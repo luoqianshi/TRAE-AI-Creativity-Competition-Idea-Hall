@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>蛛丝切断者 —— 交互式解压蜘蛛网</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            overflow: hidden;
+            font-family: 'Microsoft YaHei', sans-serif;
+            cursor: crosshair;
+        }
+        canvas {
+            display: block;
+        }
+        .ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: #e0e0e0;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .ui h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px rgba(255,255,255,0.3);
+        }
+        .ui p {
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 5px;
+        }
+        .ui .score {
+            font-size: 32px;
+            color: #00d4ff;
+            text-shadow: 0 0 20px rgba(0,212,255,0.5);
+            margin-top: 10px;
+        }
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 10;
+        }
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .btn:hover {
+            background: rgba(255,255,255,0.2);
+            transform: scale(1.05);
+        }
+        .particle {
+            position: absolute;
+            pointer-events: none;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui">
+        <h1>🕸️ 蛛丝切断者</h1>
+        <p>滑动鼠标切断蜘蛛网，释放压力！</p>
+        <p>切断的蛛丝越多，分数越高</p>
+        <div class="score">得分: <span id="score">0</span></div>
+    </div>
+    
+    <div class="controls">
+        <button class="btn" onclick="resetWeb()">🔄 重新生成蛛网</button>
+        <button class="btn" onclick="toggleSound()">🔊 音效: 开</button>
+    </div>
+    
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let score = 0;
+        let soundEnabled = true;
+        let mouseX = 0, mouseY = 0;
+        let isMouseDown = false;
+        let lastMouseX = 0, lastMouseY = 0;
+
+        // 设置画布大小
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        // 音效（使用 Web Audio API 生成简单音效）
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playCutSound() {
+            if (!soundEnabled) return;
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(200, audioContext.currentTime + 0.1);
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.1);
+        }
+
+        // 蛛丝类
+        class Strand {
+            constructor(x1, y1, x2, y2, type = 'radial') {
+                this.x1 = x1;
+                this.y1 = y1;
+                this.x2 = x2;
+                this.y2 = y2;
+                this.type = type; // 'radial' 或 'spiral'
+                this.cut = false;
+                this.cutProgress = 0;
+                this.vibrate = 0;
+                this.opacity = 1;
+            }
+
+            draw() {
+                if (this.cut && this.cutProgress >= 1) return;
+                
+                ctx.save();
+                ctx.globalAlpha = this.opacity * (1 - this.cutProgress);
+                
+                if (this.cut) {
+                    this.cutProgress += 0.05;
+                    this.opacity *= 0.95;
+                }
+
+                // 振动效果
+                let vx = 0, vy = 0;
+                if (this.vibrate > 0) {
+                    vx = (Math.random() - 0.5) * this.vibrate;
+                    vy = (Math.random() - 0.5) * this.vibrate;
+                    this.vibrate *= 0.9;
+                }
+
+                // 绘制蛛丝
+                ctx.beginPath();
+                ctx.moveTo(this.x1 + vx, this.y1 + vy);
+                
+                // 使用贝塞尔曲线让蛛丝有自然的弯曲
+                const midX = (this.x1 + this.x2) / 2 + vx;
+                const midY = (this.y1 + this.y2) / 2 + vy;
+                const sag = this.type === 'spiral' ? 5 : 2;
+                ctx.quadraticCurveTo(midX, midY + sag, this.x2 + vx, this.y2 + vy);
+                
+                ctx.strokeStyle = `rgba(200, 220, 255, ${0.6 * (1 - this.cutProgress)})`;
+                ctx.lineWidth = this.type === 'radial' ? 1.5 : 1;
+                ctx.stroke();
+
+                // 蛛丝的高光效果
+                ctx.beginPath();
+                ctx.moveTo(this.x1 + vx, this.y1 + vy);
+                ctx.quadraticCurveTo(midX, midY + sag - 1, this.x2 + vx, this.y2 + vy);
+                ctx.strokeStyle = `rgba(255, 255, 255, ${0.3 * (1 - this.cutProgress)})`;
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            checkCut(mx, my, lastMx, lastMy) {
+                if (this.cut) return false;
+                
+                // 计算线段与鼠标轨迹的交点
+                const dist = pointToLineDistance(mx, my, this.x1, this.y1, this.x2, this.y2);
+                const lastDist = pointToLineDistance(lastMx, lastMy, this.x1, this.y1, this.x2, this.y2);
+                
+                // 如果鼠标穿过蛛丝
+                if (dist < 15 || lastDist < 15) {
+                    this.cut = true;
+                    this.vibrate = 10;
+                    createParticles((this.x1 + this.x2) / 2, (this.y1 + this.y2) / 2);
+                    playCutSound();
+                    score += 10;
+                    document.getElementById('score').textContent = score;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        // 计算点到线段的距离
+        function pointToLineDistance(px, py, x1, y1, x2, y2) {
+            const A = px - x1;
+            const B = py - y1;
+            const C = x2 - x1;
+            const D = y2 - y1;
+            const dot = A * C + B * D;
+            const lenSq = C * C + D * D;
+            let param = -1;
+            if (lenSq !== 0) param = dot / lenSq;
+            let xx, yy;
+            if (param < 0) {
+                xx = x1; yy = y1;
+            } else if (param > 1) {
+                xx = x2; yy = y2;
+            } else {
+                xx = x1 + param * C;
+                yy = y1 + param * D;
+            }
+            const dx = px - xx;
+            const dy = py - yy;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // 粒子效果
+        let particles = [];
+        function createParticles(x, y) {
+            for (let i = 0; i < 8; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4,
+                    life: 1,
+                    size: Math.random() * 3 + 1,
+                    color: `hsl(${200 + Math.random() * 40}, 80%, 70%)`
+                });
+            }
+        }
+
+        function updateParticles() {
+            particles = particles.filter(p => p.life > 0);
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.1; // 重力
+                p.life -= 0.02;
+                p.size *= 0.98;
+            });
+        }
+
+        function drawParticles() {
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+        }
+
+        // 蜘蛛网生成
+        let strands = [];
+        
+        function generateWeb() {
+            strands = [];
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const maxRadius = Math.min(canvas.width, canvas.height) * 0.4;
+            const numRays = 12;
+            const numSpirals = 8;
+
+            // 生成射线（从中心向外）
+            const rayEndpoints = [];
+            for (let i = 0; i < numRays; i++) {
+                const angle = (Math.PI * 2 * i) / numRays + Math.random() * 0.2;
+                const radius = maxRadius * (0.7 + Math.random() * 0.3);
+                const x = centerX + Math.cos(angle) * radius;
+                const y = centerY + Math.sin(angle) * radius;
+                rayEndpoints.push({x, y});
+                strands.push(new Strand(centerX, centerY, x, y, 'radial'));
+            }
+
+            // 生成螺旋线（连接相邻射线）
+            for (let s = 1; s <= numSpirals; s++) {
+                const t = s / numSpirals;
+                for (let i = 0; i < numRays; i++) {
+                    const nextI = (i + 1) % numRays;
+                    const x1 = centerX + (rayEndpoints[i].x - centerX) * t;
+                    const y1 = centerY + (rayEndpoints[i].y - centerY) * t;
+                    const x2 = centerX + (rayEndpoints[nextI].x - centerX) * t;
+                    const y2 = centerY + (rayEndpoints[nextI].y - centerY) * t;
+                    
+                    // 添加一些随机扰动让网更自然
+                    const wobble = 5 * t;
+                    strands.push(new Strand(
+                        x1 + (Math.random() - 0.5) * wobble,
+                        y1 + (Math.random() - 0.5) * wobble,
+                        x2 + (Math.random() - 0.5) * wobble,
+                        y2 + (Math.random() - 0.5) * wobble,
+                        'spiral'
+                    ));
+                }
+            }
+
+            // 添加一些随机的额外连接线让网更密
+            for (let i = 0; i < 8; i++) {
+                const idx1 = Math.floor(Math.random() * rayEndpoints.length);
+                const idx2 = Math.floor(Math.random() * rayEndpoints.length);
+                if (idx1 !== idx2) {
+                    const t1 = 0.3 + Math.random() * 0.5;
+                    const t2 = 0.3 + Math.random() * 0.5;
+                    strands.push(new Strand(
+                        centerX + (rayEndpoints[idx1].x - centerX) * t1,
+                        centerY + (rayEndpoints[idx1].y - centerY) * t1,
+                        centerX + (rayEndpoints[idx2].x - centerX) * t2,
+                        centerY + (rayEndpoints[idx2].y - centerY) * t2,
+                        'spiral'
+                    ));
+                }
+            }
+        }
+
+        // 鼠标事件
+        canvas.addEventListener('mousedown', (e) => {
+            isMouseDown = true;
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            
+            if (isMouseDown) {
+                strands.forEach(strand => strand.checkCut(mouseX, mouseY, lastMouseX, lastMouseY));
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isMouseDown = false;
+        });
+
+        // 触摸事件支持
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            isMouseDown = true;
+            mouseX = touch.clientX;
+            mouseY = touch.clientY;
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+            mouseX = touch.clientX;
+            mouseY = touch.clientY;
+            strands.forEach(strand => strand.checkCut(mouseX, mouseY, lastMouseX, lastMouseY));
+        });
+
+        canvas.addEventListener('touchend', () => {
+            isMouseDown = false;
+        });
+
+        // 控制按钮
+        function resetWeb() {
+            score = 0;
+            document.getElementById('score').textContent = score;
+            generateWeb();
+        }
+
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            event.target.textContent = soundEnabled ? '🔊 音效: 开' : '🔇 音效: 关';
+        }
+
+        // 绘制鼠标轨迹发光效果
+        function drawMouseTrail() {
+            if (!isMouseDown) return;
+            ctx.save();
+            ctx.globalAlpha = 0.3;
+            ctx.strokeStyle = '#00d4ff';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00d4ff';
+            ctx.beginPath();
+            ctx.moveTo(lastMouseX, lastMouseY);
+            ctx.lineTo(mouseX, mouseY);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // 动画循环
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制背景渐变
+            const gradient = ctx.createRadialGradient(
+                canvas.width / 2, canvas.height / 2, 0,
+                canvas.width / 2, canvas.height / 2, canvas.width
+            );
+            gradient.addColorStop(0, '#1a1a3e');
+            gradient.addColorStop(1, '#0a0a1a');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 绘制蛛丝
+            strands.forEach(strand => strand.draw());
+            
+            // 绘制粒子
+            updateParticles();
+            drawParticles();
+            
+            // 绘制鼠标轨迹
+            drawMouseTrail();
+
+            requestAnimationFrame(animate);
+        }
+
+        // 初始化
+        generateWeb();
+        animate();
+    </script>
+</body>
+</html>

@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>手势粒子控制系统 - Gesture Particle Control</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a0a;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        #canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .ui-layer {
+            position: fixed;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .header {
+            top: 20px;
+            left: 20px;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 300;
+            letter-spacing: 2px;
+            background: linear-gradient(90deg, #00d4ff, #7b2ff7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+            letter-spacing: 1px;
+        }
+
+        .controls {
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            pointer-events: all;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+            cursor: pointer;
+            border-radius: 25px;
+            font-size: 12px;
+            letter-spacing: 1px;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+
+        .btn:hover {
+            background: rgba(255,255,255,0.15);
+            border-color: rgba(255,255,255,0.4);
+        }
+
+        .btn.active {
+            background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+            border-color: transparent;
+        }
+
+        .camera-preview {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.1);
+            z-index: 10;
+            background: rgba(0,0,0,0.5);
+        }
+
+        #videoElement {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        .camera-status {
+            position: absolute;
+            bottom: 5px;
+            left: 5px;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(0,0,0,0.7);
+        }
+
+        .camera-status.connected {
+            color: #00ff88;
+        }
+
+        .camera-status.disconnected {
+            color: #ff4444;
+        }
+
+        .gesture-info {
+            position: fixed;
+            top: 50%;
+            right: 20px;
+            transform: translateY(-50%);
+            text-align: right;
+            z-index: 10;
+        }
+
+        .gesture-info .label {
+            font-size: 10px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+        }
+
+        .gesture-info .value {
+            font-size: 18px;
+            color: #00d4ff;
+            font-weight: 300;
+        }
+
+        .mode-indicator {
+            position: fixed;
+            top: 80px;
+            left: 20px;
+            z-index: 10;
+        }
+
+        .mode-indicator .mode {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 11px;
+            margin-right: 10px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .mode-indicator .mode.active {
+            background: rgba(0, 212, 255, 0.2);
+            border-color: #00d4ff;
+            color: #00d4ff;
+        }
+
+        .instructions {
+            position: fixed;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            z-index: 10;
+            opacity: 0.7;
+        }
+
+        .instructions p {
+            font-size: 11px;
+            color: #888;
+            margin: 3px 0;
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            text-align: center;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 2px solid rgba(255,255,255,0.1);
+            border-top-color: #00d4ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div class="ui-layer header">
+        <h1>手势粒子控制</h1>
+        <p>Gesture Particle Control System</p>
+    </div>
+
+    <div class="ui-layer mode-indicator">
+        <span class="mode active" id="mouseMode">鼠标模式</span>
+        <span class="mode" id="cameraMode">摄像头模式</span>
+    </div>
+
+    <div class="camera-preview" id="cameraPreview">
+        <video id="videoElement" autoplay playsinline></video>
+        <div class="camera-status disconnected" id="cameraStatus">未连接</div>
+    </div>
+
+    <div class="ui-layer gesture-info">
+        <div class="label">当前手势</div>
+        <div class="value" id="gestureValue">无</div>
+        <div class="label" style="margin-top: 15px;">粒子数量</div>
+        <div class="value" id="particleCount">3000</div>
+        <div class="label" style="margin-top: 15px;">FPS</div>
+        <div class="value" id="fpsValue">60</div>
+    </div>
+
+    <div class="ui-layer controls">
+        <button class="btn active" onclick="setShape('random')">随机</button>
+        <button class="btn" onclick="setShape('sphere')">球体</button>
+        <button class="btn" onclick="setShape('cube')">立方体</button>
+        <button class="btn" onclick="setShape('pyramid')">金字塔</button>
+        <button class="btn" onclick="setShape('heart')">爱心</button>
+        <button class="btn" onclick="toggleCamera()">切换摄像头</button>
+    </div>
+
+    <div class="ui-layer instructions">
+        <p>鼠标移动控制粒子流向 | 点击切换聚合/散开</p>
+        <p>摄像头模式：伸出手掌控制粒子，捏合手指聚合</p>
+    </div>
+
+    <div class="loading" id="loading">
+        <div class="loading-spinner"></div>
+        <p>正在初始化粒子系统...</p>
+    </div>
+
+    <script>
+        // 全局变量
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        let particles = [];
+        let mouse = { x: 0, y: 0, active: false };
+        let handPosition = { x: 0, y: 0, active: false };
+        let currentShape = 'random';
+        let isAggregating = false;
+        let cameraActive = false;
+        let hands;
+        let camera;
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let fps = 60;
+
+        const PARTICLE_COUNT = 3000;
+        const PARTICLE_SIZE = 2;
+        const CONNECTION_DISTANCE = 100;
+
+        // 颜色配置
+        const colors = [
+            '#00d4ff', '#7b2ff7', '#ff006e', '#fb5607', '#ffbe0b',
+            '#8338ec', '#3a86ff', '#06ffa5', '#ff4081', '#00e5ff'
+        ];
+
+        // 粒子类
+        class Particle {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.z = Math.random() * 1000;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.vz = (Math.random() - 0.5) * 2;
+                this.size = Math.random() * PARTICLE_SIZE + 1;
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.alpha = Math.random() * 0.5 + 0.5;
+                this.targetX = this.x;
+                this.targetY = this.y;
+                this.targetZ = this.z;
+                this.life = Math.random() * 100;
+            }
+
+            update() {
+                // 计算到鼠标/手势的距离
+                let targetX = mouse.x;
+                let targetY = mouse.y;
+                let targetActive = mouse.active;
+
+                if (cameraActive && handPosition.active) {
+                    targetX = handPosition.x;
+                    targetY = handPosition.y;
+                    targetActive = true;
+                }
+
+                const dx = targetX - this.x;
+                const dy = targetY - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (targetActive && distance < 300) {
+                    // 被吸引
+                    const force = (300 - distance) / 300;
+                    this.vx += dx * force * 0.02;
+                    this.vy += dy * force * 0.02;
+                }
+
+                // 形状聚合逻辑
+                if (isAggregating && currentShape !== 'random') {
+                    const shapePos = this.getShapePosition();
+                    this.targetX = shapePos.x;
+                    this.targetY = shapePos.y;
+                    this.targetZ = shapePos.z;
+
+                    this.vx += (this.targetX - this.x) * 0.05;
+                    this.vy += (this.targetY - this.y) * 0.05;
+                    this.vz += (this.targetZ - this.z) * 0.05;
+                }
+
+                // 应用速度
+                this.x += this.vx;
+                this.y += this.vy;
+                this.z += this.vz;
+
+                // 阻尼
+                this.vx *= 0.95;
+                this.vy *= 0.95;
+                this.vz *= 0.95;
+
+                // 边界处理
+                if (this.x < 0 || this.x > width) this.vx *= -1;
+                if (this.y < 0 || this.y > height) this.vy *= -1;
+                if (this.z < 0 || this.z > 1000) this.vz *= -1;
+
+                // 生命周期
+                this.life += 0.1;
+                this.alpha = 0.5 + Math.sin(this.life) * 0.3;
+            }
+
+            getShapePosition() {
+                const centerX = width / 2;
+                const centerY = height / 2;
+                const index = particles.indexOf(this);
+                const total = particles.length;
+                const ratio = index / total;
+
+                switch (currentShape) {
+                    case 'sphere':
+                        const phi = Math.acos(2 * ratio - 1);
+                        const theta = Math.PI * (1 + Math.sqrt(5)) * index;
+                        const radius = 200;
+                        return {
+                            x: centerX + radius * Math.sin(phi) * Math.cos(theta),
+                            y: centerY + radius * Math.sin(phi) * Math.sin(theta),
+                            z: radius * Math.cos(phi)
+                        };
+
+                    case 'cube':
+                        const side = Math.cbrt(total);
+                        const x = (index % side) / side - 0.5;
+                        const y = (Math.floor(index / side) % side) / side - 0.5;
+                        const z = Math.floor(index / (side * side)) / side - 0.5;
+                        return {
+                            x: centerX + x * 300,
+                            y: centerY + y * 300,
+                            z: z * 300
+                        };
+
+                    case 'pyramid':
+                        const layer = Math.floor(Math.sqrt(index));
+                        const layerIndex = index - layer * layer;
+                        const layerSize = layer * 2 + 1;
+                        const px = (layerIndex % layerSize) - layer;
+                        const py = Math.floor(layerIndex / layerSize) - layer;
+                        return {
+                            x: centerX + px * 20,
+                            y: centerY + py * 20 + layer * 15 - 150,
+                            z: layer * 20
+                        };
+
+                    case 'heart':
+                        const t = ratio * Math.PI * 2;
+                        const hx = 16 * Math.pow(Math.sin(t), 3);
+                        const hy = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+                        return {
+                            x: centerX + hx * 8,
+                            y: centerY + hy * 8 - 50,
+                            z: Math.sin(t * 3) * 50
+                        };
+
+                    default:
+                        return { x: this.x, y: this.y, z: this.z };
+                }
+            }
+
+            draw() {
+                const scale = 1000 / (1000 + this.z);
+                const x = this.x * scale + (1 - scale) * width / 2;
+                const y = this.y * scale + (1 - scale) * height / 2;
+                const size = this.size * scale;
+
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.alpha * scale;
+                ctx.fill();
+
+                // 发光效果
+                ctx.beginPath();
+                ctx.arc(x, y, size * 2, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.alpha * 0.2 * scale;
+                ctx.fill();
+            }
+        }
+
+        // 初始化
+        function init() {
+            resize();
+            window.addEventListener('resize', resize);
+
+            // 创建粒子
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                particles.push(new Particle());
+            }
+
+            // 鼠标事件
+            canvas.addEventListener('mousemove', (e) => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+                mouse.active = true;
+            });
+
+            canvas.addEventListener('mouseleave', () => {
+                mouse.active = false;
+            });
+
+            canvas.addEventListener('click', () => {
+                isAggregating = !isAggregating;
+            });
+
+            // 触摸事件
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                mouse.x = e.touches[0].clientX;
+                mouse.y = e.touches[0].clientY;
+                mouse.active = true;
+            });
+
+            canvas.addEventListener('touchend', () => {
+                mouse.active = false;
+            });
+
+            // 隐藏加载
+            document.getElementById('loading').classList.add('hidden');
+
+            // 开始动画
+            animate();
+        }
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+
+        // 绘制连线
+        function drawConnections() {
+            for (let i = 0; i < particles.length; i += 10) {
+                for (let j = i + 10; j < particles.length; j += 10) {
+                    const dx = particles[i].x - particles[j].x;
+                    const dy = particles[i].y - particles[j].y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < CONNECTION_DISTANCE) {
+                        const alpha = (1 - distance / CONNECTION_DISTANCE) * 0.1;
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.strokeStyle = `rgba(0, 212, 255, ${alpha})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        // 动画循环
+        function animate() {
+            // 计算FPS
+            frameCount++;
+            const currentTime = performance.now();
+            if (currentTime - lastTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = currentTime;
+                document.getElementById('fpsValue').textContent = fps;
+            }
+
+            // 清空画布（带拖尾效果）
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.1)';
+            ctx.fillRect(0, 0, width, height);
+
+            // 更新和绘制粒子
+            particles.forEach(particle => {
+                particle.update();
+                particle.draw();
+            });
+
+            // 绘制连线
+            drawConnections();
+
+            requestAnimationFrame(animate);
+        }
+
+        // 设置形状
+        function setShape(shape) {
+            currentShape = shape;
+            isAggregating = shape !== 'random';
+
+            // 更新按钮状态
+            document.querySelectorAll('.controls .btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+
+        // 切换摄像头
+        async function toggleCamera() {
+            const videoElement = document.getElementById('videoElement');
+            const statusElement = document.getElementById('cameraStatus');
+            const mouseMode = document.getElementById('mouseMode');
+            const cameraMode = document.getElementById('cameraMode');
+
+            if (!cameraActive) {
+                try {
+                    // 初始化MediaPipe Hands
+                    hands = new Hands({locateFile: (file) => {
+                        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                    }});
+
+                    hands.setOptions({
+                        maxNumHands: 1,
+                        modelComplexity: 1,
+                        minDetectionConfidence: 0.5,
+                        minTrackingConfidence: 0.5
+                    });
+
+                    hands.onResults(onHandResults);
+
+                    // 启动摄像头
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: 320, height: 240 }
+                    });
+                    videoElement.srcObject = stream;
+
+                    // 等待视频加载
+                    await new Promise(resolve => {
+                        videoElement.onloadedmetadata = resolve;
+                    });
+                    videoElement.play();
+
+                    // 开始检测
+                    detectHands();
+
+                    cameraActive = true;
+                    statusElement.textContent = '已连接';
+                    statusElement.classList.remove('disconnected');
+                    statusElement.classList.add('connected');
+                    mouseMode.classList.remove('active');
+                    cameraMode.classList.add('active');
+
+                } catch (error) {
+                    console.error('摄像头启动失败:', error);
+                    alert('无法访问摄像头，请检查权限设置');
+                }
+            } else {
+                // 关闭摄像头
+                const stream = videoElement.srcObject;
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                videoElement.srcObject = null;
+                cameraActive = false;
+                statusElement.textContent = '未连接';
+                statusElement.classList.remove('connected');
+                statusElement.classList.add('disconnected');
+                mouseMode.classList.add('active');
+                cameraMode.classList.remove('active');
+            }
+        }
+
+        // 手势检测结果处理
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                // 获取手掌中心位置（使用手腕和食指根部中点）
+                const wrist = landmarks[0];
+                const indexBase = landmarks[5];
+                const middleTip = landmarks[12];
+                const thumbTip = landmarks[4];
+
+                handPosition.x = (1 - (wrist.x + indexBase.x) / 2) * width;
+                handPosition.y = ((wrist.y + indexBase.y) / 2) * height;
+                handPosition.active = true;
+
+                // 检测手势
+                const gesture = detectGesture(landmarks);
+                document.getElementById('gestureValue').textContent = gesture;
+
+                // 捏合手势触发聚合
+                const pinchDistance = Math.sqrt(
+                    Math.pow(thumbTip.x - middleTip.x, 2) +
+                    Math.pow(thumbTip.y - middleTip.y, 2)
+                );
+
+                if (pinchDistance < 0.05) {
+                    isAggregating = true;
+                } else if (pinchDistance > 0.15) {
+                    isAggregating = false;
+                }
+            } else {
+                handPosition.active = false;
+                document.getElementById('gestureValue').textContent = '未检测到手';
+            }
+        }
+
+        // 手势识别
+        function detectGesture(landmarks) {
+            const tips = [8, 12, 16, 20]; // 食指、中指、无名指、小指指尖
+            const bases = [5, 9, 13, 17]; // 对应指根
+            let extendedFingers = 0;
+
+            for (let i = 0; i < tips.length; i++) {
+                if (landmarks[tips[i]].y < landmarks[bases[i]].y) {
+                    extendedFingers++;
+                }
+            }
+
+            // 拇指特殊处理
+            const thumbExtended = Math.abs(landmarks[4].x - landmarks[17].x) > 0.05;
+            if (thumbExtended) extendedFingers++;
+
+            switch (extendedFingers) {
+                case 0: return '拳头';
+                case 1: return '一指';
+                case 2: return '剪刀手';
+                case 3: return '三指';
+                case 4: return '四指';
+                case 5: return '手掌';
+                default: return '未知';
+            }
+        }
+
+        // 持续检测手势
+        async function detectHands() {
+            if (!cameraActive) return;
+
+            const videoElement = document.getElementById('videoElement');
+            if (videoElement.readyState >= 2) {
+                await hands.send({image: videoElement});
+            }
+
+            requestAnimationFrame(detectHands);
+        }
+
+        // 启动
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

@@ -1,0 +1,983 @@
+<!doctype html>
+<html lang="zh-CN"><head><script data-od-sandbox-shim="">(function(){
+  function makeStore(){
+    var data = {};
+    var api = {
+      getItem: function(k){ return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function(k, v){ data[k] = String(v); },
+      removeItem: function(k){ delete data[k]; },
+      clear: function(){ data = {}; },
+      key: function(i){ return Object.keys(data)[i] || null; }
+    };
+    Object.defineProperty(api, 'length', { get: function(){ return Object.keys(data).length; } });
+    return api;
+  }
+  function tryShim(name){
+    var works = false;
+    try { works = !!window[name] && typeof window[name].getItem === 'function'; void window[name].length; }
+    catch (_) { works = false; }
+    if (works) return;
+    try { Object.defineProperty(window, name, { configurable: true, value: makeStore() }); }
+    catch (_) { try { window[name] = makeStore(); } catch (__) {} }
+  }
+  tryShim('localStorage');
+  tryShim('sessionStorage');
+  document.addEventListener('click', (e) => {
+    if (!e.target || !(e.target instanceof Element)) return;
+    var link = e.target.closest('a[href]');
+    if (!link) return;
+    var href = link.getAttribute('href');
+    if (href === null) return;
+    var isAnchor = href.startsWith('#') || href === '';
+    if (isAnchor) {
+      e.preventDefault();
+      if (href === '' || href === '#') {
+        window.scrollTo({ top: 0 });
+        history.replaceState(null, '', ' ');
+      } else {
+        var targetId = href.slice(1);
+        var target = targetId ? document.getElementById(targetId) : null;
+        if (target) {
+          target.scrollIntoView();
+          location.hash === href && history.replaceState(null, '', ' ');
+          location.hash = href;
+        }
+      }
+    } else if (link.getAttribute('target') === '_blank') {
+      e.preventDefault();
+      let safe = false;
+      try {
+        var url = new URL(href, location.href);
+        safe =
+          url.protocol === 'http:' ||
+          url.protocol === 'https:' ||
+          url.protocol === 'mailto:';
+      } catch (_) {}
+      safe && window.open(href, '_blank', 'noopener,noreferrer');
+    }
+  });
+})();</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEDU 智能改卷 · 创意提案</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#0e1a1c; --muted:#5d6b6e; --faint:#8a999c;
+    --accent:#0b8f81; --accent-soft:#d9f0ec; --accent-deep:#075d54;
+    --ink:#0d1f2c; --gold:#c98a3a; --panel:#f5f8f8; --line:#e4ebeb; --shell:#07120f;
+    --ease:cubic-bezier(.16,1,.3,1);        /* expo-out — 顺滑收尾，premium */
+    --ease-soft:cubic-bezier(.33,1,.68,1);  /* hover / 小位移 */
+    --ease-back:cubic-bezier(.34,1.4,.5,1); /* 轻微回弹，给数据生长用 */
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--bg); color:var(--fg);
+    font:18px/1.6 -apple-system,system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  }
+  /* scroll-snap container */
+  .scroll{
+    height:100vh; overflow-y:scroll; scroll-snap-type:y mandatory;
+    scroll-behavior:smooth;
+    position:relative; z-index:1;
+  }
+  .scroll::-webkit-scrollbar{width:0;height:0;}
+  .scroll{scrollbar-width:none;}
+
+  /* per-panel background FX canvas — sits above the panel's own background
+     but below the content (.wrap). Each panel runs a distinct animation and
+     only renders while it is on screen (visibility-gated rAF). */
+  .fx{position:absolute; inset:0; width:100%; height:100%; z-index:0;
+      pointer-events:none; display:block;}
+
+  section.panel{
+    min-height:100vh; scroll-snap-align:start; scroll-snap-stop:always;
+    position:relative; overflow:hidden; display:flex; flex-direction:column; justify-content:center;
+    padding:clamp(48px,7vh,96px) clamp(28px,7vw,140px);
+  }
+  .wrap{width:100%; max-width:1240px; margin:0 auto; position:relative; z-index:2;}
+
+  h1,h2{font-weight:700; letter-spacing:-.022em; color:var(--ink); text-wrap:balance;}
+  p{text-wrap:pretty;}
+  .tnum{font-variant-numeric:tabular-nums;}
+
+  .eyebrow{
+    font:600 clamp(12px,1.1vw,15px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+    letter-spacing:.32em; text-transform:uppercase; color:var(--accent);
+    display:inline-flex; align-items:center; gap:14px; margin-bottom:24px;
+  }
+  .eyebrow::before{content:"";width:28px;height:2px;background:var(--accent);}
+
+  .head{margin-bottom:clamp(32px,5vh,56px);}
+  .head h2{font-size:clamp(30px,4.4vw,58px); line-height:1.08;}
+  .head .note{margin-top:18px; color:var(--muted); font-size:clamp(16px,1.5vw,23px); max-width:64ch; line-height:1.55;}
+
+  /* ===== reveal animation ===== */
+  .reveal{opacity:0; transform:translateY(40px) scale(.985); filter:blur(6px); will-change:opacity,transform,filter;
+    transition:opacity .85s var(--ease), transform 1.05s var(--ease), filter .7s var(--ease);}
+  .panel.in .reveal{opacity:1; transform:none; filter:none;}
+  /* 节奏更松、间隔渐次拉开（非等距），层层涌入更自然 */
+  .panel.in .reveal.d1{transition-delay:.06s;}
+  .panel.in .reveal.d2{transition-delay:.15s;}
+  .panel.in .reveal.d3{transition-delay:.26s;}
+  .panel.in .reveal.d4{transition-delay:.38s;}
+  .panel.in .reveal.d5{transition-delay:.52s;}
+  .panel.in .reveal.d6{transition-delay:.66s;}
+  @media (prefers-reduced-motion:reduce){
+    .reveal{opacity:1!important;transform:none!important;filter:none!important;transition:none!important;}
+    html,.scroll{scroll-behavior:auto;}
+  }
+
+  /* ===== top progress + dot nav + brand ===== */
+  .topbar{position:fixed; top:0; left:0; right:0; height:3px; background:transparent; z-index:60;}
+  .topbar .fill{height:100%; width:0; background:linear-gradient(90deg,var(--accent),#4cb5a8); transition:width .15s linear;}
+  .brandfix{
+    position:fixed; top:26px; left:clamp(28px,7vw,140px); z-index:55;
+    display:inline-flex; align-items:center; gap:11px;
+    font:600 15px/1 ui-monospace,Menlo,monospace; letter-spacing:.12em; color:var(--ink); mix-blend-mode:normal;
+  }
+  .brandfix b{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:15px;font-weight:800;}
+  .dots{position:fixed; right:clamp(16px,2.4vw,40px); top:50%; transform:translateY(-50%); z-index:55; display:flex; flex-direction:column; gap:14px;}
+  .dots a{width:10px;height:10px;border-radius:50%;border:1.5px solid var(--faint); background:transparent; transition:all .3s var(--ease); cursor:pointer; display:block;}
+  .dots a.on{background:var(--accent);border-color:var(--accent);transform:scale(1.25);}
+  .dots a:hover{border-color:var(--accent);}
+  .scrollcue{position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:55; color:var(--faint);
+    font:11px/1 ui-monospace,Menlo,monospace; letter-spacing:.2em; text-transform:uppercase; display:flex; flex-direction:column; align-items:center; gap:8px; transition:opacity .4s;}
+  .scrollcue .m{width:22px;height:34px;border:1.5px solid var(--faint);border-radius:12px;position:relative;}
+  .scrollcue .m::after{content:"";position:absolute;left:50%;top:7px;width:3px;height:6px;border-radius:2px;background:var(--faint);transform:translateX(-50%);animation:wheel 1.5s var(--ease) infinite;}
+  @keyframes wheel{0%{opacity:0;transform:translate(-50%,0);}40%{opacity:1;}100%{opacity:0;transform:translate(-50%,10px);}}
+  .dots a.light{border-color:rgba(255,255,255,.5);}
+  .dots a.light.on{background:#5fd6c6;border-color:#5fd6c6;}
+
+  /* ===== 01 cover ===== */
+  .s-cover{background:radial-gradient(1100px 640px at 84% -10%,#e7f4f1 0%,rgba(231,244,241,0) 56%),linear-gradient(160deg,#fbfdfd 0%,#fff 72%);overflow:hidden;}
+  .blob{position:absolute; border-radius:50%; filter:blur(60px); opacity:.5; z-index:0; pointer-events:none;}
+  .blob.a{width:520px;height:520px;background:#bfe9e1;top:-160px;right:-80px;opacity:.3;animation:float1 14s ease-in-out infinite;}
+  .blob.b{width:380px;height:380px;background:#e9dcc2;bottom:-140px;left:-60px;opacity:.35;animation:float2 18s ease-in-out infinite;}
+  @keyframes float1{50%{transform:translate(-40px,50px) scale(1.08);}}
+  @keyframes float2{50%{transform:translate(50px,-40px) scale(1.12);}}
+  .s-cover .wrap{position:relative;z-index:1;}
+  .s-cover h1{font-size:clamp(54px,9.2vw,120px); line-height:.97; letter-spacing:-.03em; margin-top:8px;}
+  .s-cover h1 .hl{color:var(--accent);}
+  .s-cover .sub{margin-top:28px; font-size:clamp(20px,2.6vw,30px); color:var(--muted); line-height:1.4; max-width:26ch;}
+  .s-cover .posit{
+    margin-top:38px; max-width:68ch; padding:26px 32px; background:#fff; border:1px solid var(--line);
+    border-radius:16px; font-size:clamp(17px,1.8vw,24px); line-height:1.55; color:var(--ink);
+    box-shadow:0 14px 40px rgba(7,93,84,.07);
+  }
+  .s-cover .posit b{color:var(--accent-deep);font-weight:700;}
+
+  /* ===== 02 pains ===== */
+  .pains{display:grid; grid-template-columns:repeat(3,1fr); gap:24px;}
+  .pain{background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:clamp(28px,3vw,40px); position:relative; overflow:hidden;
+    transition:transform .45s var(--ease-soft), box-shadow .45s var(--ease-soft);}
+  .pain:hover{transform:translateY(-6px);box-shadow:0 22px 48px rgba(13,31,44,.08);}
+  .pain .tag{position:absolute;top:0;right:0;padding:8px 16px;background:#fbeede;color:var(--gold);font:600 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;border-bottom-left-radius:14px;}
+  .pain .n{font:700 19px/1 ui-monospace,Menlo,monospace;color:var(--gold);letter-spacing:.1em;margin-bottom:20px;}
+  .pain h3{font-size:clamp(22px,2.3vw,30px);color:var(--ink);font-weight:700;line-height:1.18;}
+  .pain p{margin-top:14px;color:var(--muted);font-size:clamp(15px,1.5vw,21px);line-height:1.55;}
+
+  /* ===== 03 flow ===== */
+  .flow{display:grid; grid-template-columns:repeat(4,1fr); gap:0;}
+  .step{position:relative; padding:0 clamp(14px,1.8vw,30px);}
+  .step:not(:last-child)::after{content:"→";position:absolute;right:-10px;top:42px;font-size:30px;color:var(--accent);opacity:0;transform:translateX(-8px);transition:opacity .6s var(--ease) .55s, transform .6s var(--ease) .55s;}
+  .panel.in .step:not(:last-child)::after{transform:none;}
+  .panel.in .step:not(:last-child)::after{opacity:1;}
+  .step .dot{width:60px;height:60px;border-radius:16px;background:#fff;border:2px solid var(--accent);color:var(--accent-deep);display:grid;place-items:center;font:800 24px/1 ui-monospace,Menlo,monospace;margin-bottom:24px;}
+  .step.solid .dot{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .step h3{font-size:clamp(18px,1.9vw,25px);color:var(--ink);font-weight:700;line-height:1.25;}
+  .step p{margin-top:12px;color:var(--muted);font-size:clamp(14px,1.4vw,19px);line-height:1.5;}
+  .step .out{margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;}
+  .step .out span{font-size:15px;color:var(--accent-deep);background:var(--accent-soft);padding:6px 12px;border-radius:8px;font-weight:600;}
+
+  /* ===== 04 value (dark) ===== */
+  .s-value{background:var(--shell);}
+  .s-value h2,.s-value .head .note{color:#eaf4f2;}
+  .s-value .eyebrow{color:#5fd6c6;}
+  .s-value .eyebrow::before{background:#5fd6c6;}
+  .valwrap{display:grid;grid-template-columns:1.15fr 1fr;gap:clamp(40px,6vw,80px);align-items:center;}
+  .bigstat .arrow{display:flex;align-items:baseline;gap:clamp(16px,2.4vw,30px);flex-wrap:wrap;}
+  .bigstat .from{font-size:clamp(48px,6.4vw,86px);font-weight:700;color:#7d9a95;letter-spacing:-.03em;text-decoration:line-through;text-decoration-thickness:4px;text-decoration-color:rgba(201,138,58,.7);}
+  .bigstat .to{font-size:clamp(96px,13vw,168px);font-weight:800;color:#fff;letter-spacing:-.04em;line-height:.9;}
+  .bigstat .to small{font-size:clamp(34px,4.6vw,60px);font-weight:700;color:#5fd6c6;}
+  .bigstat .cap{margin-top:22px;font-size:clamp(16px,1.7vw,24px);color:#9fb6b2;line-height:1.5;}
+  .vpoints{display:flex;flex-direction:column;gap:20px;}
+  .vpoint{display:flex;gap:18px;align-items:flex-start;padding-bottom:20px;border-bottom:1px solid rgba(255,255,255,.1);}
+  .vpoint:last-child{border-bottom:0;}
+  .vpoint .ic{flex:0 0 auto;width:44px;height:44px;border-radius:11px;background:rgba(95,214,198,.15);color:#5fd6c6;display:grid;place-items:center;font-size:22px;}
+  .vpoint h4{font-size:clamp(19px,1.9vw,24px);color:#fff;font-weight:700;}
+  .vpoint p{margin-top:6px;font-size:clamp(15px,1.5vw,19px);color:#9fb6b2;line-height:1.5;}
+
+  /* ===== 05 report viz ===== */
+  .viz{display:grid;grid-template-columns:1fr 1fr;gap:clamp(28px,4vw,56px);}
+  .card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:clamp(26px,3vw,36px);box-shadow:0 8px 26px rgba(13,31,44,.04);}
+  .card .ctitle{font-size:clamp(19px,1.9vw,23px);font-weight:700;color:var(--ink);}
+  .card .csub{font-size:clamp(13px,1.3vw,17px);color:var(--faint);margin-top:6px;margin-bottom:24px;}
+  .hist{display:flex;align-items:flex-end;gap:clamp(8px,1.2vw,14px);height:clamp(180px,26vh,240px);}
+  .hist .bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:10px;justify-content:flex-end;height:100%;}
+  .hist .bar .col{width:100%;border-radius:7px 7px 0 0;background:linear-gradient(180deg,var(--accent),#4cb5a8);height:0;transition:height 1.1s var(--ease-back);will-change:height;}
+  .panel.in .hist .bar:nth-child(1) .col{transition-delay:.30s;}
+  .panel.in .hist .bar:nth-child(2) .col{transition-delay:.37s;}
+  .panel.in .hist .bar:nth-child(3) .col{transition-delay:.44s;}
+  .panel.in .hist .bar:nth-child(4) .col{transition-delay:.51s;}
+  .panel.in .hist .bar:nth-child(5) .col{transition-delay:.58s;}
+  .panel.in .hist .bar:nth-child(6) .col{transition-delay:.65s;}
+  .panel.in .hist .bar:nth-child(7) .col{transition-delay:.72s;}
+  .panel.in .hist .bar:nth-child(8) .col{transition-delay:.79s;}
+  .hist .bar.peak .col{background:linear-gradient(180deg,var(--accent-deep),var(--accent));}
+  .panel.in .hist .bar .col{height:var(--h);}
+  .hist .bar .v{font:700 15px/1 ui-monospace,Menlo,monospace;color:var(--ink);}
+  .hist .bar .x{font-size:13px;color:var(--faint);}
+  .loss{display:flex;flex-direction:column;gap:18px;}
+  .loss .row{display:grid;grid-template-columns:minmax(120px,180px) 1fr 52px;gap:14px;align-items:center;}
+  .loss .lab{font-size:clamp(14px,1.4vw,18px);color:var(--ink);text-align:right;}
+  .loss .track{height:20px;background:var(--panel);border-radius:999px;overflow:hidden;}
+  .loss .fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#e0a85a,var(--gold));width:0;transition:width 1.2s var(--ease);will-change:width;}
+  .panel.in .loss .row:nth-child(1) .fill{transition-delay:.32s;}
+  .panel.in .loss .row:nth-child(2) .fill{transition-delay:.44s;}
+  .panel.in .loss .row:nth-child(3) .fill{transition-delay:.56s;}
+  .panel.in .loss .row:nth-child(4) .fill{transition-delay:.68s;}
+  .panel.in .loss .row:nth-child(5) .fill{transition-delay:.80s;}
+  .panel.in .loss .fill{width:var(--w);}
+  .loss .pct{font:700 17px/1 ui-monospace,Menlo,monospace;color:var(--gold);}
+  .reportnote{margin-top:30px;display:flex;gap:36px;flex-wrap:wrap;font-size:clamp(15px,1.5vw,19px);color:var(--muted);}
+  .reportnote b{color:var(--accent-deep);}
+
+  /* ===== 06 trust ===== */
+  .trust{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;}
+  .trust .t{border:1px solid var(--line);border-radius:18px;padding:clamp(28px,3vw,38px);background:#fff;transition:transform .45s var(--ease-soft),box-shadow .45s var(--ease-soft);}
+  .trust .t:hover{transform:translateY(-6px);box-shadow:0 22px 48px rgba(13,31,44,.07);}
+  .trust .t .ic{width:52px;height:52px;border-radius:13px;background:var(--accent-soft);color:var(--accent-deep);display:grid;place-items:center;font-size:26px;margin-bottom:20px;}
+  .trust .t h3{font-size:clamp(20px,2vw,27px);color:var(--ink);font-weight:700;}
+  .trust .t p{margin-top:12px;color:var(--muted);font-size:clamp(15px,1.5vw,20px);line-height:1.55;}
+
+  /* ===== 07 audience ===== */
+  .aud{display:grid;grid-template-columns:1fr 1fr;gap:clamp(32px,5vw,56px);align-items:center;}
+  .persona{background:var(--panel);border-radius:20px;padding:clamp(36px,4vw,52px);border:1px solid var(--line);}
+  .persona .who{font-size:clamp(28px,3.4vw,40px);font-weight:800;color:var(--ink);letter-spacing:-.02em;}
+  .persona .role{margin-top:10px;font-size:clamp(17px,1.8vw,22px);color:var(--accent-deep);font-weight:600;}
+  .persona ul{margin-top:26px;list-style:none;display:flex;flex-direction:column;gap:14px;}
+  .persona li{font-size:clamp(16px,1.6vw,21px);color:var(--muted);padding-left:28px;position:relative;line-height:1.45;}
+  .persona li::before{content:"";position:absolute;left:0;top:10px;width:12px;height:12px;border-radius:50%;background:var(--accent);}
+  .meta h3{font-size:clamp(30px,3.6vw,44px);color:var(--ink);line-height:1.15;}
+  .meta .track{margin-top:24px;display:inline-flex;align-items:center;gap:12px;background:var(--accent-soft);color:var(--accent-deep);font-weight:700;padding:14px 24px;border-radius:999px;font-size:clamp(17px,1.8vw,22px);}
+  .meta p{margin-top:26px;font-size:clamp(17px,1.8vw,23px);color:var(--muted);max-width:40ch;line-height:1.55;}
+
+  /* ===== 08 vision ===== */
+  .s-vision{background:linear-gradient(160deg,#fbfdfd,#fff);}
+  .visionhero{font-size:clamp(28px,3.8vw,48px);color:var(--ink);font-weight:700;max-width:30ch;line-height:1.2;letter-spacing:-.02em;margin-bottom:clamp(36px,5vh,56px);}
+  .visionhero b{color:var(--accent);}
+  .road{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
+  .road .ph{border-radius:18px;padding:clamp(26px,3vw,34px);border:1px solid var(--line);background:#fff;position:relative;transition:transform .45s var(--ease-soft);}
+  .road .ph:hover{transform:translateY(-6px);}
+  .road .ph.now{background:var(--accent);border-color:var(--accent);}
+  .road .ph.now *{color:#fff!important;}
+  .road .ph .badge{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:var(--accent);margin-bottom:14px;display:block;}
+  .road .ph.now .badge{color:rgba(255,255,255,.85);}
+  .road .ph h3{font-size:clamp(20px,2vw,27px);color:var(--ink);font-weight:700;}
+  .road .ph p{margin-top:10px;font-size:clamp(14px,1.4vw,18px);color:var(--muted);line-height:1.5;}
+  .road .ph .tagnow{position:absolute;top:24px;right:24px;width:12px;height:12px;border-radius:50%;background:#5fd6c6;box-shadow:0 0 0 0 rgba(95,214,198,.55);animation:nowpulse 2.2s ease-out infinite;}
+  @keyframes nowpulse{0%{box-shadow:0 0 0 0 rgba(95,214,198,.55);}70%{box-shadow:0 0 0 12px rgba(95,214,198,0);}100%{box-shadow:0 0 0 0 rgba(95,214,198,0);}}
+  .closingline{margin-top:clamp(36px,5vh,52px);display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;padding-top:26px;border-top:1px solid var(--line);color:var(--muted);font-size:clamp(15px,1.5vw,19px);}
+  .closingline b{color:var(--accent-deep);}
+
+  /* responsive collapse */
+  @media (max-width:900px){
+    .pains,.flow,.trust,.road,.viz,.valwrap,.aud{grid-template-columns:1fr;}
+    .flow{gap:20px;}
+    .step:not(:last-child)::after{content:"↓";right:auto;left:18px;top:auto;bottom:-26px;}
+    section.panel{scroll-snap-align:none;min-height:auto;padding-top:80px;padding-bottom:80px;}
+    .scroll{scroll-snap-type:none;}
+    .dots,.scrollcue{display:none;}
+  }
+</style>
+<style data-od-tweaks-bridge-style="">
+[data-od-tweaks-hidden] .tw-panel {
+  transform: translateX(calc(100% + 32px)) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.tw-restore { display: none !important; }
+</style><script data-od-tweaks-bridge="">(function(){
+  // Synchronously hide BEFORE the artifact body parses so the panel never
+  // flashes on initial paint. The host removes the attribute via postMessage
+  // once it knows the desired state.
+  document.documentElement.setAttribute('data-od-tweaks-hidden', '');
+
+  var suppressEcho = false;
+  var observer = null;
+
+  function panelEl(){ return document.querySelector('.tw-panel'); }
+
+  function applyClassesToPanel(visible){
+    var panel = panelEl();
+    if (panel) panel.classList.toggle('tw-hidden', !visible);
+  }
+
+  function setPanelVisible(visible){
+    suppressEcho = true;
+    document.documentElement.toggleAttribute('data-od-tweaks-hidden', !visible);
+    applyClassesToPanel(visible);
+    // Clear flag after the MutationObserver has had a chance to fire for this
+    // change so we don't echo our own host-driven toggles back to the host.
+    Promise.resolve().then(function(){ suppressEcho = false; });
+  }
+
+  function postState(){
+    var panel = panelEl();
+    if (!panel) return;
+    try {
+      parent.postMessage({
+        type: 'od:tweaks-panel-state',
+        visible: !panel.classList.contains('tw-hidden'),
+      }, '*');
+    } catch (e) {}
+  }
+
+  function postAvailability(){
+    try {
+      parent.postMessage({
+        type: 'od:tweaks-available',
+        available: !!panelEl(),
+      }, '*');
+    } catch (e) {}
+  }
+
+  function attachObserver(){
+    var panel = panelEl();
+    if (!panel || observer) return;
+    observer = new MutationObserver(function(){
+      if (suppressEcho) return;
+      postState();
+    });
+    observer.observe(panel, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  function onReady(){
+    // Capture the panel authored visibility BEFORE we apply the host hidden
+    // attribute. The bridge sets data-od-tweaks-hidden synchronously in head
+    // (before the body parses), so on entry to onReady the attribute is
+    // always present even though the artifact may have authored the panel
+    // as default-visible. Reading the panel class first is the only place
+    // we can still observe the author intent. Then drive the attribute,
+    // classes, and posted state from that captured value so a default
+    // visible tw-panel reports visible:true and the toolbar toggle starts
+    // ON. Issue surfaced in PR #1643 review.
+    var panel = panelEl();
+    var initialVisible = !!panel && !panel.classList.contains('tw-hidden');
+    document.documentElement.toggleAttribute('data-od-tweaks-hidden', !initialVisible);
+    applyClassesToPanel(initialVisible);
+    attachObserver();
+    postAvailability();
+    // Post the captured initial visibility so the toolbar toggle reflects
+    // the default state on mount. Without this the toggle reads OFF while
+    // a default-visible tw-panel artifact clearly shows its panel and the
+    // user would have to click toggle-on then toggle-off to actually hide.
+    postState();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onReady);
+  } else {
+    onReady();
+  }
+
+  window.addEventListener('message', function(ev){
+    if (!ev.data || ev.data.type !== 'od:tweaks-panel-visible') return;
+    setPanelVisible(!!ev.data.visible);
+  });
+})();</script></head>
+<body>
+<div class="topbar" data-od-id="path-0"><div class="fill" id="prog" data-od-id="path-0-0"></div></div>
+<div class="brandfix" data-od-id="path-1"><b>E</b> OpenEDU</div>
+<nav class="dots" id="dots" aria-label="章节导航" data-od-id="path-2"></nav>
+<div class="scrollcue" id="cue" data-od-id="path-3"><span>scroll</span><div class="m" data-od-id="path-3-1"></div></div>
+
+<div class="scroll" id="scroll" data-od-id="path-4">
+
+  <!-- 01 -->
+  <section class="panel s-cover" data-label="封面" data-theme="light" data-od-id="path-4-0">
+    <canvas class="fx" data-fx="cover" aria-hidden="true"></canvas>
+    <div class="blob a" data-od-id="path-4-0-1"></div><div class="blob b" data-od-id="path-4-0-2"></div>
+    <div class="wrap" data-od-id="path-4-0-3">
+      <span class="eyebrow reveal">学习工作赛道 · 中小学</span>
+      <h1 class="reveal d1" data-od-id="path-4-0-3-1">OpenEDU<br><span class="hl">智能改卷</span></h1>
+      <div class="sub reveal d2">让老师从「批改的搬运工」<br>回到「教学的决策者」</div>
+      <div class="posit reveal d3">
+        老师导入<b>一个班</b>的主观题作答,AI 按<b>采分点</b>逐份评分 + 批注,
+        老师<b>一键复核</b>,<b>30 分钟</b>生成全班学情报告。
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section class="panel" data-label="痛点" data-theme="light" data-od-id="path-4-1">
+    <canvas class="fx" data-fx="pain" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-1-1">
+      <div class="head">
+        <span class="eyebrow reveal">问题 · The Problem</span>
+        <h2 class="reveal d1" data-od-id="path-4-1-1-0-1">老师不是不想批,是批不起。</h2>
+        <p class="note reveal d2">主观题批改吞掉了老师最宝贵的时间,而批完之后,真正有价值的「学情」却没有沉淀下来。</p>
+      </div>
+      <div class="pains">
+        <div class="pain reveal d3"><span class="tag">耗时</span><div class="n">01</div><h3 data-od-id="path-4-1-1-1-0-2">批一个班<br>耗时数小时</h3><p>40–50 份主观题逐份手批,一次作业常占用老师一个晚上,改卷挤压了备课与答疑。</p></div>
+        <div class="pain reveal d4"><span class="tag">无洞察</span><div class="n">02</div><h3 data-od-id="path-4-1-1-1-1-2">批完只剩分数<br>没有学情</h3><p>得到的是一摞分数,而不是「哪个采分点全班都丢」「典型错误长什么样」的可教学洞察。</p></div>
+        <div class="pain reveal d5"><span class="tag">不可信</span><div class="n">03</div><h3 data-od-id="path-4-1-1-1-2-2">通用 AI 判分<br>是个黑箱</h3><p>不对齐本校评分标准、给分逻辑说不清、老师无从复核——结果再快也不敢用在成绩上。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section class="panel" data-label="解决方案" data-theme="light" data-od-id="path-4-2">
+    <canvas class="fx" data-fx="flow" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-2-1">
+      <div class="head">
+        <span class="eyebrow reveal">方案 · How it works</span>
+        <h2 class="reveal d1" data-od-id="path-4-2-1-0-1">采分点透明 · 老师在环的四步流程</h2>
+        <p class="note reveal d2">AI 负责重复劳动,老师保留最终裁量权——每一步都看得见、改得动。</p>
+      </div>
+      <div class="flow">
+        <div class="step solid reveal d3"><div class="dot">1</div><h3 data-od-id="path-4-2-1-1-0-1">导入一个班作答</h3><p>批量上传或拍照导入整班主观题作答,自动识别题号与对应学生。</p></div>
+        <div class="step solid reveal d4"><div class="dot">2</div><h3 data-od-id="path-4-2-1-1-1-1">按采分点逐份评分</h3><p>对齐评分标准,逐个采分点给分,并附批注与建议分。</p><div class="out"><span>逐点给分</span><span>错误批注</span><span>建议分</span></div></div>
+        <div class="step solid reveal d5"><div class="dot">3</div><h3 data-od-id="path-4-2-1-1-2-1">老师一键复核 / 微调</h3><p>采纳、改分、批量调整——老师始终是最终决策者。</p></div>
+        <div class="step reveal d6"><div class="dot">4</div><h3 data-od-id="path-4-2-1-1-3-1">生成全班学情报告</h3><p>自动汇总成可教学的报告。</p><div class="out"><span>得分分布</span><span>高频失分点</span><span>典型答案</span><span>教学建议</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section class="panel s-value" data-label="核心价值" data-theme="dark" data-od-id="path-4-3">
+    <canvas class="fx" data-fx="value" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-3-1">
+      <div class="head">
+        <span class="eyebrow reveal">价值 · The Payoff</span>
+        <h2 class="reveal d1" data-od-id="path-4-3-1-0-1">把一个班的批改,从一晚压到一杯咖啡。</h2>
+      </div>
+      <div class="valwrap">
+        <div class="bigstat reveal d2">
+          <div class="arrow">
+            <span class="from tnum">2 小时</span>
+            <span class="to tnum"><span id="countup" data-od-id="path-4-3-1-1-0-0-1-0">30</span><small> 分钟</small></span>
+          </div>
+          <div class="cap">单个班级主观题:从「逐份手批 ≈ 2 小时」到「复核 + 报告 ≈ 30 分钟」。</div>
+        </div>
+        <div class="vpoints">
+          <div class="vpoint reveal d3"><div class="ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3.5"></circle></svg></div><div><h4 data-od-id="path-4-3-1-1-1-0-1-0">采分点透明</h4><p>每一分都对应明确的采分点与批注,给分逻辑可追溯。</p></div></div>
+          <div class="vpoint reveal d4"><div class="ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5 9.5 17 4 11.5"></path></svg></div><div><h4 data-od-id="path-4-3-1-1-1-1-1-0">老师在环</h4><p>AI 给初评,老师一键复核微调,最终裁量权始终在老师手里。</p></div></div>
+          <div class="vpoint reveal d5"><div class="ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 2.7v5.1c0 4.3-2.9 7.3-7 8.9-4.1-1.6-7-4.6-7-8.9V5.7z"></path><path d="M9 11.7l2.2 2.2 4-4.2"></path></svg></div><div><h4 data-od-id="path-4-3-1-1-1-2-1-0">可信可控</h4><p>对齐本校评分标准,结果敢用于真实成绩与家校沟通。</p></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 -->
+  <section class="panel" data-label="学情报告" data-theme="light" data-od-id="path-4-4">
+    <canvas class="fx" data-fx="report" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-4-1">
+      <div class="head">
+        <span class="eyebrow reveal">产出 · Class Insight</span>
+        <h2 class="reveal d1" data-od-id="path-4-4-1-0-1">30 分钟得到的,不只是分数,是一份学情报告</h2>
+        <p class="note reveal d2">示意图 · 以一道 10 分论述题为例,展示报告自动生成的可视化洞察。</p>
+      </div>
+      <div class="viz">
+        <div class="card reveal d3">
+          <div class="ctitle">得分分布</div>
+          <div class="csub">全班 48 人 · 横轴为得分区间 / 人数</div>
+          <div class="hist">
+            <div class="bar"><span class="v tnum">2</span><div class="col" style="--h:14%"></div><span class="x">0–2</span></div>
+            <div class="bar"><span class="v tnum">5</span><div class="col" style="--h:30%"></div><span class="x">3–4</span></div>
+            <div class="bar"><span class="v tnum">9</span><div class="col" style="--h:54%"></div><span class="x">5–6</span></div>
+            <div class="bar peak"><span class="v tnum">17</span><div class="col" style="--h:100%"></div><span class="x">7–8</span></div>
+            <div class="bar"><span class="v tnum">11</span><div class="col" style="--h:66%"></div><span class="x">9–10</span></div>
+            <div class="bar"><span class="v tnum">4</span><div class="col" style="--h:24%"></div><span class="x">满分</span></div>
+          </div>
+        </div>
+        <div class="card reveal d4">
+          <div class="ctitle">高频失分点</div>
+          <div class="csub">按「丢分人数占比」排序 · 直接指向下一节课重点</div>
+          <div class="loss">
+            <div class="row"><span class="lab">论点缺乏论据支撑</span><div class="track"><div class="fill" style="--w:78%"></div></div><span class="pct tnum">78%</span></div>
+            <div class="row"><span class="lab">概念定义不准确</span><div class="track"><div class="fill" style="--w:61%"></div></div><span class="pct tnum">61%</span></div>
+            <div class="row"><span class="lab">结论与题目脱节</span><div class="track"><div class="fill" style="--w:44%"></div></div><span class="pct tnum">44%</span></div>
+            <div class="row"><span class="lab">术语表述不规范</span><div class="track"><div class="fill" style="--w:29%"></div></div><span class="pct tnum">29%</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="reportnote reveal d5">
+        <span>同时附带 → <b>典型答案样本</b>(高分 / 中分 / 易错对照)</span>
+        <span><b>教学建议</b>:针对「论据支撑」安排一次专项讲评</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 -->
+  <section class="panel" data-label="可信" data-theme="light" data-od-id="path-4-5">
+    <canvas class="fx" data-fx="trust" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-5-1">
+      <div class="head">
+        <span class="eyebrow reveal">差异 · Why trust it</span>
+        <h2 class="reveal d1" data-od-id="path-4-5-1-0-1">和「通用 AI 判分」的根本区别</h2>
+        <p class="note reveal d2">不是更聪明的黑箱,而是一个老师能看懂、能改、能负责的评分助手。</p>
+      </div>
+      <div class="trust">
+        <div class="t reveal d3"><div class="ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><path d="M8 9h8M8 12h8M8 15h5"></path></svg></div><h3 data-od-id="path-4-5-1-1-0-1">对齐评分标准</h3><p>以本校 / 本次的采分点为准绳逐点判分,而非凭模型「感觉」给一个总分。</p></div>
+        <div class="t reveal d4"><div class="ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3.5"></circle></svg></div><h3 data-od-id="path-4-5-1-1-1-1">每一分可追溯</h3><p>点开任意一份作答,都能看到「哪个采分点得分、为什么、对应批注」。</p></div>
+        <div class="t reveal d5"><div class="ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16z"></path><path d="M13.5 6.5l4 4"></path></svg></div><h3 data-od-id="path-4-5-1-1-2-1">老师拥有终审</h3><p>AI 是初评,采纳与否、改多少分由老师一键决定,责任与裁量权清晰。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 -->
+  <section class="panel" data-label="用户与赛道" data-theme="light" data-od-id="path-4-6">
+    <canvas class="fx" data-fx="audience" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-6-1">
+      <div class="head">
+        <span class="eyebrow reveal">市场 · Who &amp; Where</span>
+        <h2 class="reveal d1" data-od-id="path-4-6-1-0-1">为一线老师而造</h2>
+      </div>
+      <div class="aud">
+        <div class="persona reveal d2">
+          <div class="who">中小学一线老师</div>
+          <div class="role">语文 / 英语 / 政史等主观题学科</div>
+          <ul>
+            <li>每周固定布置主观题作业与练习</li>
+            <li>需要把改卷时间还给备课与答疑</li>
+            <li>关心的是「全班哪里没学会」,而非单纯分数</li>
+            <li>对成绩公正性敏感,要看得懂给分依据</li>
+          </ul>
+        </div>
+        <div class="meta reveal d3">
+          <h3 data-od-id="path-4-6-1-1-1-0">切入<br>学习工作赛道</h3>
+          <div class="track"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:8px"><path d="M2.5 8.5 12 5l9.5 3.5L12 12z"></path><path d="M6.5 10.5V15c0 1.2 2.5 2.5 5.5 2.5s5.5-1.3 5.5-2.5v-4.5"></path></svg>学习工作 · 教育生产力</div>
+          <p>从老师每天都在做、又最痛的「主观题批改」切入,以高频刚需建立信任,再向教学全流程延展。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 08 -->
+  <section class="panel s-vision" data-label="愿景" data-theme="light" data-od-id="path-4-7">
+    <canvas class="fx" data-fx="vision" aria-hidden="true"></canvas>
+    <div class="wrap" data-od-id="path-4-7-1">
+      <span class="eyebrow reveal">愿景 · The Vision</span>
+      <div class="visionhero reveal d1">智能改卷,是 <b>OpenEDU「AI 教学工作台」</b>的第一个模块。</div>
+      <div class="road">
+        <div class="ph now reveal d2"><span class="tagnow" aria-hidden="true"></span><span class="badge">MODULE 01 · 现在</span><h3 data-od-id="path-4-7-1-2-0-2">智能改卷</h3><p>采分点评分 + 学情报告,建立老师对 AI 的信任与日常入口。</p></div>
+        <div class="ph reveal d3"><span class="badge">MODULE 02</span><h3 data-od-id="path-4-7-1-2-1-1">错题归纳</h3><p>沉淀失分点,自动生成班级 / 个人错题集与巩固练习。</p></div>
+        <div class="ph reveal d4"><span class="badge">MODULE 03</span><h3 data-od-id="path-4-7-1-2-2-1">名人智能体</h3><p>可对话的学科角色,把讲评与答疑变成沉浸式互动。</p></div>
+        <div class="ph reveal d5"><span class="badge">MODULE 04</span><h3 data-od-id="path-4-7-1-2-3-1">分层出题</h3><p>依据学情自动生成分层试题,实现因材施教的闭环。</p></div>
+      </div>
+      <div class="closingline reveal d6">
+        <span>一个改卷工具的终点,是 <b>老师的 AI 教学工作台</b>。</span>
+        <span>OpenEDU 智能改卷 · 创意提案</span>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function(){
+  var scroller=document.getElementById('scroll');
+  var panels=Array.prototype.slice.call(document.querySelectorAll('.panel'));
+  var prog=document.getElementById('prog');
+  var dotsWrap=document.getElementById('dots');
+  var cue=document.getElementById('cue');
+
+  // build dot nav
+  panels.forEach(function(p,i){
+    var a=document.createElement('a');
+    a.title=p.getAttribute('data-label')||('Section '+(i+1));
+    a.addEventListener('click',function(){
+      p.scrollIntoView({behavior:'smooth',block:'start'});
+    });
+    dotsWrap.appendChild(a);
+  });
+  var dots=Array.prototype.slice.call(dotsWrap.children);
+
+  // reveal on enter
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting) e.target.classList.add('in');
+    });
+  },{root:scroller,threshold:0.35});
+  panels.forEach(function(p){io.observe(p);});
+
+  // active dot + theme sync via most-centered panel
+  var activeIO=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        var i=panels.indexOf(e.target);
+        var dark=e.target.getAttribute('data-theme')==='dark';
+        dots.forEach(function(d,j){d.classList.toggle('on',j===i);d.classList.toggle('light',dark);});
+        cue.style.color=dark?'rgba(255,255,255,.55)':'';
+        document.querySelector('.brandfix').style.color=dark?'#eaf4f2':'';
+      }
+    });
+  },{root:scroller,threshold:0.6});
+  panels.forEach(function(p){activeIO.observe(p);});
+
+  // progress bar + hide cue after first scroll
+  scroller.addEventListener('scroll',function(){
+    var max=scroller.scrollHeight-scroller.clientHeight;
+    var pct=max>0?(scroller.scrollTop/max*100):0;
+    prog.style.width=pct+'%';
+    cue.style.opacity=scroller.scrollTop>40?'0':'1';
+  },{passive:true});
+
+  // count-up on value section (quick tick to 30)
+  var counted=false;
+  var cIO=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting && !counted){
+        counted=true;
+        var el=document.getElementById('countup'); if(!el) return;
+        var n=0, target=30, t0=null;
+        function tick(ts){
+          if(!t0)t0=ts; var p=Math.min((ts-t0)/700,1);
+          el.textContent=Math.round(p*target);
+          if(p<1) requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      }
+    });
+  },{root:scroller,threshold:0.6});
+  var vs=document.querySelector('.s-value'); if(vs) cIO.observe(vs);
+
+  // keyboard up/down/PgUp/PgDn snap
+  var idx=0;
+  function nearest(){
+    var top=scroller.scrollTop, best=0, bd=1e9;
+    panels.forEach(function(p,i){var d=Math.abs(p.offsetTop-top);if(d<bd){bd=d;best=i;}});
+    return best;
+  }
+  document.addEventListener('keydown',function(ev){
+    if(ev.key==='ArrowDown'||ev.key==='PageDown'){ev.preventDefault();idx=Math.min(panels.length-1,nearest()+1);panels[idx].scrollIntoView({behavior:'smooth'});}
+    else if(ev.key==='ArrowUp'||ev.key==='PageUp'){ev.preventDefault();idx=Math.max(0,nearest()-1);panels[idx].scrollIntoView({behavior:'smooth'});}
+    else if(ev.key==='Home'){ev.preventDefault();panels[0].scrollIntoView({behavior:'smooth'});}
+    else if(ev.key==='End'){ev.preventDefault();panels[panels.length-1].scrollIntoView({behavior:'smooth'});}
+  });
+
+  // first panel reveals immediately
+  if(panels[0]) panels[0].classList.add('in');
+  dots[0] && dots[0].classList.add('on');
+})();
+</script>
+
+<!-- ===== 每屏背景动效引擎:8 屏 8 种 2D 画布动态,克制蓝绿基调,仅在视口内运行 ===== -->
+<script>
+(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var scroller=document.getElementById('scroll');
+  function rnd(a,b){return a+Math.random()*(b-a);}
+  var mx=0.5,my=0.5;            // normalized pointer (viewport)
+  window.addEventListener('pointermove',function(e){
+    mx=e.clientX/window.innerWidth; my=e.clientY/window.innerHeight;
+  },{passive:true});
+
+  // ---- effect builders: each returns draw(t) using the live inst.w / inst.h ----
+  var FX={
+    // 01 封面 — 知识星座:漂移节点 + 近邻连线 + 少量金色采分点
+    cover:function(s){
+      var n=Math.round(Math.min(78, s.w*s.h/13000)), P=[];
+      for(var i=0;i<n;i++)P.push({x:rnd(0,s.w),y:rnd(0,s.h),vx:rnd(-.16,.16),vy:rnd(-.16,.16),g:Math.random()<.07});
+      var thr=Math.min(160,s.w*0.14);
+      return function(){
+        var ctx=s.ctx,w=s.w,h=s.h,ox=(mx-0.5)*26,oy=(my-0.5)*26;
+        for(var i=0;i<P.length;i++){var p=P[i];p.x+=p.vx;p.y+=p.vy;
+          if(p.x<0||p.x>w)p.vx*=-1; if(p.y<0||p.y>h)p.vy*=-1;}
+        ctx.lineWidth=1;
+        for(var a=0;a<P.length;a++)for(var b=a+1;b<P.length;b++){
+          var A=P[a],B=P[b],d=Math.hypot(A.x-B.x,A.y-B.y);
+          if(d<thr){ctx.strokeStyle='rgba(11,143,129,'+(0.11*(1-d/thr))+')';
+            ctx.beginPath();ctx.moveTo(A.x+ox*.3,A.y+oy*.3);ctx.lineTo(B.x+ox*.3,B.y+oy*.3);ctx.stroke();}
+        }
+        for(var i=0;i<P.length;i++){var p=P[i];ctx.beginPath();
+          ctx.arc(p.x+ox*.3,p.y+oy*.3,p.g?3.2:1.7,0,7);
+          ctx.fillStyle=p.g?'rgba(201,138,58,.85)':'rgba(11,143,129,.5)';ctx.fill();}
+      };
+    },
+    // 02 痛点 — 缓缓下落的金色光丝:时间在流逝 / 被批改吞掉
+    pain:function(s){
+      // 时间在批改里流逝:带渐隐拖尾的金色光丝下落 + 头部微光点
+      var n=Math.round(Math.min(120,s.w*s.h/7000)),P=[];
+      for(var i=0;i<n;i++)P.push({x:rnd(0,s.w),y:rnd(-s.h,s.h),sp:rnd(1.1,3.0),a:rnd(.14,.36),len:rnd(34,88),wd:rnd(1,2.4),dx:rnd(-.12,.12)});
+      return function(){var ctx=s.ctx,w=s.w,h=s.h;
+        ctx.lineCap='round';
+        for(var i=0;i<P.length;i++){var p=P[i];p.y+=p.sp;p.x+=p.dx;
+          if(p.y-p.len>h){p.y=-rnd(0,h*.4);p.x=rnd(0,w);}
+          var g=ctx.createLinearGradient(p.x,p.y-p.len,p.x,p.y);
+          g.addColorStop(0,'rgba(201,138,58,0)');
+          g.addColorStop(1,'rgba(201,138,58,'+p.a+')');
+          ctx.strokeStyle=g;ctx.lineWidth=p.wd;
+          ctx.beginPath();ctx.moveTo(p.x,p.y-p.len);ctx.lineTo(p.x,p.y);ctx.stroke();
+          // 头部微光点
+          ctx.fillStyle='rgba(214,160,82,'+Math.min(.6,p.a+.18)+')';
+          ctx.beginPath();ctx.arc(p.x,p.y,p.wd*.9,0,7);ctx.fill();}
+      };
+    },
+    // 03 解决方案 — 横向流动的数据流:四步流水线
+    flow:function(s){
+      var lanes=Math.max(4,Math.round(s.h/130)),P=[];
+      for(var L=0;L<lanes;L++){var y=(L+.5)/lanes*s.h;
+        for(var i=0;i<6;i++)P.push({y:y,x:rnd(0,s.w),sp:rnd(.6,1.5),a:rnd(.08,.2),r:rnd(1.4,3)});}
+      return function(){var ctx=s.ctx,w=s.w,h=s.h;
+        for(var i=0;i<P.length;i++){var p=P[i];p.x+=p.sp;if(p.x>w+30)p.x=-30;
+          var g=ctx.createLinearGradient(p.x-28,0,p.x,0);
+          g.addColorStop(0,'rgba(11,143,129,0)');g.addColorStop(1,'rgba(11,143,129,'+p.a+')');
+          ctx.strokeStyle=g;ctx.lineWidth=p.r;ctx.beginPath();ctx.moveTo(p.x-28,p.y);ctx.lineTo(p.x,p.y);ctx.stroke();
+          ctx.fillStyle='rgba(11,143,129,'+(p.a+.06)+')';ctx.beginPath();ctx.arc(p.x,p.y,p.r*.85,0,7);ctx.fill();}
+      };
+    },
+    // 04 核心价值(深色) — 上升的薄荷微光 + 中心扩散脉冲:收获感
+    value:function(s){
+      var n=Math.round(Math.min(64,s.w*s.h/14000)),P=[];
+      for(var i=0;i<n;i++)P.push({x:rnd(0,s.w),y:rnd(0,s.h),sp:rnd(.2,.85),r:rnd(.8,2.2),a:rnd(.1,.5)});
+      return function(t){var ctx=s.ctx,w=s.w,h=s.h;
+        for(var i=0;i<P.length;i++){var p=P[i];p.y-=p.sp;if(p.y<-4){p.y=h+4;p.x=rnd(0,w);}
+          ctx.fillStyle='rgba(95,214,198,'+p.a+')';ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();}
+        var cx=w*0.28,cy=h*0.52,per=3.4,maxR=Math.min(w,h)*0.62;
+        for(var k=0;k<2;k++){var pp=((t+k*per/2)%per)/per;
+          ctx.strokeStyle='rgba(95,214,198,'+(0.16*(1-pp))+')';ctx.lineWidth=1.5;
+          ctx.beginPath();ctx.arc(cx,cy,pp*maxR,0,7);ctx.stroke();}
+      };
+    },
+    // 05 学情报告 — 淡网格 + 呼吸散点 + 扫描光带:数据感
+    report:function(s){
+      var n=Math.round(Math.min(64,s.w*s.h/13000)),pts=[];
+      for(var i=0;i<n;i++)pts.push({x:rnd(0,s.w),y:rnd(0,s.h),r:rnd(1,2.6),ph:rnd(0,6.28)});
+      var gap=48;
+      return function(t){var ctx=s.ctx,w=s.w,h=s.h;
+        ctx.strokeStyle='rgba(11,143,129,0.045)';ctx.lineWidth=1;
+        for(var x=gap;x<w;x+=gap){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
+        for(var y=gap;y<h;y+=gap){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+        for(var i=0;i<pts.length;i++){var p=pts[i],a=0.1+0.12*Math.sin(t*1.4+p.ph);
+          ctx.fillStyle='rgba(11,143,129,'+a+')';ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();}
+        var sx=(t*70)%(w+90)-45,g=ctx.createLinearGradient(sx-45,0,sx,0);
+        g.addColorStop(0,'rgba(76,181,168,0)');g.addColorStop(1,'rgba(76,181,168,0.11)');
+        ctx.fillStyle=g;ctx.fillRect(sx-45,0,45,h);
+      };
+    },
+    // 06 可信 — 中心同心环扩散:对齐 / 雷达式校准,稳定可控
+    trust:function(s){
+      return function(t){var ctx=s.ctx,w=s.w,h=s.h,cx=w*0.5,cy=h*0.5,maxR=Math.hypot(w,h)*0.5,per=4.2;
+        ctx.strokeStyle='rgba(11,143,129,0.05)';ctx.lineWidth=1;
+        for(var r=70;r<maxR;r+=70){ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.stroke();}
+        for(var k=0;k<3;k++){var pp=((t+k*per/3)%per)/per;
+          ctx.strokeStyle='rgba(11,143,129,'+(0.16*(1-pp))+')';ctx.lineWidth=1.5;
+          ctx.beginPath();ctx.arc(cx,cy,pp*maxR,0,7);ctx.stroke();}
+      };
+    },
+    // 07 用户与赛道 — 围绕中心环绕的群体光点:一线老师社群
+    // 07 用户与赛道 — 老师社群网络:多层环绕节点向中心枢纽汇聚
+    audience:function(s){
+      var R=Math.min(s.w,s.h)*0.46, rings=[
+        {rad:R*0.40,n:7,sp:0.10,r:3.2},
+        {rad:R*0.70,n:11,sp:-0.07,r:2.8},
+        {rad:R*1.0,n:15,sp:0.045,r:2.3}
+      ], P=[];
+      for(var ri=0;ri<rings.length;ri++){var R0=rings[ri];
+        for(var i=0;i<R0.n;i++)P.push({ring:ri,rad:R0.rad,base:(i/R0.n)*6.283,sp:R0.sp,r:R0.r,
+          g:Math.random()<.16, ph:rnd(0,6.28), ph2:rnd(0,6.28)});
+      }
+      function pos(p,t){var a=p.base+t*p.sp; return [Math.cos(a)*p.rad,Math.sin(a)*p.rad*0.62];}
+      return function(t){var ctx=s.ctx,w=s.w,h=s.h,cx=w*0.5,cy=h*0.5;
+        // 中心枢纽呼吸光晕
+        var hub=1+Math.sin(t*0.9)*0.18, hr=46*hub;
+        var hg=ctx.createRadialGradient(cx,cy,0,cx,cy,hr*2.2);
+        hg.addColorStop(0,'rgba(11,143,129,0.20)');hg.addColorStop(1,'rgba(11,143,129,0)');
+        ctx.fillStyle=hg;ctx.beginPath();ctx.arc(cx,cy,hr*2.2,0,7);ctx.fill();
+        // 向中心的连线（节点周期性靠近中心时变亮，隐喻汇聚）
+        ctx.lineWidth=1;
+        for(var i=0;i<P.length;i++){var p=P[i],q=pos(p,t),x=cx+q[0],y=cy+q[1];
+          var pulse=0.5+0.5*Math.sin(t*0.8+p.ph);
+          ctx.strokeStyle='rgba(11,143,129,'+(0.05+pulse*0.13)+')';
+          ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(x,y);ctx.stroke();
+        }
+        // 同环邻接星座连线
+        ctx.lineWidth=1;
+        for(var ri=0;ri<rings.length;ri++){var first=null,prevX,prevY,started=false;
+          for(var i=0;i<P.length;i++){if(P[i].ring!==ri)continue;
+            var p=P[i],q=pos(p,t),x=cx+q[0],y=cy+q[1];
+            if(started){ctx.strokeStyle='rgba(76,181,168,0.10)';ctx.beginPath();ctx.moveTo(prevX,prevY);ctx.lineTo(x,y);ctx.stroke();}
+            else{first=[x,y];started=true;}
+            prevX=x;prevY=y;
+          }
+          if(first){ctx.strokeStyle='rgba(76,181,168,0.10)';ctx.beginPath();ctx.moveTo(prevX,prevY);ctx.lineTo(first[0],first[1]);ctx.stroke();}
+        }
+        // 节点（带辉光）
+        for(var i=0;i<P.length;i++){var p=P[i],q=pos(p,t),x=cx+q[0],y=cy+q[1];
+          var tw=0.7+0.3*Math.sin(t*1.4+p.ph2);
+          ctx.save();ctx.shadowBlur=p.g?14:8;
+          ctx.shadowColor=p.g?'rgba(201,138,58,0.7)':'rgba(11,143,129,0.55)';
+          ctx.fillStyle=p.g?'rgba(201,138,58,'+(0.6+tw*0.35)+')':'rgba(11,143,129,'+(0.45+tw*0.35)+')';
+          ctx.beginPath();ctx.arc(x,y,p.r*(0.85+tw*0.3),0,7);ctx.fill();ctx.restore();
+        }
+        // 中心枢纽实心点
+        ctx.fillStyle='rgba(7,93,84,0.85)';ctx.beginPath();ctx.arc(cx,cy,5.5,0,7);ctx.fill();
+      };
+    },
+    // 08 愿景 — 流动的极光波带:面向未来的地平线
+    vision:function(s){
+      var cols=['11,143,129','76,181,168','95,214,198'];
+      return function(t){var ctx=s.ctx,w=s.w,h=s.h;
+        for(var b=0;b<3;b++){var amp=18+b*12,base=h*(0.46+b*0.13),k=0.0075;
+          ctx.beginPath();ctx.moveTo(0,base);
+          for(var x=0;x<=w;x+=12)ctx.lineTo(x,base+Math.sin(x*k+t*(0.5+b*0.22)+b)*amp);
+          ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();
+          var g=ctx.createLinearGradient(0,base-amp,0,h);
+          g.addColorStop(0,'rgba('+cols[b]+',0.07)');g.addColorStop(1,'rgba(11,143,129,0)');
+          ctx.fillStyle=g;ctx.fill();}
+      };
+    }
+  };
+
+  // ---- wire each .fx canvas to its panel, render only while on screen ----
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  var insts=[], active=new Set(), raf=null, t0=null;
+
+  function build(inst){
+    var b=FX[inst.name]||FX.cover;
+    inst.draw=b(inst);
+  }
+  function resize(inst){
+    var r=inst.canvas.getBoundingClientRect();
+    inst.w=r.width; inst.h=r.height;
+    inst.canvas.width=Math.round(inst.w*dpr); inst.canvas.height=Math.round(inst.h*dpr);
+    inst.ctx.setTransform(dpr,0,0,dpr,0,0);
+    build(inst);                // reseed particles for the new size
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.fx'),function(cv){
+    var inst={canvas:cv,ctx:cv.getContext('2d'),name:cv.getAttribute('data-fx'),w:0,h:0,draw:function(){}};
+    insts.push(inst); resize(inst);
+  });
+
+  function loop(ts){
+    if(t0==null)t0=ts; var t=(ts-t0)/1000;
+    active.forEach(function(inst){ inst.ctx.clearRect(0,0,inst.w,inst.h); inst.draw(t); });
+    raf = active.size ? requestAnimationFrame(loop) : null;
+  }
+  function wake(){ if(!raf && active.size) raf=requestAnimationFrame(loop); }
+
+  if(reduce){
+    insts.forEach(function(inst){ inst.draw(0); });   // single static frame, no loop
+  } else {
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        var inst=null; for(var i=0;i<insts.length;i++) if(insts[i].canvas===e.target){inst=insts[i];break;}
+        if(!inst) return;
+        if(e.isIntersecting){ active.add(inst); }
+        else { active.delete(inst); inst.ctx.clearRect(0,0,inst.w,inst.h); }
+      });
+      wake();
+    },{root:scroller||null,threshold:0.04});
+    insts.forEach(function(inst){ io.observe(inst.canvas); });
+
+    var rt;
+    window.addEventListener('resize',function(){
+      clearTimeout(rt);
+      rt=setTimeout(function(){ insts.forEach(resize); wake(); },150);
+    });
+  }
+})();
+</script>
+
+
+<script data-od-snapshot-bridge="">(function(){
+  function copyComputedStyle(source, target){
+    if (!source || !target || source.nodeType !== 1 || target.nodeType !== 1) return;
+    var computed = window.getComputedStyle(source);
+    var style = target.getAttribute('style') || '';
+    for (var i = 0; i < computed.length; i++){
+      var prop = computed[i];
+      style += prop + ':' + computed.getPropertyValue(prop) + ';';
+    }
+    target.setAttribute('style', style);
+  }
+  function syncElementState(source, target){
+    var tag = source.tagName ? source.tagName.toLowerCase() : '';
+    if (tag === 'img' && source.currentSrc) target.setAttribute('src', source.currentSrc);
+    if (tag === 'input' || tag === 'textarea') target.setAttribute('value', source.value || '');
+    if (tag === 'canvas') {
+      try {
+        var img = document.createElement('img');
+        img.setAttribute('src', source.toDataURL('image/png'));
+        img.setAttribute('style', target.getAttribute('style') || '');
+        target.parentNode && target.parentNode.replaceChild(img, target);
+      } catch (_) {}
+    }
+  }
+  function inlineSnapshotStyles(originalRoot, cloneRoot){
+    copyComputedStyle(originalRoot, cloneRoot);
+    syncElementState(originalRoot, cloneRoot);
+    var originals = originalRoot.querySelectorAll('*');
+    var clones = cloneRoot.querySelectorAll('*');
+    var count = Math.min(originals.length, clones.length);
+    for (var i = 0; i < count; i++){
+      copyComputedStyle(originals[i], clones[i]);
+      syncElementState(originals[i], clones[i]);
+    }
+    var scripts = cloneRoot.querySelectorAll('script');
+    for (var s = scripts.length - 1; s >= 0; s--) scripts[s].remove();
+  }
+  function waitForImages(){
+    var imgs = Array.prototype.slice.call(document.images || []);
+    return Promise.all(imgs.map(function(img){
+      if (img.complete) return Promise.resolve();
+      return new Promise(function(resolve){
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      });
+    }));
+  }
+  function renderSnapshot(id){
+    var w = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    var h = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    var dpr = window.devicePixelRatio || 1;
+    var docW = Math.max(w, document.documentElement.scrollWidth || 0, document.body ? document.body.scrollWidth : 0);
+    var docH = Math.max(h, document.documentElement.scrollHeight || 0, document.body ? document.body.scrollHeight : 0);
+    var clone = document.documentElement.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+    inlineSnapshotStyles(document.documentElement, clone);
+    var serializer = new XMLSerializer();
+    var html = serializer.serializeToString(clone);
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">' +
+      '<foreignObject x="' + (-window.scrollX || 0) + '" y="' + (-window.scrollY || 0) + '" width="' + docW + '" height="' + docH + '">' +
+      html +
+      '</foreignObject></svg>';
+    var img = new Image();
+    img.onload = function(){
+      try {
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.floor(w * dpr));
+        canvas.height = Math.max(1, Math.floor(h * dpr));
+        var ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('no 2d context');
+        ctx.scale(dpr, dpr);
+        ctx.drawImage(img, 0, 0, w, h);
+        window.parent.postMessage({ type: 'od:snapshot:result', id: id, dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height }, '*');
+      } catch (err) {
+        window.parent.postMessage({ type: 'od:snapshot:result', id: id, error: String(err && err.message || err) }, '*');
+      }
+    };
+    img.onerror = function(){
+      window.parent.postMessage({ type: 'od:snapshot:result', id: id, error: 'snapshot image failed' }, '*');
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+  window.addEventListener('message', function(ev){
+    var data = ev && ev.data;
+    if (!data || data.type !== 'od:snapshot' || !data.id) return;
+    waitForImages().then(function(){ renderSnapshot(String(data.id)); });
+  });
+})();</script><script data-od-srcdoc-transport-activation="">(function(){
+  window.addEventListener('message', function(ev){
+    var data = ev && ev.data;
+    if (!data || data.type !== 'od:srcdoc-transport-activate' || typeof data.html !== 'string') return;
+    document.open();
+    document.write(data.html);
+    document.close();
+  });
+})();</script></body></html>

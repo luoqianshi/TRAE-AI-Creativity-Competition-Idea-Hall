@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 隔空琴 — 手势识别虚拟钢琴</title>
+<style>
+:root {
+  --bg: #0d0d1a;
+  --panel: #151530;
+  --white-key: #f8f8ff;
+  --black-key: #1a1a30;
+  --accent: #ff6b6b;
+  --accent2: #4ecdc4;
+  --text: #eaeaff;
+  --sub: #8899cc;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg); color: var(--text); min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+}
+.hero {
+  text-align: center; padding: 40px 20px 16px; width: 100%;
+}
+.hero h1 { font-size: 2.3em; font-weight: 800; }
+.hero h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.hero p { color: var(--sub); margin-top: 6px; font-size: .9em; }
+
+.container { width: 100%; max-width: 960px; padding: 0 20px 40px; }
+
+/* 手势可视化区域 */
+.gesture-zone {
+  background: var(--panel); border-radius: 20px; padding: 24px;
+  text-align: center; margin: 16px 0; border: 2px dashed rgba(255,255,255,.08);
+  min-height: 120px; display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+}
+.gesture-zone .hand-icon { font-size: 3.5em; transition: all .2s; }
+.gesture-zone .hand-icon.active { transform: scale(1.15); }
+.gesture-zone .hint { color: var(--sub); font-size: .85em; margin-top: 6px; }
+.gesture-zone .detected { color: var(--accent2); font-weight: 600; margin-top: 4px; }
+
+/* 模式切换 */
+.mode-bar {
+  display: flex; gap: 10px; margin: 12px 0; justify-content: center; flex-wrap: wrap;
+}
+.mode-btn {
+  padding: 10px 20px; border-radius: 12px; border: 2px solid rgba(255,255,255,.1);
+  background: var(--panel); color: var(--text); cursor: pointer;
+  font-weight: 600; transition: all .3s; font-size: .9em;
+}
+.mode-btn:hover { border-color: rgba(78,205,196,.3); }
+.mode-btn.active { border-color: var(--accent2); background: rgba(78,205,196,.1); }
+
+/* 钢琴键盘 */
+.piano-wrap {
+  background: var(--panel); border-radius: 20px; padding: 30px 20px 40px;
+  margin: 16px 0; position: relative; overflow-x: auto;
+}
+.piano { display: flex; position: relative; min-width: 780px; }
+.white-key {
+  width: 80px; height: 220px; background: var(--white-key);
+  border: 2px solid #ccc; border-radius: 0 0 8px 8px; cursor: pointer;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 14px; font-weight: 700; color: #333; font-size: .85em;
+  transition: all .1s; position: relative; z-index: 1; user-select: none;
+}
+.white-key:hover { background: #eef; }
+.white-key:active, .white-key.pressed {
+  background: linear-gradient(to bottom, #e8e8ff, #ddd);
+  box-shadow: inset 0 4px 8px rgba(0,0,0,.15);
+  transform: scaleY(.98);
+}
+.black-key {
+  width: 50px; height: 140px; background: #222;
+  border-radius: 0 0 6px 6px; cursor: pointer;
+  position: absolute; z-index: 2; transition: all .1s; user-select: none;
+}
+.black-key:hover { background: #333; }
+.black-key:active, .black-key.pressed {
+  background: #111;
+  box-shadow: inset 0 4px 8px rgba(0,0,0,.4);
+  transform: scaleY(.98);
+}
+.black-key .note-label {
+  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+  color: #aaa; font-size: .6em; font-weight: 600;
+}
+
+/* 提示信息 */
+.info-bar {
+  background: var(--panel); border-radius: 14px; padding: 16px 20px;
+  margin: 12px 0; display: flex; gap: 20px; justify-content: center;
+  flex-wrap: wrap; font-size: .85em; color: var(--sub);
+}
+.info-bar span { display: flex; align-items: center; gap: 6px; }
+.info-bar .key-hint {
+  padding: 3px 8px; border-radius: 5px; background: rgba(255,255,255,.1);
+  font-family: monospace; font-weight: 700;
+}
+
+/* 录制 */
+.record-bar { display: flex; gap: 10px; margin: 12px 0; justify-content: center; flex-wrap: wrap; }
+.rec-btn {
+  padding: 10px 20px; border-radius: 12px; border: none; font-weight: 700;
+  cursor: pointer; transition: all .3s;
+}
+.rec-btn.record { background: var(--accent); color: #fff; }
+.rec-btn.record:hover { transform: scale(1.03); }
+.rec-btn.record.recording { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.5)} 50%{box-shadow:0 0 0 12px rgba(255,107,107,0)} }
+.rec-btn.play { background: var(--accent2); color: #0d0d1a; }
+.rec-btn.play:hover { transform: scale(1.03); }
+.rec-btn.clear { background: transparent; border: 2px solid rgba(255,255,255,.2); color: var(--sub); }
+
+/* 视觉反馈波纹 */
+.ripple {
+  position: absolute; width: 80px; height: 80px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(78,205,196,.4), transparent);
+  pointer-events: none; animation: rippleOut .6s ease-out forwards;
+}
+@keyframes rippleOut {
+  0% { transform: scale(.5); opacity: 1; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+/* 响应式 */
+@media (max-width: 840px) {
+  .white-key { width: 50px; height: 160px; }
+  .black-key { width: 34px; height: 100px; }
+  .piano { min-width: auto; }
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>🤚 AI <span>隔空琴</span></h1>
+  <p>手势识别 · 虚拟钢琴 · 无需物理接触，隔空弹奏美妙旋律</p>
+</div>
+
+<div class="container">
+  <div class="gesture-zone" id="gestureZone">
+    <div class="hand-icon" id="handIcon">👋</div>
+    <div class="hint">将手放在摄像头前，或使用键盘模拟手势</div>
+    <div class="detected" id="detected"></div>
+  </div>
+
+  <div class="mode-bar">
+    <button class="mode-btn active" data-mode="piano">🎹 自由弹奏</button>
+    <button class="mode-btn" data-mode="guide">📖 引导模式</button>
+    <button class="mode-btn" data-mode="game">🎮 节奏挑战</button>
+  </div>
+
+  <div class="piano-wrap" id="pianoWrap">
+    <div class="piano" id="piano"></div>
+  </div>
+
+  <div class="info-bar">
+    <span>💡 按 <span class="key-hint">A-L</span> 弹白键</span>
+    <span>🎵 按 <span class="key-hint">W E T Y U</span> 弹黑键</span>
+    <span>🖱️ 也可以点击琴键弹奏</span>
+  </div>
+
+  <div class="record-bar">
+    <button class="rec-btn record" id="btnRecord">⏺️ 开始录制</button>
+    <button class="rec-btn play" id="btnPlay">▶️ 播放</button>
+    <button class="rec-btn clear" id="btnClear">🗑️ 清除</button>
+  </div>
+</div>
+
+<script>
+// 音符映射 (音高用频率模拟)
+const notes = {
+  'C4':  { key: 'A', type: 'white', label: 'C', freq: 261.63 },
+  'C#4': { key: 'W', type: 'black', label: 'C#', freq: 277.18 },
+  'D4':  { key: 'S', type: 'white', label: 'D', freq: 293.66 },
+  'D#4': { key: 'E', type: 'black', label: 'D#', freq: 311.13 },
+  'E4':  { key: 'D', type: 'white', label: 'E', freq: 329.63 },
+  'F4':  { key: 'F', type: 'white', label: 'F', freq: 349.23 },
+  'F#4': { key: 'T', type: 'black', label: 'F#', freq: 369.99 },
+  'G4':  { key: 'G', type: 'white', label: 'G', freq: 392.00 },
+  'G#4': { key: 'Y', type: 'black', label: 'G#', freq: 415.30 },
+  'A4':  { key: 'H', type: 'white', label: 'A', freq: 440.00 },
+  'A#4': { key: 'U', type: 'black', label: 'A#', freq: 466.16 },
+  'B4':  { key: 'J', type: 'white', label: 'B', freq: 493.88 },
+  'C5':  { key: 'K', type: 'white', label: 'C5', freq: 523.25 },
+  'C#5': { key: 'O', type: 'black', label: 'C#5', freq: 554.37 },
+  'D5':  { key: 'L', type: 'white', label: 'D5', freq: 587.33 },
+};
+
+// 构建钢琴
+const pianoEl = document.getElementById('piano');
+const whiteKeys = [];
+const blackKeys = [];
+const whiteNoteNames = Object.keys(notes).filter(n => notes[n].type === 'white');
+const blackNoteNames = Object.keys(notes).filter(n => notes[n].type === 'black');
+
+whiteNoteNames.forEach(noteName => {
+  const note = notes[noteName];
+  const key = document.createElement('div');
+  key.className = 'white-key';
+  key.dataset.note = noteName;
+  key.textContent = note.key;
+  key.addEventListener('mousedown', () => playNote(noteName));
+  key.addEventListener('touchstart', (e) => { e.preventDefault(); playNote(noteName); });
+  pianoEl.appendChild(key);
+  whiteKeys.push(key);
+});
+
+blackNoteNames.forEach((noteName, i) => {
+  const note = notes[noteName];
+  const key = document.createElement('div');
+  key.className = 'black-key';
+  key.dataset.note = noteName;
+  key.innerHTML = `<span class="note-label">${note.key}</span>`;
+
+  const whiteWidth = 80;
+  const blackWidth = 50;
+  let offset = 0;
+  if (i === 0) offset = whiteWidth - blackWidth / 2;
+  else if (i === 6) offset = whiteWidth * 7 + whiteWidth - blackWidth / 2 - 2;
+  else {
+    const gapAfterPrev = (i === 2 || i === 5) ? whiteWidth : 0;
+    offset = whiteWidth * (i + 1) + gapAfterPrev + whiteWidth - blackWidth / 2 - 2;
+  }
+  key.style.left = offset + 'px';
+
+  key.addEventListener('mousedown', (e) => { e.stopPropagation(); playNote(noteName); });
+  key.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); playNote(noteName); });
+  pianoEl.appendChild(key);
+  blackKeys.push(key);
+});
+
+// 音频上下文
+let audioCtx;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playNote(noteName, duration = 300) {
+  const ctx = getAudioCtx();
+  const freq = notes[noteName].freq;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  gain.gain.setValueAtTime(0.3, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration / 1000);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration / 1000);
+
+  // 视觉反馈
+  const key = document.querySelector(`[data-note="${noteName}"]`);
+  if (key) {
+    key.classList.add('pressed');
+    setTimeout(() => key.classList.remove('pressed'), 150);
+  }
+
+  // 手势反馈
+  const hand = document.getElementById('handIcon');
+  hand.classList.add('active');
+  document.getElementById('detected').textContent = `检测到手势 → 音符: ${notes[noteName].label}`;
+  setTimeout(() => {
+    hand.classList.remove('active');
+    document.getElementById('detected').textContent = '';
+  }, 400);
+
+  // 录制
+  if (isRecording) {
+    recording.push({ note: noteName, time: Date.now() - recordStart });
+  }
+
+  // 波纹
+  addRipple(key);
+}
+
+function addRipple(el) {
+  const rect = el.getBoundingClientRect();
+  const ripple = document.createElement('div');
+  ripple.className = 'ripple';
+  ripple.style.left = rect.left + rect.width / 2 - 40 + 'px';
+  ripple.style.top = rect.top + rect.height / 2 - 40 + 'px';
+  document.body.appendChild(ripple);
+  setTimeout(() => ripple.remove(), 600);
+}
+
+// 键盘控制
+const keyMap = {};
+Object.entries(notes).forEach(([name, info]) => {
+  keyMap[info.key.toLowerCase()] = name;
+});
+
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const noteName = keyMap[e.key.toLowerCase()];
+  if (noteName) {
+    e.preventDefault();
+    playNote(noteName);
+  }
+});
+
+// 模式切换
+document.querySelector('.mode-bar').addEventListener('click', function(e) {
+  const btn = e.target.closest('.mode-btn');
+  if (!btn) return;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const mode = btn.dataset.mode;
+
+  if (mode === 'guide') startGuideMode();
+  else if (mode === 'game') startGameMode();
+});
+
+function startGuideMode() {
+  const guideNotes = ['C4','D4','E4','F4','G4','A4','B4','C5'];
+  let i = 0;
+  document.getElementById('detected').textContent = '🎵 引导模式：跟随提示弹奏！';
+  const interval = setInterval(() => {
+    if (document.querySelector('.mode-btn.active')?.dataset.mode !== 'guide') {
+      clearInterval(interval);
+      document.getElementById('detected').textContent = '';
+      return;
+    }
+    document.querySelectorAll('.white-key,.black-key').forEach(k => k.style.background = '');
+    const note = guideNotes[i % guideNotes.length];
+    const key = document.querySelector(`[data-note="${note}"]`);
+    if (key) {
+      key.style.background = note.includes('#') ? '#4ecdc4' : '#ffe0e0';
+      key.style.boxShadow = '0 0 20px rgba(78,205,196,.5)';
+    }
+    i++;
+  }, 1200);
+}
+
+function startGameMode() {
+  document.getElementById('detected').textContent = '🎮 节奏挑战：按高亮的琴键！';
+  let score = 0;
+  const gameNotes = Object.keys(notes).sort(() => Math.random() - .5).slice(0, 8);
+  let gi = 0;
+  let currentTarget = null;
+
+  function nextTarget() {
+    document.querySelectorAll('.white-key,.black-key').forEach(k => {
+      k.style.background = '';
+      k.style.boxShadow = '';
+    });
+    if (gi >= gameNotes.length) {
+      document.getElementById('detected').textContent = `🎉 挑战完成！得分: ${score}/${gameNotes.length}`;
+      return;
+    }
+    currentTarget = gameNotes[gi];
+    const key = document.querySelector(`[data-note="${currentTarget}"]`);
+    if (key) {
+      key.style.background = '#4ecdc4';
+      key.style.boxShadow = '0 0 25px rgba(78,205,196,.6)';
+      key.style.animation = 'pulse .8s ease-in-out infinite';
+    }
+    setTimeout(() => {
+      if (currentTarget) {
+        const k = document.querySelector(`[data-note="${currentTarget}"]`);
+        if (k) { k.style.background = ''; k.style.boxShadow = ''; k.style.animation = ''; }
+      }
+      gi++;
+      setTimeout(nextTarget, 400);
+    }, 1500);
+  }
+
+  // 覆盖点击
+  const origPlay = playNote;
+  const gamePlay = function(noteName) {
+    origPlay(noteName);
+    if (currentTarget === noteName) {
+      score++;
+      document.getElementById('detected').textContent = `✅ 命中！得分: ${score}`;
+    }
+  };
+
+  nextTarget();
+}
+
+// 录制功能
+let isRecording = false;
+let recording = [];
+let recordStart = 0;
+
+document.getElementById('btnRecord').addEventListener('click', function() {
+  isRecording = !isRecording;
+  if (isRecording) {
+    recording = [];
+    recordStart = Date.now();
+    this.textContent = '⏹️ 停止录制';
+    this.classList.add('recording');
+  } else {
+    this.textContent = '⏺️ 开始录制';
+    this.classList.remove('recording');
+  }
+});
+
+document.getElementById('btnPlay').addEventListener('click', function() {
+  if (recording.length === 0) return;
+  const now = Date.now();
+  recording.forEach(({ note, time }) => {
+    setTimeout(() => playNote(note, 250), time);
+  });
+});
+
+document.getElementById('btnClear').addEventListener('click', function() {
+  recording = [];
+  isRecording = false;
+  document.getElementById('btnRecord').textContent = '⏺️ 开始录制';
+  document.getElementById('btnRecord').classList.remove('recording');
+});
+
+// 初始化欢迎效果
+setTimeout(() => {
+  ['C4','E4','G4','C5'].forEach((n, i) => {
+    setTimeout(() => playNote(n, 500), i * 200);
+  });
+}, 800);
+</script>
+</body>
+</html>

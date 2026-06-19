@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevSync - 跨端闪传与云剪贴板</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Noto Sans SC', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #12121a;
+      --bg-card: rgba(18, 18, 26, 0.8);
+      --accent-cyan: #00f5ff;
+      --accent-purple: #a855f7;
+      --accent-pink: #ec4899;
+      --accent-green: #10b981;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --border-color: rgba(255, 255, 255, 0.08);
+    }
+    
+    body {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    
+    .bg-mesh {
+      position: fixed;
+      inset: 0;
+      background: 
+        radial-gradient(ellipse 80% 50% at 20% 40%, rgba(168, 85, 247, 0.15), transparent),
+        radial-gradient(ellipse 60% 40% at 80% 60%, rgba(0, 245, 255, 0.1), transparent),
+        radial-gradient(ellipse 50% 30% at 50% 90%, rgba(236, 72, 153, 0.08), transparent);
+      pointer-events: none;
+      z-index: 0;
+    }
+    
+    .noise-overlay {
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+      opacity: 0.03;
+      pointer-events: none;
+      z-index: 1;
+    }
+    
+    .glass {
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border-color);
+    }
+    
+    .glass-hover:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    
+    .glow-cyan { box-shadow: 0 0 20px rgba(0, 245, 255, 0.3), 0 0 40px rgba(0, 245, 255, 0.1); }
+    .glow-purple { box-shadow: 0 0 20px rgba(168, 85, 247, 0.3), 0 0 40px rgba(168, 85, 247, 0.1); }
+    .glow-pink { box-shadow: 0 0 20px rgba(236, 72, 153, 0.3), 0 0 40px rgba(236, 72, 153, 0.1); }
+    .glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.3), 0 0 40px rgba(16, 185, 129, 0.1); }
+    
+    .text-gradient-cyan {
+      background: linear-gradient(135deg, #00f5ff, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .text-gradient-purple {
+      background: linear-gradient(135deg, #a855f7, #ec4899);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .border-gradient-cyan {
+      border-image: linear-gradient(135deg, #00f5ff, #a855f7) 1;
+    }
+    
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+    }
+    
+    @keyframes slide-up {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    @keyframes slide-in-right {
+      from { opacity: 0; transform: translateX(30px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    
+    @keyframes qr-rotate {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    @keyframes border-flow {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+    
+    .animate-slide-up { animation: slide-up 0.5s ease-out forwards; }
+    .animate-slide-in-right { animation: slide-in-right 0.5s ease-out forwards; }
+    .animate-float { animation: float 3s ease-in-out infinite; }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+    
+    .status-dot.connected { background: #10b981; box-shadow: 0 0 10px #10b981; }
+    .status-dot.connecting { background: #f59e0b; box-shadow: 0 0 10px #f59e0b; }
+    .status-dot.disconnected { background: #6b7280; }
+    
+    .qr-container {
+      background: conic-gradient(from 0deg, #00f5ff, #a855f7, #ec4899, #00f5ff);
+      padding: 3px;
+      border-radius: 16px;
+    }
+    
+    .qr-inner {
+      background: #0a0a0f;
+      border-radius: 13px;
+      padding: 16px;
+    }
+    
+    .code-block {
+      background: linear-gradient(135deg, rgba(0, 245, 255, 0.05), rgba(168, 85, 247, 0.05));
+      border: 1px solid rgba(0, 245, 255, 0.2);
+      border-radius: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .code-block::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #00f5ff, #a855f7, #ec4899);
+      background-size: 200% 100%;
+      animation: border-flow 3s linear infinite;
+    }
+    
+    .drop-zone {
+      border: 2px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 20px;
+      transition: all 0.3s ease;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    
+    .drop-zone.drag-over {
+      border-color: #00f5ff;
+      background: rgba(0, 245, 255, 0.1);
+      box-shadow: 0 0 30px rgba(0, 245, 255, 0.2), inset 0 0 30px rgba(0, 245, 255, 0.05);
+    }
+    
+    .drop-zone.drag-over .drop-icon {
+      transform: scale(1.1);
+      color: #00f5ff;
+    }
+    
+    .progress-bar {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+      background: linear-gradient(90deg, #00f5ff, #a855f7);
+    }
+    
+    .copy-btn {
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .copy-btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(0, 245, 255, 0.3), rgba(168, 85, 247, 0.3));
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    
+    .copy-btn.copied::after {
+      opacity: 1;
+    }
+    
+    .scrollbar-hide::-webkit-scrollbar { display: none; }
+    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    
+    .typing-cursor::after {
+      content: '|';
+      animation: blink 1s step-end infinite;
+    }
+    
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    
+    .device-icon {
+      transition: all 0.3s ease;
+    }
+    
+    .device-icon:hover {
+      transform: scale(1.1);
+    }
+    
+    .card-hover {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .card-hover:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+    
+    @media (max-width: 768px) {
+      .main-grid { grid-template-columns: 1fr !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="bg-mesh"></div>
+    <div class="noise-overlay"></div>
+    
+    <div class="relative z-10 min-h-screen flex flex-col">
+      <!-- 顶部状态栏 -->
+      <header class="glass sticky top-0 z-50 border-b border-white/5">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+          <div class="flex items-center justify-between gap-4 flex-wrap">
+            <!-- Logo & 标题 -->
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 flex items-center justify-center glow-cyan">
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </div>
+              <div>
+                <h1 class="text-xl font-bold text-gradient-cyan">DevSync</h1>
+                <p class="text-xs text-slate-400">跨端闪传 · 云剪贴板</p>
+              </div>
+            </div>
+            
+            <!-- 设备连接状态 -->
+            <div class="flex items-center gap-6">
+              <div v-for="(device, index) in devices" :key="index" 
+                   class="flex items-center gap-2 glass rounded-full px-4 py-2 card-hover"
+                   :class="device.status === 'connected' ? 'glow-green' : ''">
+                <span class="device-icon text-xl">{{ device.icon }}</span>
+                <span class="text-sm font-medium hidden sm:inline">{{ device.name }}</span>
+                <span class="status-dot" :class="device.status"></span>
+              </div>
+            </div>
+            
+            <!-- 暗号输入 & 二维码 -->
+            <div class="flex items-center gap-3">
+              <div class="relative">
+                <input type="text" v-model="pairCode" placeholder="输入配对暗号"
+                       class="w-32 sm:w-40 px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20 transition-all font-mono"
+                       maxlength="6">
+                <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">{{ pairCode.length }}/6</span>
+              </div>
+              <button @click="toggleQR" class="relative w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 flex items-center justify-center hover:opacity-90 transition-opacity glow-cyan">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+                </svg>
+                <!-- 二维码弹窗 -->
+                <div v-if="showQR" class="absolute top-full mt-3 right-0 z-50 animate-slide-up">
+                  <div class="qr-container">
+                    <div class="qr-inner">
+                      <div class="w-48 h-48 bg-white rounded-lg flex items-center justify-center">
+                        <!-- 模拟二维码 -->
+                        <div class="grid grid-cols-5 gap-1 p-2">
+                          <div v-for="i in 25" :key="i" 
+                               class="w-4 h-4 rounded-sm"
+                               :class="qrPattern[i-1] ? 'bg-black' : 'bg-white'">
+                          </div>
+                        </div>
+                      </div>
+                      <p class="text-center text-xs text-slate-400 mt-3">扫描二维码配对设备</p>
+                    </div>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+      
+      <!-- 主内容区 -->
+      <main class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
+        <div class="main-grid grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- 左侧：云剪贴板 -->
+          <section class="space-y-4 animate-slide-up" style="animation-delay: 0.1s">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                  </svg>
+                </div>
+                <div>
+                  <h2 class="text-lg font-bold">实时云剪贴板</h2>
+                  <p class="text-xs text-slate-400">{{ clipboardItems.length }} 条记录 · 跨设备同步</p>
+                </div>
+              </div>
+              <button @click="clearClipboard" class="px-3 py-1.5 text-xs text-slate-400 hover:text-white glass rounded-lg transition-colors">
+                清空历史
+              </button>
+            </div>
+            
+            <!-- 剪贴板列表 -->
+            <div class="space-y-3 max-h-[600px] overflow-y-auto scrollbar-hide pr-2">
+              <div v-for="(item, index) in clipboardItems" :key="index"
+                   class="code-block card-hover p-4 animate-slide-up"
+                   :style="{ animationDelay: (index * 0.1) + 's' }">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <div class="flex items-center gap-2">
+                    <span class="px-2 py-0.5 text-xs rounded-full" 
+                          :class="item.type === 'code' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-purple-500/20 text-purple-400'">
+                      {{ item.type === 'code' ? '代码' : '文本' }}
+                    </span>
+                    <span class="text-xs text-slate-500">{{ item.time }}</span>
+                    <span class="text-xs text-slate-600">·</span>
+                    <span class="text-xs text-slate-500">{{ item.source }}</span>
+                  </div>
+                  <button @click="copyItem(item)" 
+                          class="copy-btn px-3 py-1 text-xs rounded-lg glass flex items-center gap-1 hover:bg-white/10 transition-all"
+                          :class="{ 'copied': item.copied }">
+                    <svg v-if="!item.copied" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                    <svg v-else class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    <span>{{ item.copied ? '已复制' : '复制' }}</span>
+                  </button>
+                </div>
+                <pre class="font-mono text-sm text-slate-200 overflow-x-auto scrollbar-hide"><code>{{ item.content }}</code></pre>
+              </div>
+            </div>
+          </section>
+          
+          <!-- 右侧：文件闪传 -->
+          <section class="space-y-4 animate-slide-in-right" style="animation-delay: 0.2s">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                  </svg>
+                </div>
+                <div>
+                  <h2 class="text-lg font-bold">文件闪传沙盒</h2>
+                  <p class="text-xs text-slate-400">拖拽上传 · 跨设备传输</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-slate-400">
+                <span class="status-dot connected"></span>
+                <span>{{ transferStats.speed }}</span>
+              </div>
+            </div>
+            
+            <!-- 拖拽上传区 -->
+            <div class="drop-zone p-12 text-center cursor-pointer"
+                 :class="{ 'drag-over': isDragging }"
+                 @dragover.prevent="isDragging = true"
+                 @dragleave.prevent="isDragging = false"
+                 @drop.prevent="handleDrop"
+                 @click="$refs.fileInput.click()">
+              <input type="file" ref="fileInput" @change="handleFileSelect" multiple class="hidden">
+              <div class="drop-icon transition-all duration-300">
+                <div class="w-20 h-20 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center">
+                  <svg class="w-10 h-10 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                  </svg>
+                </div>
+                <p class="text-lg font-medium mb-2">拖拽文件到此处</p>
+                <p class="text-sm text-slate-500">或点击选择文件 · 支持多文件</p>
+                <div class="flex items-center justify-center gap-4 mt-4 text-xs text-slate-500">
+                  <span class="px-2 py-1 glass rounded">任意格式</span>
+                  <span class="px-2 py-1 glass rounded">最大 2GB</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 传输历史 -->
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-medium text-slate-300">传输历史</h3>
+                <span class="text-xs text-slate-500">{{ transferHistory.length }} 个文件</span>
+              </div>
+              
+              <div class="space-y-3 max-h-[400px] overflow-y-auto scrollbar-hide pr-2">
+                <div v-for="(file, index) in transferHistory" :key="index"
+                     class="glass rounded-xl p-4 card-hover animate-slide-up"
+                     :style="{ animationDelay: (index * 0.05) + 's' }">
+                  <div class="flex items-start gap-4">
+                    <!-- 文件图标 -->
+                    <div class="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+                         :class="getFileColor(file.type)">
+                      <span class="text-2xl">{{ getFileIcon(file.type) }}</span>
+                    </div>
+                    
+                    <!-- 文件信息 -->
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center justify-between gap-2 mb-1">
+                        <p class="font-medium truncate">{{ file.name }}</p>
+                        <button v-if="file.status === 'completed'" 
+                                @click="downloadFile(file)"
+                                class="shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center hover:opacity-90 transition-opacity glow-cyan">
+                          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                          </svg>
+                        </button>
+                      </div>
+                      
+                      <div class="flex items-center gap-3 text-xs text-slate-500 mb-3">
+                        <span>{{ file.size }}</span>
+                        <span>·</span>
+                        <span>{{ file.time }}</span>
+                        <span>·</span>
+                        <span class="flex items-center gap-1">
+                          <span class="w-2 h-2 rounded-full" :class="getStatusColor(file.status)"></span>
+                          {{ getStatusText(file.status) }}
+                        </span>
+                      </div>
+                      
+                      <!-- 进度条 -->
+                      <div v-if="file.status === 'transferring'" class="progress-bar">
+                        <div class="progress-fill" :style="{ width: file.progress + '%' }"></div>
+                      </div>
+                      
+                      <!-- 目标设备 -->
+                      <div class="flex items-center gap-2 mt-2">
+                        <span class="text-xs text-slate-500">发送到:</span>
+                        <span class="px-2 py-0.5 text-xs glass rounded-full">{{ file.target }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <!-- 空状态 -->
+                <div v-if="transferHistory.length === 0" 
+                     class="text-center py-12 text-slate-500">
+                  <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
+                    <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                  </div>
+                  <p class="text-sm">暂无传输记录</p>
+                  <p class="text-xs mt-1">拖拽文件开始传输</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+      
+      <!-- 底部状态栏 -->
+      <footer class="glass border-t border-white/5 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+          <div class="flex items-center justify-between text-xs text-slate-500">
+            <div class="flex items-center gap-4">
+              <span class="flex items-center gap-2">
+                <span class="status-dot connected"></span>
+                已连接 {{ connectedDevices }} 台设备
+              </span>
+              <span class="hidden sm:inline">·</span>
+              <span class="hidden sm:inline">延迟 {{ latency }}ms</span>
+            </div>
+            <div class="flex items-center gap-4">
+              <span>v1.0.0 · DevSync</span>
+              <span class="hidden sm:inline">·</span>
+              <span class="hidden sm:inline">2026 创造力大赛</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+    
+    <!-- Toast 通知 -->
+    <transition name="toast">
+      <div v-if="toast.show" 
+           class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-xl glass glow-cyan animate-float">
+        <div class="flex items-center gap-3">
+          <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+          </svg>
+          <span>{{ toast.message }}</span>
+        </div>
+      </div>
+    </transition>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, computed, onMounted } = Vue
+    
+    createApp({
+      setup() {
+        // 配对状态
+        const pairCode = ref('')
+        const showQR = ref(false)
+        
+        // 设备列表
+        const devices = ref([
+          { name: 'MacBook Pro', icon: '💻', status: 'connected' },
+          { name: 'iPhone 15', icon: '📱', status: 'connected' },
+          { name: 'iPad Pro', icon: '📲', status: 'connecting' },
+          { name: 'Win PC', icon: '🖥️', status: 'disconnected' }
+        ])
+        
+        // 云剪贴板
+        const clipboardItems = ref([
+          { 
+            type: 'code', 
+            content: 'const DevSync = {\n  version: "1.0.0",\n  sync: async (data) => {\n    return await api.post("/sync", data);\n  }\n};', 
+            time: '刚刚', 
+            source: 'MacBook Pro',
+            copied: false
+          },
+          { 
+            type: 'text', 
+            content: '今天天气真好，适合写代码！☀️', 
+            time: '5分钟前', 
+            source: 'iPhone 15',
+            copied: false
+          },
+          { 
+            type: 'code', 
+            content: '// Rust async runtime\n#[tokio::main]\nasync fn main() {\n    println!("DevSync Running!");\n}', 
+            time: '10分钟前', 
+            source: 'Win PC',
+            copied: false
+          },
+          { 
+            type: 'text', 
+            content: 'IP地址: 192.168.1.100 端口: 8080', 
+            time: '30分钟前', 
+            source: 'MacBook Pro',
+            copied: false
+          }
+        ])
+        
+        // 文件传输
+        const isDragging = ref(false)
+        const transferHistory = ref([
+          { name: 'DevSync_Setup_v1.0.dmg', size: '128.5 MB', type: 'dmg', time: '刚刚', status: 'transferring', progress: 67, target: 'MacBook Pro' },
+          { name: '项目架构图.png', size: '2.3 MB', type: 'image', time: '5分钟前', status: 'completed', progress: 100, target: 'iPhone 15' },
+          { name: 'API文档.pdf', size: '1.8 MB', type: 'pdf', time: '15分钟前', status: 'completed', progress: 100, target: 'Win PC' },
+          { name: '代码片段.swift', size: '12 KB', type: 'code', time: '30分钟前', status: 'completed', progress: 100, target: 'iPad Pro' }
+        ])
+        
+        const transferStats = reactive({
+          speed: '12.5 MB/s'
+        })
+        
+        // 二维码模拟数据
+        const qrPattern = ref([
+          1,1,1,1,1,
+          1,0,0,0,1,
+          1,0,1,0,1,
+          1,0,0,0,1,
+          1,1,1,1,1
+        ])
+        
+        // Toast
+        const toast = reactive({
+          show: false,
+          message: ''
+        })
+        
+        // 计算属性
+        const connectedDevices = computed(() => 
+          devices.value.filter(d => d.status === 'connected').length
+        )
+        const latency = computed(() => Math.floor(Math.random() * 20) + 10)
+        
+        // 方法
+        const toggleQR = () => {
+          showQR.value = !showQR.value
+        }
+        
+        const clearClipboard = () => {
+          clipboardItems.value = []
+          showToast('剪贴板已清空')
+        }
+        
+        const copyItem = (item) => {
+          navigator.clipboard.writeText(item.content).then(() => {
+            item.copied = true
+            showToast('已复制到剪贴板')
+            setTimeout(() => {
+              item.copied = false
+            }, 2000)
+          })
+        }
+        
+        const handleDrop = (e) => {
+          isDragging.value = false
+          const files = Array.from(e.dataTransfer.files)
+          files.forEach(file => {
+            const newFile = {
+              name: file.name,
+              size: formatSize(file.size),
+              type: getFileType(file.name),
+              time: '刚刚',
+              status: 'transferring',
+              progress: 0,
+              target: 'MacBook Pro'
+            }
+            transferHistory.value.unshift(newFile)
+            simulateTransfer(transferHistory.value[0])
+          })
+          showToast(`已添加 ${files.length} 个文件到传输队列`)
+        }
+        
+        const handleFileSelect = (e) => {
+          const files = Array.from(e.target.files)
+          files.forEach(file => {
+            const newFile = {
+              name: file.name,
+              size: formatSize(file.size),
+              type: getFileType(file.name),
+              time: '刚刚',
+              status: 'transferring',
+              progress: 0,
+              target: 'MacBook Pro'
+            }
+            transferHistory.value.unshift(newFile)
+            simulateTransfer(transferHistory.value[0])
+          })
+          showToast(`已添加 ${files.length} 个文件到传输队列`)
+        }
+        
+        const simulateTransfer = (file) => {
+          const interval = setInterval(() => {
+            if (file.progress < 100) {
+              file.progress += Math.random() * 15
+              if (file.progress > 100) file.progress = 100
+              transferStats.speed = (Math.random() * 10 + 5).toFixed(1) + ' MB/s'
+            } else {
+              file.status = 'completed'
+              clearInterval(interval)
+              showToast(`${file.name} 传输完成`)
+            }
+          }, 200)
+        }
+        
+        const downloadFile = (file) => {
+          showToast(`开始下载 ${file.name}`)
+        }
+        
+        const formatSize = (bytes) => {
+          if (bytes < 1024) return bytes + ' B'
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+          if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+          return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+        }
+        
+        const getFileType = (filename) => {
+          const ext = filename.split('.').pop().toLowerCase()
+          const map = {
+            'jpg': 'image', 'jpeg': 'image', 'png': 'image', 'gif': 'image', 'webp': 'image',
+            'pdf': 'pdf', 'doc': 'doc', 'docx': 'doc', 'txt': 'text',
+            'zip': 'archive', 'rar': 'archive', '7z': 'archive',
+            'dmg': 'dmg', 'exe': 'exe', 'apk': 'exe',
+            'js': 'code', 'ts': 'code', 'py': 'code', 'swift': 'code', 'go': 'code', 'rs': 'code'
+          }
+          return map[ext] || 'file'
+        }
+        
+        const getFileIcon = (type) => {
+          const icons = {
+            image: '🖼️', pdf: '📄', doc: '📝', text: '📃',
+            archive: '📦', dmg: '💿', exe: '⚙️', code: '💻', file: '📎'
+          }
+          return icons[type] || '📎'
+        }
+        
+        const getFileColor = (type) => {
+          const colors = {
+            image: 'bg-gradient-to-br from-pink-500/20 to-rose-500/20',
+            pdf: 'bg-gradient-to-br from-red-500/20 to-orange-500/20',
+            doc: 'bg-gradient-to-br from-blue-500/20 to-cyan-500/20',
+            text: 'bg-gradient-to-br from-slate-500/20 to-gray-500/20',
+            archive: 'bg-gradient-to-br from-yellow-500/20 to-amber-500/20',
+            dmg: 'bg-gradient-to-br from-purple-500/20 to-violet-500/20',
+            exe: 'bg-gradient-to-br from-green-500/20 to-emerald-500/20',
+            code: 'bg-gradient-to-br from-cyan-500/20 to-blue-500/20',
+            file: 'bg-gradient-to-br from-slate-500/20 to-zinc-500/20'
+          }
+          return colors[type] || colors.file
+        }
+        
+        const getStatusColor = (status) => {
+          const colors = {
+            completed: 'bg-green-500',
+            transferring: 'bg-cyan-500',
+            failed: 'bg-red-500',
+            pending: 'bg-yellow-500'
+          }
+          return colors[status] || 'bg-slate-500'
+        }
+        
+        const getStatusText = (status) => {
+          const texts = {
+            completed: '已完成',
+            transferring: '传输中',
+            failed: '失败',
+            pending: '等待中'
+          }
+          return texts[status] || status
+        }
+        
+        const showToast = (message) => {
+          toast.message = message
+          toast.show = true
+          setTimeout(() => {
+            toast.show = false
+          }, 2500)
+        }
+        
+        // 初始化 - 模拟实时更新
+        onMounted(() => {
+          setInterval(() => {
+            qrPattern.value = qrPattern.value.map(() => Math.random() > 0.5 ? 1 : 0)
+          }, 2000)
+        })
+        
+        return {
+          pairCode,
+          showQR,
+          devices,
+          clipboardItems,
+          transferHistory,
+          transferStats,
+          isDragging,
+          qrPattern,
+          toast,
+          connectedDevices,
+          latency,
+          toggleQR,
+          clearClipboard,
+          copyItem,
+          handleDrop,
+          handleFileSelect,
+          downloadFile,
+          getFileIcon,
+          getFileColor,
+          getStatusColor,
+          getStatusText
+        }
+      }
+    }).mount('#app')
+  </script>
+  
+  <style>
+    .toast-enter-active, .toast-leave-active {
+      transition: all 0.3s ease;
+    }
+    .toast-enter-from, .toast-leave-to {
+      opacity: 0;
+      transform: translate(-50%, 20px);
+    }
+  </style>
+</body>
+</html>

@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>全息导播台 - 史诗战场控制中枢 (权威显像端)</title>
+    <!--
+      架构规约《06_桌面挂件与显示分离优化架构》：
+      1. 本页面是全项目唯一的 HTML 视界 (Projection Layer)。
+      2. 本页面不包含任何业务计算，所有状态均为后端的投影。
+      3. 桌面挂件通过 ?widget=map 或 ?widget=chars 参数复用本页面，保持 100% 同源和单例模式。
+      4. 严格杜绝在 DOM 中进行状态猜测，所有事件交互全部下发给后端。
+    -->
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* 强制全屏自适应 2K 分辨率，无滚动条 */
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            overflow: hidden !important;
+            /* 隐藏所有原生滚动条 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .center-blackbox {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            background: #000;
+        }
+
+        /* 2K 物理分辨率锁定，自适应屏幕 */
+        #webgpu-canvas,
+        #grid-canvas,
+        #overlay-mask,
+        #scroll-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            /* 保持比例缩放 */
+            max-width: 2560px;
+            max-height: 1440px;
+            aspect-ratio: 16 / 9;
+        }
+
+        #webgpu-canvas {
+            z-index: 10;
+        }
+
+        #scroll-layer {
+            z-index: 100;
+            /* 取消原有的 overflow: auto，滚动由外部挂件控制 */
+            overflow: hidden;
+            pointer-events: none;
+            /* 让外部挂件完全接管事件 */
+        }
+
+        #overlay-mask {
+            z-index: 200;
+            pointer-events: none;
+        }
+
+        /* HUD 重新定位到全屏角落 */
+        .coord-hud {
+            bottom: 20px;
+            left: 20px;
+        }
+
+        .zoom-hud {
+            bottom: 20px;
+            right: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 全局防弹崩溃罩 (Crash Overlay) -->
+    <div id="crash-overlay"
+        style="display:none; position:fixed; z-index:9999; inset:0; background:rgba(20,0,0,0.9); color:#ff4444; padding:2rem; font-family:monospace; overflow:auto;">
+        <h2>🔴 全息导播台已崩溃 (CRITICAL ERROR)</h2>
+        <pre id="crash-log"
+            style="white-space: pre-wrap; word-wrap: break-word; font-size: 14px; margin-top: 1rem;"></pre>
+    </div>
+
+
+    <!-- 中央：史诗显像黑盒区域 (唯一保留的渲染容器) -->
+    <main class="center-blackbox">
+        <!-- 纯粹的 WebGPU 渲染画布，强制锁定逻辑分辨率 2560x1440 -->
+        <canvas id="webgpu-canvas" width="2560" height="1440"></canvas>
+
+        <!-- 滚动防线 (Scroll-Layer Proxy) 现由外部挂件通过 API 驱动 -->
+        <div id="scroll-layer">
+            <div id="scroll-proxy"></div>
+        </div>
+
+        <!-- 表象 UI 蒙版 (Overlay Mask) 悬浮层 -->
+        <div id="overlay-mask">
+            <!-- 网格蒙板层 -->
+            <canvas id="grid-canvas" width="2560" height="1440"></canvas>
+            <!-- 鼠标悬浮坐标显示 -->
+            <div id="hover-coord" class="coord-hud">坐标: --</div>
+            <!-- 缩放等级显示 -->
+            <div id="zoom-level" class="zoom-hud">缩放: 100%</div>
+            <!-- 点击坐标标记（动态显隐） -->
+            <div id="click-marker" class="click-marker" style="display:none;">
+                <div class="click-crosshair"></div>
+                <div class="click-label"></div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 后端地址注入（部署时只需改这一处） -->
+    <script>window.BACKEND_URL = 'http://127.0.0.1:8000';</script>
+    <!-- 引入通信与状态模块 -->
+    <script src="js/state-store.js"></script>
+    <script src="js/api-client.js"></script>
+    <script src="js/action_library.js"></script>
+    <script src="js/behavior-engine.js"></script>
+    <script src="js/webgpu-renderer.js"></script>
+    <script src="js/grid-overlay.js"></script>
+    <script src="js/main.js"></script>
+    <script>
+        const PREVIEW_ENTITY_ID = 99999;
+        window.previewModeActive = false;
+
+        // 预览状态变量 — 提前声明以避免依赖 var 提升（原声明在 handlePreviewCommand 之后）
+        var _previewActionCode = 0;
+        var _lastPreviewPos = { x: 2000, y: 2000 }; // 最近一次主将坐标
+        var _previewEntities = [];                   // 当前投放的全部实体（主将+士兵）
+
+        // ── Per-character JSON config system ──────────────────────────────
+        /** @type {Object<string, Object>} name → parsed JSON config */
+        window.CHARACTER_CONFIGS = {};
+
+        /** @type {string[]} All known character names (populated on load) */
+        window.CHARACTER_NAMES = [];
+
+        /** @type {Object|null} Global action_frames.json (loaded once at startup) */
+        window.ACTION_FRAMES_JSON = null;
+
+        /** @type {Object|null} Global soldiers_common.json (loaded once at startup) */
+        window.SOLDIERS_COMMON_JSON = null;
+
+        /** @type {string[]} Boss character names for preloading */
+        window.BOSS_NAMES = ['boss_huanglong', 'boss_qinglong'];
+
+        /** @type {string[]} NPC character names for preloading */
+        window.NPC_NAMES = ['npc_zhangjiao', 'npc_zuoci'];
+
+        /**
+         * Preload a single character JSON by name, caching in CHARACTER_CONFIGS.
+         * @param {string} name — character name (e.g. "曹操")
+         * @returns {Promise<Object|null>}
+         */
+        async function preloadCharacterConfig(name) {
+            if (window.CHARACTER_CONFIGS[name]) return window.CHARACTER_CONFIGS[name];
+            try {
+                var resp = await fetch('/characters/' + encodeURIComponent(name) + '.json');
+                if (!resp.ok) return null;
+                var json = await resp.json();
+                window.CHARACTER_CONFIGS[name] = json;
+                if (window.CHARACTER_NAMES.indexOf(name) === -1) {
+                    window.CHARACTER_NAMES.push(name);
+                }
+                return json;
+            } catch (_) { return null; }
+        }
+        window.preloadCharacterConfig = preloadCharacterConfig;
+
+        /**
+         * Get cached character config, or fetch on-demand.
+         * @param {string} name
+         * @returns {Promise<Object|null>}
+         */
+        window.getCharacterConfig = function (name) {
+            if (window.CHARACTER_CONFIGS[name]) return Promise.resolve(window.CHARACTER_CONFIGS[name]);
+            return preloadCharacterConfig(name);
+        };
+
+        /**
+         * Load all shared JSON files and preload known character configs.
+         * Returns a Promise that resolves when all character configs are loaded.
+         */
+        async function loadCharacterJsons() {
+            // 1. Fetch shared action_frames.json
+            try {
+                var resp = await fetch('/characters/action_frames.json');
+                if (resp.ok) window.ACTION_FRAMES_JSON = await resp.json();
+            } catch (_) { /* non-fatal */ }
+
+            // 2. Fetch soldiers_common.json
+            try {
+                var resp = await fetch('/characters/soldiers_common.json');
+                if (resp.ok) window.SOLDIERS_COMMON_JSON = await resp.json();
+            } catch (_) { /* non-fatal */ }
+
+            // 3. Fetch boss.json and npc.json as fallbacks
+            try {
+                var resp = await fetch('/characters/boss.json');
+                if (resp.ok) {
+                    var bossJson = await resp.json();
+                    if (bossJson && bossJson.name) window.CHARACTER_CONFIGS[bossJson.name] = bossJson;
+                }
+            } catch (_) { /* non-fatal */ }
+            try {
+                var resp = await fetch('/characters/npc.json');
+                if (resp.ok) {
+                    var npcJson = await resp.json();
+                    if (npcJson && npcJson.name) window.CHARACTER_CONFIGS[npcJson.name] = npcJson;
+                }
+            } catch (_) { /* non-fatal */ }
+
+            // 4. Preload known boss and NPC names (fire-and-forget, no await)
+            var knownNames = [].concat(window.BOSS_NAMES, window.NPC_NAMES);
+            for (var i = 0; i < knownNames.length; i++) {
+                preloadCharacterConfig(knownNames[i]);
+            }
+
+            // 5. 预加载全部 53 个武将的 per-character JSON
+            try {
+                var listResp = await fetch('/api/characters');
+                if (listResp.ok) {
+                    var listData = await listResp.json();
+                    var charList = listData.data || listData;
+                    if (typeof charList === 'object') {
+                        var allNames = [];
+                        if (Array.isArray(charList)) {
+                            allNames = charList.map(function (c) { return c.name; }).filter(Boolean);
+                        } else {
+                            Object.values(charList).forEach(function (group) {
+                                if (Array.isArray(group)) {
+                                    group.forEach(function (c) { if (c && c.name) allNames.push(c.name); });
+                                }
+                            });
+                        }
+                        // 并发预加载，每批 10 个
+                        var batchPromises = [];
+                        for (var i = 0; i < allNames.length; i += 10) {
+                            var batch = allNames.slice(i, i + 10);
+                            batchPromises.push(Promise.all(batch.map(function (n) { return preloadCharacterConfig(n); })));
+                        }
+                        await Promise.all(batchPromises);
+                        console.log('[loadCharacterJsons] 完成 ' + allNames.length + ' 个武将配置预加载');
+                    }
+                }
+            } catch (_) { /* non-fatal, telemetry handler will trigger on-demand preload */ }
+        }
+
+        // Expose as global for bootstrap hard barrier
+        window.loadAllCharacterJsons = loadCharacterJsons;
+
+        // Start loading at startup (bootstrap will await it via the global)
+        loadCharacterJsons();
+
+        window.handleLoadSceneMap = function (standard_assets) {
+            if (!standard_assets) return;
+
+            // 1. 同步世界尺寸
+            if (typeof WORLD !== 'undefined') {
+                WORLD.w = standard_assets.world_w || 4000;
+                WORLD.h = standard_assets.world_h || 4000;
+            }
+            // 2. 渲染地图底图
+            if (typeof window.setMapBackground === 'function') {
+                window.setMapBackground(standard_assets.render_assets || []);
+            }
+            // 3. 卸载现有实体
+            if (typeof window.updateEntities === 'function') {
+                window.updateEntities(new ArrayBuffer(0));
+            }
+            // 4. 通知网格层绘制基地和兵线
+            if (typeof setPreviewScene === 'function') {
+                setPreviewScene(standard_assets);
+            }
+            console.log('🟢 [handleLoadSceneMap] 标准场景底图与物理边界加载完成:', standard_assets.scene_id);
+        };
+
+        // 统一处理预览命令
+        window.handlePreviewCommand = function (msg) {
+            if (msg.type === 'toggle_preview') {
+                window.previewModeActive = msg.active;
+                if (!msg.active) {
+                    if (typeof window.updateEntities === 'function') window.updateEntities(new ArrayBuffer(0));
+                    if (typeof window.clearMapBackground === 'function') window.clearMapBackground();
+                    // 清除预览实体豁免集合
+                    window._previewEntityIds = null;
+                    _previewEntities = [];
+                }
+                if (window.previewChannel) {
+                    window.previewChannel.postMessage({ type: 'toggle_preview', active: msg.active });
+                }
+            } else if (msg.type === 'focus_camera') {
+                if (typeof setCamera === 'function' && typeof updateGrid === 'function' && typeof WORLD !== 'undefined') {
+                    const cam = getCamera();
+                    const zoom = cam ? cam.zoom : 1.0;
+                    updateGrid(msg.x, msg.y, zoom);
+                    setCamera(msg.x, msg.y, zoom, WORLD.perspectiveScale, WORLD.k);
+                }
+                if (typeof WORLD !== 'undefined' && WORLD.w && WORLD.h) {
+                    const xPct = msg.x / WORLD.w;
+                    const yPct = msg.y / WORLD.h;
+                    VCPStateStore.setPreviewCameraPct({ xPct, yPct });
+                }
+                // 注意：不再调用 updateCameraFromX/Y，这两个函数不存在于主画面作用域
+            } else if (msg.type === 'camera_pan') {
+                if (typeof updateGrid === 'function' && typeof setCamera === 'function') {
+                    const cam = getCamera();
+                    let newX = cam.x;
+                    let newY = cam.y;
+                    if (msg.axis === 'X') {
+                        newX = msg.percentage * WORLD.w;
+                    } else if (msg.axis === 'Y') {
+                        newY = msg.percentage * WORLD.h;
+                    }
+                    updateGrid(newX, newY, cam.zoom);
+                    setCamera(newX, newY, cam.zoom, WORLD.perspectiveScale, WORLD.k);
+                    if (typeof syncCameraToWidgets === 'function') {
+                        syncCameraToWidgets(newX, newY, cam.zoom);
+                    }
+                    if (typeof broadcastCamera === 'function') {
+                        broadcastCamera(newX, newY, cam.zoom);
+                    }
+                }
+            } else if (msg.type === 'click_preview_map') {
+                if (msg.standard_assets) {
+                    if (typeof handleLoadSceneMap === 'function') {
+                        handleLoadSceneMap(msg.standard_assets);
+                    }
+                    window.previewModeActive = true;
+                } else {
+                    if (typeof VCPApiClient !== 'undefined' && typeof VCPApiClient.handlePreviewMap === 'function') {
+                        VCPApiClient.handlePreviewMap(msg.scene_id, null);
+                    }
+                }
+            } else if (msg.type === 'change_zoom') {
+                if (typeof updateGrid === 'function' && typeof setCamera === 'function') {
+                    const cam = getCamera();
+                    updateGrid(cam.x, cam.y, msg.zoom);
+                    setCamera(cam.x, cam.y, msg.zoom, WORLD.perspectiveScale, WORLD.k);
+                }
+            } else if (msg.type === 'change_action') {
+                // 动作切换：由 preview_action SSE 事件路由至此
+                if (VCPApiClient && VCPApiClient.onPreviewAction) {
+                    VCPApiClient.onPreviewAction(null, msg.action_code);
+                }
+            } else if (msg.type === 'spawn_character') {
+                // 投放人物到预览场景：直接使用后端的 ECS 装配数组
+                window.previewModeActive = true;
+                _previewActionCode = 0;
+
+                if (msg.entities && msg.entities.length > 0) {
+                    _previewEntities = msg.entities;
+                    console.log("[GHOST-DIAG] PREVIEW_SPAWN_ENTITIES received: " + msg.entities.length + " entities");
+                    const _heroEnt = msg.entities.find(e => e.is_hero);
+                    if (_heroEnt) { console.log("[GHOST-DIAG] Hero: " + _heroEnt.name + " @ (" + _heroEnt.x.toFixed(1) + ", " + _heroEnt.y.toFixed(1) + ") tex_ids=" + JSON.stringify(_heroEnt.tex_ids) + " model=" + _heroEnt.model); }
+                    const _btc = {}; msg.entities.forEach(e => { const t = (e.tex_ids||{}).body||0; _btc[t]=(_btc[t]||0)+1; }); const _dups = Object.entries(_btc).filter(([k,v])=>v>1); if(_dups.length>0) console.warn("[GHOST-DIAG] DUPLICATE body_tid:", JSON.stringify(_dups));
+                    const _ht = _heroEnt?_heroEnt.tex_ids:null; if(_ht){ msg.entities.filter(e=>!e.is_hero).forEach(e=>{ const t=(e.tex_ids||{}).body||0; if(t===_ht.body||t===_ht.mount||t===_ht.cape||t===_ht.weapon){ console.warn("[GHOST-DIAG] Soldier "+e.name+" body_tid="+t+" MATCHES hero! body="+_ht.body+" mount="+_ht.mount+" cape="+_ht.cape+" weapon="+_ht.weapon); }}); }
+                    // 以主帅为镜头追踪中心点
+                    _lastPreviewPos = { x: _previewEntities[0].x, y: _previewEntities[0].y };
+                } else {
+                    // 后端工厂装配失败时的降级防御
+                    _previewEntities = [{
+                        entity_id: PREVIEW_ENTITY_ID,
+                        x: _lastPreviewPos.x,
+                        y: _lastPreviewPos.y,
+                        is_hero: true,
+                        direction: 1.0
+                    }];
+                }
+
+                if (typeof window.updateEntities === 'function') {
+                    // 【数据闭环修复】：先强制同步 entityMap，确保贴图元数据不断层
+                    if (typeof window.updateRendererEntities === 'function') {
+                        window.updateRendererEntities(_previewEntities);
+                    }
+                    // 【数据闭环修复】：标记预览实体ID集合，供渲染器超时清理时豁免
+                    window._previewEntityIds = new Set(_previewEntities.map(function (e) { return e.entity_id; }));
+
+                    var FLOATS = 6;
+                    var buf = new Float32Array(_previewEntities.length * FLOATS);
+                    for (var si = 0; si < _previewEntities.length; si++) {
+                        var se = _previewEntities[si];
+                        buf[si * FLOATS + 0] = se.entity_id;
+                        buf[si * FLOATS + 1] = se.x;
+                        buf[si * FLOATS + 2] = se.y;
+                        buf[si * FLOATS + 3] = se.action_code !== undefined ? se.action_code : 0;
+                        buf[si * FLOATS + 4] = se.direction !== undefined ? se.direction : 1.0;
+                        buf[si * FLOATS + 5] = se.flip ? 1.0 : 0.0;
+                    }
+                    window.updateEntities(buf.buffer);
+                }
+
+                // 自动将镜头移动到主将位置
+                if (typeof updateGrid === 'function' && typeof setCamera === 'function' && typeof WORLD !== 'undefined') {
+                    var camX = _lastPreviewPos.x;
+                    var camY = _lastPreviewPos.y;
+                    const cam = getCamera();
+                    const zoom = cam ? cam.zoom : 1.0;
+                    updateGrid(camX, camY, zoom);
+                    setCamera(camX, camY, zoom, WORLD.perspectiveScale, WORLD.k);
+
+                    // 同步到挂件（X和Y轴）
+                    if (typeof VCPApiClient !== 'undefined') {
+                        var xPct = camX / WORLD.w;
+                        var yPct = camY / WORLD.h;
+                        VCPApiClient.handleCameraPan('X', xPct, 'battle');
+                        VCPApiClient.handleCameraPan('Y', yPct, 'battle');
+                    }
+                }
+                // 聚焦镜头到投放位置
+                if (typeof updateGrid === 'function' && typeof setCamera === 'function' && typeof WORLD !== 'undefined') {
+                    const cam = getCamera();
+                    const zoom = cam ? cam.zoom : 1.0;
+                    updateGrid(_lastPreviewPos.x, _lastPreviewPos.y, zoom);
+                    setCamera(_lastPreviewPos.x, _lastPreviewPos.y, zoom, WORLD.perspectiveScale, WORLD.k);
+                }
+            }
+        };
+
+        // 虚拟路由接入由 main.js 中统一负责，此处不再重复绑定 SCENE_UNLOAD 和 CAMERA_SYNC 以避免竞争
+        // 注意：_previewActionCode / _lastPreviewPos / _previewEntities 已提前到 script 块顶部声明
+
+
+        // 注册 onPreviewAction 回调（由 VCPApiClient.handleClickAction 在预览模式下触发）
+        VCPApiClient.onPreviewAction = function (target, action) {
+            _previewActionCode = action;
+            if (_previewEntities.length === 0 || typeof window.updateEntities !== 'function') return;
+
+            // 【状态续期】：动作切换时重新注册到 entityMap，续期 entityLastSeen 防止超时清理
+            if (typeof window.updateRendererEntities === 'function') {
+                window.updateRendererEntities(_previewEntities);
+            }
+
+            var FLOATS = 6;
+            var buf = new Float32Array(_previewEntities.length * FLOATS);
+            for (var ri = 0; ri < _previewEntities.length; ri++) {
+                var re = _previewEntities[ri];
+                // NAPI 的 preview_action 在这通过修改整个队伍的动作码应用
+                re.action_code = _previewActionCode;
+
+                buf[ri * FLOATS + 0] = re.entity_id;
+                buf[ri * FLOATS + 1] = re.x;
+                buf[ri * FLOATS + 2] = re.y;
+                buf[ri * FLOATS + 3] = re.action_code !== undefined ? re.action_code : 0;
+                buf[ri * FLOATS + 4] = re.direction !== undefined ? re.direction : 1.0;
+                buf[ri * FLOATS + 5] = re.flip ? 1.0 : 0.0;
+            }
+            window.updateEntities(buf.buffer);
+        };
+
+        // 注册镜头平移回调（由 VCPApiClient.handleCameraPan 在预览模式下触发）
+        VCPApiClient.onCameraPan = function (axis, percentage) {
+            if (typeof updateGrid === 'function' && typeof setCamera === 'function' && typeof WORLD !== 'undefined') {
+                var cam = getCamera();
+                var newX = cam.x, newY = cam.y;
+                if (axis === 'X') newX = percentage * WORLD.w;
+                else if (axis === 'Y') newY = percentage * WORLD.h;
+                updateGrid(newX, newY, cam.zoom);
+                setCamera(newX, newY, cam.zoom, WORLD.perspectiveScale, WORLD.k);
+            }
+        };
+
+        // 注册镜头缩放回调（由 VCPApiClient.handleCameraZoom 在预览模式下触发）
+        VCPApiClient.onCameraZoom = function (zoom) {
+            currentZoom = zoom;
+            if (typeof updateGrid === 'function' && typeof setCamera === 'function' && typeof WORLD !== 'undefined') {
+                var cam = getCamera();
+                updateGrid(cam.x, cam.y, currentZoom);
+                setCamera(cam.x, cam.y, currentZoom, WORLD.perspectiveScale, WORLD.k);
+            }
+            var zoomHud = document.getElementById('zoom-level');
+            if (zoomHud) zoomHud.textContent = '缩放: ' + (zoom * 100).toFixed(0) + '%';
+        };
+
+
+
+        // 监听跨窗口指令 (控制遮罩层)
+        VCPStateStore.onGridVisibleChange((show) => {
+            const overlay = document.getElementById('overlay-mask');
+            if (overlay) overlay.style.display = show ? 'block' : 'none';
+        });
+
+        // 统一控制中心与状态缓存
+        var _globalScenesData = null;
+        var _globalCharactersData = null;
+        window._lockedCharName = null;
+        window._isPreviewMapLoaded = false;
+
+        async function initGlobalCatalog() {
+            try {
+                if (typeof VCPApiClient !== 'undefined') {
+                    // 最多等待 15 秒，超时后使用已获取到的部分数据继续
+                    await Promise.race([
+                        VCPApiClient.waitForInitData(),
+                        new Promise(function (_, reject) {
+                            setTimeout(function () { reject(new Error('initData 15秒超时')); }, 15000);
+                        })
+                    ]).catch(function (e) {
+                        console.warn('⚠️ [initGlobalCatalog] ' + e.message + '，使用已获取的部分数据继续');
+                    });
+                    _globalScenesData = await VCPApiClient.getScenes();
+                    _globalCharactersData = await VCPApiClient.getCharacters();
+
+                    if (_globalScenesData) {
+                        window.previewChannel.postMessage({ type: 'scenes_data', data: _globalScenesData });
+                    }
+                    if (_globalCharactersData) {
+                        window.previewChannel.postMessage({ type: 'characters_data', data: _globalCharactersData });
+                    }
+                }
+            } catch (e) {
+                console.error("❌ 主页面初始化名册缓存失败:", e);
+            }
+        }
+        initGlobalCatalog();
+
+        window.previewChannel = window.previewChannel || new BroadcastChannel('vcp_preview_channel');
+        window.previewChannel.onmessage = function (event) {
+            const msg = event.data;
+            console.log("📥 [index.html] 收到 BroadcastChannel 消息:", msg);
+            if (!msg) return;
+
+            // 1. 挂件初始化握手，回推名册与当前激活状态
+            if (msg.type === 'widget_init') {
+                if (msg.widget === 'maps' && _globalScenesData) {
+                    window.previewChannel.postMessage({ type: 'scenes_data', data: _globalScenesData });
+                    var isBattleActive = window.battleStatus ? !!window.battleStatus.is_active : false;
+                    var activeMapId = window.battleStatus ? window.battleStatus.scene_id : null;
+                    var previewingMapId = window.previewModeActive ? (localStorage.getItem('VCP_PREVIEW_SCENE_ID') || null) : null;
+                    window.previewChannel.postMessage({
+                        type: 'map_state_sync',
+                        activeMapId: activeMapId,
+                        previewingMapId: previewingMapId,
+                        isBattleActive: isBattleActive
+                    });
+                }
+                if (msg.widget === 'chars') {
+                    if (_globalCharactersData) {
+                        window.previewChannel.postMessage({ type: 'characters_data', data: _globalCharactersData });
+                    }
+                    window.previewChannel.postMessage({ type: 'toggle_preview', active: !!window.previewModeActive });
+                    if (window._lockedCharName) {
+                        window.previewChannel.postMessage({ type: 'target_info_sync', name: window._lockedCharName });
+                    }
+                }
+                return;
+            }
+
+            // 2. 网格开关
+            if (msg.type === 'toggle_grid') {
+                const overlay = document.getElementById('overlay-mask');
+                if (overlay) overlay.style.display = msg.show ? 'block' : 'none';
+                return;
+            }
+
+            // 3. 预览模式开关
+            if (msg.type === 'toggle_preview') {
+                console.log("📥 [index.html] 收到 toggle_preview 消息, active =", msg.active);
+                window.previewModeActive = msg.active;
+                console.log("🔄 [index.html] window.previewModeActive 已更新为:", window.previewModeActive);
+                if (typeof VCPApiClient !== 'undefined') {
+                    VCPApiClient.setMode(msg.active ? 'preview' : 'battle');
+                    VCPApiClient.togglePreview(msg.active).catch(function () { });
+                }
+                if (!msg.active) {
+                    if (typeof VCPApiClient !== 'undefined' && VCPApiClient.requestAction) {
+                        VCPApiClient.requestAction('preview', 'clear_all').catch(function () { });
+                    }
+                    if (typeof window.updateEntities === 'function') window.updateEntities(new ArrayBuffer(0));
+                    if (typeof window.clearMapBackground === 'function') window.clearMapBackground();
+                    if (typeof setPreviewScene === 'function') setPreviewScene(null);
+                    window._isPreviewMapLoaded = false;
+                    window._pendingSpawnActor = null;
+                    // 清除预览实体豁免集合
+                    window._previewEntityIds = null;
+                    _previewEntities = [];
+                    window.previewChannel.postMessage({ type: 'clear_spawn_highlight' });
+                }
+                window.previewChannel.postMessage({ type: 'toggle_preview', active: msg.active });
+                return;
+            }
+
+            // 4. 缩放变化
+            if (msg.type === 'change_zoom') {
+                if (typeof updateGrid === 'function' && typeof setCamera === 'function') {
+                    const cam = getCamera();
+                    updateGrid(cam.x, cam.y, msg.zoom);
+                    setCamera(cam.x, cam.y, msg.zoom, WORLD.perspectiveScale, WORLD.k);
+                    broadcastCamera(cam.x, cam.y, msg.zoom);
+                }
+                return;
+            }
+
+            // 5. 武将点击 (锁定/投放)
+            if (msg.type === 'character_click') {
+                console.log("📥 [index.html] 收到 character_click 消息, name =", msg.name, "faction =", msg.faction);
+                window._lockedCharName = msg.name;
+                window.previewChannel.postMessage({ type: 'target_info_sync', name: msg.name });
+
+                // 主窗口具有 NAPI 权限，代理执行实际投放
+                // 挂件（iframe/Shadow DOM 沙箱）无 window.backendAPI，已移除其直接调用
+                if (window.previewModeActive && typeof VCPApiClient !== 'undefined') {
+                    VCPApiClient.spawnCharacter(
+                        msg.name, msg.isHero, msg.faction,
+                        null, null, null, true  // singleHero=true：只投放选中武将及随从
+                    ).catch(function(e) {
+                        console.error('[index.html] 预览投放失败:', e);
+                    });
+                } else if (typeof window._lockOnEntity === 'function' && window.behaviorEngine) {
+                    // 战场模式：从 BehaviorEngine 找名字匹配的 entity_id，启动前端相机追踪
+                    var foundId = null, foundState = null;
+                    window.behaviorEngine.states.forEach(function (st, eid) {
+                        if (st.name === msg.name && st.action !== 'death' && foundId === null) {
+                            foundId = eid;
+                            foundState = st;
+                        }
+                    });
+                    if (foundId !== null) {
+                        window._lockOnEntity(foundId, foundState);
+                    }
+                }
+                return;
+            }
+
+
+            // 6. 动作指令
+            if (msg.type === 'character_action') {
+                if (typeof VCPApiClient !== 'undefined') {
+                    var mode = window.previewModeActive ? 'preview' : 'battle';
+                    VCPApiClient.handleClickAction(window._lockedCharName, msg.action, mode).catch(function () { });
+                }
+                return;
+            }
+
+            // 7. 地图/战役指令
+            if (msg.type === 'map_action') {
+                if (typeof VCPApiClient !== 'undefined') {
+                    if (msg.action === 'create') {
+                        VCPApiClient.createBattle(msg.mapId).catch(function (e) { console.error('createBattle failed', e); });
+                    } else if (msg.action === 'preview') {
+                        localStorage.setItem('VCP_PREVIEW_SCENE_ID', msg.mapId);
+                        window._isPreviewMapLoaded = true;
+                        VCPApiClient.handlePreviewMap(msg.mapId, null).catch(function (e) { console.error('handlePreviewMap failed', e); });
+                    } else if (msg.action === 'stop') {
+                        localStorage.removeItem('VCP_PREVIEW_SCENE_ID');
+                        window._isPreviewMapLoaded = false;
+                        VCPApiClient.stopBattle().catch(function (e) { console.error('stopBattle failed', e); });
+                    }
+                }
+                return;
+            }
+
+            // 8. 降级兼容相机微调
+            if (msg.type === 'camera_pan' || msg.type === 'focus_camera') {
+                if (typeof handlePreviewCommand === 'function') {
+                    handlePreviewCommand(msg);
+                }
+            }
+        };
+
+        // 绑定原生 SSE 并同步事件回挂件
+        (function initSseListeners() {
+            if (typeof VCPSseBridge !== 'undefined') {
+                VCPSseBridge.on('telemetry', function (data) {
+                    if (window.previewModeActive) return;
+                    if (data.entities && Array.isArray(data.entities)) {
+                        var spawnedNames = [];
+                        data.entities.forEach(function (ent) {
+                            if (ent.name) spawnedNames.push(ent.name);
+                        });
+                        window.previewChannel.postMessage({
+                            type: 'character_spawned_state',
+                            spawnedNames: spawnedNames
+                        });
+                    }
+                });
+
+                VCPSseBridge.on('SCENE_UNLOAD', function () {
+                    window._lockedCharName = null;
+                    window._isPreviewMapLoaded = false;
+                    window._pendingSpawnActor = null;
+                    window.previewChannel.postMessage({ type: 'character_spawned_state', spawnedNames: [] });
+                    window.previewChannel.postMessage({ type: 'target_info_sync', name: null });
+                    window.previewChannel.postMessage({
+                        type: 'map_state_sync',
+                        activeMapId: null,
+                        previewingMapId: null,
+                        isBattleActive: false
+                    });
+                });
+
+                VCPSseBridge.on('SCENE_LOAD', function (data) {
+                    window._isPreviewMapLoaded = false;
+                    var sId = data.standard_assets ? data.standard_assets.scene_id : null;
+                    window.previewChannel.postMessage({
+                        type: 'map_state_sync',
+                        activeMapId: sId,
+                        previewingMapId: null,
+                        isBattleActive: true
+                    });
+                });
+
+                VCPSseBridge.on('PREVIEW_MAP', function (data) {
+                    window._isPreviewMapLoaded = true;
+
+                    window.previewChannel.postMessage({
+                        type: 'map_state_sync',
+                        activeMapId: null,
+                        previewingMapId: data.scene_id,
+                        isBattleActive: false
+                    });
+
+                    // 投放由 widget_chars.html 直接发起，不再通过 index.html 中转
+                    window._pendingSpawnActor = null;
+                });
+            } else {
+                // 毫秒级轮询防止乱序加载，若已就绪则即刻绑定
+                setTimeout(initSseListeners, 20);
+            }
+        })();
+
+        // 初始化读取
+        if (!VCPStateStore.getBattleGridVisible()) {
+            const overlay = document.getElementById('overlay-mask');
+            if (overlay) overlay.style.display = 'none';
+        }
+    </script>
+</body>
+
+</html>

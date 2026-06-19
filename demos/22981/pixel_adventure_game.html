@@ -1,0 +1,4640 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>MONITO ADVENTURES v0.32</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a1a;
+            margin: 0;
+            padding: 0;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            touch-action: none;
+            width: 100vw;
+            height: 100vh;
+        }
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            background: #1a1a1a;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #e8d5a3;
+            font-size: 12px;
+            text-shadow: 2px 2px 0 #1a1a2e;
+            pointer-events: none;
+            z-index: 10;
+            line-height: 1.6;
+        }
+        #versionTag {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #5a8a9a;
+            font-size: 10px;
+            text-shadow: 1px 1px 0 #1a1a2e;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #timeIndicator {
+            position: absolute;
+            top: 28px;
+            left: 10px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #8fb8c9;
+            font-size: 11px;
+            text-align: center;
+            text-shadow: 1px 1px 0 #1a1a2e;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.8;
+        }
+        #transitionOverlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.4s;
+            z-index: 100;
+        }
+        #transitionOverlay.active { opacity: 1; }
+        .scanlines {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px
+            );
+            pointer-events: none;
+            z-index: 15;
+        }
+        }
+        #minimap {
+            position: absolute;
+            bottom: 40px;
+            right: 10px;
+            border: 2px solid rgba(45, 74, 92, 0.7);
+            border-radius: 4px;
+            z-index: 10;
+            pointer-events: none;
+            opacity: 0.85;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <canvas id="minimap" width="120" height="90" style="display:none;"></canvas>
+        <div id="ui" style="display:none;">
+            <div id="sceneName">🌸 金色花田</div>
+            <div id="coords">X: 400 Y: 300</div>
+            <div id="orbCounter">✨ 0/20</div>
+        </div>
+        <div id="timeIndicator" style="display:none;">
+            <canvas id="timeCanvas" width="60" height="12"></canvas>
+        </div>
+        <div id="versionTag" style="display:none;">v0.32</div>
+        <div id="transitionOverlay"></div>
+        <div class="scanlines"></div>
+    </div>
+
+    <script>
+    // ================================================================
+    // MONITO ADVENTURES v0.32 — 低优先级功能添加
+    // 在 v0.29 基础上新增：
+    //   1. 天气系统 — 场景独特天气效果
+    //   2. NPC系统 — 场景NPC与对话
+    //   3. 互动元素 — 可推石头、可钓鱼水域
+    //   4. 任务系统 — 收集光球目标
+    //   5. 存档功能 — localStorage
+    //   6. 宝箱系统
+    //   7. 传送门系统
+    //   8. 角色升级系统
+    // ================================================================
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const minimapCanvas = document.getElementById('minimap');
+    const minimapCtx = minimapCanvas.getContext('2d');
+    const timeCanvas = document.getElementById('timeCanvas');
+    const timeCtx = timeCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    minimapCtx.imageSmoothingEnabled = false;
+    timeCtx.imageSmoothingEnabled = false;
+
+    // ==================== 帧率独立 ====================
+    let lastTime = 0;
+    let deltaTime = 1 / 60;
+    let fpsCounter = 0;
+    let fpsTimer = 0;
+    let currentFps = 60;
+
+    // ==================== 音效引擎 ====================
+    const AudioEngine = {
+        ctx: null,
+        masterGain: null,
+        volume: 0.5,
+        muted: false,
+        initialized: false,
+        footstepCooldown: 0,
+        ambientNodes: [],
+        lastPhase: '',
+
+        init() {
+            if (this.initialized) return;
+            try {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = this.volume;
+                this.masterGain.connect(this.ctx.destination);
+                this.initialized = true;
+            } catch(e) { console.log('Web Audio API not available'); }
+        },
+        resume() {
+            if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+        },
+        setVolume(v) {
+            this.volume = Math.max(0, Math.min(1, v));
+            if (this.masterGain) {
+                this.masterGain.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime, 0.05);
+            }
+            const pct = Math.round(this.volume * 100);
+        },
+        toggleMute() {
+            this.muted = !this.muted;
+            this.setVolume(this.volume);
+        },
+        createNoiseBuffer(duration) {
+            const sr = this.ctx.sampleRate;
+            const len = sr * duration;
+            const buffer = this.ctx.createBuffer(1, len, sr);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+            return buffer;
+        },
+        playFootstep(scene) {
+            if (!this.initialized || this.footstepCooldown > 0) return;
+            this.footstepCooldown = 0.25;
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(scene === 'flowerField' ? 80 : 60, now);
+            osc.frequency.exponentialRampToValueAtTime(40, now + 0.08);
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start(now);
+            osc.stop(now + 0.1);
+
+            const noise = this.ctx.createBufferSource();
+            const noiseGain = this.ctx.createGain();
+            const filter = this.ctx.createBiquadFilter();
+            noise.buffer = this.createNoiseBuffer(0.06);
+            filter.type = 'bandpass';
+            filter.frequency.value = scene === 'flowerField' ? 3000 : 1500;
+            filter.Q.value = 1;
+            noiseGain.gain.setValueAtTime(scene === 'flowerField' ? 0.06 : 0.04, now);
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+            noise.connect(filter);
+            filter.connect(noiseGain);
+            noiseGain.connect(this.masterGain);
+            noise.start(now);
+            noise.stop(now + 0.06);
+        },
+        playTransition() {
+            if (!this.initialized) return;
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(220, now);
+            osc.frequency.exponentialRampToValueAtTime(440, now + 0.4);
+            osc.frequency.exponentialRampToValueAtTime(330, now + 0.8);
+            gain.gain.setValueAtTime(0.08, now);
+            gain.gain.linearRampToValueAtTime(0.12, now + 0.3);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start(now);
+            osc.stop(now + 0.8);
+        },
+        startAmbient(scene) {
+            this.stopAmbient();
+            if (!this.initialized) return;
+            const now = this.ctx.currentTime;
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = this.createNoiseBuffer(4);
+            noise.loop = true;
+            const noiseGain = this.ctx.createGain();
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = scene === 'flowerField' ? 400 : 300;
+            filter.Q.value = 0.5;
+            noiseGain.gain.value = scene === 'flowerField' ? 0.02 : 0.025;
+            noise.connect(filter);
+            filter.connect(noiseGain);
+            noiseGain.connect(this.masterGain);
+            noise.start(now);
+            this.ambientNodes.push(noise, noiseGain, filter);
+
+            if (scene === 'pillarSea') {
+                const waterOsc = this.ctx.createOscillator();
+                const waterGain = this.ctx.createGain();
+                waterOsc.type = 'sine';
+                waterOsc.frequency.value = 120;
+                const lfo = this.ctx.createOscillator();
+                const lfoGain = this.ctx.createGain();
+                lfo.frequency.value = 0.3;
+                lfoGain.gain.value = 20;
+                lfo.connect(lfoGain);
+                lfoGain.connect(waterOsc.frequency);
+                waterGain.gain.value = 0.015;
+                waterOsc.connect(waterGain);
+                waterGain.connect(this.masterGain);
+                waterOsc.start(now);
+                lfo.start(now);
+                this.ambientNodes.push(waterOsc, waterGain, lfo, lfoGain);
+            }
+        },
+        stopAmbient() {
+            this.ambientNodes.forEach(node => {
+                try { if (node.stop) node.stop(); node.disconnect(); } catch(e) {}
+            });
+            this.ambientNodes = [];
+        },
+        updateDayNightAmbient(phase) {
+            if (phase === this.lastPhase || !this.initialized) return;
+            this.lastPhase = phase;
+            const now = this.ctx.currentTime;
+            if (phase === 'night') {
+                for (let i = 0; i < 3; i++) {
+                    const delay = i * 0.8 + Math.random() * 0.5;
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.value = 4000 + Math.random() * 2000;
+                    gain.gain.setValueAtTime(0, now + delay);
+                    gain.gain.linearRampToValueAtTime(0.02, now + delay + 0.01);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.05);
+                    osc.connect(gain);
+                    gain.connect(this.masterGain);
+                    osc.start(now + delay);
+                    osc.stop(now + delay + 0.05);
+                }
+            }
+            if (phase === 'dawn') {
+                for (let i = 0; i < 2; i++) {
+                    const delay = i * 1.2 + Math.random() * 0.3;
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(800 + Math.random() * 400, now + delay);
+                    osc.frequency.exponentialRampToValueAtTime(2000 + Math.random() * 500, now + delay + 0.1);
+                    osc.frequency.exponentialRampToValueAtTime(1200, now + delay + 0.15);
+                    gain.gain.setValueAtTime(0.03, now + delay);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.2);
+                    osc.connect(gain);
+                    gain.connect(this.masterGain);
+                    osc.start(now + delay);
+                    osc.stop(now + delay + 0.2);
+                }
+            }
+        },
+        update(dt) {
+            if (this.footstepCooldown > 0) this.footstepCooldown -= dt;
+        },
+        // 摸头音效 — 柔和上升音
+        playPetSound() {
+            if (!this.initialized) return;
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(300, now);
+            osc.frequency.exponentialRampToValueAtTime(500, now + 0.2);
+            osc.frequency.exponentialRampToValueAtTime(400, now + 0.4);
+            gain.gain.setValueAtTime(0.06, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start(now);
+            osc.stop(now + 0.4);
+        },
+        // 呼唤音效 — 短促双音
+        playCallSound() {
+            if (!this.initialized) return;
+            const now = this.ctx.currentTime;
+            for (let i = 0; i < 2; i++) {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.value = 600 + i * 100;
+                gain.gain.setValueAtTime(0.05, now + i * 0.15);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.15 + 0.12);
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start(now + i * 0.15);
+                osc.stop(now + i * 0.15 + 0.12);
+            }
+        },
+        // 逗玩音效 — 跳跃音符
+        playPlaySound() {
+            if (!this.initialized) return;
+            const now = this.ctx.currentTime;
+            const notes = [400, 500, 600, 500];
+            notes.forEach((freq, i) => {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.04, now + i * 0.12);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.1);
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start(now + i * 0.12);
+                osc.stop(now + i * 0.12 + 0.1);
+            });
+        }
+    };
+
+    function ensureAudioInit() {
+        if (!AudioEngine.initialized) {
+            AudioEngine.init();
+            AudioEngine.startAmbient(GameState.currentScene);
+        } else {
+            AudioEngine.resume();
+        }
+    }
+
+    // ==================== 昼夜循环 ====================
+    const DayNight = {
+        timeOfDay: 0.35,
+        speed: 0.008,
+        timeSpeed: 1,
+        ambientR: 0, ambientG: 0, ambientB: 0,
+        ambientAlpha: 0,
+        sunAngle: 0,
+        sunIntensity: 1,
+        getPhase() {
+            const t = this.timeOfDay;
+            if (t < 0.2) return 'night';
+            if (t < 0.3) return 'dawn';
+            if (t < 0.7) return 'day';
+            if (t < 0.8) return 'dusk';
+            return 'night';
+        },
+        getPhaseName() {
+            const phase = this.getPhase();
+            return { night: '🌙 夜晚', dawn: '🌅 黎明', day: '☀️ 白天', dusk: '🌇 黄昏' }[phase];
+        },
+        update(dt) {
+            this.timeOfDay = (this.timeOfDay + this.speed * this.timeSpeed * dt) % 1;
+            this.sunAngle = this.timeOfDay * Math.PI * 2 - Math.PI / 2;
+            this.sunIntensity = Math.max(0, Math.sin(this.timeOfDay * Math.PI * 2 - Math.PI / 2));
+            const phase = this.getPhase();
+            if (phase === 'night') {
+                this.ambientR = 5; this.ambientG = 8; this.ambientB = 25;
+                this.ambientAlpha = 0.7;
+            } else if (phase === 'dawn') {
+                const t = (this.timeOfDay - 0.2) / 0.1;
+                this.ambientR = 10 + t * 40; this.ambientG = 15 + t * 20; this.ambientB = 40 - t * 10;
+                this.ambientAlpha = 0.55 - t * 0.35;
+            } else if (phase === 'day') {
+                this.ambientR = 50; this.ambientG = 35; this.ambientB = 30;
+                this.ambientAlpha = 0.2 - this.sunIntensity * 0.1;
+            } else if (phase === 'dusk') {
+                const t = (this.timeOfDay - 0.7) / 0.1;
+                this.ambientR = 50 + t * 20; this.ambientG = 35 - t * 20; this.ambientB = 30 + t * 20;
+                this.ambientAlpha = 0.2 + t * 0.35;
+            }
+        },
+        drawOverlay(ctx) {
+            // 黑夜覆盖层 - 覆盖整个画面包括天空
+            ctx.fillStyle = `rgba(${this.ambientR}, ${this.ambientG}, ${this.ambientB}, ${this.ambientAlpha})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (this.ambientAlpha > 0.3) {
+                const px = Player.x - GameState.camera.x;
+                 const py = Player.y - GameState.camera.y;
+                 // 角色周围光源（更大更柔和）
+                const lightRadius = 150 + this.sunIntensity * 80;
+                const grad = ctx.createRadialGradient(px, py, 0, px, py, lightRadius);
+                grad.addColorStop(0, `rgba(255, 230, 180, ${this.ambientAlpha * 0.6})`);
+                grad.addColorStop(0.3, `rgba(255, 210, 140, ${this.ambientAlpha * 0.3})`);
+                grad.addColorStop(0.7, `rgba(255, 190, 100, ${this.ambientAlpha * 0.1})`);
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.fillRect(px - lightRadius, py - lightRadius, lightRadius * 2, lightRadius * 2);
+
+                // 小猫也有小光源
+                const cx = Cat.x - GameState.camera.x;
+                const cy = Cat.y - GameState.camera.y;
+                const catGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40);
+                catGrad.addColorStop(0, `rgba(255, 220, 150, ${this.ambientAlpha * 0.25})`);
+                catGrad.addColorStop(1, 'transparent');
+                ctx.fillStyle = catGrad;
+                ctx.fillRect(cx - 40, cy - 40, 80, 80);
+            }
+            if (this.getPhase() === 'dawn' || this.getPhase() === 'dusk') {
+                const px = Player.x - GameState.camera.x;
+                const py = Player.y - GameState.camera.y;
+                const grad = ctx.createRadialGradient(px, py - 20, 0, px, py - 20, 80);
+                grad.addColorStop(0, 'rgba(255, 180, 80, 0.08)');
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.fillRect(px - 80, py - 100, 160, 160);
+            }
+        },
+        drawTimeBar(ctx) {
+            const w = timeCanvas.width;
+            const h = timeCanvas.height;
+            timeCtx.clearRect(0, 0, w, h);
+            timeCtx.fillStyle = 'rgba(0,0,0,0.5)';
+            timeCtx.fillRect(0, 0, w, h);
+            for (let x = 0; x < w; x++) {
+                const t = x / w;
+                let r, g, b;
+                if (t < 0.2 || t > 0.8) { r = 20; g = 25; b = 60; }
+                else if (t < 0.3) { r = 200; g = 120; b = 60; }
+                else if (t < 0.7) { r = 100; g = 160; b = 220; }
+                else { r = 200; g = 100; b = 50; }
+                timeCtx.fillStyle = `rgb(${r},${g},${b})`;
+                timeCtx.fillRect(x, 1, 1, h - 2);
+            }
+            const cx = this.timeOfDay * w;
+            timeCtx.fillStyle = '#fff';
+            timeCtx.fillRect(cx - 1, 0, 2, h);
+        }
+    };
+
+    // ==================== 游戏状态 ====================
+    const GameState = {
+        currentScene: 'flowerField',
+        transitioning: false,
+        camera: { x: 0, y: 0 },
+        worldWidth: 1600,
+        worldHeight: 1200,
+        keys: {},
+        orbs: [],
+        orbsCollected: 0,
+        orbsTotal: 0,
+        butterflies: [],
+        time: 0,
+        footprints: [],
+        maxFootprints: 80,
+        weather: { type: 'calm', intensity: 0, windDir: 1, rainTimer: 0 },
+        expandingOrbs: [],
+        collectParticles: [],
+        bubbles: [],
+        // 天气效果数据
+        weatherEffects: {
+            rainDrops: [],
+            ripples: [],
+            seaDust: [],
+            fishSchools: [],
+            cloudFluffs: [],
+            sunBeams: []
+        },
+        // NPC对话状态
+        npcDialog: { active: false, text: '', timer: 0, targetNpc: null },
+        // 钓鱼状态
+        fishing: { active: false, timer: 0, spot: null },
+        // 任务系统
+        quests: {
+            current: { id: 'collect_orbs', name: '收集光球', target: 5, current: 0, completed: false },
+            completed: []
+        },
+        questCompletedTimer: 0,
+        // 传送门粒子
+        portalParticles: [],
+        // 升级提示
+        levelUpTimer: 0,
+        // 场景切换提示
+        sceneHint: { text: '', timer: 0, opacity: 0 },
+        // 统计变量（成就系统用）
+        totalChestsOpened: 0,
+        visitedScenes: new Set(['flowerField']),
+        totalFishCaught: 0,
+        npcTalked: new Set(),
+        frameCount: 0,
+        // 成就系统
+        achievements: {
+            list: [
+                { id: 'first_orb', name: '初见光球', desc: '收集第1个光球', unlocked: false, condition: () => GameState.orbsCollected >= 1 },
+                { id: 'orb_10', name: '光球猎人', desc: '收集10个光球', unlocked: false, condition: () => GameState.orbsCollected >= 10 },
+                { id: 'orb_50', name: '光球大师', desc: '收集50个光球', unlocked: false, condition: () => GameState.orbsCollected >= 50 },
+                { id: 'chest_1', name: '开箱达人', desc: '打开第1个宝箱', unlocked: false, condition: () => GameState.totalChestsOpened >= 1 },
+                { id: 'chest_10', name: '宝箱猎人', desc: '打开10个宝箱', unlocked: false, condition: () => GameState.totalChestsOpened >= 10 },
+                { id: 'level_5', name: '冒险进阶', desc: '达到5级', unlocked: false, condition: () => Player.level >= 5 },
+                { id: 'explore_all', name: '探索者', desc: '访问所有场景', unlocked: false, condition: () => (GameState.visitedScenes || new Set()).size >= 4 },
+                { id: 'fish_1', name: '钓鱼新手', desc: '成功钓到鱼', unlocked: false, condition: () => (GameState.totalFishCaught || 0) >= 1 },
+                { id: 'npc_all', name: '社交达人', desc: '与所有NPC对话', unlocked: false, condition: () => (GameState.npcTalked || new Set()).size >= 4 },
+            ],
+            notification: null,
+            totalUnlocked: 0
+        },
+        // 昼夜循环
+        dayNight: {
+            cycle: 0,        // 0-1 循环值
+            speed: 0.00003,  // 循环速度（约 55 秒一个完整昼夜）
+            currentPhase: 'day' // day, dusk, night, dawn
+        }
+    };
+
+    // ==================== 角色 ====================
+    const Player = {
+        x: 400, y: 300,
+        width: 24, height: 32,
+        speed: 150,
+        direction: 'down',
+        isMoving: false,
+        animFrame: 0,
+        animTimer: 0,
+        footprintTimer: 0,
+        idleTime: 0,
+        blinkTimer: 0,
+        isBlinking: false,
+        name: '冒险者',
+        nameColor: '#e8d5a3',
+        level: 1,
+        exp: 0,
+        colors: {
+            skin: '#f4d0a4', hair: '#5c3a1e',
+            shirt: '#c0392b', pants: '#2c3e50',
+            shoes: '#1a1a1a', cloak: '#8b4513', cloakLight: '#a0522d'
+        },
+        costumes: {
+            current: 'default',
+            unlocked: ['default'],
+            list: {
+                default: { name: '冒险者', shirt: '#c0392b', pants: '#2c3e50', cloak: '#8b4513' },
+                ocean: { name: '海洋行者', shirt: '#2980b9', pants: '#1a5276', cloak: '#1a3a5a' },
+                forest: { name: '森林守卫', shirt: '#27ae60', pants: '#1a5a2a', cloak: '#2a4a1a' },
+            }
+        },
+        costumeSwitchTimer: 0,
+        // 开场动画
+        intro: {
+            active: true,
+            phase: 0, // 0=淡入标题, 1=显示副标题, 2=淡出, 3=开始游戏
+            timer: 0,
+            alpha: 0
+        }
+    };
+
+    // ==================== 命名系统 ====================
+    const NameSystem = {
+        isEditing: false,
+        inputEl: null,
+        nameHitbox: { x: 0, y: 0, w: 0, h: 0 },
+
+        drawName(px, py) {
+            const camX = GameState.camera.x;
+            const camY = GameState.camera.y;
+            const name = Player.name;
+            const fontSize = 10;
+            ctx.font = `${fontSize}px 'Courier New', monospace`;
+            const textWidth = ctx.measureText(name).width;
+            const nameX = px - textWidth / 2;
+            const nameY = py - 22;
+
+            // 保存点击检测区域（屏幕坐标）
+            this.nameHitbox = {
+                x: nameX + camX,
+                y: nameY + camY - fontSize,
+                w: textWidth,
+                h: fontSize + 4
+            };
+
+            // 名字背景（半透明底板）
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect(nameX - 4, nameY - fontSize - 1, textWidth + 8, fontSize + 4);
+            // 名字边框
+            ctx.strokeStyle = 'rgba(232, 213, 163, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(nameX - 4, nameY - fontSize - 1, textWidth + 8, fontSize + 4);
+
+            // 名字文字
+            ctx.fillStyle = Player.nameColor;
+            ctx.textAlign = 'center';
+            ctx.fillText(name, px, nameY);
+            ctx.textAlign = 'left';
+        },
+
+        checkClick(screenX, screenY) {
+            // 检测角色名字
+            const hb = this.nameHitbox;
+            const inPlayerHitbox = screenX >= hb.x - GameState.camera.x &&
+                           screenX <= hb.x - GameState.camera.x + hb.w &&
+                           screenY >= hb.y - GameState.camera.y &&
+                           screenY <= hb.y - GameState.camera.y + hb.h;
+            if (inPlayerHitbox && !this.isEditing) {
+                this.showInput(Player, '✏️ 输入你的名字');
+                return true;
+            }
+            // 检测小猫名字
+            const chb = Cat.nameHitbox;
+            const inCatHitbox = screenX >= chb.x - GameState.camera.x &&
+                           screenX <= chb.x - GameState.camera.x + chb.w &&
+                           screenY >= chb.y - GameState.camera.y &&
+                           screenY <= chb.y - GameState.camera.y + chb.h;
+            if (inCatHitbox && !this.isEditing) {
+                this.showInput(Cat, '🐱 输入小猫的名字');
+                return true;
+            }
+            return false;
+        },
+
+        showInput(target, labelText) {
+            if (this.isEditing) return;
+            this.isEditing = true;
+
+            // 创建输入框
+            this.inputEl = document.createElement('input');
+            this.inputEl.type = 'text';
+            this.inputEl.value = target.name;
+            this.inputEl.maxLength = 12;
+            this.inputEl.style.cssText = `
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(10, 15, 30, 0.95);
+                border: 2px solid #2d7d8a;
+                border-radius: 8px;
+                color: #e8d5a3;
+                font-family: 'Courier New', monospace;
+                font-size: 16px;
+                padding: 12px 20px;
+                text-align: center;
+                outline: none;
+                z-index: 100;
+                width: 200px;
+                box-shadow: 0 0 20px rgba(45, 125, 138, 0.5);
+            `;
+
+            // 提示文字
+            const label = document.createElement('div');
+            label.textContent = labelText;
+            label.style.cssText = `
+                position: absolute;
+                top: calc(50% - 50px);
+                left: 50%;
+                transform: translateX(-50%);
+                color: #8fb8c9;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                z-index: 100;
+                text-shadow: 1px 1px 2px #000;
+            `;
+
+            document.getElementById('gameContainer').appendChild(label);
+            document.getElementById('gameContainer').appendChild(this.inputEl);
+            this.inputEl.focus();
+            this.inputEl.select();
+
+            // 确认命名
+            const confirm = () => {
+                const newName = this.inputEl.value.trim();
+                if (newName) {
+                    target.name = newName;
+                }
+                this.closeInput(label);
+            };
+
+            this.inputEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') confirm();
+                if (e.key === 'Escape') this.closeInput(label);
+            });
+
+            this.inputEl.addEventListener('blur', () => {
+                setTimeout(() => confirm(), 100);
+            });
+        },
+
+        closeInput(label) {
+            if (this.inputEl) {
+                this.inputEl.remove();
+                this.inputEl = null;
+            }
+            if (label) label.remove();
+            this.isEditing = false;
+        }
+    };
+
+    // ==================== 小猫伙伴 ====================
+    const Cat = {
+        x: 420, y: 320,
+        width: 14, height: 12,
+        speed: 80,
+        direction: 'down',
+        isMoving: false,
+        animFrame: 0,
+        animTimer: 0,
+        state: 'follow', // follow, idle, sit, chase, rub, roll
+        idleTimer: 0,
+        sitTimer: 0,
+        tailAngle: 0,
+        rubbing: false,
+        rubTimer: 0,
+        rollTimer: 0,
+        isRolling: false,
+        name: '小橘猫',
+        nameColor: '#f0c060',
+        nameHitbox: { x: 0, y: 0, w: 0, h: 0 },
+        colors: {
+            body: '#e8a838',
+            bodyLight: '#f0c060',
+            stripes: '#c07820',
+            eyes: '#2a8a3a',
+            nose: '#f08080',
+            ears: '#d08020'
+        },
+        update(dt) {
+            const dx = Player.x - this.x;
+            const dy = Player.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // 状态机
+            if (this.state === 'chase') {
+                // 追逐蝴蝶
+                const bx = Butterflies[0].x - this.x;
+                const by = Butterflies[0].y - this.y;
+                const bdist = Math.sqrt(bx * bx + by * by);
+                if (bdist > 5) {
+                    this.x += (bx / bdist) * this.speed * 1.5 * dt;
+                    this.y += (by / bdist) * this.speed * 1.5 * dt;
+                    this.isMoving = true;
+                    this.direction = Math.abs(bx) > Math.abs(by) ? (bx > 0 ? 'right' : 'left') : (by > 0 ? 'down' : 'up');
+                }
+                if (bdist < 15) {
+                    this.state = 'follow';
+                }
+                this.idleTimer = 0;
+            } else if (this.state === 'follow') {
+                if (dist > 60) {
+                    this.x += (dx / dist) * this.speed * dt;
+                    this.y += (dy / dist) * this.speed * dt;
+                    this.isMoving = true;
+                    this.direction = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+                    this.idleTimer = 0;
+                } else {
+                    this.isMoving = false;
+                    this.idleTimer += dt;
+                    if (this.idleTimer > 5 + Math.random() * 5 && Math.random() < 0.01) {
+                        this.state = 'sit';
+                        this.sitTimer = 0;
+                    }
+                    // 随机追逐蝴蝶
+                    if (Butterflies.length > 0 && Math.random() < 0.002) {
+                        this.state = 'chase';
+                    }
+                }
+            } else if (this.state === 'sit') {
+                this.isMoving = false;
+                this.sitTimer += dt;
+                // 打滚触发
+                if (!this.isRolling && Math.random() < 0.2) {
+                    this.isRolling = true;
+                    this.rollTimer = 0;
+                }
+                if (this.isRolling) {
+                    this.rollTimer += dt;
+                    if (this.rollTimer > 1) {
+                        this.isRolling = false;
+                        this.rollTimer = 0;
+                    }
+                }
+                if (this.sitTimer > 5 + Math.random() * 5) {
+                    this.state = 'follow';
+                    this.idleTimer = 0;
+                    this.isRolling = false;
+                }
+            } else if (this.state === 'rub') {
+                this.isMoving = false;
+                this.rubTimer += dt;
+                if (this.rubTimer > 2) {
+                    this.state = 'follow';
+                    this.rubTimer = 0;
+                    this.rubbing = false;
+                }
+            }
+
+            // 蹭腿检测
+            if (this.state !== 'rub' && this.state !== 'chase' && !Player.isMoving && dist < 30) {
+                this.state = 'rub';
+                this.rubTimer = 0;
+                this.rubbing = true;
+            }
+
+            // 动画
+            if (this.isMoving) {
+                this.animTimer += dt * 10;
+                this.animFrame = this.animTimer;
+            } else {
+                this.animFrame = 0;
+            }
+
+            // 尾巴摆动
+            this.tailAngle += dt * 3;
+
+            // 边界
+            this.x = Math.max(10, Math.min(GameState.worldWidth - 10, this.x));
+            this.y = Math.max(10, Math.min(GameState.worldHeight - 10, this.y));
+        },
+        draw(px, py) {
+            const c = this.colors;
+            const frame = this.isMoving ? Math.floor(this.animFrame) % 4 : 0;
+            const bob = this.isMoving ? Math.sin(this.animFrame * 0.3) * 1 : 0;
+            const x = Math.floor(px - this.width / 2);
+            const y = Math.floor(py - this.height / 2 + bob);
+
+            // 小猫阴影（根据场景调整）
+            const catShadowColor = GameState.currentScene === 'flowerField' ? 'rgba(0,0,0,0.15)'
+                : GameState.currentScene === 'pillarSea' ? 'rgba(0,20,40,0.1)'
+                : 'rgba(0,0,0,0.2)';
+            ctx.fillStyle = catShadowColor;
+            ctx.beginPath();
+            ctx.ellipse(x + 7, y + 11, 5, 2, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (this.state === 'sit') {
+                if (this.isRolling) {
+                    // 打滚动画：旋转的黄色椭圆
+                    ctx.save();
+                    ctx.translate(px, py);
+                    ctx.rotate(this.rollTimer * Math.PI * 2);
+                    ctx.fillStyle = c.body;
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, 7, 4, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = c.bodyLight;
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, 5, 2.5, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                } else {
+                    // 坐姿（身体变扁，高度减半）
+                    drawPixelRect(x + 2, y + 6, 10, 4, c.body);
+                    drawPixelRect(x + 3, y + 5, 8, 2, c.bodyLight);
+                    drawPixelRect(x + 4, y + 7, 6, 1, c.stripes);
+                    drawPixelRect(x + 3, y + 2, 8, 4, c.body);
+                    drawPixelRect(x + 3, y + 1, 2, 2, c.ears);
+                    drawPixelRect(x + 9, y + 1, 2, 2, c.ears);
+                    drawPixelRect(x + 5, y + 3, 1, 1, c.eyes);
+                    drawPixelRect(x + 8, y + 3, 1, 1, c.eyes);
+                    drawPixelRect(x + 6, y + 4, 2, 1, c.nose);
+                    const tailX = x + 12 + Math.sin(this.tailAngle) * 2;
+                    const tailY = y + 6 + Math.cos(this.tailAngle * 0.5) * 1;
+                    drawPixelRect(tailX, tailY, 3, 2, c.body);
+                    drawPixelRect(tailX + 2, tailY - 1, 2, 2, c.body);
+                }
+            } else if (this.state === 'rub') {
+                // 蹭腿：在角色腿边左右摆动
+                const rubOffset = Math.sin(GameState.time * 0.08) * 5;
+                const rx = x + rubOffset;
+                drawPixelRect(rx + 3, y + 8, 2, 3, c.body);
+                drawPixelRect(rx + 9, y + 8, 2, 3, c.body);
+                drawPixelRect(rx + 2, y + 3, 10, 6, c.body);
+                drawPixelRect(rx + 3, y + 4, 8, 3, c.bodyLight);
+                drawPixelRect(rx + 4, y + 5, 6, 1, c.stripes);
+                drawPixelRect(rx + 3, y, 8, 5, c.body);
+                drawPixelRect(rx + 3, y - 1, 2, 2, c.ears);
+                drawPixelRect(rx + 9, y - 1, 2, 2, c.ears);
+                // 蹭腿时闭眼享受
+                drawPixelRect(rx + 5, y + 2, 2, 1, c.eyes);
+                drawPixelRect(rx + 8, y + 2, 2, 1, c.eyes);
+                drawPixelRect(rx + 6, y + 3, 2, 1, c.nose);
+                const tailSway = Math.sin(this.tailAngle * 3) * 4;
+                drawPixelRect(rx + 12, y + 4 + tailSway, 2, 2, c.body);
+                drawPixelRect(rx + 13, y + 3 + tailSway * 0.7, 2, 2, c.bodyLight);
+            } else if (this.state === 'pet') {
+                // 被摸头 — 闭眼享受
+                const legOffset = 0;
+                drawPixelRect(x + 3 + legOffset, y + 8, 2, 3, c.body);
+                drawPixelRect(x + 9 - legOffset, y + 8, 2, 3, c.body);
+                drawPixelRect(x + 2, y + 3, 10, 6, c.body);
+                drawPixelRect(x + 3, y + 4, 8, 3, c.bodyLight);
+                drawPixelRect(x + 4, y + 5, 6, 1, c.stripes);
+                drawPixelRect(x + 3, y, 8, 5, c.body);
+                drawPixelRect(x + 3, y - 1, 2, 2, c.ears);
+                drawPixelRect(x + 9, y - 1, 2, 2, c.ears);
+                // 闭眼（横线）
+                drawPixelRect(x + 5, y + 2, 2, 1, c.eyes);
+                drawPixelRect(x + 8, y + 2, 2, 1, c.eyes);
+                drawPixelRect(x + 6, y + 3, 2, 1, c.nose);
+                // 尾巴快速摇摆
+                const tailSway = Math.sin(this.tailAngle * 3) * 4;
+                drawPixelRect(x + 12, y + 4 + tailSway, 2, 2, c.body);
+                drawPixelRect(x + 13, y + 3 + tailSway * 0.7, 2, 2, c.bodyLight);
+            } else if (this.state === 'play') {
+                // 逗玩 — 跳跃
+                const jumpBob = Math.sin(Interaction.timer * 8) * 4;
+                const playY = y + jumpBob;
+                drawPixelRect(x + 3, playY + 8, 2, 3, c.body);
+                drawPixelRect(x + 9, playY + 8, 2, 3, c.body);
+                drawPixelRect(x + 2, playY + 3, 10, 6, c.body);
+                drawPixelRect(x + 3, playY + 4, 8, 3, c.bodyLight);
+                drawPixelRect(x + 4, playY + 5, 6, 1, c.stripes);
+                drawPixelRect(x + 3, playY, 8, 5, c.body);
+                drawPixelRect(x + 3, playY - 1, 2, 2, c.ears);
+                drawPixelRect(x + 9, playY - 1, 2, 2, c.ears);
+                // 兴奋的大眼睛
+                drawPixelRect(x + 5, playY + 1, 2, 2, c.eyes);
+                drawPixelRect(x + 8, playY + 1, 2, 2, c.eyes);
+                drawPixelRect(x + 6, playY + 3, 2, 1, c.nose);
+                const tailSway = Math.sin(this.tailAngle * 4) * 5;
+                drawPixelRect(x + 12, playY + 4 + tailSway, 2, 2, c.body);
+                drawPixelRect(x + 13, playY + 3 + tailSway * 0.7, 2, 2, c.bodyLight);
+            } else {
+                // 行走/站立
+                const legOffset = frame === 1 ? -1 : frame === 3 ? 1 : 0;
+                drawPixelRect(x + 3 + legOffset, y + 8, 2, 3, c.body);
+                drawPixelRect(x + 9 - legOffset, y + 8, 2, 3, c.body);
+                // 身体
+                drawPixelRect(x + 2, y + 3, 10, 6, c.body);
+                drawPixelRect(x + 3, y + 4, 8, 3, c.bodyLight);
+                // 条纹
+                drawPixelRect(x + 4, y + 5, 6, 1, c.stripes);
+                // 头
+                drawPixelRect(x + 3, y, 8, 5, c.body);
+                // 耳朵
+                drawPixelRect(x + 3, y - 1, 2, 2, c.ears);
+                drawPixelRect(x + 9, y - 1, 2, 2, c.ears);
+                // 眼睛
+                const eyeDir = this.direction === 'left' ? -1 : this.direction === 'right' ? 1 : 0;
+                drawPixelRect(x + 5 + eyeDir, y + 1, 1, 2, c.eyes);
+                drawPixelRect(x + 8 + eyeDir, y + 1, 1, 2, c.eyes);
+                // 鼻子
+                drawPixelRect(x + 6, y + 3, 2, 1, c.nose);
+                // 尾巴
+                const tailSway = Math.sin(this.tailAngle) * 5;
+                drawPixelRect(x + 12, y + 4 + tailSway, 2, 2, c.body);
+                drawPixelRect(x + 13, y + 3 + tailSway * 0.7, 2, 2, c.body);
+                drawPixelRect(x + 14, y + 2 + tailSway * 0.4, 2, 2, c.bodyLight);
+            }
+
+            // 小猫名字
+            const catName = this.name;
+            const catFontSize = 9;
+            ctx.font = `${catFontSize}px 'Courier New', monospace`;
+            // 中文字符每个约 9-10px 宽，确保足够空间
+            const catTextW = Math.max(ctx.measureText(catName).width, catName.length * catFontSize);
+            const catNameX = px - catTextW / 2;
+            const catNameY = py - 10;
+            const catNamePad = 4;
+            // 保存点击区域
+            this.nameHitbox = {
+                x: catNameX + GameState.camera.x,
+                y: catNameY + GameState.camera.y - catFontSize,
+                w: catTextW + catNamePad * 2,
+                h: catFontSize + 4
+            };
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+            ctx.fillRect(catNameX - catNamePad, catNameY - catFontSize, catTextW + catNamePad * 2, catFontSize + 3);
+            ctx.strokeStyle = 'rgba(240, 192, 96, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(catNameX - catNamePad, catNameY - catFontSize, catTextW + catNamePad * 2, catFontSize + 3);
+            ctx.fillStyle = this.nameColor;
+            ctx.textAlign = 'center';
+            ctx.fillText(catName, px, catNameY);
+            ctx.textAlign = 'left';
+        }
+    };
+
+    // ==================== NPC系统 ====================
+    const NPCSystem = {
+        npcs: [],
+        init() {
+            this.npcs = [
+                // 迷雾森林
+                {
+                    x: 600, y: 400, name: '森林守护者', type: 'oldman',
+                    dialog: '这片森林很古老，小心迷路', scene: 'flowerField',
+                    animPhase: 0, width: 20, height: 32
+                },
+                // 深海柱林
+                {
+                    x: 500, y: 500, name: '海之女', type: 'mermaid',
+                    dialog: '深海之下藏着古老的秘密...', scene: 'pillarSea',
+                    animPhase: 0, width: 20, height: 28
+                },
+                // 云端花田
+                {
+                    x: 700, y: 300, name: '云之精灵', type: 'fairy',
+                    dialog: '彩虹的尽头有宝藏哦~', scene: 'cloudSea',
+                    animPhase: 0, width: 18, height: 30
+                },
+                // 熔岩洞穴
+                {
+                    x: 600, y: 500, name: '火焰守护者', type: 'firespirit',
+                    dialog: '不要掉进岩浆里...', scene: 'lavaCave',
+                    animPhase: 0, width: 20, height: 32
+                }
+            ];
+        },
+        update(dt) {
+            this.npcs.forEach(npc => {
+                npc.animPhase += dt;
+            });
+            // 对话计时器
+            if (GameState.npcDialog.timer > 0) {
+                GameState.npcDialog.timer -= dt;
+                if (GameState.npcDialog.timer <= 0) {
+                    GameState.npcDialog.active = false;
+                    GameState.npcDialog.text = '';
+                    GameState.npcDialog.targetNpc = null;
+                }
+            }
+        },
+        draw(camX, camY) {
+            this.npcs.forEach(npc => {
+                if (npc.scene !== GameState.currentScene) return;
+                const sx = npc.x - camX;
+                const sy = npc.y - camY;
+                if (sx < -40 || sx > canvas.width + 40 || sy < -40 || sy > canvas.height + 40) return;
+
+                // 绘制NPC
+                if (npc.type === 'oldman') {
+                    // 森林老人 - 绿色斗篷
+                    const sway = Math.sin(npc.animPhase * 1.5) * 1;
+                    // 阴影
+                    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+                    ctx.beginPath();
+                    ctx.ellipse(sx, sy + 16, 10, 3, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    // 身体（绿色斗篷）
+                    ctx.fillStyle = '#2a5a2a';
+                    ctx.fillRect(sx - 8, sy - 4, 16, 18);
+                    ctx.fillStyle = '#3a7a3a';
+                    ctx.fillRect(sx - 6, sy - 2, 12, 14);
+                    // 头
+                    ctx.fillStyle = '#d4b896';
+                    ctx.fillRect(sx - 5, sy - 14, 10, 10);
+                    // 白发
+                    ctx.fillStyle = '#e8e8e8';
+                    ctx.fillRect(sx - 6, sy - 16, 12, 4);
+                    ctx.fillRect(sx - 5, sy - 14, 2, 4);
+                    ctx.fillRect(sx + 3, sy - 14, 2, 4);
+                    // 眼睛
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.fillRect(sx - 2, sy - 10, 1, 2);
+                    ctx.fillRect(sx + 1, sy - 10, 1, 2);
+                    // 斗篷摆动
+                    ctx.fillStyle = '#2a5a2a';
+                    ctx.fillRect(sx - 8 + sway, sy + 10, 4, 8);
+                    ctx.fillRect(sx + 4 + sway, sy + 10, 4, 8);
+                    // 手杖
+                    ctx.fillStyle = '#5a3a1a';
+                    ctx.fillRect(sx + 9, sy - 8, 2, 24);
+                } else if (npc.type === 'mermaid') {
+                    // 美人鱼 - 蓝色长发，坐在柱子上
+                    const tailWave = Math.sin(npc.animPhase * 2) * 3;
+                    // 柱子底座
+                    ctx.fillStyle = 'rgba(30,60,80,0.6)';
+                    ctx.fillRect(sx - 10, sy + 10, 20, 12);
+                    // 尾巴
+                    ctx.fillStyle = '#4a8aaa';
+                    ctx.fillRect(sx - 4, sy + 6, 8, 8);
+                    ctx.fillRect(sx - 6 + tailWave, sy + 12, 12, 4);
+                    ctx.fillRect(sx - 4 + tailWave * 1.5, sy + 15, 8, 3);
+                    ctx.fillStyle = '#6aaaca';
+                    ctx.fillRect(sx - 2, sy + 8, 4, 4);
+                    // 身体
+                    ctx.fillStyle = '#d4b896';
+                    ctx.fillRect(sx - 5, sy - 8, 10, 14);
+                    // 头发
+                    ctx.fillStyle = '#3a6aaa';
+                    ctx.fillRect(sx - 7, sy - 14, 14, 8);
+                    ctx.fillRect(sx - 8, sy - 10, 3, 10);
+                    ctx.fillRect(sx + 5, sy - 10, 3, 10);
+                    // 脸
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.fillRect(sx - 2, sy - 6, 1, 2);
+                    ctx.fillRect(sx + 1, sy - 6, 1, 2);
+                } else if (npc.type === 'fairy') {
+                    // 云端仙子 - 白色长裙，漂浮
+                    const floatY = Math.sin(npc.animPhase * 1.2) * 4;
+                    const fy = sy + floatY;
+                    // 阴影（淡）
+                    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+                    ctx.beginPath();
+                    ctx.ellipse(sx, fy + 18, 8, 2, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    // 裙子
+                    ctx.fillStyle = '#f0f0f0';
+                    ctx.fillRect(sx - 6, fy + 2, 12, 14);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(sx - 4, fy + 4, 8, 10);
+                    // 身体
+                    ctx.fillStyle = '#f4d0a4';
+                    ctx.fillRect(sx - 4, fy - 8, 8, 10);
+                    // 头
+                    ctx.fillStyle = '#f4d0a4';
+                    ctx.fillRect(sx - 4, fy - 16, 8, 8);
+                    // 头发
+                    ctx.fillStyle = '#e8d5a3';
+                    ctx.fillRect(sx - 5, fy - 18, 10, 4);
+                    ctx.fillRect(sx - 6, fy - 16, 3, 8);
+                    ctx.fillRect(sx + 3, fy - 16, 3, 8);
+                    // 眼睛
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.fillRect(sx - 2, fy - 12, 1, 2);
+                    ctx.fillRect(sx + 1, fy - 12, 1, 2);
+                    // 小翅膀
+                    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+                    ctx.fillRect(sx - 10, fy - 4, 5, 8);
+                    ctx.fillRect(sx + 5, fy - 4, 5, 8);
+                } else if (npc.type === 'firespirit') {
+                    // 火焰精灵 - 红橙色，飘浮
+                    const floatY = Math.sin(npc.animPhase * 1.5) * 5;
+                    const fy = sy + floatY;
+                    const flicker = 0.7 + Math.sin(npc.animPhase * 8) * 0.3;
+                    // 火焰光晕
+                    ctx.fillStyle = `rgba(255, 100, 0, ${0.15 * flicker})`;
+                    ctx.beginPath();
+                    ctx.arc(sx, fy, 20, 0, Math.PI * 2);
+                    ctx.fill();
+                    // 身体（火焰色）
+                    ctx.fillStyle = `rgb(${Math.floor(200 * flicker)}, ${Math.floor(80 * flicker)}, 0)`;
+                    ctx.fillRect(sx - 6, fy - 4, 12, 16);
+                    ctx.fillStyle = `rgb(${Math.floor(255 * flicker)}, ${Math.floor(120 * flicker)}, 20)`;
+                    ctx.fillRect(sx - 4, fy - 2, 8, 12);
+                    // 头
+                    ctx.fillStyle = `rgb(${Math.floor(255 * flicker)}, ${Math.floor(150 * flicker)}, 50)`;
+                    ctx.fillRect(sx - 5, fy - 14, 10, 10);
+                    // 火焰头发
+                    ctx.fillStyle = `rgb(255, ${Math.floor(200 * flicker)}, 0)`;
+                    ctx.fillRect(sx - 6, fy - 18, 12, 6);
+                    ctx.fillRect(sx - 4, fy - 20, 3, 4);
+                    ctx.fillRect(sx + 1, fy - 21, 3, 5);
+                    ctx.fillRect(sx + 4, fy - 18, 2, 3);
+                    // 眼睛（发光）
+                    ctx.fillStyle = '#ffff00';
+                    ctx.fillRect(sx - 2, fy - 10, 2, 2);
+                    ctx.fillRect(sx + 1, fy - 10, 2, 2);
+                    // 火焰尾巴
+                    ctx.fillStyle = `rgba(255, 100, 0, ${0.6 * flicker})`;
+                    ctx.fillRect(sx - 3, fy + 10, 2, 6);
+                    ctx.fillRect(sx + 1, fy + 10, 2, 8);
+                    ctx.fillStyle = `rgba(255, 200, 0, ${0.4 * flicker})`;
+                    ctx.fillRect(sx - 1, fy + 12, 2, 4);
+                }
+
+                // 名字
+                ctx.font = '9px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                const nameW = ctx.measureText(npc.name).width;
+                ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                ctx.fillRect(sx - nameW / 2 - 3, sy - 28, nameW + 6, 11);
+                ctx.fillStyle = '#e8d5a3';
+                ctx.fillText(npc.name, sx, sy - 20);
+                ctx.textAlign = 'left';
+
+                // 靠近检测 - 显示对话气泡 "..."
+                const pdx = Player.x - npc.x;
+                const pdy = Player.y - npc.y;
+                const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                if (pdist < 30 && !GameState.npcDialog.active) {
+                    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                    ctx.fillRect(sx - 8, sy - 42, 16, 12);
+                    ctx.strokeStyle = '#aaa';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(sx - 8, sy - 42, 16, 12);
+                    ctx.fillStyle = '#333';
+                    ctx.font = '10px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('...', sx, sy - 33);
+                    ctx.textAlign = 'left';
+                }
+            });
+
+            // 绘制对话文本
+            if (GameState.npcDialog.active && GameState.npcDialog.targetNpc) {
+                const npc = GameState.npcDialog.targetNpc;
+                const sx = npc.x - camX;
+                const sy = npc.y - camY;
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                const textW = ctx.measureText(GameState.npcDialog.text).width;
+                ctx.fillRect(sx - textW / 2 - 6, sy - 60, textW + 12, 20);
+                ctx.strokeStyle = '#e8d5a3';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(sx - textW / 2 - 6, sy - 60, textW + 12, 20);
+                ctx.fillStyle = '#e8d5a3';
+                ctx.font = '10px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(GameState.npcDialog.text, sx, sy - 47);
+                ctx.textAlign = 'left';
+            }
+        },
+        tryTalk() {
+            for (const npc of this.npcs) {
+                if (npc.scene !== GameState.currentScene) continue;
+                const pdx = Player.x - npc.x;
+                const pdy = Player.y - npc.y;
+                const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                if (pdist < 35) {
+                    GameState.npcDialog.active = true;
+                    GameState.npcDialog.text = npc.dialog;
+                    GameState.npcDialog.timer = 3;
+                    GameState.npcDialog.targetNpc = npc;
+                    if (!GameState.npcTalked) GameState.npcTalked = new Set();
+                    GameState.npcTalked.add(npc.name);
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    // ==================== 互动系统 ====================
+    const Interaction = {
+        active: false,
+        type: '', // 'pet', 'call', 'play', 'carry'
+        timer: 0,
+        duration: 0,
+        cooldown: 0,
+        particles: [],
+
+        tryInteract() {
+            if (this.active || this.cooldown > 0) return;
+            const dx = Player.x - Cat.x;
+            const dy = Player.y - Cat.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < 50) {
+                // 靠近：摸头 或 逗玩
+                if (Cat.state === 'sit') {
+                    this.start('pet', 1.5);
+                } else if (Math.random() < 0.4) {
+                    this.start('play', 2.0);
+                } else {
+                    this.start('pet', 1.5);
+                }
+            } else {
+                // 远离：呼唤
+                this.start('call', 1.0);
+            }
+        },
+
+        start(type, duration) {
+            this.active = true;
+            this.type = type;
+            this.timer = 0;
+            this.duration = duration;
+            this.particles = [];
+
+            if (type === 'pet') {
+                Cat.state = 'pet';
+                Cat.isMoving = false;
+                AudioEngine.playPetSound();
+            } else if (type === 'call') {
+                Player.direction = Math.abs(dx_calc()) > Math.abs(dy_calc()) ? (Cat.x > Player.x ? 'right' : 'left') : (Cat.y > Player.y ? 'down' : 'up');
+                Cat.state = 'follow';
+                Cat.speed = 200; // 加速跑来
+                AudioEngine.playCallSound();
+            } else if (type === 'play') {
+                Cat.state = 'play';
+                Cat.isMoving = false;
+                AudioEngine.playPlaySound();
+            }
+        },
+
+        update(dt) {
+            if (this.cooldown > 0) this.cooldown -= dt;
+
+            if (!this.active) return;
+            this.timer += dt;
+
+            // 生成互动粒子
+            if (this.type === 'pet') {
+                if (Math.random() < 0.15) {
+                    this.particles.push({
+                        x: Cat.x + (Math.random() - 0.5) * 10,
+                        y: Cat.y - 15,
+                        vy: -20 - Math.random() * 15,
+                        life: 1,
+                        type: 'heart'
+                    });
+                }
+            } else if (this.type === 'play') {
+                if (Math.random() < 0.2) {
+                    this.particles.push({
+                        x: Cat.x + (Math.random() - 0.5) * 16,
+                        y: Cat.y + (Math.random() - 0.5) * 16,
+                        vy: -15 - Math.random() * 10,
+                        vx: (Math.random() - 0.5) * 20,
+                        life: 1,
+                        type: 'sparkle'
+                    });
+                }
+                // 小猫转圈
+                Cat.x += Math.cos(this.timer * 6) * 0.5;
+                Cat.y += Math.sin(this.timer * 6) * 0.5;
+            }
+
+            // 更新粒子
+            this.particles.forEach(p => {
+                p.y += (p.vy || 0) * dt;
+                p.x += (p.vx || 0) * dt;
+                p.life -= 0.02;
+            });
+            this.particles = this.particles.filter(p => p.life > 0);
+
+            // 互动结束
+            if (this.timer >= this.duration) {
+                this.end();
+            }
+        },
+
+        end() {
+            this.active = false;
+            this.type = '';
+            this.cooldown = 0.5;
+            Cat.state = 'follow';
+            Cat.speed = 80;
+            Cat.idleTimer = 0;
+            this.particles = [];
+        },
+
+        drawParticles(camX, camY) {
+            this.particles.forEach(p => {
+                const sx = p.x - camX;
+                const sy = p.y - camY;
+                ctx.globalAlpha = Math.max(0, p.life);
+                if (p.type === 'heart') {
+                    ctx.fillStyle = '#ff6b8a';
+                    ctx.font = '8px monospace';
+                    ctx.fillText('❤', sx, sy);
+                } else if (p.type === 'sparkle') {
+                    ctx.fillStyle = '#ffe87c';
+                    ctx.fillRect(sx, sy, 2, 2);
+                    ctx.fillStyle = `rgba(255, 232, 124, ${p.life * 0.3})`;
+                    ctx.fillRect(sx - 1, sy - 1, 4, 4);
+                }
+                ctx.globalAlpha = 1;
+            });
+        },
+
+        drawActionIndicator(camX, camY) {
+            // [F] 提示已移除，保持接口兼容
+        }
+    };
+
+    function dx_calc() { return Cat.x - Player.x; }
+    function dy_calc() { return Cat.y - Player.y; }
+
+    // ==================== 蝴蝶 ====================
+    const Butterflies = [];
+    function spawnButterfly() {
+        Butterflies.push({
+            x: Math.random() * GameState.worldWidth,
+            y: Math.random() * GameState.worldHeight,
+            vx: (Math.random() - 0.5) * 40,
+            vy: (Math.random() - 0.5) * 20 - 10,
+            wingAngle: Math.random() * Math.PI,
+            wingSpeed: 8 + Math.random() * 6,
+            color: ['#f4a460', '#e8b4b8', '#b8e8d0', '#d4a5a5'][Math.floor(Math.random() * 4)],
+            life: 1
+        });
+    }
+    for (let i = 0; i < 5; i++) spawnButterfly();
+
+    function updateButterflies(dt) {
+        Butterflies.forEach(b => {
+            b.x += b.vx * dt;
+            b.y += b.vy * dt;
+            b.wingAngle += b.wingSpeed * dt;
+            b.vx += Math.sin(GameState.time * 0.5 + b.y * 0.01) * 10 * dt;
+            b.vy += Math.cos(GameState.time * 0.3 + b.x * 0.01) * 5 * dt;
+            // 边界反弹
+            if (b.x < 0 || b.x > GameState.worldWidth) b.vx *= -1;
+            if (b.y < 0 || b.y > GameState.worldHeight) b.vy *= -1;
+            b.x = Math.max(0, Math.min(GameState.worldWidth, b.x));
+            b.y = Math.max(0, Math.min(GameState.worldHeight, b.y));
+        });
+    }
+
+    function drawButterflies(camX, camY) {
+        Butterflies.forEach(b => {
+            const bx = b.x - camX;
+            const by = b.y - camY;
+            if (bx > -10 && bx < canvas.width + 10 && by > -10 && by < canvas.height + 10) {
+                const wingW = Math.abs(Math.sin(b.wingAngle)) * 4;
+                ctx.fillStyle = b.color;
+                ctx.fillRect(bx - wingW, by - 2, wingW, 4);
+                ctx.fillRect(bx, by - 2, wingW, 4);
+                ctx.fillStyle = '#333';
+                ctx.fillRect(bx - 1, by, 2, 1);
+            }
+        });
+    }
+
+    // ==================== 场景数据 ====================
+    const Scenes = {
+        flowerField: {
+            name: '🌲 迷雾森林',
+            bgColor: '#1a2a0a', groundColor: '#2a4a1a',
+            flowers: [], pillars: [], decorations: [],
+            hills: [], fgGrass: [], trees: [],
+            groundCanvas: null, groundDirty: true,
+            chests: [], portal: null
+        },
+        pillarSea: {
+            name: '🌊 深海柱林',
+            bgColor: '#0a1628', groundColor: '#0a1a2a',
+            flowers: [], pillars: [], decorations: [],
+            groundCanvas: null, groundDirty: true,
+            chests: [], portal: null
+        },
+        cloudSea: {
+            name: '☁️ 云端花田',
+            bgColor: '#d4e8f8', groundColor: '#b8d4e8',
+            flowers: [], pillars: [], decorations: [], clouds: [],
+            groundCanvas: null, groundDirty: true,
+            chests: [], portal: null
+        },
+        lavaCave: {
+            name: '🌋 熔岩洞穴',
+            bgColor: '#1a0a0a', groundColor: '#2a1a0a',
+            flowers: [], pillars: [], decorations: [],
+            chests: [], portal: null,
+            lavaPools: [],
+            groundCanvas: null, groundDirty: true
+        }
+    };
+
+    // ==================== 粒子对象池 ====================
+    class ParticlePool {
+        constructor(maxSize) {
+            this.pool = []; this.active = []; this.maxSize = maxSize;
+        }
+        get(x, y, type) {
+            let p;
+            if (this.pool.length > 0) { p = this.pool.pop(); p.reset(x, y, type); }
+            else { p = new Particle(x, y, type); }
+            this.active.push(p);
+            return p;
+        }
+        release(p) {
+            const idx = this.active.indexOf(p);
+            if (idx > -1) {
+                this.active.splice(idx, 1);
+                if (this.pool.length < this.maxSize) this.pool.push(p);
+            }
+        }
+        update(dt) {
+            for (let i = this.active.length - 1; i >= 0; i--) {
+                this.active[i].update(dt);
+                if (this.active[i].life <= 0) this.release(this.active[i]);
+            }
+        }
+        draw(ctx, camX, camY) {
+            for (let i = 0; i < this.active.length; i++) {
+                this.active[i].draw(ctx, camX, camY);
+            }
+        }
+    }
+
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y; this.type = type;
+            this.life = 1; this.decay = 0.005;
+            this.vx = 0; this.vy = 0; this.size = 1; this.color = '#fff';
+            this.trail = [];
+            this.maxTrail = 5;
+        }
+        reset(x, y, type) {
+            this.x = x; this.y = y; this.type = type;
+            this.life = 1; this.decay = 0.005 + Math.random() * 0.01;
+            this.vx = 0; this.vy = 0; this.trail = [];
+            if (type === 'pollen') {
+                this.vx = (Math.random() - 0.5) * 30;
+                this.vy = -12 - Math.random() * 30;
+                this.size = 1 + Math.random() * 2;
+                this.color = '#f4d03f';
+            } else if (type === 'dust') {
+                this.vx = (Math.random() - 0.5) * 18;
+                this.vy = -6 - Math.random() * 18;
+                this.size = 1 + Math.random() * 1.5;
+                this.color = '#d4a843';
+            } else if (type === 'sparkle') {
+                this.vx = (Math.random() - 0.5) * 12;
+                this.vy = (Math.random() - 0.5) * 12;
+                this.size = 1 + Math.random() * 2;
+                this.color = '#fff8dc';
+                this.decay = 0.02 + Math.random() * 0.02;
+            } else if (type === 'footstep_dust') {
+                this.vx = (Math.random() - 0.5) * 20;
+                this.vy = -8 - Math.random() * 15;
+                this.size = 1 + Math.random() * 1.5;
+                this.color = GameState.currentScene === 'flowerField' ? '#8a7a5a' : '#4a6a7a';
+                this.decay = 0.03 + Math.random() * 0.02;
+            } else if (type === 'firefly') {
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10;
+                this.size = 2;
+                this.color = '#ffe87c';
+                this.decay = 0.003 + Math.random() * 0.003;
+            } else if (type === 'rain') {
+                this.vx = GameState.weather.windDir * 30;
+                this.vy = 200 + Math.random() * 100;
+                this.size = 1;
+                this.color = 'rgba(180, 200, 220, 0.4)';
+                this.decay = 0.02;
+            } else if (type === 'wind_leaf') {
+                this.vx = GameState.weather.windDir * 60 + (Math.random() - 0.5) * 20;
+                this.vy = (Math.random() - 0.5) * 30;
+                this.size = 2;
+                this.color = GameState.currentScene === 'flowerField' ? '#6a8a3a' : '#4a6a8a';
+                this.decay = 0.005;
+            }
+        }
+        update(dt) {
+            // 拖尾记录
+            if (this.type === 'sparkle' || this.type === 'firefly') {
+                this.trail.push({ x: this.x, y: this.y });
+                if (this.trail.length > this.maxTrail) this.trail.shift();
+            }
+            this.x += this.vx * dt;
+            this.y += this.vy * dt;
+            this.life -= this.decay;
+            if (this.type === 'pollen') {
+                this.vx += Math.sin(GameState.time * 0.05 + this.y * 0.01) * 1.2 * dt;
+            } else if (this.type === 'firefly') {
+                this.vx += Math.sin(GameState.time * 0.03 + this.x * 0.02) * 3 * dt;
+                this.vy += Math.cos(GameState.time * 0.04 + this.y * 0.02) * 3 * dt;
+            }
+        }
+        draw(ctx, camX, camY) {
+            // 拖尾
+            if (this.trail.length > 1) {
+                for (let i = 0; i < this.trail.length; i++) {
+                    const t = this.trail[i];
+                    const alpha = (i / this.trail.length) * this.life * 0.3;
+                    ctx.fillStyle = this.color;
+                    ctx.globalAlpha = alpha;
+                    ctx.fillRect(Math.floor(t.x - camX), Math.floor(t.y - camY), 1, 1);
+                }
+            }
+            // 主体
+            ctx.fillStyle = this.color;
+            ctx.globalAlpha = Math.max(0, this.life);
+            const sx = Math.floor(this.x - camX);
+            const sy = Math.floor(this.y - camY);
+            ctx.fillRect(sx, sy, this.size, this.size);
+            // 萤火虫发光
+            if (this.type === 'firefly' && this.life > 0.3) {
+                ctx.fillStyle = `rgba(255, 232, 124, ${this.life * 0.15})`;
+                ctx.fillRect(sx - 2, sy - 2, this.size + 4, this.size + 4);
+            }
+            // 闪烁效果
+            if (this.type === 'sparkle') {
+                const flicker = 0.5 + Math.sin(GameState.time * 10 + this.x) * 0.5;
+                ctx.fillStyle = `rgba(255, 255, 255, ${this.life * flicker * 0.5})`;
+                ctx.fillRect(sx - 1, sy - 1, this.size + 2, this.size + 2);
+            }
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    const particlePool = new ParticlePool(500);
+
+    function spawnParticles(scene) {
+        const isNight = DayNight.ambientAlpha > 0.4;
+        if (scene === 'flowerField') {
+            if (Math.random() < 0.3) {
+                particlePool.get(Player.x + (Math.random() - 0.5) * 80, Player.y + (Math.random() - 0.5) * 80, 'pollen');
+            }
+            if (isNight && Math.random() < 0.15) {
+                particlePool.get(Player.x + (Math.random() - 0.5) * 200, Player.y + (Math.random() - 0.5) * 200, 'firefly');
+            }
+        } else {
+            if (Math.random() < 0.2) {
+                particlePool.get(Player.x + (Math.random() - 0.5) * 120, Player.y + (Math.random() - 0.5) * 120, 'dust');
+            }
+            if (Math.random() < 0.08) {
+                particlePool.get(Math.random() * GameState.worldWidth, Math.random() * GameState.worldHeight, 'sparkle');
+            }
+            if (isNight && Math.random() < 0.1) {
+                particlePool.get(Player.x + (Math.random() - 0.5) * 200, Player.y + (Math.random() - 0.5) * 200, 'firefly');
+            }
+        }
+        // 天气粒子
+        if (GameState.weather.type === 'rain' && Math.random() < GameState.weather.intensity) {
+            particlePool.get(Math.random() * canvas.width + GameState.camera.x, GameState.camera.y - 10, 'rain');
+        }
+        if (GameState.weather.type === 'wind' && Math.random() < GameState.weather.intensity * 0.5) {
+            particlePool.get(
+                GameState.weather.windDir > 0 ? GameState.camera.x - 10 : GameState.camera.x + canvas.width + 10,
+                GameState.camera.y + Math.random() * canvas.height,
+                'wind_leaf'
+            );
+        }
+    }
+
+    function spawnFootstepDust() {
+        for (let i = 0; i < 3; i++) {
+            particlePool.get(Player.x + (Math.random() - 0.5) * 8, Player.y + 14 + Math.random() * 4, 'footstep_dust');
+        }
+    }
+
+    // ==================== 脚印系统 ====================
+    function addFootprint() {
+        // 柱海场景水下不显示脚印
+        if (GameState.currentScene === 'pillarSea') return;
+        GameState.footprints.push({ x: Player.x, y: Player.y + 14, life: 1, direction: Player.direction });
+        if (GameState.footprints.length > GameState.maxFootprints) GameState.footprints.shift();
+    }
+
+    function updateFootprints(dt) {
+        for (let i = GameState.footprints.length - 1; i >= 0; i--) {
+            GameState.footprints[i].life -= 0.08 * dt; // 持续时间从约2秒增加到约3秒
+            if (GameState.footprints[i].life <= 0) GameState.footprints.splice(i, 1);
+        }
+    }
+
+    function drawFootprints(camX, camY) {
+        // 柱海场景不绘制脚印
+        if (GameState.currentScene === 'pillarSea') return;
+        // 场景适配颜色
+        let baseColor;
+        if (GameState.currentScene === 'flowerField') {
+            baseColor = '20,40,10';
+        } else if (GameState.currentScene === 'cloudSea') {
+            baseColor = '100,100,120';
+        } else if (GameState.currentScene === 'lavaCave') {
+            baseColor = '60,30,10';
+        } else {
+            baseColor = '0,0,0';
+        }
+        GameState.footprints.forEach(fp => {
+            ctx.fillStyle = `rgba(${baseColor},${fp.life * 0.15})`;
+            const ox = fp.direction === 'left' ? 2 : fp.direction === 'right' ? -2 : 0;
+            // 脚印大小从 3px 增大到 4px
+            ctx.fillRect(Math.floor(fp.x - camX - 4 + ox), Math.floor(fp.y - camY), 4, 2);
+            ctx.fillRect(Math.floor(fp.x - camX + 1 + ox), Math.floor(fp.y - camY), 4, 2);
+        });
+    }
+
+    // ==================== 动态阴影 ====================
+    function drawShadow(screenX, screenY, width, height, opacity) {
+        ctx.fillStyle = `rgba(0,0,0,${opacity})`;
+        ctx.beginPath();
+        ctx.ellipse(screenX, screenY, width, height * 0.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // ==================== 水面反射 ====================
+    function drawWaterReflection(objX, objY, objW, objH, camX, camY, waterY) {
+        const refY = waterY + (waterY - objY - objH);
+        if (refY > waterY - 50 && refY < canvas.height) {
+            ctx.save();
+            ctx.globalAlpha = 0.15;
+            ctx.scale(1, -0.4);
+            ctx.fillStyle = 'rgba(45, 125, 138, 0.3)';
+            ctx.fillRect(objX - camX, -(refY + objH * 0.4 - camY), objW, objH);
+            ctx.restore();
+        }
+    }
+
+    // ==================== 离屏 Canvas 预渲染 ====================
+    function prerenderGround(scene) {
+        const s = Scenes[scene];
+        if (!s.groundCanvas) {
+            s.groundCanvas = document.createElement('canvas');
+            s.groundCanvas.width = GameState.worldWidth;
+            s.groundCanvas.height = GameState.worldHeight;
+        }
+        const gc = s.groundCanvas.getContext('2d');
+        gc.imageSmoothingEnabled = false;
+        gc.clearRect(0, 0, s.groundCanvas.width, s.groundCanvas.height);
+
+        if (scene === 'flowerField') {
+            // 基底绿色（v0.15风格）
+            gc.fillStyle = '#4a8a2a';
+            gc.fillRect(0, 0, GameState.worldWidth, GameState.worldHeight);
+            // 自然草地色块变化（大块渐变）
+            for (let i = 0; i < 200; i++) {
+                const gx = (i * 137) % GameState.worldWidth;
+                const gy = (i * 241) % GameState.worldHeight;
+                const size = 8 + Math.random() * 20;
+                gc.fillStyle = (i % 4 === 0) ? '#3d7a1e' : (i % 4 === 1) ? '#5a9a32' : (i % 4 === 2) ? '#4a8828' : '#6aaa3a';
+                gc.fillRect(gx, gy, size, size);
+            }
+            // 草丛簇（更自然的草）
+            for (let i = 0; i < 300; i++) {
+                const gx = Math.random() * GameState.worldWidth;
+                const gy = Math.random() * GameState.worldHeight;
+                gc.fillStyle = '#3a7018';
+                gc.fillRect(gx, gy, 1, 4);
+                gc.fillRect(gx + 2, gy - 1, 1, 5);
+                gc.fillRect(gx + 4, gy, 1, 3);
+                gc.fillRect(gx - 1, gy + 1, 1, 3);
+            }
+            // 小石头
+            for (let i = 0; i < 40; i++) {
+                const gx = Math.random() * GameState.worldWidth;
+                const gy = Math.random() * GameState.worldHeight;
+                gc.fillStyle = '#8a8a7a';
+                gc.fillRect(gx, gy, 3, 2);
+                gc.fillStyle = '#9a9a8a';
+                gc.fillRect(gx, gy, 2, 1);
+            }
+            // 泥土小路（蜿蜒）
+            gc.fillStyle = '#7a6a4a';
+            for (let x = 0; x < GameState.worldWidth; x += 3) {
+                const yOff = Math.sin(x * 0.005) * 50 + Math.sin(x * 0.012) * 20 + GameState.worldHeight / 2;
+                const width = 6 + Math.sin(x * 0.008) * 2;
+                gc.fillRect(x, yOff, 3, width);
+            }
+            // 小路边缘草
+            gc.fillStyle = '#5a7a2a';
+            for (let x = 0; x < GameState.worldWidth; x += 5) {
+                const yOff = Math.sin(x * 0.005) * 50 + Math.sin(x * 0.012) * 20 + GameState.worldHeight / 2;
+                gc.fillRect(x, yOff - 3, 1, 2);
+                gc.fillRect(x, yOff + 7, 1, 2);
+            }
+        } else if (scene === 'pillarSea') {
+            gc.fillStyle = '#0d1f2d';
+            gc.fillRect(0, 0, GameState.worldWidth, GameState.worldHeight);
+            for (let i = 0; i < 400; i++) {
+                const gx = (i * 97) % GameState.worldWidth;
+                const gy = (i * 193) % GameState.worldHeight;
+                gc.fillStyle = `rgba(30, 60, 80, ${0.3 + Math.random() * 0.3})`;
+                gc.fillRect(gx, gy, 2, 1);
+            }
+        } else if (scene === 'cloudSea') {
+            // 云端花田地面 - 柔和天空感（淡蓝渐变）
+            gc.fillStyle = '#b8d4e8';
+            gc.fillRect(0, 0, GameState.worldWidth, GameState.worldHeight);
+            // 天空渐变层次
+            const skyColors = ['#a8c8e0', '#c8dff0', '#d8e8f8', '#e0ecf8'];
+            for (let i = 0; i < 150; i++) {
+                const gx = (i * 157) % GameState.worldWidth;
+                const gy = (i * 271) % GameState.worldHeight;
+                gc.fillStyle = skyColors[i % skyColors.length];
+                gc.globalAlpha = 1;
+                gc.fillRect(gx, gy, 6 + Math.floor(Math.random() * 10), 4 + Math.floor(Math.random() * 6));
+            }
+            // 远处云影（柔和）
+            const cloudShadowColors = ['#d0e0f0', '#c8d8ec'];
+            for (let i = 0; i < 50; i++) {
+                const cx = Math.random() * GameState.worldWidth;
+                const cy = Math.random() * GameState.worldHeight * 0.6;
+                gc.fillStyle = cloudShadowColors[i % cloudShadowColors.length];
+                gc.globalAlpha = 0.3;
+                gc.fillRect(cx, cy, 20 + Math.random() * 40, 8 + Math.random() * 12);
+            }
+            gc.globalAlpha = 1;
+        } else if (scene === 'lavaCave') {
+            // 熔岩洞穴 - 暗红色地面
+            gc.fillStyle = '#2a1a0a';
+            gc.fillRect(0, 0, GameState.worldWidth, GameState.worldHeight);
+            // 地面色块变化
+            const lavaGroundColors = ['#2a1a0a', '#221508', '#301e0c', '#1a0a0a', '#2e1c0b'];
+            for (let i = 0; i < 400; i++) {
+                const gx = (i * 137) % GameState.worldWidth;
+                const gy = (i * 241) % GameState.worldHeight;
+                const size = 3 + Math.random() * 6;
+                gc.fillStyle = lavaGroundColors[i % lavaGroundColors.length];
+                gc.fillRect(gx, gy, size, size);
+            }
+            // 裂纹纹理
+            gc.strokeStyle = '#1a0a0a';
+            gc.lineWidth = 1;
+            for (let i = 0; i < 60; i++) {
+                const cx = Math.random() * GameState.worldWidth;
+                const cy = Math.random() * GameState.worldHeight;
+                gc.beginPath();
+                gc.moveTo(cx, cy);
+                let px = cx, py = cy;
+                const segs = 3 + Math.floor(Math.random() * 5);
+                for (let j = 0; j < segs; j++) {
+                    px += (Math.random() - 0.5) * 30;
+                    py += (Math.random() - 0.5) * 30;
+                    gc.lineTo(px, py);
+                }
+                gc.stroke();
+            }
+            // 熔岩边缘发光点
+            for (let i = 0; i < 100; i++) {
+                const gx = Math.random() * GameState.worldWidth;
+                const gy = Math.random() * GameState.worldHeight;
+                gc.fillStyle = `rgba(255, ${60 + Math.floor(Math.random() * 40)}, 0, ${0.1 + Math.random() * 0.15})`;
+                gc.fillRect(gx, gy, 2, 2);
+            }
+        }
+        s.groundDirty = false;
+    }
+
+    // ==================== 存档系统 ====================
+    function saveGame() {
+        const saveData = {
+            currentScene: GameState.currentScene,
+            orbsCollected: GameState.orbsCollected,
+            quests: GameState.quests,
+            playerName: Player.name,
+            catName: Cat.name,
+            playerLevel: Player.level,
+            playerExp: Player.exp,
+            playerSpeed: Player.speed,
+            playerX: Player.x,
+            playerY: Player.y,
+            catX: Cat.x,
+            catY: Cat.y,
+            chestsState: {},
+            totalChestsOpened: GameState.totalChestsOpened,
+            visitedScenes: GameState.visitedScenes ? Array.from(GameState.visitedScenes) : ['flowerField'],
+            totalFishCaught: GameState.totalFishCaught,
+            npcTalked: GameState.npcTalked ? Array.from(GameState.npcTalked) : [],
+            achievementsUnlocked: GameState.achievements.list.map(a => ({ id: a.id, unlocked: a.unlocked })),
+            achievementsTotalUnlocked: GameState.achievements.totalUnlocked,
+            costumeCurrent: Player.costumes.current,
+            costumeUnlocked: Player.costumes.unlocked
+        };
+        // 保存宝箱状态
+        for (const sceneKey in Scenes) {
+            saveData.chestsState[sceneKey] = Scenes[sceneKey].chests.map(c => ({ opened: c.opened }));
+        }
+        localStorage.setItem('monitoAdventuresSave', JSON.stringify(saveData));
+        showSaveLoadHint('💾 存档成功！');
+    }
+
+    function loadGame() {
+        const saveStr = localStorage.getItem('monitoAdventuresSave');
+        if (!saveStr) return false;
+        try {
+            const saveData = JSON.parse(saveStr);
+            if (saveData.currentScene) GameState.currentScene = saveData.currentScene;
+            if (saveData.orbsCollected !== undefined) GameState.orbsCollected = saveData.orbsCollected;
+            if (saveData.quests) GameState.quests = saveData.quests;
+            if (saveData.playerName) Player.name = saveData.playerName;
+            if (saveData.catName) Cat.name = saveData.catName;
+            if (saveData.playerLevel !== undefined) Player.level = saveData.playerLevel;
+            if (saveData.playerExp !== undefined) Player.exp = saveData.playerExp;
+            if (saveData.playerSpeed !== undefined) Player.speed = saveData.playerSpeed;
+            if (saveData.playerX !== undefined) Player.x = saveData.playerX;
+            if (saveData.playerY !== undefined) Player.y = saveData.playerY;
+            if (saveData.catX !== undefined) Cat.x = saveData.catX;
+            if (saveData.catY !== undefined) Cat.y = saveData.catY;
+            // 恢复统计变量
+            if (saveData.totalChestsOpened !== undefined) GameState.totalChestsOpened = saveData.totalChestsOpened;
+            if (saveData.visitedScenes) GameState.visitedScenes = new Set(saveData.visitedScenes);
+            if (saveData.totalFishCaught !== undefined) GameState.totalFishCaught = saveData.totalFishCaught;
+            if (saveData.npcTalked) GameState.npcTalked = new Set(saveData.npcTalked);
+            // 恢复成就状态
+            if (saveData.achievementsUnlocked) {
+                saveData.achievementsUnlocked.forEach(saved => {
+                    const ach = GameState.achievements.list.find(a => a.id === saved.id);
+                    if (ach) ach.unlocked = saved.unlocked;
+                });
+            }
+            if (saveData.achievementsTotalUnlocked !== undefined) GameState.achievements.totalUnlocked = saveData.achievementsTotalUnlocked;
+            // 恢复服装状态
+            if (saveData.costumeCurrent) Player.costumes.current = saveData.costumeCurrent;
+            if (saveData.costumeUnlocked) Player.costumes.unlocked = saveData.costumeUnlocked;
+            // 恢复宝箱状态
+            if (saveData.chestsState) {
+                for (const sceneKey in saveData.chestsState) {
+                    if (Scenes[sceneKey] && Scenes[sceneKey].chests) {
+                        saveData.chestsState[sceneKey].forEach((state, i) => {
+                            if (Scenes[sceneKey].chests[i]) Scenes[sceneKey].chests[i].opened = state.opened;
+                        });
+                    }
+                }
+            }
+            showSaveLoadHint('📂 读档成功！');
+            return true;
+        } catch (e) {
+            console.log('读档失败', e);
+            return false;
+        }
+    }
+
+    let saveLoadHintTimer = 0;
+    let saveLoadHintText = '';
+    function showSaveLoadHint(text) {
+        saveLoadHintText = text;
+        saveLoadHintTimer = 2;
+    }
+
+    // ==================== 升级系统 ====================
+    function addExp(amount) {
+        Player.exp += amount;
+        const needed = Player.level * 100;
+        if (Player.exp >= needed) {
+            Player.exp -= needed;
+            Player.level++;
+            Player.speed = Math.min(200, Player.speed + 10);
+            GameState.levelUpTimer = 2;
+            GameState.screenFlash = { timer: 20, color: '#ffd700' };
+        }
+    }
+
+    // ==================== 任务系统 ====================
+    function checkQuestProgress() {
+        const q = GameState.quests.current;
+        if (!q.completed && q.current >= q.target) {
+            q.completed = true;
+            GameState.quests.completed.push(q);
+            GameState.questCompletedTimer = 2;
+            // 生成下一个任务
+            const nextTarget = q.target + 5;
+            GameState.quests.current = {
+                id: 'collect_orbs_' + nextTarget,
+                name: '收集光球',
+                target: nextTarget,
+                current: 0,
+                completed: false
+            };
+        }
+    }
+
+    // ==================== 宝箱绘制（贝壳/沉船宝箱风格）====================
+    function drawChest(chest, camX, camY) {
+        const cx = chest.x - camX;
+        const cy = chest.y - camY;
+        if (cx < -30 || cx > canvas.width + 30 || cy < -30 || cy > canvas.height + 30) return;
+
+        const lidOpen = chest.openAnim > 0 ? chest.openAnim * 12 : 0;
+        const isUnderwater = GameState.currentScene === 'pillarSea';
+
+        if (isUnderwater) {
+            // 水下贝壳宝箱风格
+            const shellColor = chest.opened ? '#0d2a4a' : '#1a3a5a';
+            const shellBorder = '#0d2a4a';
+            const openAngle = lidOpen * Math.PI / 180;
+
+            // 阴影
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            ctx.beginPath();
+            ctx.ellipse(cx + 10, cy + 18, 10, 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 下半贝壳
+            ctx.fillStyle = shellColor;
+            ctx.beginPath();
+            ctx.ellipse(cx + 10, cy + 12, 10, 7, 0, 0, Math.PI, false);
+            ctx.fill();
+            ctx.strokeStyle = shellBorder;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // 上半贝壳（可张开）
+            ctx.save();
+            ctx.translate(cx + 10, cy + 12);
+            ctx.rotate(-openAngle);
+            ctx.translate(-10, -12);
+            ctx.fillStyle = shellColor;
+            ctx.beginPath();
+            ctx.ellipse(10, 12, 10, 7, 0, Math.PI, 0, false);
+            ctx.fill();
+            ctx.strokeStyle = shellBorder;
+            ctx.stroke();
+            ctx.restore();
+
+            // 珍珠光泽（未打开时）
+            if (!chest.opened) {
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.beginPath();
+                ctx.arc(cx + 10, cy + 12, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(200,230,255,0.4)';
+                ctx.beginPath();
+                ctx.arc(cx + 9, cy + 11, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // 打开后内部发光
+                ctx.fillStyle = '#4a7aaa';
+                ctx.beginPath();
+                ctx.ellipse(cx + 10, cy + 12, 7, 4, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(100,180,220,0.3)';
+                ctx.beginPath();
+                ctx.arc(cx + 10, cy + 12, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        } else {
+            // 原陆地宝箱风格
+            const baseColor = chest.opened ? '#5a3a1a' : '#8a5a2a';
+            const borderColor = chest.opened ? '#4a2a0a' : '#6a3a1a';
+
+            // 阴影
+            ctx.fillStyle = 'rgba(0,0,0,0.2)';
+            ctx.beginPath();
+            ctx.ellipse(cx + 10, cy + 18, 10, 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 箱体
+            ctx.fillStyle = baseColor;
+            ctx.fillRect(cx, cy + 6, 20, 12);
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(cx, cy + 6, 20, 12);
+
+            // 盖子
+            ctx.save();
+            ctx.translate(cx + 10, cy + 6);
+            ctx.rotate(-lidOpen * Math.PI / 180);
+            ctx.translate(-10, -6);
+            ctx.fillStyle = baseColor;
+            ctx.fillRect(0, 0, 20, 7);
+            ctx.strokeStyle = borderColor;
+            ctx.strokeRect(0, 0, 20, 7);
+            // 金色锁扣
+            if (!chest.opened) {
+                ctx.fillStyle = '#d4a843';
+                ctx.fillRect(8, 4, 4, 4);
+                ctx.fillStyle = '#f0d060';
+                ctx.fillRect(9, 5, 2, 2);
+            }
+            ctx.restore();
+
+            // 空箱内部
+            if (chest.opened) {
+                ctx.fillStyle = '#3a2a1a';
+                ctx.fillRect(cx + 2, cy + 8, 16, 8);
+            }
+        }
+    }
+
+    // ==================== 传送门绘制 ====================
+    function drawPortal(portal, camX, camY) {
+        if (!portal) return;
+        const px = portal.x - camX;
+        const py = portal.y - camY;
+        if (px < -50 || px > canvas.width + 50 || py < -50 || py > canvas.height + 50) return;
+
+        const time = GameState.time;
+        const isUnderwater = GameState.currentScene === 'pillarSea';
+
+        if (isUnderwater) {
+            // 水下漩涡风格
+            const colors = ['#1a3a5a', '#153050', '#0f2848', '#0a1a2a', '#071420'];
+            for (let i = 0; i < 5; i++) {
+                const radius = 15 + i * 4;
+                const offset = time * (2 + i * 0.5) * 0.05;
+                ctx.strokeStyle = colors[i];
+                ctx.globalAlpha = 0.3 + Math.sin(time * 0.1 + i) * 0.15;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(px, py, radius, offset, offset + Math.PI * 1.5);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+
+            // 中心微光
+            ctx.fillStyle = 'rgba(100,150,200,0.3)';
+            ctx.globalAlpha = 0.4 + Math.sin(time * 0.2) * 0.2;
+            ctx.beginPath();
+            ctx.arc(px, py, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        } else {
+            // 原彩色光圈风格
+            const colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+            for (let i = 0; i < 5; i++) {
+                const radius = 15 + i * 4;
+                const offset = time * (2 + i * 0.5) * 0.05;
+                ctx.strokeStyle = colors[i];
+                ctx.globalAlpha = 0.4 + Math.sin(time * 0.1 + i) * 0.2;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(px, py, radius, offset, offset + Math.PI * 1.5);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+
+            // 中心光点
+            ctx.fillStyle = '#ffffff';
+            ctx.globalAlpha = 0.6 + Math.sin(time * 0.2) * 0.3;
+            ctx.beginPath();
+            ctx.arc(px, py, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    // ==================== 传送门粒子爆发 ====================
+    function spawnPortalParticles(x, y) {
+        for (let i = 0; i < 20; i++) {
+            const angle = (Math.PI * 2 / 20) * i;
+            const speed = 50 + Math.random() * 80;
+            GameState.portalParticles.push({
+                x: x, y: y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 1,
+                color: ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3'][Math.floor(Math.random() * 4)]
+            });
+        }
+    }
+
+    // ==================== 互动元素系统 ====================
+    const Interactables = {
+        stones: [],
+        fishingSpots: [],
+        dustParticles: [],
+        waterRipples: [],
+        init() {
+            // 迷雾森林 - 可推石头
+            for (let i = 0; i < 4; i++) {
+                this.stones.push({
+                    x: 200 + i * 300 + Math.random() * 100,
+                    y: 200 + Math.random() * 600,
+                    radius: 10 + Math.random() * 6,
+                    scene: 'flowerField',
+                    pushed: false
+                });
+            }
+            // 深海柱林 - 钓鱼点
+            for (let i = 0; i < 3; i++) {
+                this.fishingSpots.push({
+                    x: 300 + i * 400 + Math.random() * 100,
+                    y: 550 + Math.random() * 100,
+                    scene: 'pillarSea',
+                    active: false,
+                    bobOffset: Math.random() * Math.PI * 2
+                });
+            }
+        },
+        update(dt) {
+            // 灰尘粒子
+            for (let i = this.dustParticles.length - 1; i >= 0; i--) {
+                const p = this.dustParticles[i];
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.life -= dt * 1.5;
+                if (p.life <= 0) this.dustParticles.splice(i, 1);
+            }
+            // 水波纹
+            for (let i = this.waterRipples.length - 1; i >= 0; i--) {
+                const r = this.waterRipples[i];
+                r.r += 15 * dt;
+                r.alpha -= dt * 0.8;
+                if (r.alpha <= 0) this.waterRipples.splice(i, 1);
+            }
+            // 钓鱼计时
+            if (GameState.fishing.active) {
+                GameState.fishing.timer -= dt;
+                if (GameState.fishing.timer <= 0) {
+                    // 钓到！
+                    GameState.fishing.active = false;
+                    GameState.totalFishCaught++;
+                    GameState.orbsCollected++;
+                    GameState.quests.current.current++;
+                    checkQuestProgress();
+                    addExp(10);
+                    // 生成光球效果
+                    if (GameState.fishing.spot) {
+                        for (let i = 0; i < 8; i++) {
+                            particlePool.get(GameState.fishing.spot.x, GameState.fishing.spot.y, 'sparkle');
+                        }
+                        GameState.expandingOrbs.push({
+                            x: GameState.fishing.spot.x, y: GameState.fishing.spot.y,
+                            radius: 4, maxRadius: 20, alpha: 1, color: '#88ddff'
+                        });
+                    }
+                    GameState.fishing.spot = null;
+                }
+            }
+        },
+        draw(camX, camY) {
+            const scene = GameState.currentScene;
+            // 绘制石头
+            this.stones.forEach(s => {
+                if (s.scene !== scene) return;
+                const sx = s.x - camX;
+                const sy = s.y - camY;
+                if (sx < -30 || sx > canvas.width + 30 || sy < -30 || sy > canvas.height + 30) return;
+                // 阴影
+                ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                ctx.beginPath();
+                ctx.ellipse(sx, sy + s.radius * 0.6, s.radius, s.radius * 0.4, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // 石头本体
+                ctx.fillStyle = '#6a6a6a';
+                ctx.beginPath();
+                ctx.arc(sx, sy, s.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#7a7a7a';
+                ctx.beginPath();
+                ctx.arc(sx - s.radius * 0.2, sy - s.radius * 0.2, s.radius * 0.6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#5a5a5a';
+                ctx.beginPath();
+                ctx.arc(sx + s.radius * 0.3, sy + s.radius * 0.1, s.radius * 0.3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            // 绘制钓鱼点浮标
+            this.fishingSpots.forEach(fs => {
+                if (fs.scene !== scene) return;
+                const sx = fs.x - camX;
+                const sy = fs.y - camY;
+                if (sx < -20 || sx > canvas.width + 20 || sy < -20 || sy > canvas.height + 20) return;
+                const bob = Math.sin(GameState.time * 2 + fs.bobOffset) * 2;
+                // 浮标线
+                ctx.strokeStyle = 'rgba(200,200,200,0.5)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(sx, sy + bob);
+                ctx.lineTo(sx, sy - 15);
+                ctx.stroke();
+                // 浮标
+                ctx.fillStyle = '#cc4444';
+                ctx.fillRect(sx - 2, sy + bob - 2, 4, 4);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(sx - 1, sy + bob - 1, 2, 2);
+            });
+            // 灰尘粒子
+            this.dustParticles.forEach(p => {
+                const sx = p.x - camX;
+                const sy = p.y - camY;
+                ctx.fillStyle = `rgba(180,170,150,${p.life})`;
+                ctx.fillRect(sx, sy, p.size, p.size);
+            });
+            // 水波纹
+            this.waterRipples.forEach(r => {
+                const sx = r.x - camX;
+                const sy = r.y - camY;
+                ctx.strokeStyle = `rgba(150,200,220,${r.alpha})`;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.ellipse(sx, sy, r.r, r.r * 0.4, 0, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+            // 钓鱼进度提示
+            if (GameState.fishing.active && GameState.fishing.spot) {
+                const sx = GameState.fishing.spot.x - camX;
+                const sy = GameState.fishing.spot.y - camY - 25;
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillRect(sx - 30, sy - 6, 60, 12);
+                ctx.fillStyle = '#4a9aaa';
+                const progress = 1 - (GameState.fishing.timer / 1.5);
+                ctx.fillRect(sx - 28, sy - 4, 56 * progress, 8);
+            }
+        },
+        tryPushStone() {
+            const scene = GameState.currentScene;
+            if (scene !== 'flowerField') return false;
+            for (const s of this.stones) {
+                if (s.scene !== scene) continue;
+                const pdx = Player.x - s.x;
+                const pdy = Player.y - s.y;
+                const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                if (pdist < 30) {
+                    // 推动石头
+                    const pushDist = 20;
+                    let pushX = 0, pushY = 0;
+                    if (Player.direction === 'left') pushX = -pushDist;
+                    else if (Player.direction === 'right') pushX = pushDist;
+                    else if (Player.direction === 'up') pushY = -pushDist;
+                    else if (Player.direction === 'down') pushY = pushDist;
+                    s.x += pushX;
+                    s.y += pushY;
+                    s.x = Math.max(s.radius, Math.min(GameState.worldWidth - s.radius, s.x));
+                    s.y = Math.max(s.radius, Math.min(GameState.worldHeight - s.radius, s.y));
+                    // 灰尘粒子
+                    for (let i = 0; i < 10; i++) {
+                        this.dustParticles.push({
+                            x: s.x, y: s.y,
+                            vx: (Math.random() - 0.5) * 40,
+                            vy: -10 - Math.random() * 20,
+                            life: 0.5 + Math.random() * 0.5,
+                            size: 2 + Math.random() * 2
+                        });
+                    }
+                    return true;
+                }
+            }
+            return false;
+        },
+        tryFish() {
+            const scene = GameState.currentScene;
+            if (scene !== 'pillarSea') return false;
+            for (const fs of this.fishingSpots) {
+                if (fs.scene !== scene) continue;
+                const pdx = Player.x - fs.x;
+                const pdy = Player.y - fs.y;
+                const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                if (pdist < 30 && !GameState.fishing.active) {
+                    GameState.fishing.active = true;
+                    GameState.fishing.timer = 1.5;
+                    GameState.fishing.spot = fs;
+                    // 水波纹动画
+                    for (let i = 0; i < 3; i++) {
+                        this.waterRipples.push({
+                            x: fs.x, y: fs.y,
+                            r: 2 + i * 3, alpha: 0.5 - i * 0.1
+                        });
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    // ==================== 初始化场景 ====================
+    function initScenes() {
+        for (let i = 0; i < 60; i++) {
+            Scenes.flowerField.flowers.push({
+                x: Math.random() * GameState.worldWidth,
+                y: Math.random() * GameState.worldHeight,
+                size: 3 + Math.random() * 5,
+                color: ['#f4d03f', '#f7dc6f', '#f9e79f', '#e8d5a3', '#f5b7b1', '#ffdd44', '#ff88cc', '#ffffff', '#88ddff', '#ffaa66'][Math.floor(Math.random() * 10)],
+                sway: Math.random() * Math.PI * 2,
+                swaySpeed: 0.5 + Math.random() * 1.5
+            });
+        }
+        // 森林远景柱子已移除
+        /* for (let i = 0; i < 10; i++) {
+            Scenes.flowerField.pillars.push({
+                x: 150 + i * 160 + Math.random() * 80,
+                y: 80 + Math.random() * 150,
+                width: 18 + Math.random() * 12,
+                height: 250 + Math.random() * 200,
+                opacity: 0.12 + Math.random() * 0.08,
+                parallax: 0.3 + Math.random() * 0.2
+            });
+        } */
+        for (let i = 0; i < 15; i++) {
+            Scenes.flowerField.decorations.push({
+                x: Math.random() * GameState.worldWidth,
+                y: Math.random() * GameState.worldHeight,
+                type: Math.random() > 0.5 ? 'bush' : 'rock',
+                size: 6 + Math.random() * 8
+            });
+        }
+
+        // 柱海远景柱子已移除
+        /* for (let i = 0; i < 30; i++) {
+            const depth = Math.random();
+            Scenes.pillarSea.pillars.push({
+                x: Math.random() * GameState.worldWidth,
+                y: 30 + Math.random() * 350,
+                width: (15 + Math.random() * 25) * (1 - depth * 0.5),
+                height: (200 + Math.random() * 400) * (1 - depth * 0.3),
+                opacity: 0.3 + (1 - depth) * 0.5,
+                depth: depth,
+                parallax: 0.4 + depth * 0.5
+            });
+        }
+        Scenes.pillarSea.pillars.sort((a, b) => b.depth - a.depth); */
+        for (let i = 0; i < 10; i++) {
+            Scenes.pillarSea.decorations.push({
+                x: Math.random() * GameState.worldWidth,
+                y: Math.random() * GameState.worldHeight,
+                type: 'glow_orb',
+                size: 2 + Math.random() * 3,
+                pulse: Math.random() * Math.PI * 2
+            });
+        }
+
+        prerenderGround('flowerField');
+
+        // 花田 - 远景山丘
+        for (let i = 0; i < 8; i++) {
+            Scenes.flowerField.hills.push({
+                x: i * 250 + Math.random() * 100,
+                y: 80 + Math.random() * 60,
+                width: 150 + Math.random() * 100,
+                height: 40 + Math.random() * 30,
+                color: ['#5a9a3a', '#4a8a2a', '#6aaa4a'][Math.floor(Math.random() * 3)],
+                parallax: 0.15 + Math.random() * 0.1
+            });
+        }
+        // 花田 - 前景草丛
+        for (let i = 0; i < 60; i++) {
+            Scenes.flowerField.fgGrass.push({
+                x: Math.random() * GameState.worldWidth,
+                y: Math.random() * GameState.worldHeight,
+                height: 8 + Math.random() * 14,
+                width: 3 + Math.random() * 4,
+                sway: Math.random() * Math.PI * 2
+            });
+        }
+        // 花田 - 像素大树
+        const treePositions = [
+            {x: 200, y: 200}, {x: 600, y: 150}, {x: 1000, y: 300},
+            {x: 400, y: 500}, {x: 800, y: 450}, {x: 1200, y: 250},
+            {x: 300, y: 700}, {x: 900, y: 650}, {x: 1500, y: 400},
+            {x: 1800, y: 300}, {x: 500, y: 900}, {x: 1100, y: 800}
+        ];
+        treePositions.forEach(tp => {
+            Scenes.flowerField.trees.push({
+                x: tp.x + Math.random() * 40 - 20,
+                y: tp.y + Math.random() * 40 - 20,
+                size: 0.8 + Math.random() * 0.5,
+                sway: Math.random() * Math.PI * 2,
+                type: Math.floor(Math.random() * 3)
+            });
+        });
+
+        // 可收集光球（散布在地图中）
+        for (let i = 0; i < 20; i++) {
+            GameState.orbs.push({
+                x: 100 + Math.random() * (GameState.worldWidth - 200),
+                y: 100 + Math.random() * (GameState.worldHeight - 200),
+                collected: false,
+                bobPhase: Math.random() * Math.PI * 2,
+                color: ['#ffdd44', '#ff88cc', '#88ddff', '#aaffaa'][Math.floor(Math.random() * 4)]
+            });
+        }
+        GameState.orbsTotal = GameState.orbs.length;
+
+        // 初始化宝箱（每个场景 2-3 个）
+        for (const sceneKey in Scenes) {
+            const scene = Scenes[sceneKey];
+            const chestCount = 2 + Math.floor(Math.random() * 2); // 2-3
+            for (let i = 0; i < chestCount; i++) {
+                scene.chests.push({
+                    x: 100 + Math.random() * (GameState.worldWidth - 200),
+                    y: 100 + Math.random() * (GameState.worldHeight - 200),
+                    opened: false,
+                    openAnim: 0
+                });
+            }
+            // 传送门放在场景中央附近
+            scene.portal = {
+                x: GameState.worldWidth / 2 + (Math.random() - 0.5) * 200,
+                y: GameState.worldHeight / 2 + (Math.random() - 0.5) * 150
+            };
+        }
+
+        // 蝴蝶
+        for (let i = 0; i < 10; i++) {
+            GameState.butterflies.push({
+                x: Math.random() * GameState.worldWidth,
+                y: Math.random() * GameState.worldHeight,
+                vx: (Math.random() - 0.5) * 0.5,
+                vy: (Math.random() - 0.5) * 0.3,
+                wingPhase: Math.random() * Math.PI * 2,
+                color: ['#ffaacc', '#aaddff', '#ffffaa', '#ffaa88'][Math.floor(Math.random() * 4)],
+                timer: Math.random() * 200
+            });
+        }
+
+        prerenderGround('pillarSea');
+
+        // 云端花田 - 金色花朵
+        for (let i = 0; i < 80; i++) {
+            Scenes.cloudSea.flowers.push({
+                x: Math.random() * GameState.worldWidth,
+                y: Math.random() * GameState.worldHeight,
+                size: 4 + Math.random() * 6,
+                color: ['#f4d03f', '#f7dc6f', '#f9e79f', '#e8c85a', '#d4a843'][Math.floor(Math.random() * 5)],
+                sway: Math.random() * Math.PI * 2,
+                swaySpeed: 0.3 + Math.random() * 1.2,
+                height: 8 + Math.random() * 12
+            });
+        }
+        // 云海远景柱子已移除
+        /* for (let i = 0; i < 15; i++) {
+            Scenes.cloudSea.pillars.push({
+                x: 100 + i * 120 + Math.random() * 60,
+                y: 50 + Math.random() * 100,
+                width: 20 + Math.random() * 15,
+                height: 300 + Math.random() * 250,
+                opacity: 0.08 + Math.random() * 0.08,
+                parallax: 0.2 + Math.random() * 0.15
+            });
+        } */
+        // 云海花田 - 云层
+        for (let i = 0; i < 20; i++) {
+            Scenes.cloudSea.clouds.push({
+                x: Math.random() * GameState.worldWidth,
+                y: 350 + Math.random() * 200,
+                width: 80 + Math.random() * 150,
+                height: 20 + Math.random() * 30,
+                speed: 5 + Math.random() * 10,
+                opacity: 0.15 + Math.random() * 0.2
+            });
+        }
+        // 云海花田 - 木栅栏
+        for (let i = 0; i < 8; i++) {
+            Scenes.cloudSea.decorations.push({
+                x: 50 + i * 200 + Math.random() * 100,
+                y: 380 + Math.random() * 50,
+                type: 'fence',
+                size: 15 + Math.random() * 10
+            });
+        }
+
+        prerenderGround('cloudSea');
+
+        // ========== 熔岩洞穴初始化 ==========
+        // 石柱（8-10根，棕灰色，比柱海更粗）
+        const lavaPillarCount = 8 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < lavaPillarCount; i++) {
+            Scenes.lavaCave.pillars.push({
+                x: 100 + i * (GameState.worldWidth - 200) / lavaPillarCount + Math.random() * 60,
+                y: 50 + Math.random() * 300,
+                width: 30 + Math.random() * 20,
+                height: 200 + Math.random() * 300,
+                opacity: 0.5 + Math.random() * 0.3,
+                parallax: 0.3 + Math.random() * 0.2
+            });
+        }
+        // 熔岩池（15个红色发光区域）
+        for (let i = 0; i < 15; i++) {
+            Scenes.lavaCave.lavaPools.push({
+                x: 80 + Math.random() * (GameState.worldWidth - 160),
+                y: 200 + Math.random() * (GameState.worldHeight - 300),
+                radius: 15 + Math.random() * 25,
+                pulse: Math.random() * Math.PI * 2
+            });
+        }
+        // 熔岩洞穴的宝箱和传送门由通用循环处理（已有 for...in Scenes 循环）
+
+        prerenderGround('lavaCave');
+    }
+
+    // ==================== 绘制函数 ====================
+    function drawPixelRect(x, y, w, h, color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
+    }
+
+    function drawCharacter(px, py) {
+        const costume = Player.costumes.list[Player.costumes.current];
+        const c = {
+            skin: Player.colors.skin, hair: Player.colors.hair,
+            shirt: costume.shirt, pants: costume.pants,
+            shoes: Player.colors.shoes,
+            cloak: costume.cloak, cloakLight: costume.cloak
+        };
+        const frame = Player.isMoving ? Math.floor(Player.animFrame) % 4 : 0;
+        const bob = Player.isMoving ? Math.sin(Player.animFrame * Math.PI) * 2 : 0;
+        // idle 呼吸动画：不移动时轻微上下浮动
+        const idleBreath = !Player.isMoving ? Math.sin(GameState.time * 0.05) * 1 : 0;
+        // 走路时身体左右摇摆
+        const sway = Player.isMoving ? Math.sin(Player.animFrame * 0.5) * 1 * (Player.direction === 'left' ? -1 : 1) : 0;
+        const x = Math.floor(px - Player.width / 2 + sway);
+        const y = Math.floor(py - Player.height / 2 + bob + idleBreath);
+
+            // 角色阴影（根据场景调整）
+            const playerShadowColor = GameState.currentScene === 'flowerField' ? 'rgba(0,0,0,0.15)'
+                : GameState.currentScene === 'pillarSea' ? 'rgba(0,20,40,0.1)'
+                : 'rgba(0,0,0,0.2)';
+            ctx.fillStyle = playerShadowColor;
+        ctx.beginPath();
+        ctx.ellipse(px, py + 16, 8, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 斗篷（后）
+        drawPixelRect(x + 2, y + 12, 20, 18, c.cloak);
+        drawPixelRect(x + 4, y + 14, 16, 14, c.cloakLight);
+
+        // 腿部
+        const legOffset = frame === 1 ? -2 : frame === 3 ? 2 : 0;
+        drawPixelRect(x + 6 + legOffset, y + 24, 4, 8, c.pants);
+        drawPixelRect(x + 14 - legOffset, y + 24, 4, 8, c.pants);
+        drawPixelRect(x + 6 + legOffset, y + 30, 4, 2, c.shoes);
+        drawPixelRect(x + 14 - legOffset, y + 30, 4, 2, c.shoes);
+
+        // 身体
+        drawPixelRect(x + 6, y + 14, 12, 12, c.shirt);
+        drawPixelRect(x + 10, y + 16, 4, 2, '#a93226');
+
+        // 手臂
+        let armOffset = frame === 1 ? 2 : frame === 3 ? -2 : 0;
+        let leftArmWave = 0;
+        let rightArmWave = 0;
+        if (!Player.isMoving && Player.idleTime > 3) {
+            // idle 挥手动画
+            const wave = Math.sin(GameState.time * 0.1) * 3;
+            leftArmWave = wave;
+            rightArmWave = -wave;
+        }
+        drawPixelRect(x + 3, y + 15 + armOffset + leftArmWave, 3, 8, c.skin);
+        drawPixelRect(x + 18, y + 15 - armOffset + rightArmWave, 3, 8, c.skin);
+
+        // 头部
+        drawPixelRect(x + 8, y + 4, 8, 10, c.skin);
+
+        // 头发
+        drawPixelRect(x + 7, y + 2, 10, 6, c.hair);
+        drawPixelRect(x + 8, y + 1, 8, 2, c.hair);
+        drawPixelRect(x + 6, y + 4, 2, 4, c.hair);
+        drawPixelRect(x + 16, y + 4, 2, 4, c.hair);
+
+        // 眼睛
+        const eyeDir = Player.direction === 'left' ? -1 : Player.direction === 'right' ? 1 : 0;
+        const eyeY = Player.direction === 'up' ? 6 : 8;
+        if (Player.isBlinking) {
+            // 眨眼：画成一条线
+            drawPixelRect(x + 10 + eyeDir, y + eyeY + 1, 2, 1, '#1a1a1a');
+            drawPixelRect(x + 13 + eyeDir, y + eyeY + 1, 2, 1, '#1a1a1a');
+        } else {
+            drawPixelRect(x + 10 + eyeDir, y + eyeY, 2, 2, '#1a1a1a');
+            drawPixelRect(x + 13 + eyeDir, y + eyeY, 2, 2, '#1a1a1a');
+            if (Player.direction !== 'up') {
+                drawPixelRect(x + 10 + eyeDir, y + eyeY, 1, 1, '#fff');
+                drawPixelRect(x + 13 + eyeDir, y + eyeY, 1, 1, '#fff');
+            }
+        }
+
+        // 斗篷飘动
+        const cloakWave = Math.sin(GameState.time * 0.1) * 2;
+        drawPixelRect(x + 2 + cloakWave, y + 20, 4, 8, c.cloak);
+        drawPixelRect(x + 18 - cloakWave, y + 20, 4, 8, c.cloak);
+    }
+
+    function drawFlowerField(camX, camY) {
+        const s = Scenes.flowerField;
+        if (s.groundDirty) prerenderGround('flowerField');
+
+        // 地面填满整个画面
+        ctx.drawImage(s.groundCanvas, -camX, -camY);
+        // 填充屏幕边缘（防止黑色区域）
+        const groundRight = GameState.worldWidth - camX;
+        const groundBottom = GameState.worldHeight - camY;
+        if (groundRight < canvas.width) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(groundRight, 0, canvas.width - groundRight, canvas.height);
+        }
+        if (groundBottom < canvas.height) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, groundBottom, canvas.width, canvas.height - groundBottom);
+        }
+        if (camX < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, -camX, canvas.height);
+        }
+        if (camY < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, canvas.width, -camY);
+        }
+
+        // 远景石头堆（视差）
+        // 远景石头堆已移除
+
+        // 前景草丛（半透明，在角色之前绘制）
+        s.fgGrass.forEach(g => {
+            const gx = g.x - camX;
+            const gy = g.y - camY;
+            if (gx > -10 && gx < canvas.width + 10 && gy > -10 && gy < canvas.height + 10) {
+                const sway = Math.sin(GameState.time * 0.02 + g.sway) * 3;
+                ctx.globalAlpha = 0.5;
+                ctx.fillStyle = '#2a5a10';
+                ctx.fillRect(Math.floor(gx - 1 + sway), Math.floor(gy - g.height), 1, g.height);
+                ctx.fillRect(Math.floor(gx + 1 + sway), Math.floor(gy - g.height + 1), 1, g.height - 1);
+                ctx.fillRect(Math.floor(gx + sway * 0.5), Math.floor(gy - g.height + 2), 1, g.height - 2);
+                ctx.globalAlpha = 1;
+            }
+        });
+
+        // 像素大树
+        s.trees.forEach(t => {
+            const tx = t.x - camX;
+            const ty = t.y - camY;
+            if (tx > -60 && tx < canvas.width + 60 && ty > -80 && ty < canvas.height + 80) {
+                const s = t.size;
+                const sway = Math.sin(GameState.time * 0.008 + t.sway) * 1;
+                // 树干
+                ctx.fillStyle = '#5a3a1a';
+                ctx.fillRect(Math.floor(tx - 2 * s), Math.floor(ty - 10 * s), 4 * s, 14 * s);
+                ctx.fillStyle = '#4a2a10';
+                ctx.fillRect(Math.floor(tx - 1 * s), Math.floor(ty - 8 * s), 2 * s, 12 * s);
+                // 树冠（深色剪影风格）
+                const crownX = Math.floor(tx + sway);
+                const crownY = Math.floor(ty - 20 * s);
+                if (t.type === 0) {
+                    // 大树剪影
+                    const darkColors = ['#1a3a0a','#1e4210','#223a12','#1a3210'];
+                    const px4 = Math.floor(4 * s);
+                    for (let row = 0; row < 4; row++) {
+                        for (let col = 0; col < 5; col++) {
+                            ctx.fillStyle = darkColors[(row + col) % darkColors.length];
+                            ctx.fillRect(crownX - 2 * px4 + col * px4, crownY + 2 * px4 - row * px4, px4, px4);
+                        }
+                    }
+                    for (let row = 0; row < 3; row++) {
+                        for (let col = 0; col < 4; col++) {
+                            ctx.fillStyle = darkColors[(row + col + 1) % darkColors.length];
+                            ctx.fillRect(crownX - 1.5 * px4 + col * px4, crownY - row * px4, px4, px4);
+                        }
+                    }
+                    for (let row = 0; row < 2; row++) {
+                        for (let col = 0; col < 3; col++) {
+                            ctx.fillStyle = darkColors[(row + col + 2) % darkColors.length];
+                            ctx.fillRect(crownX - px4 + col * px4, crownY - 2 * px4 - row * px4, px4, px4);
+                        }
+                    }
+                } else if (t.type === 1) {
+                    // 松树剪影
+                    const darkPine = ['#1a3a0a','#1e4210','#223a12','#1a3210'];
+                    const px4 = Math.floor(4 * s);
+                    for (let col = -3; col <= 3; col++) {
+                        ctx.fillStyle = darkPine[Math.abs(col) % darkPine.length];
+                        ctx.fillRect(crownX + col * px4, crownY + 2 * px4, px4, px4);
+                    }
+                    for (let col = -2; col <= 2; col++) {
+                        ctx.fillStyle = darkPine[(Math.abs(col) + 1) % darkPine.length];
+                        ctx.fillRect(crownX + col * px4, crownY + px4, px4, px4);
+                    }
+                    for (let col = -1; col <= 1; col++) {
+                        ctx.fillStyle = darkPine[(Math.abs(col) + 2) % darkPine.length];
+                        ctx.fillRect(crownX + col * px4, crownY, px4, px4);
+                    }
+                    ctx.fillStyle = darkPine[3];
+                    ctx.fillRect(crownX, crownY - px4, px4, px4);
+                } else {
+                    // 灌木剪影
+                    const darkBush = ['#1a3a0a','#1e4210','#223a12'];
+                    const px3 = Math.floor(3 * s);
+                    for (let row = 0; row < 3; row++) {
+                        for (let col = 0; col < 4; col++) {
+                            ctx.fillStyle = darkBush[(row + col) % darkBush.length];
+                            ctx.fillRect(crownX - 1.5 * px3 + col * px3, crownY + px3 - row * px3, px3, px3);
+                        }
+                    }
+                    for (let row = 0; row < 2; row++) {
+                        for (let col = 0; col < 3; col++) {
+                            ctx.fillStyle = darkBush[(row + col + 1) % darkBush.length];
+                            ctx.fillRect(crownX - px3 + col * px3, crownY - row * px3, px3, px3);
+                        }
+                    }
+                }
+                // 树影
+                ctx.fillStyle = 'rgba(0,0,0,0.15)';
+                ctx.beginPath();
+                ctx.ellipse(Math.floor(tx), Math.floor(ty + 4 * s), 14 * s, 4, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+
+        // 装饰物
+        s.decorations.forEach(d => {
+            const dx = d.x - camX;
+            const dy = d.y - camY;
+            if (dx > -20 && dx < canvas.width + 20 && dy > -20 && dy < canvas.height + 20) {
+                if (d.type === 'bush') {
+                    ctx.fillStyle = '#2d5a14';
+                    ctx.fillRect(dx, dy, d.size, d.size * 0.6);
+                    ctx.fillStyle = '#3a7020';
+                    ctx.fillRect(dx + 1, dy - 1, d.size - 2, d.size * 0.5);
+                } else {
+                    ctx.fillStyle = '#6a6a5a';
+                    ctx.fillRect(dx, dy, d.size * 0.7, d.size * 0.5);
+                    ctx.fillStyle = '#7a7a6a';
+                    ctx.fillRect(dx, dy, d.size * 0.5, d.size * 0.3);
+                }
+                // 装饰物阴影
+                drawShadow(d.x + d.size / 2 - camX, d.y + d.size * 0.4 - camY, d.size * 0.5, 3, 0.15);
+            }
+        });
+
+        // 森林蘑菇（代替花朵）
+        s.flowers.forEach(f => {
+            const fx = f.x - camX;
+            const fy = f.y - camY;
+            if (fx > -15 && fx < canvas.width + 15 && fy > -15 && fy < canvas.height + 15) {
+                // 蘑菇茎
+                ctx.fillStyle = '#d0c0a0';
+                ctx.fillRect(Math.floor(fx), Math.floor(fy), 2, 4);
+                // 蘑菇帽（红色或棕色）
+                ctx.fillStyle = f.color === '#ffdd44' ? '#cc4444' : '#8a5a3a';
+                ctx.fillRect(Math.floor(fx - 2), Math.floor(fy - 3), 6, 3);
+                // 蘑菇点
+                ctx.fillStyle = '#f0e0d0';
+                ctx.fillRect(Math.floor(fx - 1), Math.floor(fy - 2), 1, 1);
+                ctx.fillRect(Math.floor(fx + 1), Math.floor(fy - 2), 1, 1);
+            }
+        });
+
+        // 迷雾效果（角色周围）
+        const px = Player.x - camX;
+        const py = Player.y - camY;
+        const fogGrad = ctx.createRadialGradient(px, py, 30, px, py, 250);
+        fogGrad.addColorStop(0, 'rgba(200,220,200,0)');
+        fogGrad.addColorStop(0.5, 'rgba(180,200,180,0.05)');
+        fogGrad.addColorStop(1, 'rgba(160,180,160,0.15)');
+        ctx.fillStyle = fogGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 萤火虫
+        if (!GameState.fireflies) {
+            GameState.fireflies = [];
+            for (let i = 0; i < 20; i++) {
+                GameState.fireflies.push({
+                    x: Math.random() * GameState.worldWidth,
+                    y: Math.random() * GameState.worldHeight,
+                    phase: Math.random() * Math.PI * 2,
+                    speed: 0.5 + Math.random() * 1
+                });
+            }
+        }
+        GameState.fireflies.forEach(ff => {
+            ff.x += Math.sin(GameState.time * 0.01 + ff.phase) * ff.speed;
+            ff.y += Math.cos(GameState.time * 0.008 + ff.phase) * ff.speed * 0.5;
+            const brightness = 0.3 + Math.sin(GameState.time * 0.05 + ff.phase) * 0.3;
+            const ffx = ff.x - camX;
+            const ffy = ff.y - camY;
+            if (ffx > -5 && ffx < canvas.width + 5 && ffy > -5 && ffy < canvas.height + 5) {
+                ctx.fillStyle = `rgba(200,255,100,${brightness})`;
+                ctx.fillRect(Math.floor(ffx), Math.floor(ffy), 2, 2);
+                ctx.fillStyle = `rgba(200,255,100,${brightness * 0.3})`;
+                ctx.fillRect(Math.floor(ffx - 1), Math.floor(ffy - 1), 4, 4);
+            }
+        });
+
+    }
+
+    function drawCloudSea(camX, camY) {
+        const s = Scenes.cloudSea;
+        if (s.groundDirty) prerenderGround('cloudSea');
+
+        // 地面填满整个画面
+        ctx.drawImage(s.groundCanvas, -camX, -camY);
+        const groundRight2 = GameState.worldWidth - camX;
+        const groundBottom2 = GameState.worldHeight - camY;
+        if (groundRight2 < canvas.width) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(groundRight2, 0, canvas.width - groundRight2, canvas.height);
+        }
+        if (groundBottom2 < canvas.height) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, groundBottom2, canvas.width, canvas.height - groundBottom2);
+        }
+        if (camX < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, -camX, canvas.height);
+        }
+        if (camY < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, canvas.width, -camY);
+        }
+
+        // 浮空云朵平台
+        s.clouds.forEach(c => {
+            const cx = c.x - camX;
+            const cy = c.y - camY + Math.sin(GameState.time * 0.01 + c.x * 0.01) * 5;
+            if (cx > -50 && cx < canvas.width + 50) {
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.fillRect(cx - 15, cy, 30, 8);
+                ctx.fillRect(cx - 10, cy - 3, 20, 5);
+                ctx.fillRect(cx - 5, cy - 5, 10, 5);
+                // 云朵高光
+                ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                ctx.fillRect(cx - 12, cy - 2, 24, 3);
+            }
+        });
+
+        // 木栅栏
+        s.decorations.forEach(d => {
+            const dx = d.x - camX;
+            const dy = d.y - camY;
+            if (dx > -20 && dx < canvas.width + 20 && dy > -20 && dy < canvas.height + 20) {
+                if (d.type === 'fence') {
+                    ctx.fillStyle = '#6a4a2a';
+                    ctx.fillRect(dx, dy, 2, d.size);
+                    ctx.fillRect(dx + 6, dy, 2, d.size);
+                    ctx.fillRect(dx - 2, dy + 3, 12, 2);
+                    ctx.fillRect(dx - 2, dy + 8, 12, 2);
+                }
+            }
+        });
+
+        // 金色花朵（多层）
+        s.flowers.forEach(f => {
+            const fx = f.x - camX;
+            const fy = f.y - camY;
+            if (fx > -15 && fx < canvas.width + 15 && fy > -15 && fy < canvas.height + 15) {
+                const sway = Math.sin(GameState.time * 0.015 + f.sway) * 2;
+                // 花茎
+                ctx.fillStyle = '#5a6a2a';
+                ctx.fillRect(Math.floor(fx), Math.floor(fy), 1, f.height);
+                // 花朵（多层花瓣）
+                ctx.fillStyle = f.color;
+                ctx.fillRect(Math.floor(fx - 2 + sway), Math.floor(fy - 3), 5, 4);
+                ctx.fillRect(Math.floor(fx - 1 + sway), Math.floor(fy - 5), 3, 3);
+                ctx.fillRect(Math.floor(fx + sway), Math.floor(fy - 6), 1, 2);
+                // 花心
+                ctx.fillStyle = '#d4a843';
+                ctx.fillRect(Math.floor(fx + sway), Math.floor(fy - 3), 2, 2);
+            }
+        });
+
+        // 云层（缓慢移动）
+        s.clouds.forEach(c => {
+            c.x += c.speed * deltaTime;
+            if (c.x > GameState.worldWidth + c.width) c.x = -c.width;
+            const cx = c.x - camX * 0.5;
+            const cy = c.y - camY * 0.3;
+            if (cx + c.width > -50 && cx < canvas.width + 50) {
+                ctx.fillStyle = `rgba(255, 250, 240, ${c.opacity})`;
+                ctx.fillRect(cx, cy, c.width, c.height);
+                ctx.fillStyle = `rgba(255, 255, 255, ${c.opacity * 0.5})`;
+                ctx.fillRect(cx + c.width * 0.2, cy - 3, c.width * 0.6, c.height * 0.5);
+            }
+        });
+
+        // 天空渐变 - 暖色调黄昏
+        const csSky2 = ctx.createLinearGradient(0, 0, 0, 300);
+        csSky2.addColorStop(0, 'rgba(200, 160, 140, 0.4)');
+        csSky2.addColorStop(0.4, 'rgba(220, 190, 150, 0.2)');
+        csSky2.addColorStop(1, 'transparent');
+        ctx.fillStyle = csSky2;
+        ctx.fillRect(0, 0, canvas.width, 300);
+
+        // 阳光光束
+        ctx.fillStyle = 'rgba(255, 220, 150, 0.03)';
+        for (let i = 0; i < 4; i++) {
+            const bx = 150 + i * 180 + Math.sin(GameState.time * 0.005 + i) * 40;
+            ctx.beginPath();
+            ctx.moveTo(bx, 0);
+            ctx.lineTo(bx - 30, 400);
+            ctx.lineTo(bx + 30, 400);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // 彩虹效果（固定位置，不随相机移动）
+        const rainbowColors = [
+            { r: 255, g: 0, b: 0 },
+            { r: 255, g: 127, b: 0 },
+            { r: 255, g: 255, b: 0 },
+            { r: 0, g: 255, b: 0 },
+            { r: 0, g: 127, b: 255 },
+            { r: 139, g: 0, b: 255 }
+        ];
+        const rainbowX = canvas.width * 0.6;
+        const rainbowY = canvas.height * 0.15;
+        const rainbowRadius = 140;
+        ctx.lineWidth = 6;
+        rainbowColors.forEach((col, i) => {
+            ctx.strokeStyle = `rgba(${col.r},${col.g},${col.b},0.15)`;
+            ctx.beginPath();
+            ctx.arc(rainbowX, rainbowY, rainbowRadius - i * 7, Math.PI, 0);
+            ctx.stroke();
+        });
+
+        // 云海星星粒子
+        if (!GameState.cloudParticles) {
+            GameState.cloudParticles = [];
+            for (let i = 0; i < 15; i++) {
+                GameState.cloudParticles.push({
+                    x: Math.random() * GameState.worldWidth,
+                    y: Math.random() * GameState.worldHeight,
+                    phase: Math.random() * Math.PI * 2,
+                    size: 1 + Math.random() * 2
+                });
+            }
+        }
+        GameState.cloudParticles.forEach(p => {
+            const brightness = 0.3 + Math.sin(GameState.time * 0.04 + p.phase) * 0.3;
+            const px = p.x - camX;
+            const py = p.y - camY;
+            if (px > -5 && px < canvas.width + 5 && py > -5 && py < canvas.height + 5) {
+                ctx.fillStyle = `rgba(255,255,200,${brightness})`;
+                ctx.fillRect(Math.floor(px), Math.floor(py), Math.ceil(p.size), Math.ceil(p.size));
+            }
+        });
+    }
+
+    function drawPillarSea(camX, camY) {
+        const s = Scenes.pillarSea;
+        if (s.groundDirty) prerenderGround('pillarSea');
+
+        // 地面填满整个画面
+        ctx.drawImage(s.groundCanvas, -camX, -camY);
+        const groundRight3 = GameState.worldWidth - camX;
+        const groundBottom3 = GameState.worldHeight - camY;
+        if (groundRight3 < canvas.width) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(groundRight3, 0, canvas.width - groundRight3, canvas.height);
+        }
+        if (groundBottom3 < canvas.height) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, groundBottom3, canvas.width, canvas.height - groundBottom3);
+        }
+        if (camX < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, -camX, canvas.height);
+        }
+        if (camY < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, canvas.width, -camY);
+        }
+
+        const waterBaseY = 400;
+
+        // 水面波纹
+        for (let i = 0; i < 40; i++) {
+            const wx = ((i * 73 + GameState.time * 0.5) % (canvas.width + 100)) - 50;
+            const wy = waterBaseY + (i * 7) % 200;
+            ctx.fillStyle = `rgba(100, 180, 200, ${0.06 + Math.sin(i + GameState.time * 0.03) * 0.03})`;
+            ctx.fillRect(wx, wy, 15 + Math.sin(i * 0.5 + GameState.time * 0.02) * 8, 1);
+        }
+
+        // 水面反光线条
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 12; i++) {
+            const rx = ((i * 127 + GameState.time * 0.3) % (canvas.width + 60)) - 30;
+            const ry = waterBaseY + 10 + (i * 17) % 180;
+            const rLen = 8 + Math.sin(i * 0.7 + GameState.time * 0.04) * 6;
+            ctx.beginPath();
+            ctx.moveTo(rx, ry);
+            ctx.lineTo(rx + rLen, ry + Math.sin(GameState.time * 0.05 + i) * 1);
+            ctx.stroke();
+        }
+
+        // 动态波纹（正弦波线条）
+        ctx.strokeStyle = 'rgba(100,200,255,0.2)';
+        ctx.lineWidth = 1;
+        for (let w = 0; w < 5; w++) {
+            ctx.beginPath();
+            const waveY = waterBaseY + 20 + w * 35;
+            for (let x = 0; x < canvas.width; x += 2) {
+                const wy = waveY + Math.sin(x * 0.02 + GameState.time * 0.03 + w * 1.5) * 4;
+                if (x === 0) ctx.moveTo(x, wy);
+                else ctx.lineTo(x, wy);
+            }
+            ctx.stroke();
+        }
+
+        // 水下光线（斜线光柱）
+        for (let i = 0; i < 6; i++) {
+            const lx = 80 + i * 130 + Math.sin(GameState.time * 0.005 + i * 2) * 40;
+            const lw = 3 + Math.sin(i * 1.5) * 2;
+            ctx.fillStyle = 'rgba(100,200,255,0.08)';
+            ctx.beginPath();
+            ctx.moveTo(lx, waterBaseY);
+            ctx.lineTo(lx + lw, waterBaseY);
+            ctx.lineTo(lx + lw + 30, canvas.height);
+            ctx.lineTo(lx + 30, canvas.height);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // 气泡绘制
+        // 气泡绘制已移除
+        /* GameState.bubbles.forEach(b => {
+            const bx = b.x - camX;
+            const by = b.y - camY;
+            if (by > waterBaseY && by < canvas.height && bx > -10 && bx < canvas.width + 10) {
+                ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                ctx.beginPath();
+                ctx.arc(bx, by, b.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(255,255,255,0.5)';
+                ctx.beginPath();
+                ctx.arc(bx - b.size * 0.3, by - b.size * 0.3, b.size * 0.3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }); */
+
+        // 初始化瀑布柱子索引
+        if (!GameState.waterfallPillars) {
+            const indices = [];
+            while (indices.length < Math.min(3, Math.max(2, s.pillars.length))) {
+                const idx = Math.floor(Math.random() * s.pillars.length);
+                if (!indices.includes(idx)) indices.push(idx);
+            }
+            GameState.waterfallPillars = indices;
+        }
+
+        // 柱子（从远到近，先画远的）
+        s.pillars.forEach((p, idx) => {
+            const px = p.x - camX * p.parallax;
+            const py = p.y - camY * (0.3 + p.depth * 0.3);
+            if (px + p.width > -50 && px < canvas.width + 50) {
+                // 根据视差深度选择柱子颜色
+                let c1, c2, c3;
+                if (p.parallax < 0.5) {
+                    c1 = `rgba(13, 42, 58, ${p.opacity})`;
+                    c2 = `rgba(18, 50, 68, ${p.opacity})`;
+                    c3 = `rgba(10, 35, 50, ${p.opacity})`;
+                } else if (p.parallax <= 0.8) {
+                    c1 = `rgba(26, 58, 74, ${p.opacity})`;
+                    c2 = `rgba(35, 75, 95, ${p.opacity})`;
+                    c3 = `rgba(20, 50, 65, ${p.opacity})`;
+                } else {
+                    c1 = `rgba(42, 74, 90, ${p.opacity})`;
+                    c2 = `rgba(55, 95, 115, ${p.opacity})`;
+                    c3 = `rgba(35, 65, 80, ${p.opacity})`;
+                }
+                const pg = ctx.createLinearGradient(px, py, px + p.width, py);
+                pg.addColorStop(0, c1);
+                pg.addColorStop(0.5, c2);
+                pg.addColorStop(1, c3);
+                ctx.fillStyle = pg;
+                ctx.fillRect(px, py, p.width, p.height);
+                ctx.fillStyle = `rgba(100, 200, 220, ${p.opacity * 0.15})`;
+                ctx.fillRect(px + p.width * 0.2, py, p.width * 0.25, p.height);
+
+                // 柱子表面纹理（竖向细线）
+                ctx.fillStyle = p.parallax < 0.5 ? 'rgba(8, 28, 40, 0.4)' : (p.parallax <= 0.8 ? 'rgba(15, 40, 55, 0.4)' : 'rgba(25, 55, 70, 0.4)');
+                for (let tx = 0; tx < p.width; tx += 4) {
+                    ctx.fillRect(px + tx, py, 1, p.height);
+                }
+
+                // 瀑布效果
+                if (GameState.waterfallPillars.includes(idx)) {
+                    const wfX = px + p.width * 0.3;
+                    const wfW = p.width * 0.4;
+                    for (let wy = py; wy < py + p.height; wy += 3) {
+                        const wave = Math.sin(GameState.time * 0.05 + wy * 0.1) * 2;
+                        ctx.fillStyle = 'rgba(200,220,255,0.6)';
+                        ctx.fillRect(wfX + wave, wy, wfW, 1);
+                    }
+                    // 底部水花飞溅
+                    for (let sp = 0; sp < 5; sp++) {
+                        const spX = wfX + Math.random() * wfW;
+                        const spY = py + p.height + Math.random() * 4;
+                        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+                        ctx.fillRect(spX, spY, 1 + Math.random(), 1 + Math.random());
+                    }
+                }
+
+                // 水面反射
+                drawWaterReflection(p.x + p.width / 2, py, p.width, p.height, camX, camY, waterBaseY);
+
+                // 柱子阴影
+                drawShadow(p.x + p.width / 2 - camX, py + p.height - camY, p.width * 0.6, 6, p.opacity * 0.2);
+            }
+        });
+
+        // 发光球
+        s.decorations.forEach(d => {
+            const dx = d.x - camX;
+            const dy = d.y - camY;
+            if (dx > -10 && dx < canvas.width + 10 && dy > -10 && dy < canvas.height + 10) {
+                const pulse = 0.5 + Math.sin(GameState.time * 0.05 + d.pulse) * 0.5;
+                const nightBoost = DayNight.ambientAlpha > 0.4 ? 2 : 1;
+                ctx.fillStyle = `rgba(200, 220, 255, ${pulse * 0.3 * nightBoost})`;
+                ctx.fillRect(dx - 1, dy - 1, d.size + 2, d.size + 2);
+                ctx.fillStyle = `rgba(255, 255, 255, ${pulse * 0.6 * nightBoost})`;
+                ctx.fillRect(dx, dy, d.size, d.size);
+            }
+        });
+
+        // 天空
+        const psSky2 = ctx.createLinearGradient(0, 0, 0, 250);
+        psSky2.addColorStop(0, `rgba(10, 26, 46, ${0.8 - DayNight.sunIntensity * 0.3})`);
+        psSky2.addColorStop(0.5, `rgba(26, 58, 90, ${0.4 - DayNight.sunIntensity * 0.2})`);
+        psSky2.addColorStop(1, 'transparent');
+        ctx.fillStyle = psSky2;
+        ctx.fillRect(0, 0, canvas.width, 250);
+
+        // 丁达尔光束
+        const beamAlpha = 0.015 + DayNight.sunIntensity * 0.02;
+        ctx.fillStyle = `rgba(200, 180, 100, ${beamAlpha})`;
+        for (let i = 0; i < 5; i++) {
+            const bx = 100 + i * 150 + Math.sin(GameState.time * 0.008 + i) * 30;
+            ctx.beginPath();
+            ctx.moveTo(bx, 0);
+            ctx.lineTo(bx - 25, 350);
+            ctx.lineTo(bx + 25, 350);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // 水母粒子
+        if (!GameState.jellyfish) {
+            GameState.jellyfish = [];
+            for (let i = 0; i < 8; i++) {
+                GameState.jellyfish.push({
+                    x: Math.random() * GameState.worldWidth,
+                    y: 100 + Math.random() * (GameState.worldHeight - 200),
+                    phase: Math.random() * Math.PI * 2,
+                    size: 4 + Math.random() * 4
+                });
+            }
+        }
+        GameState.jellyfish.forEach(j => {
+            j.y += Math.sin(GameState.time * 0.015 + j.phase) * 0.3;
+            j.x += Math.cos(GameState.time * 0.008 + j.phase) * 0.2;
+            const jx = j.x - camX;
+            const jy = j.y - camY;
+            if (jx > -10 && jx < canvas.width + 10 && jy > -10 && jy < canvas.height + 10) {
+                // 水母身体
+                ctx.fillStyle = 'rgba(150,100,200,0.4)';
+                ctx.fillRect(Math.floor(jx - j.size/2), Math.floor(jy), Math.ceil(j.size), Math.ceil(j.size * 0.6));
+                // 水母触须
+                ctx.fillStyle = 'rgba(150,100,200,0.2)';
+                const tentLen = j.size * 0.8;
+                for (let ti = 0; ti < 3; ti++) {
+                    const tx = jx - j.size/3 + ti * j.size/3;
+                    const tw = Math.sin(GameState.time * 0.03 + j.phase + ti) * 2;
+                    ctx.fillRect(Math.floor(tx + tw), Math.floor(jy + j.size * 0.6), 1, Math.ceil(tentLen));
+                }
+            }
+        });
+
+        // 海底珊瑚
+        if (!s.corals) {
+            s.corals = [];
+            for (let i = 0; i < 15; i++) {
+                s.corals.push({
+                    x: Math.random() * GameState.worldWidth,
+                    y: GameState.worldHeight - 20 - Math.random() * 30,
+                    type: Math.floor(Math.random() * 3),
+                    color: ['#cc4444', '#ff8844', '#44aacc'][Math.floor(Math.random() * 3)]
+                });
+            }
+        }
+        s.corals.forEach(c => {
+            const cx = c.x - camX;
+            const cy = c.y - camY;
+            if (cx > -20 && cx < canvas.width + 20) {
+                ctx.fillStyle = c.color;
+                if (c.type === 0) {
+                    // 分支状珊瑚
+                    ctx.fillRect(cx, cy, 3, 8);
+                    ctx.fillRect(cx - 3, cy - 3, 3, 5);
+                    ctx.fillRect(cx + 3, cy - 2, 3, 4);
+                } else if (c.type === 1) {
+                    // 圆形珊瑚
+                    ctx.fillRect(cx - 2, cy - 2, 5, 5);
+                    ctx.fillRect(cx - 1, cy - 4, 3, 3);
+                } else {
+                    // 海草
+                    ctx.fillStyle = '#2a6a3a';
+                    const sway = Math.sin(GameState.time * 0.02 + c.x) * 3;
+                    ctx.fillRect(cx + sway, cy - 10, 2, 10);
+                }
+            }
+        });
+
+        // 水面倒影
+        const reflectY = canvas.height * 0.85;
+        // 角色倒影
+        const playerScreenX = Player.x - camX;
+        const playerScreenY = Player.y - camY;
+        if (playerScreenY < reflectY) {
+            ctx.save();
+            ctx.globalAlpha = 0.15;
+            ctx.translate(0, reflectY * 2);
+            ctx.scale(1, -1);
+            drawCharacter(playerScreenX, playerScreenY);
+            ctx.restore();
+        }
+        // 小猫倒影
+        const catScreenX = Cat.x - camX;
+        const catScreenY = Cat.y - camY;
+        if (catScreenY < reflectY) {
+            ctx.save();
+            ctx.globalAlpha = 0.1;
+            ctx.translate(0, reflectY * 2);
+            ctx.scale(1, -1);
+            ctx.fillStyle = '#cc9922';
+            ctx.fillRect(catScreenX - 4, catScreenY - 3, 8, 6);
+            ctx.restore();
+        }
+        // 水面线
+        ctx.strokeStyle = 'rgba(100,180,220,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, reflectY);
+        ctx.lineTo(canvas.width, reflectY);
+        ctx.stroke();
+    }
+
+    function drawLavaCave(camX, camY) {
+        const s = Scenes.lavaCave;
+        if (s.groundDirty) prerenderGround('lavaCave');
+
+        // 地面填满整个画面
+        ctx.drawImage(s.groundCanvas, -camX, -camY);
+        const groundRight = GameState.worldWidth - camX;
+        const groundBottom = GameState.worldHeight - camY;
+        if (groundRight < canvas.width) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(groundRight, 0, canvas.width - groundRight, canvas.height);
+        }
+        if (groundBottom < canvas.height) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, groundBottom, canvas.width, canvas.height - groundBottom);
+        }
+        if (camX < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, -camX, canvas.height);
+        }
+        if (camY < 0) {
+            ctx.fillStyle = s.groundColor;
+            ctx.fillRect(0, 0, canvas.width, -camY);
+        }
+
+        // 洞穴顶部暗影
+        const caveTop = ctx.createLinearGradient(0, 0, 0, 120);
+        caveTop.addColorStop(0, 'rgba(10, 5, 5, 0.8)');
+        caveTop.addColorStop(1, 'transparent');
+        ctx.fillStyle = caveTop;
+        ctx.fillRect(0, 0, canvas.width, 120);
+
+        // 熔岩池（红色发光圆形，带脉冲动画）
+        s.lavaPools.forEach(pool => {
+            const px = pool.x - camX;
+            const py = pool.y - camY;
+            if (px > -60 && px < canvas.width + 60 && py > -60 && py < canvas.height + 60) {
+                const pulse = 1 + Math.sin(GameState.time * 0.05 + pool.pulse) * 0.3;
+                const r = pool.radius * pulse;
+                // 外层光晕
+                const glow = ctx.createRadialGradient(px, py, 0, px, py, r * 1.5);
+                glow.addColorStop(0, 'rgba(255, 68, 0, 0.4)');
+                glow.addColorStop(0.5, 'rgba(255, 40, 0, 0.15)');
+                glow.addColorStop(1, 'transparent');
+                ctx.fillStyle = glow;
+                ctx.fillRect(px - r * 1.5, py - r * 1.5, r * 3, r * 3);
+                // 熔岩池本体
+                const lavaGrad = ctx.createRadialGradient(px, py, 0, px, py, r);
+                lavaGrad.addColorStop(0, '#ff6600');
+                lavaGrad.addColorStop(0.4, '#ff4400');
+                lavaGrad.addColorStop(0.8, '#cc2200');
+                lavaGrad.addColorStop(1, '#881100');
+                ctx.fillStyle = lavaGrad;
+                ctx.beginPath();
+                ctx.arc(px, py, r, 0, Math.PI * 2);
+                ctx.fill();
+                // 高光
+                ctx.fillStyle = 'rgba(255, 200, 100, 0.3)';
+                ctx.beginPath();
+                ctx.arc(px - r * 0.2, py - r * 0.2, r * 0.3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+
+        // 石柱（棕灰色，比柱海的柱子更粗）
+        s.pillars.forEach(p => {
+            const px = p.x - camX * p.parallax;
+            const py = p.y - camY * 0.3;
+            if (px + p.width > -50 && px < canvas.width + 50 && py + p.height > -50 && py < canvas.height + 50) {
+                // 石柱本体
+                const pillarGrad = ctx.createLinearGradient(px, py, px + p.width, py);
+                pillarGrad.addColorStop(0, `rgba(74, 58, 42, ${p.opacity})`);
+                pillarGrad.addColorStop(0.3, `rgba(90, 72, 55, ${p.opacity})`);
+                pillarGrad.addColorStop(0.7, `rgba(80, 65, 48, ${p.opacity})`);
+                pillarGrad.addColorStop(1, `rgba(60, 48, 35, ${p.opacity})`);
+                ctx.fillStyle = pillarGrad;
+                ctx.fillRect(px, py, p.width, p.height);
+                // 石柱纹理
+                ctx.fillStyle = `rgba(50, 40, 30, ${p.opacity * 0.5})`;
+                for (let tx = 0; tx < p.width; tx += 5) {
+                    ctx.fillRect(px + tx, py, 1, p.height);
+                }
+                // 石柱顶部
+                ctx.fillStyle = `rgba(100, 80, 60, ${p.opacity})`;
+                ctx.fillRect(px - 2, py, p.width + 4, 4);
+                // 石柱底部
+                ctx.fillStyle = `rgba(60, 45, 30, ${p.opacity})`;
+                ctx.fillRect(px - 1, py + p.height - 3, p.width + 2, 3);
+                // 阴影
+                drawShadow(p.x + p.width / 2 - camX, py + p.height - camY, p.width * 0.6, 6, p.opacity * 0.2);
+            }
+        });
+
+        // 天气效果：上升的火星粒子
+        if (!GameState.lavaEmbers) {
+            GameState.lavaEmbers = [];
+            for (let i = 0; i < 40; i++) {
+                GameState.lavaEmbers.push({
+                    x: Math.random() * GameState.worldWidth,
+                    y: Math.random() * GameState.worldHeight,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: -20 - Math.random() * 30,
+                    life: Math.random(),
+                    size: 1 + Math.random() * 2
+                });
+            }
+        }
+        GameState.lavaEmbers.forEach(e => {
+            e.x += e.vx * 0.016;
+            e.y += e.vy * 0.016;
+            e.life -= 0.005;
+            if (e.life <= 0 || e.y < 0) {
+                e.x = Math.random() * GameState.worldWidth;
+                e.y = GameState.worldHeight - Math.random() * 100;
+                e.life = 0.5 + Math.random() * 0.5;
+                e.vx = (Math.random() - 0.5) * 10;
+                e.vy = -20 - Math.random() * 30;
+            }
+            const ex = e.x - camX;
+            const ey = e.y - camY;
+            if (ex > -5 && ex < canvas.width + 5 && ey > -5 && ey < canvas.height + 5) {
+                ctx.fillStyle = `rgba(255, 102, 0, ${e.life * 0.8})`;
+                ctx.fillRect(Math.floor(ex), Math.floor(ey), Math.ceil(e.size), Math.ceil(e.size));
+                // 火星光晕
+                ctx.fillStyle = `rgba(255, 150, 50, ${e.life * 0.3})`;
+                ctx.fillRect(Math.floor(ex) - 1, Math.floor(ey) - 1, Math.ceil(e.size) + 2, Math.ceil(e.size) + 2);
+            }
+        });
+
+        // 洞穴环境光（红色微光）
+        const ambientGlow = ctx.createRadialGradient(
+            canvas.width / 2, canvas.height / 2, 0,
+            canvas.width / 2, canvas.height / 2, canvas.width * 0.6
+        );
+        ambientGlow.addColorStop(0, 'rgba(80, 20, 0, 0.05)');
+        ambientGlow.addColorStop(1, 'rgba(40, 10, 0, 0.1)');
+        ctx.fillStyle = ambientGlow;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // ==================== 小地图 ====================
+    function drawMinimap() {
+        const mw = minimapCanvas.width;
+        const mh = minimapCanvas.height;
+        const scaleX = mw / GameState.worldWidth;
+        const scaleY = mh / GameState.worldHeight;
+        minimapCtx.clearRect(0, 0, mw, mh);
+
+        const isNight = DayNight.ambientAlpha > 0.4;
+        if (GameState.currentScene === 'flowerField') {
+            minimapCtx.fillStyle = isNight ? '#1a3010' : '#3a6a1a';
+        } else if (GameState.currentScene === 'lavaCave') {
+            minimapCtx.fillStyle = isNight ? '#100505' : '#2a1a0a';
+        } else {
+            minimapCtx.fillStyle = isNight ? '#060d18' : '#0d1f2d';
+        }
+        minimapCtx.fillRect(0, 0, mw, mh);
+
+        const s = Scenes[GameState.currentScene];
+        minimapCtx.fillStyle = GameState.currentScene === 'flowerField' ? 'rgba(26,58,58,0.5)' : GameState.currentScene === 'lavaCave' ? 'rgba(74,58,42,0.5)' : 'rgba(45,125,138,0.6)';
+        s.pillars.forEach(p => {
+            minimapCtx.fillRect(p.x * scaleX, p.y * scaleY, Math.max(2, p.width * scaleX), Math.max(4, p.height * scaleY));
+        });
+
+        minimapCtx.strokeStyle = 'rgba(255,255,255,0.4)';
+        minimapCtx.lineWidth = 1;
+        minimapCtx.strokeRect(
+            GameState.camera.x * scaleX,
+            GameState.camera.y * scaleY,
+            canvas.width * scaleX,
+            canvas.height * scaleY
+        );
+
+        // 小猫
+        minimapCtx.fillStyle = '#e8a838';
+        minimapCtx.fillRect(Cat.x * scaleX - 1, Cat.y * scaleY - 1, 2, 2);
+
+        // 角色
+        minimapCtx.fillStyle = '#c0392b';
+        minimapCtx.fillRect(Player.x * scaleX - 2, Player.y * scaleY - 2, 4, 4);
+    }
+
+    // ==================== 大气雾化 ====================
+    function drawAtmosphericFog(camX, camY) {
+        // 远景雾化层 — 根据场景类型调整颜色
+        const fogColor = GameState.currentScene === 'flowerField'
+            ? { r: 180, g: 200, b: 160 }
+            : GameState.currentScene === 'cloudSea'
+            ? { r: 220, g: 190, b: 160 }
+            : { r: 30, g: 50, b: 70 };
+
+        // 底部雾气（地面附近更浓）
+        const bottomGrad = ctx.createLinearGradient(0, canvas.height - 100, 0, canvas.height);
+        bottomGrad.addColorStop(0, 'transparent');
+        bottomGrad.addColorStop(1, `rgba(${fogColor.r}, ${fogColor.g}, ${fogColor.b}, 0.25)`);
+        ctx.fillStyle = bottomGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 远景雾化（顶部天空区域）
+        const topGrad = ctx.createLinearGradient(0, 0, 0, 120);
+        topGrad.addColorStop(0, `rgba(${fogColor.r}, ${fogColor.g}, ${fogColor.b}, 0.15)`);
+        topGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = topGrad;
+        ctx.fillRect(0, 0, canvas.width, 120);
+
+    }
+
+    // ==================== 天气系统 ====================
+    function updateWeather(dt) {
+        const scene = GameState.currentScene;
+        const we = GameState.weatherEffects;
+
+        if (scene === 'flowerField') {
+            // 迷雾森林 - 细雨
+            // 初始化雨滴
+            if (we.rainDrops.length === 0) {
+                for (let i = 0; i < 65; i++) {
+                    we.rainDrops.push({
+                        x: Math.random() * GameState.worldWidth,
+                        y: Math.random() * GameState.worldHeight,
+                        speed: 120 + Math.random() * 80,
+                        len: 6 + Math.random() * 6
+                    });
+                }
+            }
+            we.rainDrops.forEach(r => {
+                r.y += r.speed * dt;
+                r.x += r.speed * 0.3 * dt; // 斜向右下
+                if (r.y > GameState.worldHeight) {
+                    // 地面产生涟漪
+                    if (Math.random() < 0.3) {
+                        we.ripples.push({ x: r.x, y: GameState.worldHeight - 5 - Math.random() * 20, r: 1, alpha: 0.4, maxR: 8 + Math.random() * 6 });
+                    }
+                    r.y = -20;
+                    r.x = Math.random() * GameState.worldWidth;
+                }
+            });
+            // 更新涟漪
+            for (let i = we.ripples.length - 1; i >= 0; i--) {
+                we.ripples[i].r += 8 * dt;
+                we.ripples[i].alpha -= 0.4 * dt;
+                if (we.ripples[i].alpha <= 0) we.ripples.splice(i, 1);
+            }
+        } else if (scene === 'pillarSea') {
+            // 深海柱林 - 气泡增强已在原代码中，添加浮尘和鱼群
+            if (we.seaDust.length === 0) {
+                for (let i = 0; i < 80; i++) {
+                    we.seaDust.push({
+                        x: Math.random() * GameState.worldWidth,
+                        y: Math.random() * GameState.worldHeight,
+                        vy: 3 + Math.random() * 8,
+                        vx: (Math.random() - 0.5) * 5,
+                        size: 1 + Math.random() * 1.5
+                    });
+                }
+            }
+            we.seaDust.forEach(d => {
+                d.y += d.vy * dt;
+                d.x += d.vx * dt;
+                if (d.y > GameState.worldHeight) { d.y = 0; d.x = Math.random() * GameState.worldWidth; }
+                if (d.x < 0) d.x = GameState.worldWidth;
+                if (d.x > GameState.worldWidth) d.x = 0;
+            });
+            // 鱼群
+            if (we.fishSchools.length === 0) {
+                for (let i = 0; i < 3; i++) {
+                    we.fishSchools.push({
+                        x: -50 - Math.random() * 200,
+                        y: 450 + Math.random() * 300,
+                        speed: 80 + Math.random() * 60,
+                        fish: []
+                    });
+                    const count = 3 + Math.floor(Math.random() * 3);
+                    for (let f = 0; f < count; f++) {
+                        we.fishSchools[i].fish.push({
+                            offX: (Math.random() - 0.5) * 20,
+                            offY: (Math.random() - 0.5) * 10
+                        });
+                    }
+                }
+            }
+            we.fishSchools.forEach(fs => {
+                fs.x += fs.speed * dt;
+                if (fs.x > GameState.worldWidth + 100) {
+                    fs.x = -100 - Math.random() * 200;
+                    fs.y = 450 + Math.random() * 300;
+                }
+            });
+        } else if (scene === 'cloudSea') {
+            // 云端花田 - 云絮和阳光光束
+            if (we.cloudFluffs.length === 0) {
+                for (let i = 0; i < 12; i++) {
+                    we.cloudFluffs.push({
+                        x: Math.random() * GameState.worldWidth,
+                        y: 50 + Math.random() * 200,
+                        speed: 8 + Math.random() * 12,
+                        width: 30 + Math.random() * 40,
+                        height: 10 + Math.random() * 15,
+                        alpha: 0.15 + Math.random() * 0.2
+                    });
+                }
+            }
+            we.cloudFluffs.forEach(c => {
+                c.x += c.speed * dt;
+                if (c.x > GameState.worldWidth + c.width) c.x = -c.width;
+            });
+            if (we.sunBeams.length === 0) {
+                for (let i = 0; i < 5; i++) {
+                    we.sunBeams.push({
+                        x: 100 + i * 300 + Math.random() * 100,
+                        width: 30 + Math.random() * 30,
+                        angle: 0.1 + Math.random() * 0.1
+                    });
+                }
+            }
+        }
+    }
+
+    function drawWeather(camX, camY) {
+        const scene = GameState.currentScene;
+        const we = GameState.weatherEffects;
+
+        if (scene === 'flowerField') {
+            // 细雨 - 斜线
+            ctx.strokeStyle = 'rgba(180,200,220,0.3)';
+            ctx.lineWidth = 1;
+            we.rainDrops.forEach(r => {
+                const sx = r.x - camX;
+                const sy = r.y - camY;
+                if (sx > -20 && sx < canvas.width + 20 && sy > -20 && sy < canvas.height + 20) {
+                    ctx.beginPath();
+                    ctx.moveTo(sx, sy);
+                    ctx.lineTo(sx + r.len * 0.4, sy + r.len);
+                    ctx.stroke();
+                }
+            });
+            // 涟漪
+            we.ripples.forEach(rp => {
+                const sx = rp.x - camX;
+                const sy = rp.y - camY;
+                if (sx > -20 && sx < canvas.width + 20 && sy > -20 && sy < canvas.height + 20) {
+                    ctx.strokeStyle = `rgba(180,200,220,${rp.alpha * 0.5})`;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.ellipse(sx, sy, rp.r, rp.r * 0.3, 0, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            });
+        } else if (scene === 'pillarSea') {
+            // 海底浮尘
+            ctx.fillStyle = 'rgba(200,220,255,0.1)';
+            we.seaDust.forEach(d => {
+                const sx = d.x - camX;
+                const sy = d.y - camY;
+                if (sx > -5 && sx < canvas.width + 5 && sy > -5 && sy < canvas.height + 5) {
+                    ctx.fillRect(sx, sy, d.size, d.size);
+                }
+            });
+            // 鱼群
+            we.fishSchools.forEach(fs => {
+                const sx = fs.x - camX;
+                const sy = fs.y - camY;
+                if (sx > -100 && sx < canvas.width + 100 && sy > -50 && sy < canvas.height + 50) {
+                    fs.fish.forEach(f => {
+                        const fx = sx + f.offX;
+                        const fy = sy + f.offY;
+                        ctx.fillStyle = 'rgba(150,200,220,0.6)';
+                        ctx.fillRect(fx, fy, 3, 2);
+                    });
+                }
+            });
+        } else if (scene === 'cloudSea') {
+            // 飘动的云絮
+            we.cloudFluffs.forEach(c => {
+                const sx = c.x - camX;
+                const sy = c.y - camY;
+                if (sx > -100 && sx < canvas.width + 100 && sy > -50 && sy < canvas.height + 50) {
+                    ctx.fillStyle = `rgba(255,255,255,${c.alpha})`;
+                    ctx.fillRect(sx, sy, c.width, c.height);
+                    ctx.fillRect(sx + c.width * 0.2, sy - c.height * 0.3, c.width * 0.6, c.height * 0.5);
+                }
+            });
+            // 阳光光束
+            ctx.fillStyle = 'rgba(255,255,200,0.05)';
+            we.sunBeams.forEach(b => {
+                const sx = b.x - camX;
+                if (sx > -100 && sx < canvas.width + 100) {
+                    ctx.beginPath();
+                    ctx.moveTo(sx, 0);
+                    ctx.lineTo(sx + b.width + 60, canvas.height);
+                    ctx.lineTo(sx + b.width + 90, canvas.height);
+                    ctx.lineTo(sx + b.width * 0.3, 0);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            });
+        }
+    }
+
+    // ==================== 游戏逻辑 ====================
+    function update(dt) {
+        // 开场动画
+        if (GameState.intro && GameState.intro.active) {
+            GameState.intro.timer++;
+            if (GameState.intro.phase === 0) {
+                // 标题淡入（2秒）
+                GameState.intro.alpha = Math.min(1, GameState.intro.timer / 60);
+                if (GameState.intro.timer > 120) { GameState.intro.phase = 1; GameState.intro.timer = 0; }
+            } else if (GameState.intro.phase === 1) {
+                // 显示副标题（2秒）
+                if (GameState.intro.timer > 120) { GameState.intro.phase = 2; GameState.intro.timer = 0; }
+            } else if (GameState.intro.phase === 2) {
+                // 淡出（1秒）
+                GameState.intro.alpha = Math.max(0, 1 - GameState.intro.timer / 60);
+                if (GameState.intro.timer > 60) { GameState.intro.phase = 3; GameState.intro.active = false; }
+            }
+            return; // 开场动画期间不更新游戏
+        }
+
+        GameState.time += dt;
+        DayNight.update(dt);
+        AudioEngine.updateDayNightAmbient(DayNight.getPhase());
+        AudioEngine.update(dt);
+        updateWeather(dt);
+
+        // 昼夜循环更新
+        GameState.dayNight.cycle = (GameState.dayNight.cycle + GameState.dayNight.speed * dt * 60) % 1;
+        const c = GameState.dayNight.cycle;
+        if (c < 0.25) GameState.dayNight.currentPhase = 'day';
+        else if (c < 0.4) GameState.dayNight.currentPhase = 'dusk';
+        else if (c < 0.7) GameState.dayNight.currentPhase = 'night';
+        else if (c < 0.85) GameState.dayNight.currentPhase = 'dawn';
+        else GameState.dayNight.currentPhase = 'day';
+
+        // 时间控制
+        if (GameState.keys['e']) DayNight.timeSpeed = 5;
+        else if (GameState.keys['q']) DayNight.timeSpeed = 0.2;
+        else DayNight.timeSpeed = 1;
+
+        // 互动键
+        if (GameState.keys['f']) {
+            Interaction.tryInteract();
+            GameState.keys['f'] = false; // 单次触发
+        }
+
+        // 成就检查（每60帧检查一次）
+        GameState.frameCount++;
+        if (GameState.frameCount % 60 === 0) {
+            GameState.achievements.list.forEach(a => {
+                if (!a.unlocked && a.condition()) {
+                    a.unlocked = true;
+                    GameState.achievements.totalUnlocked++;
+                    GameState.achievements.notification = { name: a.name, desc: a.desc, timer: 180 };
+                }
+            });
+        }
+
+        // 输入
+        let dx = 0, dy = 0;
+        if (GameState.keys['w'] || GameState.keys['arrowup']) { dy = -1; Player.direction = 'up'; }
+        if (GameState.keys['s'] || GameState.keys['arrowdown']) { dy = 1; Player.direction = 'down'; }
+        if (GameState.keys['a'] || GameState.keys['arrowleft']) { dx = -1; Player.direction = 'left'; }
+        if (GameState.keys['d'] || GameState.keys['arrowright']) { dx = 1; Player.direction = 'right'; }
+
+        Player.isMoving = dx !== 0 || dy !== 0;
+        if (Player.isMoving && !GameState.transitioning) {
+            const len = Math.sqrt(dx * dx + dy * dy);
+            Player.x += (dx / len) * Player.speed * dt;
+            Player.y += (dy / len) * Player.speed * dt;
+            Player.animTimer += dt * (1000 / 150);
+            Player.animFrame = Player.animTimer;
+            Player.idleTime = 0;
+
+            Player.footprintTimer += dt;
+            if (Player.footprintTimer > 0.3) {
+                addFootprint();
+                spawnFootstepDust();
+                AudioEngine.playFootstep(GameState.currentScene);
+                Player.footprintTimer = 0;
+            }
+        } else {
+            Player.animFrame = 0;
+            Player.animTimer = 0;
+            Player.idleTime += dt;
+        }
+
+        // 眨眼动画
+        if (!Player.isBlinking) {
+            Player.blinkTimer += dt;
+            if (Player.blinkTimer > 3 + Math.random() * 2) {
+                Player.isBlinking = true;
+                Player.blinkTimer = 0;
+            }
+        } else {
+            Player.blinkTimer += dt;
+            if (Player.blinkTimer > 0.15) {
+                Player.isBlinking = false;
+                Player.blinkTimer = 0;
+            }
+        }
+
+        Player.x = Math.max(20, Math.min(GameState.worldWidth - 20, Player.x));
+        Player.y = Math.max(20, Math.min(GameState.worldHeight - 20, Player.y));
+
+        // 树碰撞检测
+        const s = Scenes[GameState.currentScene];
+        if (s.trees) {
+            s.trees.forEach(t => {
+                const dx = Player.x - t.x;
+                const dy = Player.y - t.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 20) {
+                    Player.x += dx / dist * 2;
+                    Player.y += dy / dist * 2;
+                }
+            });
+        }
+
+        // 云朵碰撞检测（云海场景）
+        if (GameState.currentScene === 'cloudSea') {
+            const cs = Scenes.cloudSea;
+            if (!cs.cloudPlatforms) {
+                cs.cloudPlatforms = [];
+                for (let i = 0; i < 10; i++) {
+                    cs.cloudPlatforms.push({
+                        x: 200 + Math.random() * (GameState.worldWidth - 400),
+                        y: 150 + Math.random() * (GameState.worldHeight - 300),
+                        width: 60 + Math.random() * 40,
+                        height: 15 + Math.random() * 10
+                    });
+                }
+            }
+            cs.cloudPlatforms.forEach(cp => {
+                const cpx = Player.x - cp.x;
+                const cpy = Player.y - cp.y;
+                const halfW = cp.width / 2;
+                const halfH = cp.height / 2;
+                if (Math.abs(cpx) < halfW + 8 && Math.abs(cpy) < halfH + 8) {
+                    const overlapX = (halfW + 8) - Math.abs(cpx);
+                    const overlapY = (halfH + 8) - Math.abs(cpy);
+                    if (overlapX < overlapY) {
+                        Player.x += cpx > 0 ? overlapX : -overlapX;
+                    } else {
+                        Player.y += cpy > 0 ? overlapY : -overlapY;
+                    }
+                }
+            });
+        }
+
+        // 场景切换
+        if (!GameState.transitioning) {
+            // 蝴蝶移动
+            GameState.butterflies.forEach(b => {
+                b.timer--;
+                if (b.timer <= 0) {
+                    b.vx = (Math.random() - 0.5) * 0.8;
+                    b.vy = (Math.random() - 0.5) * 0.6;
+                    b.timer = 100 + Math.random() * 200;
+                }
+                b.x += b.vx;
+                b.y += b.vy + Math.sin(GameState.time * 0.03 + b.wingPhase) * 0.3;
+                b.wingPhase += 0.15;
+                if (b.x < 0) b.x = GameState.worldWidth;
+                if (b.x > GameState.worldWidth) b.x = 0;
+                if (b.y < 0) b.y = GameState.worldHeight;
+                if (b.y > GameState.worldHeight) b.y = 0;
+            });
+
+            // 光球收集检测
+            GameState.orbs.forEach(orb => {
+                if (!orb.collected) {
+                    const dx = Player.x - orb.x;
+                    const dy = Player.y - orb.y;
+                    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) {
+                        orb.collected = true;
+                        if (typeof playSound === 'function') playSound('collect');
+                        GameState.orbsCollected++;
+                        // 服装解锁检查
+                        if (GameState.orbsCollected >= 10 && !Player.costumes.unlocked.includes('ocean')) {
+                            Player.costumes.unlocked.push('ocean');
+                        }
+                        if (GameState.orbsCollected >= 25 && !Player.costumes.unlocked.includes('forest')) {
+                            Player.costumes.unlocked.push('forest');
+                        }
+                        // 任务进度
+                        GameState.quests.current.current++;
+                        checkQuestProgress();
+                        // 经验值
+                        addExp(10);
+                        // 收集动画
+                        GameState.expandingOrbs.push({
+                            x: orb.x, y: orb.y,
+                            radius: 4, maxRadius: 20,
+                            alpha: 1, color: orb.color
+                        });
+                        // 收集粒子效果
+                        for (let i = 0; i < 8; i++) {
+                            particlePool.get(orb.x, orb.y, 'sparkle');
+                        }
+                        // 收集爆发粒子
+                        for (let i = 0; i < 8; i++) {
+                            const angle = (Math.PI * 2 / 8) * i;
+                            GameState.collectParticles.push({
+                                x: orb.x, y: orb.y,
+                                vx: Math.cos(angle) * 2,
+                                vy: Math.sin(angle) * 2,
+                                life: 30,
+                                color: orb.color || '#ffdd44'
+                            });
+                        }
+                    }
+                }
+            });
+
+            // 宝箱检测（E键打开）
+            const currentSceneData = Scenes[GameState.currentScene];
+            if (GameState.keys['e']) {
+                let eHandled = false;
+                currentSceneData.chests.forEach(chest => {
+                    if (!chest.opened && !eHandled) {
+                        const cdx = Player.x - chest.x;
+                        const cdy = Player.y - chest.y;
+                        const cdist = Math.sqrt(cdx * cdx + cdy * cdy);
+                        if (cdist < 25) {
+                            chest.opened = true;
+                            chest.openAnim = 1;
+                            GameState.totalChestsOpened++;
+                            const orbsGained = 3 + Math.floor(Math.random() * 3); // 3-5
+                            GameState.orbsCollected += orbsGained;
+                            GameState.quests.current.current += orbsGained;
+                            checkQuestProgress();
+                            addExp(50);
+                            // 宝箱粒子效果
+                            for (let i = 0; i < 12; i++) {
+                                particlePool.get(chest.x + 10, chest.y + 10, 'sparkle');
+                            }
+                            eHandled = true;
+                        }
+                    }
+                });
+                // 传送门检测（E键激活）
+                if (!eHandled && currentSceneData.portal) {
+                    const pdx = Player.x - currentSceneData.portal.x;
+                    const pdy = Player.y - currentSceneData.portal.y;
+                    const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                    if (pdist < 30) {
+                        // 随机传送到安全位置
+                        let safeX, safeY, attempts = 0;
+                        do {
+                            safeX = 100 + Math.random() * (GameState.worldWidth - 200);
+                            safeY = 100 + Math.random() * (GameState.worldHeight - 200);
+                            attempts++;
+                        } while (attempts < 20);
+                        spawnPortalParticles(Player.x, Player.y);
+                        Player.x = safeX;
+                        Player.y = safeY;
+                        Cat.x = safeX + 20;
+                        Cat.y = safeY + 20;
+                        spawnPortalParticles(Player.x, Player.y);
+                        eHandled = true;
+                    }
+                }
+                // NPC对话（E键）
+                if (!eHandled) {
+                    eHandled = NPCSystem.tryTalk();
+                }
+                // 推石头（E键）
+                if (!eHandled) {
+                    eHandled = Interactables.tryPushStone();
+                }
+                // 钓鱼（E键）
+                if (!eHandled) {
+                    eHandled = Interactables.tryFish();
+                }
+                GameState.keys['e'] = false; // 单次触发
+            }
+
+            if (Player.x > GameState.worldWidth - 30) {
+                if (GameState.currentScene === 'flowerField') startTransition('pillarSea');
+                else if (GameState.currentScene === 'pillarSea') startTransition('cloudSea');
+                else if (GameState.currentScene === 'cloudSea') startTransition('lavaCave');
+                else if (GameState.currentScene === 'lavaCave') startTransition('flowerField');
+            } else if (Player.x < 30) {
+                if (GameState.currentScene === 'flowerField') startTransition('lavaCave');
+                else if (GameState.currentScene === 'pillarSea') startTransition('flowerField');
+                else if (GameState.currentScene === 'cloudSea') startTransition('pillarSea');
+                else if (GameState.currentScene === 'lavaCave') startTransition('cloudSea');
+            }
+        }
+
+        // 相机
+        const targetCamX = Player.x - canvas.width / 2;
+        const targetCamY = Player.y - canvas.height / 2;
+        GameState.camera.x += (targetCamX - GameState.camera.x) * 0.08;
+        GameState.camera.y += (targetCamY - GameState.camera.y) * 0.08;
+        GameState.camera.x = Math.max(0, Math.min(GameState.worldWidth - canvas.width, GameState.camera.x));
+        GameState.camera.y = Math.max(0, Math.min(GameState.worldHeight - canvas.height, GameState.camera.y));
+
+        // 小猫
+        Cat.update(dt);
+
+        // NPC系统
+        NPCSystem.update(dt);
+
+        // 互动元素
+        Interactables.update(dt);
+
+        // 互动系统
+        Interaction.update(dt);
+
+        // 自动小猫互动
+        if (Interaction.cooldown <= 0 && !Interaction.active) {
+            const dx = Player.x - Cat.x;
+            const dy = Player.y - Cat.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 60) {
+                Interaction.tryInteract();
+            }
+        }
+
+        // 蝴蝶
+        updateButterflies(dt);
+
+        // 粒子
+        spawnParticles(GameState.currentScene);
+        particlePool.update(dt);
+
+        // 气泡更新
+        GameState.bubbles.forEach(b => {
+            b.y -= b.speed * dt;
+            b.x += Math.sin(GameState.time * 0.02 + b.x * 0.01) * 0.3;
+            if (b.y < 400) {
+                b.y = 600;
+                b.x = Math.random() * 800;
+            }
+        });
+
+        // 脚印
+        updateFootprints(dt);
+
+        // UI
+        document.getElementById('sceneName').textContent = Scenes[GameState.currentScene].name;
+        document.getElementById('coords').textContent = `X: ${Math.floor(Player.x)} Y: ${Math.floor(Player.y)}`;
+
+        // 任务完成提示计时器
+        if (GameState.questCompletedTimer > 0) GameState.questCompletedTimer -= dt;
+        if (GameState.levelUpTimer > 0) GameState.levelUpTimer -= dt;
+        if (saveLoadHintTimer > 0) saveLoadHintTimer -= dt;
+        if (Player.costumeSwitchTimer > 0) Player.costumeSwitchTimer--;
+
+        // 场景切换提示计时器与淡入淡出
+        if (GameState.sceneHint.timer > 0) {
+            GameState.sceneHint.timer -= dt;
+            const halfDuration = 0.75; // 淡入/淡出各0.75秒
+            const elapsed = 1.5 - GameState.sceneHint.timer;
+            if (elapsed < halfDuration) {
+                GameState.sceneHint.opacity = elapsed / halfDuration; // 淡入 0→1
+            } else {
+                GameState.sceneHint.opacity = Math.max(0, (1.5 - elapsed) / halfDuration); // 淡出 1→0
+            }
+        } else {
+            GameState.sceneHint.opacity = 0;
+        }
+
+        // 宝箱打开动画
+        const scene = Scenes[GameState.currentScene];
+        if (scene && scene.chests) {
+            scene.chests.forEach(chest => {
+                if (chest.opened && chest.openAnim < 1) {
+                    chest.openAnim = Math.min(1, chest.openAnim + dt * 3);
+                }
+            });
+        }
+
+        // 传送门粒子更新
+        for (let i = GameState.portalParticles.length - 1; i >= 0; i--) {
+            const p = GameState.portalParticles[i];
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.life -= dt * 1.5;
+            if (p.life <= 0) GameState.portalParticles.splice(i, 1);
+        }
+    }
+
+    function startTransition(targetScene) {
+        GameState.transitioning = true;
+        if (typeof playSound === 'function') playSound('transition');
+        ensureAudioInit();
+        AudioEngine.playTransition();
+        const overlay = document.getElementById('transitionOverlay');
+        overlay.classList.add('active');
+        // 设置场景切换提示
+        const sceneNames = {
+            flowerField: '🌲 迷雾森林',
+            pillarSea: '🌊 深海柱林',
+            cloudSea: '☁️ 云端花田',
+            lavaCave: '🌋 熔岩洞穴'
+        };
+        GameState.sceneHint.text = sceneNames[targetScene] || '';
+        GameState.sceneHint.timer = 1.5; // 显示1.5秒
+        GameState.sceneHint.opacity = 0;
+        setTimeout(() => {
+            GameState.currentScene = targetScene;
+            if (!GameState.visitedScenes) GameState.visitedScenes = new Set();
+            GameState.visitedScenes.add(targetScene);
+            GameState.footprints = [];
+            AudioEngine.startAmbient(targetScene);
+            if (targetScene === 'pillarSea') {
+                Player.x = 50;
+                Cat.x = 35;
+            } else if (targetScene === 'cloudSea') {
+                Player.x = 50;
+                Cat.x = 35;
+            } else if (targetScene === 'lavaCave') {
+                Player.x = 50;
+                Cat.x = 35;
+            } else {
+                Player.x = GameState.worldWidth - 50;
+                Cat.x = GameState.worldWidth - 65;
+            }
+            Cat.y = Player.y;
+            Cat.state = 'follow';
+            setTimeout(() => {
+                overlay.classList.remove('active');
+                GameState.transitioning = false;
+            }, 800);
+        }, 800);
+    }
+
+    function draw() {
+        // 开场动画
+        if (GameState.intro && GameState.intro.active) {
+            ctx.fillStyle = '#0a0a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.globalAlpha = GameState.intro.alpha;
+
+            // 标题
+            ctx.fillStyle = '#e8d5a3';
+            ctx.font = 'bold 28px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('MONITO ADVENTURES', canvas.width / 2, canvas.height / 2 - 30);
+
+            // 副标题（phase 1 后显示）
+            if (GameState.intro.phase >= 1) {
+                const subAlpha = GameState.intro.phase === 1 ?
+                    Math.min(1, GameState.intro.timer / 60) : GameState.intro.alpha;
+                ctx.globalAlpha = subAlpha;
+                ctx.fillStyle = '#a08060';
+                ctx.font = '14px monospace';
+                ctx.fillText('和小橘猫一起探索奇妙世界', canvas.width / 2, canvas.height / 2 + 10);
+            }
+
+            // 提示（phase 1 后显示）
+            if (GameState.intro.phase >= 1) {
+                ctx.globalAlpha = GameState.intro.alpha * (0.5 + Math.sin(GameState.time * 0.05) * 0.3);
+                ctx.fillStyle = '#666';
+                ctx.font = '12px monospace';
+                ctx.fillText('按任意键开始', canvas.width / 2, canvas.height / 2 + 50);
+            }
+
+            ctx.globalAlpha = 1;
+            ctx.textAlign = 'left';
+            return;
+        }
+
+        const camX = GameState.camera.x;
+        const camY = GameState.camera.y;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (GameState.currentScene === 'flowerField') drawFlowerField(camX, camY);
+        else if (GameState.currentScene === 'cloudSea') drawCloudSea(camX, camY);
+        else if (GameState.currentScene === 'lavaCave') drawLavaCave(camX, camY);
+        else drawPillarSea(camX, camY);
+
+        // 互动元素（石头、钓鱼浮标）
+        Interactables.draw(camX, camY);
+
+        // NPC
+        NPCSystem.draw(camX, camY);
+
+        // 蝴蝶
+        drawButterflies(camX, camY);
+
+        // 脚印
+        drawFootprints(camX, camY);
+
+        // 粒子
+        particlePool.draw(ctx, camX, camY);
+
+        // 天气效果
+        drawWeather(camX, camY);
+
+        // 小猫
+        Cat.draw(Cat.x - camX, Cat.y - camY);
+
+        // 互动粒子
+        Interaction.drawParticles(camX, camY);
+        // 互动提示
+        Interaction.drawActionIndicator(camX, camY);
+
+        // 光球绘制
+        GameState.orbs.forEach(orb => {
+            if (!orb.collected) {
+                const floatY = Math.sin(GameState.time * 0.03 + orb.x * 0.01) * 3;
+                const pulse = 1 + Math.sin(GameState.time * 0.05 + orb.x * 0.02) * 0.2;
+                const ox = orb.x - camX;
+                const oy = orb.y + floatY - camY;
+                if (ox > -20 && ox < canvas.width + 20 && oy > -20 && oy < canvas.height + 20) {
+                    const bob = Math.sin(GameState.time * 0.04 + orb.bobPhase) * 3;
+                    // 光晕
+                    ctx.fillStyle = orb.color.replace(')', ',0.15)').replace('rgb', 'rgba').replace('#', '');
+                    const glow = ctx.createRadialGradient(ox, oy + bob, 0, ox, oy + bob, 16 * pulse);
+                    glow.addColorStop(0, orb.color + '44');
+                    glow.addColorStop(1, 'transparent');
+                    ctx.fillStyle = glow;
+                    ctx.fillRect(ox - 16 * pulse, oy + bob - 16 * pulse, 32 * pulse, 32 * pulse);
+                    // 光球本体
+                    ctx.fillStyle = orb.color;
+                    ctx.beginPath();
+                    ctx.arc(ox, oy + bob, 4 * pulse, 0, Math.PI * 2);
+                    ctx.fill();
+                    // 高光
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath();
+                    ctx.arc(ox - 1, oy + bob - 1, 1.5 * pulse, 0, Math.PI * 2);
+                    ctx.fill();
+                    // 拖尾效果
+                    for (let ti = 1; ti <= 3; ti++) {
+                        const trailAlpha = 0.3 - ti * 0.08;
+                        const trailR = (4 - ti * 1) * pulse;
+                        ctx.fillStyle = orb.color;
+                        ctx.globalAlpha = Math.max(0.05, trailAlpha);
+                        ctx.beginPath();
+                        ctx.arc(ox - ti * 3, oy + bob + ti * 2, Math.max(1, trailR), 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.globalAlpha = 1;
+                }
+            }
+        });
+
+        // 收集扩散动画
+        for (let i = GameState.expandingOrbs.length - 1; i >= 0; i--) {
+            const eo = GameState.expandingOrbs[i];
+            eo.radius += 0.8;
+            eo.alpha -= 0.04;
+            if (eo.alpha <= 0 || eo.radius >= eo.maxRadius) {
+                GameState.expandingOrbs.splice(i, 1);
+                continue;
+            }
+            const eox = eo.x - camX;
+            const eoy = eo.y - camY;
+            if (eox > -30 && eox < canvas.width + 30 && eoy > -30 && eoy < canvas.height + 30) {
+                ctx.strokeStyle = eo.color;
+                ctx.globalAlpha = eo.alpha;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(eox, eoy, eo.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        // 收集爆发粒子
+        for (let i = GameState.collectParticles.length - 1; i >= 0; i--) {
+            const p = GameState.collectParticles[i];
+            p.x += p.vx; p.y += p.vy;
+            p.life--;
+            if (p.life <= 0) { GameState.collectParticles.splice(i, 1); continue; }
+            const ppx = p.x - camX;
+            const ppy = p.y - camY;
+            if (ppx > -10 && ppx < canvas.width + 10 && ppy > -10 && ppy < canvas.height + 10) {
+                ctx.globalAlpha = p.life / 30;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(Math.floor(ppx) - 2, Math.floor(ppy) - 2, 4, 4);
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        // 角色
+        // 蝴蝶绘制
+        GameState.butterflies.forEach(b => {
+            const bx = b.x - camX;
+            const by = b.y - camY;
+            if (bx > -10 && bx < canvas.width + 10 && by > -10 && by < canvas.height + 10) {
+                const wingOpen = Math.abs(Math.sin(b.wingPhase));
+                const w = Math.max(1, wingOpen * 3);
+                ctx.fillStyle = b.color;
+                ctx.fillRect(Math.floor(bx - w), Math.floor(by - 1), Math.floor(w), 2);
+                ctx.fillRect(Math.floor(bx + 1), Math.floor(by - 1), Math.floor(w), 2);
+                ctx.fillStyle = '#333';
+                ctx.fillRect(Math.floor(bx), Math.floor(by - 1), 1, 3);
+            }
+        });
+
+        drawCharacter(Player.x - camX, Player.y - camY);
+
+        // 角色名字
+        NameSystem.drawName(Player.x - camX, Player.y - camY);
+
+        // 柔和阳光覆盖（固定温暖氛围）
+        const sunGrad = ctx.createRadialGradient(
+            canvas.width * 0.7, 50, 0,
+            canvas.width * 0.7, 50, canvas.height * 0.8
+        );
+        sunGrad.addColorStop(0, 'rgba(255, 240, 180, 0.08)');
+        sunGrad.addColorStop(0.5, 'rgba(255, 230, 160, 0.04)');
+        sunGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = sunGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 天气覆盖
+        if (GameState.weather.type === 'rain') {
+            ctx.fillStyle = 'rgba(100, 120, 140, 0.08)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // 场景切换提示
+        if (!GameState.transitioning) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.font = '10px monospace';
+            if (Player.x > GameState.worldWidth - 100 && GameState.currentScene === 'flowerField') {
+                ctx.fillText('→ 前往柱之海', canvas.width - 120, canvas.height / 2);
+            } else if (Player.x < 100 && GameState.currentScene === 'pillarSea') {
+                ctx.fillText('← 返回花田', 20, canvas.height / 2);
+            } else if (Player.x > GameState.worldWidth - 100 && GameState.currentScene === 'pillarSea') {
+                ctx.fillText('→ 前往云端花田', canvas.width - 120, canvas.height / 2);
+            } else if (Player.x < 100 && GameState.currentScene === 'cloudSea') {
+                ctx.fillText('← 返回柱之海', 20, canvas.height / 2);
+            } else if (Player.x > GameState.worldWidth - 100 && GameState.currentScene === 'cloudSea') {
+                ctx.fillText('→ 前往熔岩洞穴', canvas.width - 120, canvas.height / 2);
+            } else if (Player.x < 100 && GameState.currentScene === 'lavaCave') {
+                ctx.fillText('← 返回云端花田', 20, canvas.height / 2);
+            } else if (Player.x > GameState.worldWidth - 100 && GameState.currentScene === 'lavaCave') {
+                ctx.fillText('→ 返回迷雾森林', canvas.width - 120, canvas.height / 2);
+            } else if (Player.x < 100 && GameState.currentScene === 'flowerField') {
+                ctx.fillText('← 前往熔岩洞穴', 20, canvas.height / 2);
+            }
+        }
+
+        // 绘制宝箱
+        const currentSceneObj = Scenes[GameState.currentScene];
+        if (currentSceneObj && currentSceneObj.chests) {
+            currentSceneObj.chests.forEach(chest => drawChest(chest, camX, camY));
+        }
+
+        // 绘制传送门
+        if (currentSceneObj && currentSceneObj.portal) {
+            drawPortal(currentSceneObj.portal, camX, camY);
+        }
+
+        // 传送门粒子
+        GameState.portalParticles.forEach(p => {
+            const sx = p.x - camX;
+            const sy = p.y - camY;
+            ctx.globalAlpha = Math.max(0, p.life);
+            ctx.fillStyle = p.color;
+            ctx.fillRect(sx, sy, 3, 3);
+        });
+        ctx.globalAlpha = 1;
+
+        // 任务完成提示
+        if (GameState.questCompletedTimer > 0) {
+            ctx.fillStyle = `rgba(255, 215, 0, ${Math.min(1, GameState.questCompletedTimer)})`;
+            ctx.font = 'bold 24px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('任务完成！', canvas.width / 2, canvas.height / 2);
+            ctx.textAlign = 'left';
+        }
+
+        // 升级提示
+        if (GameState.levelUpTimer > 0) {
+            const px = Player.x - camX;
+            const py = Player.y - camY;
+            ctx.fillStyle = `rgba(100, 255, 100, ${Math.min(1, GameState.levelUpTimer)})`;
+            ctx.font = 'bold 14px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('LEVEL UP!', px, py - 35);
+            ctx.textAlign = 'left';
+        }
+
+        // 全屏闪光效果
+        if (GameState.screenFlash && GameState.screenFlash.timer > 0) {
+            ctx.globalAlpha = GameState.screenFlash.timer / 20 * 0.3;
+            ctx.fillStyle = GameState.screenFlash.color;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalAlpha = 1;
+            GameState.screenFlash.timer--;
+        }
+
+        // 换装提示（角色头顶显示服装名1.5秒）
+        if (Player.costumeSwitchTimer > 0) {
+            const cpx = Player.x - camX;
+            const cpy = Player.y - camY;
+            const costumeName = Player.costumes.list[Player.costumes.current].name;
+            const cAlpha = Player.costumeSwitchTimer > 60 ? (90 - Player.costumeSwitchTimer) / 30 : Player.costumeSwitchTimer < 30 ? Player.costumeSwitchTimer / 30 : 1;
+            ctx.globalAlpha = cAlpha;
+            ctx.fillStyle = '#ffd700';
+            ctx.font = 'bold 12px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(costumeName, cpx, cpy - 45);
+            ctx.textAlign = 'left';
+            ctx.globalAlpha = 1;
+        }
+
+        // 存档/读档提示
+        if (saveLoadHintTimer > 0) {
+            ctx.fillStyle = `rgba(143, 184, 201, ${Math.min(1, saveLoadHintTimer)})`;
+            ctx.font = '12px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(saveLoadHintText, canvas.width / 2, canvas.height / 2 + 30);
+            ctx.textAlign = 'left';
+        }
+
+        // 场景切换提示（大字体，淡入淡出，画面中央偏上）
+        if (GameState.sceneHint.opacity > 0 && GameState.sceneHint.text) {
+            ctx.save();
+            ctx.globalAlpha = Math.min(1, GameState.sceneHint.opacity);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 24px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 6;
+            ctx.fillText(GameState.sceneHint.text, canvas.width / 2, canvas.height * 0.3);
+            ctx.shadowBlur = 0;
+            ctx.textAlign = 'left';
+            ctx.restore();
+        }
+
+        // 昼夜叠加
+        const dn = GameState.dayNight;
+        // 星星（在叠加层之前）
+        if (dn.currentPhase === 'night' || dn.currentPhase === 'dusk') {
+            const starAlpha = dn.currentPhase === 'night' ? 0.6 : 0.3;
+            for (let i = 0; i < 30; i++) {
+                const sx = (i * 137.5 + 50) % canvas.width;
+                const sy = (i * 97.3 + 20) % (canvas.height * 0.5);
+                const twinkle = 0.5 + Math.sin(GameState.time * 0.05 + i * 2) * 0.5;
+                ctx.fillStyle = `rgba(255,255,220,${starAlpha * twinkle})`;
+                ctx.fillRect(Math.floor(sx), Math.floor(sy), 1, 1);
+            }
+        }
+        let overlayAlpha = 0;
+        let overlayColor = '#000';
+        if (dn.currentPhase === 'dusk') {
+            overlayAlpha = 0.15 + Math.sin((dn.cycle - 0.25) / 0.15 * Math.PI) * 0.15;
+            overlayColor = '#1a0a2a'; // 紫色黄昏
+        } else if (dn.currentPhase === 'night') {
+            overlayAlpha = 0.3 + Math.sin((dn.cycle - 0.4) / 0.3 * Math.PI) * 0.1;
+            overlayColor = '#0a0a1a'; // 深蓝夜色
+        } else if (dn.currentPhase === 'dawn') {
+            overlayAlpha = 0.15 + Math.sin((dn.cycle - 0.7) / 0.15 * Math.PI) * 0.15;
+            overlayColor = '#2a1a0a'; // 橙色黎明
+        }
+        if (overlayAlpha > 0) {
+            ctx.fillStyle = overlayColor;
+            ctx.globalAlpha = overlayAlpha;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalAlpha = 1;
+        }
+
+        // 时间指示器
+        DayNight.drawTimeBar(timeCtx);
+
+        // 小地图
+        drawMinimap();
+
+        // 成就通知（画面右上角）
+        if (GameState.achievements.notification && GameState.achievements.notification.timer > 0) {
+            const n = GameState.achievements.notification;
+            const alpha = n.timer > 150 ? (180 - n.timer) / 30 : n.timer < 30 ? n.timer / 30 : 1;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(canvas.width - 200, 10, 190, 50);
+            ctx.fillStyle = '#ffd700';
+            ctx.font = 'bold 12px monospace';
+            ctx.fillText('\u{1F3C6} ' + n.name, canvas.width - 190, 30);
+            ctx.fillStyle = '#e8d5a3';
+            ctx.font = '10px monospace';
+            ctx.fillText(n.desc, canvas.width - 190, 48);
+            ctx.globalAlpha = 1;
+            n.timer--;
+        }
+    }
+
+    function gameLoop(timestamp) {
+        if (lastTime === 0) lastTime = timestamp;
+        deltaTime = Math.min((timestamp - lastTime) / 1000, 0.05);
+        lastTime = timestamp;
+
+        fpsCounter++;
+        fpsTimer += deltaTime;
+        if (fpsTimer >= 1) {
+            currentFps = fpsCounter;
+            fpsCounter = 0;
+            fpsTimer = 0;
+            document.getElementById('orbCounter').textContent = `✨ ${GameState.orbsCollected}/${GameState.orbsTotal}`;
+        }
+
+        update(deltaTime);
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // ==================== 输入 ====================
+    window.addEventListener('keydown', (e) => {
+        // 开场动画跳过
+        if (GameState.intro && GameState.intro.active) {
+            GameState.intro.active = false;
+            return;
+        }
+        GameState.keys[e.key.toLowerCase()] = true;
+        ensureAudioInit();
+        if (['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','q','e','f'].includes(e.key.toLowerCase())) {
+            e.preventDefault();
+        }
+        if (e.key.toLowerCase() === 'm') AudioEngine.toggleMute();
+        if (e.key.toLowerCase() === 'n') AudioEngine.setVolume(AudioEngine.volume - 0.1);
+        if (e.key.toLowerCase() === 'b') AudioEngine.setVolume(AudioEngine.volume + 0.1);
+        // 换装切换（C键）
+        if (e.key.toLowerCase() === 'c') {
+            const unlocked = Player.costumes.unlocked;
+            const currentIdx = unlocked.indexOf(Player.costumes.current);
+            const nextIdx = (currentIdx + 1) % unlocked.length;
+            Player.costumes.current = unlocked[nextIdx];
+            Player.costumeSwitchTimer = 90; // 1.5秒（60fps）
+            e.preventDefault();
+        }
+        // 存档/读档
+        if (e.key.toLowerCase() === 'l') {
+            loadGame();
+            e.preventDefault();
+        }
+    });
+    window.addEventListener('keyup', (e) => {
+        GameState.keys[e.key.toLowerCase()] = false;
+        if (e.key.toLowerCase() === 's') {
+            // 当S键松开时存档（避免与移动键冲突，仅当没有方向键按下时）
+            if (!GameState.keys['w'] && !GameState.keys['a'] && !GameState.keys['d']) {
+                saveGame();
+            }
+        }
+    });
+    // keyup 事件已在上面统一处理
+
+    let touchStartX = 0, touchStartY = 0;
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        ensureAudioInit();
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+    }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - touchStartX;
+        const dy = e.touches[0].clientY - touchStartY;
+        GameState.keys['d'] = dx > 20;
+        GameState.keys['a'] = dx < -20;
+        GameState.keys['s'] = dy > 20;
+        GameState.keys['w'] = dy < -20;
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => {
+        GameState.keys['w'] = GameState.keys['a'] = GameState.keys['s'] = GameState.keys['d'] = false;
+    });
+
+    // 鼠标点击检测名字
+    canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+        NameSystem.checkClick(clickX, clickY);
+    });
+
+    // 触摸点击检测名字（短触）
+    let touchStartTime = 0;
+    canvas.addEventListener('touchstart', (e) => {
+        touchStartTime = Date.now();
+    }, { passive: true });
+    canvas.addEventListener('touchend', (e) => {
+        const touchDuration = Date.now() - touchStartTime;
+        if (touchDuration < 200) { // 短触视为点击
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.changedTouches[0];
+            const clickX = touch.clientX - rect.left;
+            const clickY = touch.clientY - rect.top;
+            NameSystem.checkClick(clickX, clickY);
+        }
+    }, { passive: true });
+
+    // ==================== 启动 ====================
+    initScenes();
+    NPCSystem.init();
+    Interactables.init();
+    // 尝试自动读档
+    if (loadGame()) {
+        // 有存档，跳过开场动画
+        if (GameState.intro) GameState.intro.active = false;
+    }
+    // 初始化气泡
+    for (let i = 0; i < 15; i++) {
+        GameState.bubbles.push({
+            x: Math.random() * 800,
+            y: 400 + Math.random() * 200,
+            size: 1 + Math.random() * 3,
+            speed: 10 + Math.random() * 20
+        });
+    }
+    requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>

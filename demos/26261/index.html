@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实验报告批改系统</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: "Microsoft YaHei", sans-serif; background: #f5f7fa; }
+        .header { background: #1E3A5F; color: white; padding: 2rem; text-align: center; }
+        .main { display: flex; gap: 2rem; padding: 2rem; max-width: 1400px; margin: 0 auto; }
+        .preview { flex: 1; background: white; border-radius: 1rem; padding: 1rem; }
+        .controls { width: 380px; display: flex; flex-direction: column; gap: 1rem; }
+        .card { background: white; border-radius: 1rem; padding: 1.5rem; }
+        .card h3 { margin-bottom: 1rem; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 0.5rem; }
+        .btn { padding: 0.75rem; border: none; border-radius: 0.5rem; cursor: pointer; width: 100%; }
+        .btn-accent { background: #FF6B35; color: white; }
+        .btn-secondary { background: #f3f4f6; color: #374151; }
+        .upload { border: 2px dashed #ddd; border-radius: 1rem; padding: 4rem 2rem; text-align: center; cursor: pointer; margin-bottom: 1rem; }
+        .toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .toolbar-btn { padding: 0.5rem 1rem; border: none; border-radius: 0.5rem; cursor: pointer; }
+        .preview-area { background: #E5E7EB; padding: 1rem; min-height: 500px; position: relative; overflow: auto; }
+        .page-container { position: relative; background: white; margin: 0 auto; }
+        #annotLayer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 100; }
+        .annotation { position: absolute; border: 2px dashed #FF6B35; background: rgba(255,243,205,0.9); padding: 0.5rem; }
+        .annotation.selected { border-color: #1E3A5F; border-width: 3px; }
+        .del-btn { position: absolute; top: -12px; right: -12px; width: 24px; height: 24px; background: #EF4444; color: white; border: 2px solid white; border-radius: 50%; cursor: pointer; font-size: 14px; }
+        .color-picker { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .color-swatch { width: 2rem; height: 2rem; border-radius: 0.25rem; cursor: pointer; border: 3px solid transparent; }
+        .color-swatch.selected { border-color: #1E3A5F; }
+        .toast { position: fixed; top: 2rem; right: 2rem; padding: 1rem 1.5rem; border-radius: 0.5rem; color: white; font-size: 0.875rem; z-index: 1000; }
+        .toast.success { background: #10B981; }
+        .toast.error { background: #EF4444; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>实验报告批改系统</h1>
+        <p>智能辅助批改，高效反馈评语</p>
+    </header>
+
+    <main class="main">
+        <div class="preview">
+            <div id="uploadZone" class="upload">
+                <div style="font-size: 3rem; margin-bottom: 1rem;">📄</div>
+                <h3>点击或拖拽上传文件</h3>
+                <p>支持 PDF 和图片文件</p>
+                <input type="file" id="fileInput" accept=".pdf,image/*" style="display: none;">
+            </div>
+
+            <div id="viewer" class="hidden">
+                <div class="toolbar">
+                    <button class="toolbar-btn" style="background: #FF6B35; color: white;" id="saveBtn">💾 保存</button>
+                    <button class="toolbar-btn" id="exportBtn">📥 导出</button>
+                    <button class="toolbar-btn" id="resetBtn">🔄 重置</button>
+                    <span style="margin-left: auto; margin-right: 1rem;" id="pageInfo">1/1</span>
+                    <button class="toolbar-btn" id="prevBtn">← 上一页</button>
+                    <button class="toolbar-btn" id="nextBtn">下一页 →</button>
+                </div>
+                <div class="preview-area">
+                    <div class="page-container" id="pageContainer">
+                        <div id="pageContent"></div>
+                        <div id="annotLayer"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="card">
+                <h3>🤖 AI配置</h3>
+                <div class="form-group"><label>API端点</label><input type="text" id="apiEndpoint" placeholder="https://api.deepseek.com/chat/completions"></div>
+                <div class="form-group"><label>API Key</label><input type="password" id="apiKey" placeholder="sk-..."></div>
+                <div class="form-group"><label>模型</label><select id="modelSelect"><option value="deepseek-chat">DeepSeek Chat</option><option value="gpt-3.5-turbo">GPT-3.5</option></select></div>
+                <button class="btn btn-secondary" id="testBtn">测试连接</button>
+            </div>
+
+            <div class="card">
+                <h3>📝 评语设置</h3>
+                <div class="form-group"><label>字数: <span id="wordCount">100</span>字</label><input type="range" min="20" max="200" value="100" oninput="document.getElementById('wordCount').textContent=this.value"></div>
+                <button class="btn btn-accent" id="genBtn" disabled>✨ AI生成评语</button>
+            </div>
+
+            <div class="card">
+                <h3>✏️ 评语编辑</h3>
+                <div class="form-group"><label>评语内容</label><textarea id="comment" rows="4" placeholder="输入评语..."></textarea></div>
+                <div class="form-group"><label>字体</label><select id="font"><option value="Microsoft YaHei">微软雅黑</option><option value="SimSun">宋体</option><option value="SimHei">黑体</option></select></div>
+                <div class="form-group"><label>字号</label><input type="range" min="12" max="32" value="16" id="fontSize"></div>
+                <div class="form-group"><label>文字颜色</label><div class="color-picker" id="colorPicker"><div class="color-swatch selected" data-color="#1E3A5F" style="background:#1E3A5F"></div><div class="color-swatch" data-color="#FF6B35" style="background:#FF6B35"></div><div class="color-swatch" data-color="#10B981" style="background:#10B981"></div><div class="color-swatch" data-color="#EF4444" style="background:#EF4444"></div></div></div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast hidden" id="toast"></div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+        var state = { pages: [], currPage: 0, annots: [], selected: null, isDrawing: false, startX: 0, startY: 0 };
+        var els = {
+            upload: document.getElementById("uploadZone"),
+            fileInput: document.getElementById("fileInput"),
+            viewer: document.getElementById("viewer"),
+            pageContent: document.getElementById("pageContent"),
+            annotLayer: document.getElementById("annotLayer"),
+            apiEndpoint: document.getElementById("apiEndpoint"),
+            apiKey: document.getElementById("apiKey"),
+            modelSelect: document.getElementById("modelSelect"),
+            testBtn: document.getElementById("testBtn"),
+            genBtn: document.getElementById("genBtn"),
+            comment: document.getElementById("comment"),
+            font: document.getElementById("font"),
+            fontSize: document.getElementById("fontSize"),
+            colorPicker: document.getElementById("colorPicker"),
+            saveBtn: document.getElementById("saveBtn"),
+            exportBtn: document.getElementById("exportBtn"),
+            resetBtn: document.getElementById("resetBtn"),
+            pageInfo: document.getElementById("pageInfo"),
+            prevBtn: document.getElementById("prevBtn"),
+            nextBtn: document.getElementById("nextBtn"),
+            toast: document.getElementById("toast")
+        };
+
+        function showToast(msg, type) {
+            els.toast.textContent = msg;
+            els.toast.className = "toast " + (type || "success");
+            setTimeout(function(){ els.toast.classList.add("hidden"); }, 3000);
+        }
+
+        async function loadPDF(file) {
+            var buffer = await file.arrayBuffer();
+            var pdf = await pdfjsLib.getDocument({data: buffer}).promise;
+            var pages = [];
+            for(var i=1; i<=pdf.numPages; i++) {
+                var page = await pdf.getPage(i);
+                var viewport = page.getViewport({scale: 1.5});
+                var canvas = document.createElement("canvas");
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                await page.render({canvasContext: canvas.getContext("2d"), viewport: viewport}).promise;
+                pages.push(canvas.toDataURL("image/png"));
+            }
+            return pages;
+        }
+
+        async function loadImg(file) {
+            return new Promise(function(resolve) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var img = new Image();
+                    img.onload = function() {
+                        var canvas = document.createElement("canvas");
+                        var scale = Math.min(1200/img.width, 1);
+                        canvas.width = img.width * scale;
+                        canvas.height = img.height * scale;
+                        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+                        resolve([canvas.toDataURL("image/png")]);
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function handleFile(file) {
+            if(file.size > 50*1024*1024) { showToast("文件过大", "error"); return; }
+            var types = ["application/pdf", "image/jpeg", "image/png"];
+            if(types.indexOf(file.type) === -1) { showToast("请上传PDF或图片", "error"); return; }
+            
+            try {
+                state.pages = (file.type === "application/pdf") ? await loadPDF(file) : await loadImg(file);
+                state.currPage = 0;
+                state.annots = [];
+                state.selected = null;
+                renderPage();
+                els.upload.classList.add("hidden");
+                els.viewer.classList.remove("hidden");
+                updatePageInfo();
+                showToast("加载成功，共" + state.pages.length + "页");
+            } catch(e) { showToast("加载失败", "error"); }
+        }
+
+        function renderPage() {
+            els.pageContent.innerHTML = "<img src=\"" + state.pages[state.currPage] + "\" draggable=\"false\">";
+            els.annotLayer.innerHTML = "";
+            els.annotLayer.style.width = els.pageContent.querySelector("img").width + "px";
+            els.annotLayer.style.height = els.pageContent.querySelector("img").height + "px";
+            
+            for(var i=0; i<state.annots.length; i++) {
+                var a = state.annots[i];
+                if(a.page !== state.currPage) continue;
+                
+                var div = document.createElement("div");
+                div.className = "annotation" + (a.id === state.selected ? " selected" : "");
+                div.style.left = a.x + "px";
+                div.style.top = a.y + "px";
+                div.style.width = a.w + "px";
+                div.style.minHeight = a.h + "px";
+                div.style.fontFamily = a.f;
+                div.style.fontSize = a.s + "px";
+                div.style.color = a.c;
+                div.style.backgroundColor = "#FFF3CD";
+                div.innerHTML = a.t + "<button class=\"del-btn\" onclick=\"deleteAnnot('" + a.id + "')\">×</button>";
+                div.onclick = function(id) { return function(){ selectAnnot(id); }; }(a.id);
+                els.annotLayer.appendChild(div);
+            }
+        }
+
+        function selectAnnot(id) {
+            state.selected = id;
+            for(var i=0; i<state.annots.length; i++) {
+                if(state.annots[i].id === id) {
+                    els.comment.value = state.annots[i].t;
+                    els.font.value = state.annots[i].f;
+                    els.fontSize.value = state.annots[i].s;
+                    els.genBtn.disabled = false;
+                    break;
+                }
+            }
+            renderPage();
+        }
+
+        function deleteAnnot(id) {
+            state.annots = state.annots.filter(function(a){ return a.id !== id; });
+            if(state.selected === id) { state.selected = null; els.comment.value = ""; els.genBtn.disabled = true; }
+            renderPage();
+            showToast("已删除");
+        }
+
+        function addAnnot(x, y, w, h) {
+            var color = els.colorPicker.querySelector(".selected").dataset.color;
+            var a = {
+                id: Date.now().toString(36),
+                x: x, y: y, w: w, h: h,
+                page: state.currPage,
+                t: "",
+                f: els.font.value,
+                s: parseInt(els.fontSize.value),
+                c: color
+            };
+            state.annots.push(a);
+            selectAnnot(a.id);
+        }
+
+        function updatePageInfo() {
+            els.pageInfo.textContent = (state.currPage + 1) + "/" + state.pages.length;
+            els.prevBtn.disabled = state.currPage <= 0;
+            els.nextBtn.disabled = state.currPage >= state.pages.length - 1;
+        }
+
+        async function generateAI() {
+            if(!state.selected) { showToast("请选择批注区域", "error"); return; }
+            var endpoint = els.apiEndpoint.value;
+            var key = els.apiKey.value;
+            if(!endpoint || !key) { showToast("请配置API", "error"); return; }
+            
+            els.genBtn.disabled = true;
+            els.genBtn.textContent = "生成中...";
+            
+            try {
+                var response = await fetch(endpoint, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+                    body: JSON.stringify({
+                        model: els.modelSelect.value,
+                        messages: [{role: "user", content: "请写一段约" + document.getElementById("wordCount").textContent + "字的实验报告评语，要具体、客观、鼓励为主"}],
+                        max_tokens: 500
+                    })
+                });
+                
+                var data = await response.json();
+                var text = data.choices[0].message.content;
+                els.comment.value = text;
+                
+                for(var i=0; i<state.annots.length; i++) {
+                    if(state.annots[i].id === state.selected) {
+                        state.annots[i].t = text;
+                        break;
+                    }
+                }
+                renderPage();
+                showToast("生成成功");
+            } catch(e) {
+                showToast("生成失败: " + e.message, "error");
+            } finally {
+                els.genBtn.disabled = false;
+                els.genBtn.textContent = "✨ AI生成评语";
+            }
+        }
+
+        async function testAPI() {
+            var endpoint = els.apiEndpoint.value;
+            var key = els.apiKey.value;
+            if(!endpoint || !key) { showToast("请填写配置", "error"); return; }
+            
+            els.testBtn.disabled = true;
+            els.testBtn.textContent = "测试中...";
+            
+            try {
+                var response = await fetch(endpoint, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+                    body: JSON.stringify({model: els.modelSelect.value, messages: [{role: "user", content: "hi"}], max_tokens: 5})
+                });
+                
+                if(response.ok) showToast("连接成功");
+                else showToast("连接失败", "error");
+            } catch(e) {
+                showToast("连接失败: " + e.message, "error");
+            } finally {
+                els.testBtn.disabled = false;
+                els.testBtn.textContent = "测试连接";
+            }
+        }
+
+        function save() {
+            if(state.annots.length === 0) { showToast("没有批注", "error"); return; }
+            var record = { annots: state.annots, time: new Date().toISOString() };
+            localStorage.setItem("report_" + Date.now(), JSON.stringify(record));
+            showToast("保存成功");
+        }
+
+        function exportReport() {
+            if(state.pages.length === 0) { showToast("没有内容", "error"); return; }
+            var type = prompt("请选择导出格式：\n1-PNG图片\n2-HTML文件\n3-PDF文件", "1");
+            if(type === "1") {
+                for(var i=0; i<state.pages.length; i++) {
+                    exportPageAsPNG(i);
+                }
+                showToast("导出成功");
+            } else if(type === "2") {
+                exportAsHTML();
+            } else if(type === "3") {
+                exportAsPDF();
+            }
+        }
+
+        function exportPageAsPNG(pageIndex) {
+            var img = new Image();
+            img.onload = function() {
+                var canvas = document.createElement("canvas");
+                canvas.width = img.width;
+                canvas.height = img.height;
+                var ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0);
+                
+                for(var i=0; i<state.annots.length; i++) {
+                    var a = state.annots[i];
+                    if(a.page !== pageIndex) continue;
+                    
+                    ctx.fillStyle = "#FFF3CD";
+                    ctx.fillRect(a.x, a.y, a.w, a.h);
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeStyle = "#FF6B35";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(a.x, a.y, a.w, a.h);
+                    ctx.setLineDash([]);
+                    
+                    if(a.t) {
+                        ctx.font = a.s + "px " + a.f;
+                        ctx.fillStyle = a.c;
+                        ctx.textAlign = "left";
+                        ctx.textBaseline = "top";
+                        var padding = 8;
+                        var maxWidth = a.w - padding * 2;
+                        var words = a.t.split("");
+                        var line = "";
+                        var y = a.y + padding;
+                        
+                        for(var j=0; j<words.length; j++) {
+                            var testLine = line + words[j];
+                            var metrics = ctx.measureText(testLine);
+                            if(metrics.width > maxWidth && line) {
+                                ctx.fillText(line, a.x + padding, y);
+                                y += a.s + 4;
+                                line = words[j];
+                            } else {
+                                line = testLine;
+                            }
+                        }
+                        if(line) ctx.fillText(line, a.x + padding, y);
+                    }
+                }
+                
+                var link = document.createElement("a");
+                link.download = "page" + (pageIndex + 1) + ".png";
+                link.href = canvas.toDataURL("image/png");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+            img.src = state.pages[pageIndex];
+        }
+
+        function exportAsHTML() {
+            var html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>实验报告批改</title><style>.page{position:relative;margin-bottom:20px;}</style></head><body>";
+            for(var i=0; i<state.pages.length; i++) {
+                html += "<div class=\"page\"><img src=\"" + state.pages[i] + "\" style=\"max-width:100%;\">";
+                for(var j=0; j<state.annots.length; j++) {
+                    var a = state.annots[j];
+                    if(a.page === i) {
+                        html += "<div style=\"position:absolute;left:" + (a.x/1.5) + "px;top:" + (a.y/1.5) + "px;width:" + (a.w/1.5) + "px;background:rgba(255,243,205,0.9);border:2px dashed #FF6B35;padding:8px;font-family:" + a.f + ";font-size:" + (a.s/1.5) + "px;color:" + a.c + ";\">" + a.t + "</div>";
+                    }
+                }
+                html += "</div>";
+            }
+            html += "</body></html>";
+            
+            var blob = new Blob([html], {type: "text/html"});
+            var link = document.createElement("a");
+            link.download = "report_annotated.html";
+            link.href = URL.createObjectURL(blob);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+            showToast("HTML导出成功");
+        }
+
+        function exportAsPDF() {
+            var pdfHtml = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>实验报告批改</title>";
+            pdfHtml += "<style>";
+            pdfHtml += "@page { size: A4; margin: 15mm; }";
+            pdfHtml += "body { font-family: \"Microsoft YaHei\", sans-serif; margin: 0; padding: 0; }";
+            pdfHtml += ".page { position: relative; margin-bottom: 10px; page-break-after: always; }";
+            pdfHtml += ".page:last-child { page-break-after: avoid; }";
+            pdfHtml += ".page img { max-width: 100%; height: auto; }";
+            pdfHtml += ".header { text-align: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd; }";
+            pdfHtml += ".annotation { position: absolute; background: rgba(255,243,205,0.9); border: 2px dashed #FF6B35; padding: 8px; }";
+            pdfHtml += "</style></head><body>";
+            pdfHtml += "<div class=\"header\"><h2>实验报告批改</h2><p>导出时间: " + new Date().toLocaleString() + "</p></div>";
+            
+            for(var i=0; i<state.pages.length; i++) {
+                pdfHtml += "<div class=\"page\"><img src=\"" + state.pages[i] + "\">";
+                for(var j=0; j<state.annots.length; j++) {
+                    var a = state.annots[j];
+                    if(a.page === i) {
+                        pdfHtml += "<div class=\"annotation\" style=\"left:" + (a.x/1.5) + "px;top:" + (a.y/1.5) + "px;width:" + (a.w/1.5) + "px;font-family:" + a.f + ";font-size:" + (a.s/1.5) + "px;color:" + a.c + ";\">";
+                        pdfHtml += a.t;
+                        pdfHtml += "</div>";
+                    }
+                }
+                pdfHtml += "</div>";
+            }
+            
+            var printWin = window.open("", "_blank");
+            printWin.document.write(pdfHtml);
+            printWin.document.write("<script>window.onload=function(){window.print();setTimeout(function(){window.close();},1000);}</s"+"cript>");
+            printWin.document.close();
+            showToast("请在打印窗口选择保存为PDF");
+        }
+
+        function reset() {
+            if(!confirm("确定重置？")) return;
+            state.pages = [];
+            state.annots = [];
+            state.selected = null;
+            els.upload.classList.remove("hidden");
+            els.viewer.classList.add("hidden");
+            els.comment.value = "";
+            showToast("已重置");
+        }
+
+        els.upload.onclick = function(){ els.fileInput.click(); };
+        els.fileInput.onchange = function(e){ handleFile(e.target.files[0]); };
+        els.upload.ondragover = function(e){ e.preventDefault(); };
+        els.upload.ondrop = function(e){ e.preventDefault(); handleFile(e.dataTransfer.files[0]); };
+
+        els.annotLayer.onmousedown = function(e) {
+            if(e.target !== els.annotLayer) return;
+            state.isDrawing = true;
+            var r = els.annotLayer.getBoundingClientRect();
+            state.startX = e.clientX - r.left;
+            state.startY = e.clientY - r.top;
+        };
+
+        els.annotLayer.onmousemove = function(e) {
+            if(!state.isDrawing) return;
+            var r = els.annotLayer.getBoundingClientRect();
+            var x = Math.min(state.startX, e.clientX - r.left);
+            var y = Math.min(state.startY, e.clientY - r.top);
+            var w = Math.abs(e.clientX - r.left - state.startX);
+            var h = Math.abs(e.clientY - r.top - state.startY);
+            
+            var temps = els.annotLayer.querySelectorAll(".temp");
+            for(var i=0; i<temps.length; i++) temps[i].remove();
+            
+            var div = document.createElement("div");
+            div.className = "annotation temp";
+            div.style.left = x + "px";
+            div.style.top = y + "px";
+            div.style.width = w + "px";
+            div.style.height = h + "px";
+            els.annotLayer.appendChild(div);
+        };
+
+        els.annotLayer.onmouseup = function(e) {
+            if(!state.isDrawing) return;
+            var r = els.annotLayer.getBoundingClientRect();
+            var x = Math.min(state.startX, e.clientX - r.left);
+            var y = Math.min(state.startY, e.clientY - r.top);
+            var w = Math.abs(e.clientX - r.left - state.startX);
+            var h = Math.abs(e.clientY - r.top - state.startY);
+            
+            var temps = els.annotLayer.querySelectorAll(".temp");
+            for(var i=0; i<temps.length; i++) temps[i].remove();
+            
+            if(w > 20 && h > 20) addAnnot(x, y, w, h);
+            state.isDrawing = false;
+        };
+
+        els.comment.oninput = function() {
+            for(var i=0; i<state.annots.length; i++) {
+                if(state.annots[i].id === state.selected) {
+                    state.annots[i].t = els.comment.value;
+                    renderPage();
+                    break;
+                }
+            }
+        };
+
+        els.font.onchange = function() {
+            for(var i=0; i<state.annots.length; i++) {
+                if(state.annots[i].id === state.selected) {
+                    state.annots[i].f = els.font.value;
+                    renderPage();
+                    break;
+                }
+            }
+        };
+
+        els.fontSize.oninput = function() {
+            for(var i=0; i<state.annots.length; i++) {
+                if(state.annots[i].id === state.selected) {
+                    state.annots[i].s = parseInt(els.fontSize.value);
+                    renderPage();
+                    break;
+                }
+            }
+        };
+
+        els.colorPicker.onclick = function(e) {
+            var swatch = e.target.closest(".color-swatch");
+            if(swatch) {
+                var swatches = els.colorPicker.querySelectorAll(".color-swatch");
+                for(var i=0; i<swatches.length; i++) swatches[i].classList.remove("selected");
+                swatch.classList.add("selected");
+                
+                for(var j=0; j<state.annots.length; j++) {
+                    if(state.annots[j].id === state.selected) {
+                        state.annots[j].c = swatch.dataset.color;
+                        renderPage();
+                        break;
+                    }
+                }
+            }
+        };
+
+        els.genBtn.onclick = generateAI;
+        els.testBtn.onclick = testAPI;
+        els.saveBtn.onclick = save;
+        els.exportBtn.onclick = exportReport;
+        els.resetBtn.onclick = reset;
+        els.prevBtn.onclick = function(){ if(state.currPage > 0) { state.currPage--; renderPage(); updatePageInfo(); } };
+        els.nextBtn.onclick = function(){ if(state.currPage < state.pages.length - 1) { state.currPage++; renderPage(); updatePageInfo(); } };
+    </script>
+</body>
+</html>

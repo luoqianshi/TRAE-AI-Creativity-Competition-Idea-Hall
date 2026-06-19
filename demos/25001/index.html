@@ -1,0 +1,1670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeckDNA AI — From Poster Image to Editable Native PPT</title>
+  <meta name="description" content="DeckDNA AI: 把海报级视觉变成可编辑 PPT 的元素级生成引擎。视觉理解 → 元素拆解 → OpenXML 写入 → 导出可编辑 PPTX。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    /* =========================================================
+       0. RESET + BASE
+       ========================================================= */
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+    body{
+      font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      background:#05060d;
+      color:#e7ecf5;
+      line-height:1.55;
+      font-weight:400;
+      overflow-x:hidden;
+      min-height:100vh;
+      -webkit-font-smoothing:antialiased;
+      text-rendering:optimizeLegibility;
+    }
+    a{color:inherit;text-decoration:none}
+    button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+    img,svg{display:block;max-width:100%}
+
+    /* =========================================================
+       1. CSS VARIABLES / THEME
+       ========================================================= */
+    :root{
+      --bg-0:#04050a;
+      --bg-1:#07091a;
+      --bg-2:#0d0a22;
+      --surface:rgba(255,255,255,0.04);
+      --surface-2:rgba(255,255,255,0.06);
+      --surface-3:rgba(255,255,255,0.08);
+      --border:rgba(255,255,255,0.09);
+      --border-strong:rgba(255,255,255,0.16);
+      --text-1:#f5f7ff;
+      --text-2:#a8b1cf;
+      --text-3:#6b7493;
+      --text-4:#4a5273;
+      --cyan:#00e5ff;
+      --cyan-2:#5cf2ff;
+      --pink:#ff3d8a;
+      --pink-2:#ff7ab0;
+      --purple:#7c3aed;
+      --purple-2:#a78bfa;
+      --gold:#fbbf24;
+      --green:#34d399;
+      --grad-1:linear-gradient(135deg,#00e5ff 0%,#7c3aed 50%,#ff3d8a 100%);
+      --grad-2:linear-gradient(135deg,#00e5ff 0%,#7c3aed 100%);
+      --grad-3:linear-gradient(135deg,#ff3d8a 0%,#fbbf24 100%);
+      --grad-line:linear-gradient(90deg,transparent 0%,#00e5ff 25%,#7c3aed 50%,#ff3d8a 75%,transparent 100%);
+      --shadow-glow:0 0 60px rgba(0,229,255,0.25);
+      --shadow-card:0 30px 80px -20px rgba(0,0,0,0.6),0 0 0 1px rgba(255,255,255,0.05);
+      --maxw:1280px;
+    }
+
+    /* =========================================================
+       2. GLOBAL DECORATIONS
+       ========================================================= */
+    /* Multi-layer ambient background */
+    .bg-ambient{
+      position:fixed;inset:0;z-index:-2;pointer-events:none;
+      background:
+        radial-gradient(ellipse 60% 50% at 18% 12%, rgba(124,58,237,0.22), transparent 60%),
+        radial-gradient(ellipse 50% 40% at 88% 28%, rgba(0,229,255,0.18), transparent 60%),
+        radial-gradient(ellipse 70% 50% at 50% 92%, rgba(255,61,138,0.18), transparent 60%),
+        linear-gradient(180deg,#04050a 0%,#07091a 40%,#0a0817 100%);
+    }
+    /* Subtle grid */
+    .bg-grid{
+      position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0.5;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);
+      background-size:56px 56px;
+      mask-image:radial-gradient(ellipse 80% 60% at 50% 30%, #000 30%, transparent 80%);
+      -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 30%, #000 30%, transparent 80%);
+    }
+    /* Film grain */
+    .bg-noise{
+      position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0.04;mix-blend-mode:overlay;
+      background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    }
+
+    /* =========================================================
+       3. UTILITIES
+       ========================================================= */
+    .container{
+      width:100%;max-width:var(--maxw);
+      margin:0 auto;padding:0 32px;position:relative;
+    }
+    .eyebrow{
+      display:inline-flex;align-items:center;gap:10px;
+      font-family:'JetBrains Mono',monospace;
+      font-size:12px;font-weight:500;letter-spacing:0.22em;
+      text-transform:uppercase;
+      color:var(--cyan);
+      padding:8px 14px;
+      border:1px solid rgba(0,229,255,0.25);
+      background:rgba(0,229,255,0.06);
+      border-radius:999px;
+    }
+    .eyebrow::before{
+      content:"";width:6px;height:6px;border-radius:50%;
+      background:var(--cyan);
+      box-shadow:0 0 10px var(--cyan);
+      animation:pulse 2s ease-in-out infinite;
+    }
+    .eyebrow.pink{color:var(--pink);border-color:rgba(255,61,138,0.25);background:rgba(255,61,138,0.06)}
+    .eyebrow.pink::before{background:var(--pink);box-shadow:0 0 10px var(--pink)}
+    .eyebrow.purple{color:var(--purple-2);border-color:rgba(167,139,250,0.25);background:rgba(167,139,250,0.06)}
+    .eyebrow.purple::before{background:var(--purple-2);box-shadow:0 0 10px var(--purple-2)}
+    .eyebrow.gold{color:var(--gold);border-color:rgba(251,191,36,0.25);background:rgba(251,191,36,0.06)}
+    .eyebrow.gold::before{background:var(--gold);box-shadow:0 0 10px var(--gold)}
+
+    @keyframes pulse{
+      0%,100%{opacity:1;transform:scale(1)}
+      50%{opacity:.5;transform:scale(0.85)}
+    }
+
+    .section-title{
+      font-family:'Unbounded',sans-serif;
+      font-weight:600;
+      font-size:clamp(28px,3.6vw,52px);
+      line-height:1.1;
+      letter-spacing:-0.02em;
+      color:var(--text-1);
+      margin:18px 0 14px;
+    }
+    .section-subtitle{
+      font-size:clamp(15px,1.2vw,18px);
+      color:var(--text-2);
+      max-width:720px;
+      line-height:1.65;
+    }
+    .gradient-text{
+      background:var(--grad-1);
+      -webkit-background-clip:text;background-clip:text;color:transparent;
+    }
+
+    .divider{
+      height:1px;width:100%;
+      background:linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);
+    }
+
+    /* Glass card */
+    .glass{
+      position:relative;
+      background:linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015));
+      border:1px solid var(--border);
+      border-radius:20px;
+      backdrop-filter:blur(20px) saturate(140%);
+      -webkit-backdrop-filter:blur(20px) saturate(140%);
+      overflow:hidden;
+      isolation:isolate;
+    }
+    .glass::before{
+      content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;
+      background:linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.02) 40%,rgba(0,229,255,0.18) 100%);
+      -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      -webkit-mask-composite:xor;mask-composite:exclude;
+      pointer-events:none;
+    }
+    .glass .glow{
+      position:absolute;inset:-2px;border-radius:inherit;pointer-events:none;opacity:0;
+      background:radial-gradient(420px circle at var(--mx,50%) var(--my,50%), rgba(0,229,255,0.16),transparent 40%);
+      transition:opacity .35s ease;
+      z-index:0;
+    }
+    .glass:hover .glow{opacity:1}
+    .glass > *{position:relative;z-index:1}
+
+    /* =========================================================
+       4. NAV
+       ========================================================= */
+    .nav{
+      position:fixed;top:0;left:0;right:0;z-index:50;
+      padding:16px 0;
+      transition:background .3s ease,border-color .3s ease;
+      border-bottom:1px solid transparent;
+    }
+    .nav.scrolled{
+      background:rgba(5,6,13,0.72);
+      border-bottom-color:rgba(255,255,255,0.06);
+      backdrop-filter:blur(20px) saturate(150%);
+      -webkit-backdrop-filter:blur(20px) saturate(150%);
+    }
+    .nav-inner{
+      display:flex;align-items:center;justify-content:space-between;gap:24px;
+    }
+    .logo{
+      display:flex;align-items:center;gap:10px;
+      font-family:'Unbounded',sans-serif;font-weight:700;font-size:18px;letter-spacing:-0.01em;
+    }
+    .logo-mark{
+      width:30px;height:30px;border-radius:8px;
+      background:var(--grad-1);
+      display:grid;place-items:center;
+      box-shadow:0 6px 24px -6px rgba(0,229,255,0.6);
+      position:relative;
+    }
+    .logo-mark svg{width:18px;height:18px;color:#04050a}
+    .nav-links{display:flex;gap:6px;align-items:center}
+    .nav-link{
+      font-size:13.5px;color:var(--text-2);
+      padding:8px 14px;border-radius:999px;
+      transition:color .2s ease,background .2s ease;
+      font-weight:500;
+    }
+    .nav-link:hover{color:var(--text-1);background:var(--surface-2)}
+    .nav-cta{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:9px 18px;border-radius:999px;
+      font-size:13.5px;font-weight:600;
+      color:#04050a;
+      background:var(--grad-1);
+      transition:transform .2s ease,box-shadow .2s ease;
+    }
+    .nav-cta:hover{transform:translateY(-1px);box-shadow:0 10px 30px -8px rgba(0,229,255,0.5)}
+    .nav-cta svg{width:14px;height:14px}
+
+    @media (max-width:900px){
+      .nav-links{display:none}
+    }
+
+    /* =========================================================
+       5. HERO
+       ========================================================= */
+    .hero{
+      position:relative;
+      min-height:100vh;
+      padding:140px 0 80px;
+      display:flex;align-items:center;
+    }
+    .hero-grid{
+      display:grid;grid-template-columns:1.1fr 1fr;gap:60px;align-items:center;
+    }
+    @media (max-width:1024px){
+      .hero-grid{grid-template-columns:1fr;gap:50px}
+    }
+    .hero-content{max-width:680px}
+    .hero-badge{
+      display:inline-flex;align-items:center;gap:10px;
+      padding:7px 14px 7px 7px;
+      border:1px solid rgba(255,255,255,0.1);
+      background:rgba(255,255,255,0.04);
+      border-radius:999px;
+      font-size:12.5px;color:var(--text-2);
+      margin-bottom:28px;
+    }
+    .hero-badge-dot{
+      width:22px;height:22px;border-radius:50%;
+      background:var(--grad-1);
+      display:grid;place-items:center;
+      color:#04050a;
+    }
+    .hero-badge-dot svg{width:12px;height:12px}
+    .hero-badge b{color:var(--text-1);font-weight:600}
+    .hero h1{
+      font-family:'Unbounded',sans-serif;
+      font-weight:800;
+      font-size:clamp(48px,7.5vw,108px);
+      line-height:0.95;
+      letter-spacing:-0.04em;
+      margin-bottom:24px;
+    }
+    .hero h1 .deck{color:var(--text-1);display:inline-block}
+    .hero h1 .dna{
+      background:var(--grad-1);
+      -webkit-background-clip:text;background-clip:text;color:transparent;
+      position:relative;display:inline-block;
+    }
+    .hero h1 .dna::after{
+      content:"";position:absolute;left:0;right:0;bottom:-6px;height:3px;
+      background:var(--grad-1);border-radius:2px;
+      box-shadow:0 0 18px rgba(0,229,255,0.6);
+    }
+    .hero-tagline{
+      font-family:'Unbounded',sans-serif;
+      font-weight:400;
+      font-size:clamp(18px,2vw,26px);
+      line-height:1.35;
+      letter-spacing:-0.01em;
+      color:var(--text-1);
+      margin-bottom:18px;
+      max-width:580px;
+    }
+    .hero-tagline .accent{color:var(--cyan);font-weight:500}
+    .hero-desc{
+      font-size:16.5px;color:var(--text-2);line-height:1.7;max-width:560px;margin-bottom:36px;
+    }
+    .hero-actions{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+    .btn-primary{
+      display:inline-flex;align-items:center;gap:10px;
+      padding:14px 26px;
+      border-radius:999px;
+      font-size:14.5px;font-weight:600;
+      color:#04050a;
+      background:var(--grad-1);
+      position:relative;
+      transition:transform .25s ease,box-shadow .25s ease;
+    }
+    .btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 40px -10px rgba(0,229,255,0.55)}
+    .btn-primary svg{width:16px;height:16px}
+    .btn-ghost{
+      display:inline-flex;align-items:center;gap:10px;
+      padding:14px 26px;
+      border-radius:999px;
+      font-size:14.5px;font-weight:500;
+      color:var(--text-1);
+      background:rgba(255,255,255,0.04);
+      border:1px solid var(--border-strong);
+      transition:background .2s ease,border-color .2s ease;
+    }
+    .btn-ghost:hover{background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.25)}
+    .btn-ghost svg{width:16px;height:16px}
+
+    .hero-meta{
+      margin-top:48px;display:flex;gap:32px;flex-wrap:wrap;
+    }
+    .hero-meta-item{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-3)}
+    .hero-meta-item svg{width:14px;height:14px;color:var(--cyan)}
+    .hero-meta-item b{color:var(--text-1);font-weight:600}
+
+    /* Hero visual: PPT layer stack */
+    .hero-visual{
+      position:relative;height:520px;
+      display:flex;align-items:center;justify-content:center;
+    }
+    .dna-stage{
+      position:relative;width:100%;height:100%;
+      perspective:1400px;
+    }
+    .layer-stack{
+      position:absolute;inset:0;
+      display:grid;place-items:center;
+    }
+    .layer-card{
+      position:absolute;
+      width:380px;height:240px;
+      border-radius:16px;
+      background:linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02));
+      border:1px solid var(--border-strong);
+      box-shadow:var(--shadow-card);
+      overflow:hidden;
+      transform-style:preserve-3d;
+      animation:floatY 6s ease-in-out infinite;
+    }
+    .layer-card::before{
+      content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;
+      background:linear-gradient(135deg,rgba(255,255,255,0.25),transparent 50%,rgba(0,229,255,0.4));
+      -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      -webkit-mask-composite:xor;mask-composite:exclude;
+    }
+    .layer-card .lbl{
+      position:absolute;left:14px;top:14px;
+      font-family:'JetBrains Mono',monospace;
+      font-size:10.5px;letter-spacing:0.12em;color:var(--cyan);
+      padding:4px 8px;border-radius:6px;
+      background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.25);
+      z-index:2;
+    }
+    .layer-card.l1{
+      transform:translate(-40px,-30px) rotate(-6deg);
+      animation-delay:0s;
+      z-index:1;
+    }
+    .layer-card.l2{
+      transform:translate(20px,-10px) rotate(2deg);
+      animation-delay:-1.5s;
+      z-index:2;
+    }
+    .layer-card.l3{
+      transform:translate(-20px,30px) rotate(-2deg);
+      animation-delay:-3s;
+      z-index:3;
+    }
+    .layer-card.l4{
+      transform:translate(30px,50px) rotate(4deg);
+      animation-delay:-4.5s;
+      z-index:4;
+    }
+    .layer-card.l5{
+      transform:translate(0,80px) rotate(-1deg);
+      animation-delay:-2s;
+      z-index:5;
+    }
+    @keyframes floatY{
+      0%,100%{margin-top:0}
+      50%{margin-top:-12px}
+    }
+
+    /* Layer content mocks */
+    .layer-content{position:absolute;inset:0;padding:34px 18px 18px}
+    .layer-bg{position:absolute;inset:0;background:linear-gradient(135deg,#0c1d3a 0%,#1a0e3a 50%,#3a0e2e 100%)}
+    .layer-bg::after{content:"";position:absolute;inset:0;background:
+      radial-gradient(circle at 20% 30%,rgba(255,61,138,0.4),transparent 50%),
+      radial-gradient(circle at 80% 70%,rgba(0,229,255,0.4),transparent 50%)}
+    .layer-image{
+      position:absolute;left:18px;right:18px;top:36px;height:60px;
+      border-radius:8px;
+      background:linear-gradient(135deg,#ff3d8a 0%,#fbbf24 50%,#00e5ff 100%);
+      box-shadow:0 8px 24px -8px rgba(255,61,138,0.5);
+    }
+    .layer-image::after{
+      content:"";position:absolute;inset:0;border-radius:inherit;
+      background:repeating-linear-gradient(45deg,rgba(255,255,255,0.1) 0 2px,transparent 2px 8px);
+    }
+    .layer-text{
+      position:absolute;left:18px;right:18px;bottom:18px;
+      display:flex;flex-direction:column;gap:6px;
+    }
+    .layer-text .l1{height:9px;width:60%;background:rgba(255,255,255,0.9);border-radius:3px}
+    .layer-text .l2{height:6px;width:90%;background:rgba(255,255,255,0.5);border-radius:3px}
+    .layer-text .l3{height:6px;width:75%;background:rgba(255,255,255,0.35);border-radius:3px}
+    .layer-shapes{position:absolute;inset:36px 18px 18px}
+    .layer-shapes .circ{position:absolute;width:46px;height:46px;border-radius:50%;background:var(--grad-3);top:0;right:0;box-shadow:0 4px 20px -4px rgba(255,61,138,0.6)}
+    .layer-shapes .sq{position:absolute;width:30px;height:30px;border-radius:6px;background:linear-gradient(135deg,#00e5ff,#7c3aed);bottom:30px;left:8px;box-shadow:0 4px 20px -4px rgba(0,229,255,0.6)}
+    .layer-shapes .tri{position:absolute;width:0;height:0;border-left:18px solid transparent;border-right:18px solid transparent;border-bottom:30px solid var(--gold);bottom:0;right:60px;filter:drop-shadow(0 4px 12px rgba(251,191,36,0.5))}
+    .layer-icons{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:38px 18px 18px}
+    .layer-icons .ic{aspect-ratio:1;border-radius:6px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);display:grid;place-items:center;color:rgba(255,255,255,0.5)}
+    .layer-icons .ic svg{width:14px;height:14px}
+    .layer-icons .ic.c1{color:#00e5ff;background:rgba(0,229,255,0.1);border-color:rgba(0,229,255,0.3)}
+    .layer-icons .ic.c2{color:#ff3d8a;background:rgba(255,61,138,0.1);border-color:rgba(255,61,138,0.3)}
+    .layer-icons .ic.c3{color:var(--gold);background:rgba(251,191,36,0.1);border-color:rgba(251,191,36,0.3)}
+    .layer-icons .ic.c4{color:#7c3aed;background:rgba(124,58,237,0.1);border-color:rgba(124,58,237,0.3)}
+
+    /* Connecting orbit */
+    .orbit{
+      position:absolute;width:560px;height:560px;
+      border-radius:50%;
+      top:50%;left:50%;transform:translate(-50%,-50%);
+      pointer-events:none;
+      background:conic-gradient(from 0deg, transparent 0%, rgba(0,229,255,0.4) 10%, transparent 30%, rgba(255,61,138,0.3) 50%, transparent 70%, rgba(124,58,237,0.4) 90%, transparent 100%);
+      -webkit-mask:radial-gradient(circle, transparent 60%, #000 61%, #000 62%, transparent 63%);
+      mask:radial-gradient(circle, transparent 60%, #000 61%, #000 62%, transparent 63%);
+      animation:rotate 22s linear infinite;
+      opacity:0.5;
+    }
+    .orbit-2{
+      width:680px;height:680px;
+      animation-direction:reverse;animation-duration:30s;
+      background:conic-gradient(from 0deg, transparent 0%, rgba(124,58,237,0.3) 20%, transparent 40%, rgba(0,229,255,0.3) 60%, transparent 80%);
+    }
+    @keyframes rotate{to{transform:translate(-50%,-50%) rotate(360deg)}}
+
+    .deco-dot{
+      position:absolute;width:6px;height:6px;border-radius:50%;background:var(--cyan);
+      box-shadow:0 0 14px var(--cyan);
+      animation:pulse 3s ease-in-out infinite;
+    }
+    .deco-dot.d1{top:20%;left:15%;animation-delay:0s}
+    .deco-dot.d2{top:60%;right:10%;background:var(--pink);box-shadow:0 0 14px var(--pink);animation-delay:-1s}
+    .deco-dot.d3{bottom:15%;left:25%;background:var(--purple-2);box-shadow:0 0 14px var(--purple-2);animation-delay:-2s}
+    .deco-dot.d4{top:30%;right:25%;background:var(--gold);box-shadow:0 0 14px var(--gold);animation-delay:-1.5s}
+
+    /* Scroll cue */
+    .scroll-cue{
+      position:absolute;left:50%;bottom:24px;transform:translateX(-50%);
+      display:flex;flex-direction:column;align-items:center;gap:8px;
+      color:var(--text-3);font-size:11px;letter-spacing:0.2em;text-transform:uppercase;
+      font-family:'JetBrains Mono',monospace;
+    }
+    .scroll-cue::after{
+      content:"";width:1px;height:36px;
+      background:linear-gradient(180deg,var(--cyan),transparent);
+      animation:scrollLine 2.4s ease-in-out infinite;
+    }
+    @keyframes scrollLine{
+      0%{transform:scaleY(0);transform-origin:top}
+      50%{transform:scaleY(1);transform-origin:top}
+      51%{transform-origin:bottom}
+      100%{transform:scaleY(0);transform-origin:bottom}
+    }
+
+    /* =========================================================
+       6. SECTION COMMON
+       ========================================================= */
+    section{
+      padding:120px 0;position:relative;
+    }
+    .section-head{
+      max-width:780px;margin-bottom:64px;
+    }
+
+    /* Reveal on scroll */
+    .reveal{
+      opacity:0;transform:translateY(28px);
+      transition:opacity .9s ease, transform .9s cubic-bezier(.16,1,.3,1);
+    }
+    .reveal.in{opacity:1;transform:none}
+    .reveal[data-d="1"]{transition-delay:.08s}
+    .reveal[data-d="2"]{transition-delay:.16s}
+    .reveal[data-d="3"]{transition-delay:.24s}
+    .reveal[data-d="4"]{transition-delay:.32s}
+    .reveal[data-d="5"]{transition-delay:.40s}
+    .reveal[data-d="6"]{transition-delay:.48s}
+
+    /* =========================================================
+       7. PAIN POINTS
+       ========================================================= */
+    .pain{position:relative}
+    .pain-grid{
+      display:grid;grid-template-columns:repeat(3,1fr);gap:24px;
+    }
+    @media (max-width:900px){.pain-grid{grid-template-columns:1fr}}
+    .pain-card{padding:32px;display:flex;flex-direction:column;gap:18px;min-height:300px}
+    .pain-card .icon-wrap{
+      width:54px;height:54px;border-radius:14px;
+      display:grid;place-items:center;
+      background:rgba(255,61,138,0.08);
+      border:1px solid rgba(255,61,138,0.18);
+      color:var(--pink);
+    }
+    .pain-card:nth-child(2) .icon-wrap{background:rgba(251,191,36,0.08);border-color:rgba(251,191,36,0.18);color:var(--gold)}
+    .pain-card:nth-child(3) .icon-wrap{background:rgba(124,58,237,0.08);border-color:rgba(124,58,237,0.18);color:var(--purple-2)}
+    .pain-card .icon-wrap svg{width:26px;height:26px}
+    .pain-tag{
+      font-family:'JetBrains Mono',monospace;font-size:11px;
+      letter-spacing:0.18em;text-transform:uppercase;color:var(--text-3);
+    }
+    .pain-title{
+      font-family:'Unbounded',sans-serif;
+      font-weight:600;font-size:22px;line-height:1.25;letter-spacing:-0.01em;
+      color:var(--text-1);
+    }
+    .pain-title em{font-style:normal;color:var(--pink);font-weight:600}
+    .pain-card:nth-child(2) .pain-title em{color:var(--gold)}
+    .pain-card:nth-child(3) .pain-title em{color:var(--purple-2)}
+    .pain-desc{font-size:14.5px;color:var(--text-2);line-height:1.7}
+    .pain-vs{
+      margin-top:auto;
+      display:flex;align-items:center;gap:10px;
+      padding-top:18px;border-top:1px dashed rgba(255,255,255,0.1);
+      font-size:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace;
+      letter-spacing:0.1em;text-transform:uppercase;
+    }
+    .pain-vs b{color:var(--text-1);font-weight:600}
+
+    /* =========================================================
+       8. SOLUTION
+       ========================================================= */
+    .solution{position:relative}
+    .solution-wrap{
+      display:grid;grid-template-columns:1.05fr 1fr;gap:60px;align-items:center;
+    }
+    @media (max-width:1024px){.solution-wrap{grid-template-columns:1fr;gap:40px}}
+    .solution-statement{
+      font-family:'Unbounded',sans-serif;
+      font-weight:500;
+      font-size:clamp(28px,3.4vw,46px);
+      line-height:1.2;letter-spacing:-0.02em;
+      color:var(--text-1);
+      margin:24px 0 28px;
+    }
+    .solution-statement .hl{
+      position:relative;display:inline-block;color:var(--cyan);
+    }
+    .solution-statement .hl::after{
+      content:"";position:absolute;left:0;right:0;bottom:2px;height:8px;
+      background:linear-gradient(90deg,var(--cyan),transparent);
+      opacity:0.3;border-radius:4px;
+    }
+    .solution-list{display:flex;flex-direction:column;gap:14px}
+    .solution-pillar{
+      display:flex;gap:16px;align-items:flex-start;
+      padding:18px;border-radius:14px;
+      background:rgba(255,255,255,0.02);
+      border:1px solid var(--border);
+      transition:background .25s ease,border-color .25s ease;
+    }
+    .solution-pillar:hover{background:rgba(0,229,255,0.05);border-color:rgba(0,229,255,0.25)}
+    .solution-pillar .num{
+      font-family:'JetBrains Mono',monospace;font-weight:600;
+      font-size:13px;color:var(--cyan);
+      width:30px;height:30px;border-radius:8px;
+      display:grid;place-items:center;flex-shrink:0;
+      background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);
+    }
+    .solution-pillar h4{font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:4px}
+    .solution-pillar p{font-size:13.5px;color:var(--text-2);line-height:1.6}
+
+    /* Comparison visual */
+    .compare{
+      position:relative;padding:24px;
+      border-radius:24px;
+      background:linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01));
+      border:1px solid var(--border);
+    }
+    .compare-row{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center}
+    .compare-pane{
+      border-radius:14px;overflow:hidden;
+      border:1px solid var(--border);
+      background:#0a0c1a;
+      aspect-ratio:4/3;
+      position:relative;
+    }
+    .compare-pane .pane-tag{
+      position:absolute;top:10px;left:10px;
+      font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.18em;
+      color:#fff;padding:4px 8px;border-radius:4px;
+      background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);
+    }
+    .compare-pane .pane-tag.bad{color:#ff7ab0;background:rgba(255,61,138,0.2)}
+    .compare-pane .pane-tag.good{color:#5cf2ff;background:rgba(0,229,255,0.2)}
+    .compare-pane.before{background:linear-gradient(135deg,#1a0e3a 0%,#3a0e2e 100%);display:grid;place-items:center}
+    .compare-pane.before::before{
+      content:"";position:absolute;inset:0;background:
+        radial-gradient(circle at 30% 30%,rgba(255,61,138,0.5),transparent 50%),
+        radial-gradient(circle at 70% 70%,rgba(0,229,255,0.4),transparent 50%);
+    }
+    .compare-pane.before .lock{
+      position:relative;z-index:1;
+      width:80px;height:80px;border-radius:50%;
+      background:rgba(0,0,0,0.4);backdrop-filter:blur(8px);
+      display:grid;place-items:center;border:1px solid rgba(255,255,255,0.2);
+    }
+    .compare-pane.before .lock svg{width:32px;height:32px;color:#fff}
+    .compare-pane.after{background:#0a0c1a;padding:14px;display:flex;flex-direction:column;gap:8px}
+    .compare-pane.after .row{display:flex;gap:6px;align-items:center}
+    .compare-pane.after .row .lbl{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--cyan);width:46px}
+    .compare-pane.after .row .bar{height:8px;border-radius:2px;background:var(--surface-2);flex:1;position:relative;overflow:hidden}
+    .compare-pane.after .row .bar::after{
+      content:"";position:absolute;inset:0;width:var(--w,60%);background:var(--grad-2);border-radius:2px;
+    }
+    .compare-pane.after .row.r1 .bar::after{width:70%}
+    .compare-pane.after .row.r2 .bar::after{width:85%;background:var(--grad-1)}
+    .compare-pane.after .row.r3 .bar::after{width:60%;background:var(--grad-3)}
+    .compare-pane.after .row.r4 .bar::after{width:90%;background:linear-gradient(135deg,#34d399,#00e5ff)}
+    .compare-arrow{
+      width:42px;height:42px;border-radius:50%;
+      display:grid;place-items:center;
+      background:var(--grad-1);
+      box-shadow:0 0 30px rgba(0,229,255,0.4);
+    }
+    .compare-arrow svg{width:20px;height:20px;color:#04050a}
+    .compare-caption{
+      margin-top:18px;display:flex;justify-content:space-between;
+      font-size:12px;font-family:'JetBrains Mono',monospace;
+      color:var(--text-3);letter-spacing:0.1em;
+    }
+
+    /* =========================================================
+       9. WORKFLOW
+       ========================================================= */
+    .workflow{position:relative}
+    .workflow-track{
+      position:relative;
+      display:grid;grid-template-columns:repeat(5,1fr);gap:18px;
+      align-items:stretch;
+    }
+    @media (max-width:1024px){.workflow-track{grid-template-columns:repeat(2,1fr);gap:24px}}
+    @media (max-width:600px){.workflow-track{grid-template-columns:1fr}}
+    .step{
+      position:relative;
+      padding:24px 22px;
+      display:flex;flex-direction:column;gap:14px;
+      min-height:240px;
+    }
+    .step::after{
+      content:"→";position:absolute;
+      right:-22px;top:50%;transform:translateY(-50%);
+      color:var(--cyan);font-size:22px;font-weight:300;
+      text-shadow:0 0 12px var(--cyan);
+    }
+    .step:last-child::after{display:none}
+    @media (max-width:1024px){.step::after{display:none}}
+    .step-head{
+      display:flex;align-items:center;justify-content:space-between;
+    }
+    .step-num{
+      font-family:'JetBrains Mono',monospace;font-weight:700;
+      font-size:11px;letter-spacing:0.18em;
+      color:var(--cyan);
+      padding:4px 8px;border-radius:4px;
+      background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.25);
+    }
+    .step-icon{
+      width:42px;height:42px;border-radius:12px;
+      display:grid;place-items:center;
+      background:linear-gradient(135deg,rgba(0,229,255,0.12),rgba(124,58,237,0.12));
+      border:1px solid rgba(0,229,255,0.25);
+      color:var(--cyan);
+      position:relative;
+    }
+    .step-icon::before{
+      content:"";position:absolute;inset:-3px;border-radius:14px;
+      border:1px solid rgba(0,229,255,0.18);
+      animation:stepBreath 3s ease-in-out infinite;
+    }
+    @keyframes stepBreath{
+      0%,100%{transform:scale(1);opacity:.5}
+      50%{transform:scale(1.12);opacity:0}
+    }
+    .step-icon svg{width:20px;height:20px}
+    .step-title{
+      font-family:'Unbounded',sans-serif;
+      font-weight:600;font-size:17px;letter-spacing:-0.01em;
+      color:var(--text-1);line-height:1.3;
+    }
+    .step-desc{font-size:13px;color:var(--text-2);line-height:1.6}
+    .step-tags{
+      margin-top:auto;
+      display:flex;flex-wrap:wrap;gap:6px;
+    }
+    .step-tag{
+      font-family:'JetBrains Mono',monospace;font-size:10.5px;
+      color:var(--text-3);letter-spacing:0.05em;
+      padding:3px 7px;border-radius:4px;
+      background:var(--surface-2);border:1px solid var(--border);
+    }
+    .workflow-line{
+      position:absolute;left:8%;right:8%;top:50%;height:1px;
+      background:var(--grad-line);opacity:0.4;
+      pointer-events:none;display:none;
+    }
+    @media (min-width:1025px){
+      .workflow-line{display:block}
+    }
+
+    /* =========================================================
+       10. CORE FEATURES
+       ========================================================= */
+    .features-grid{
+      display:grid;grid-template-columns:repeat(3,1fr);gap:20px;
+    }
+    @media (max-width:900px){.features-grid{grid-template-columns:1fr 1fr}}
+    @media (max-width:560px){.features-grid{grid-template-columns:1fr}}
+    .feature{
+      padding:28px 26px;
+      display:flex;flex-direction:column;gap:14px;
+      min-height:230px;
+      transition:transform .3s ease, border-color .3s ease;
+    }
+    .feature:hover{transform:translateY(-4px);border-color:rgba(0,229,255,0.3)}
+    .feature-icon{
+      width:48px;height:48px;border-radius:12px;
+      display:grid;place-items:center;
+      background:linear-gradient(135deg,rgba(0,229,255,0.1),rgba(124,58,237,0.1));
+      border:1px solid rgba(0,229,255,0.2);
+      color:var(--cyan);
+    }
+    .feature:nth-child(1) .feature-icon{color:var(--cyan)}
+    .feature:nth-child(2) .feature-icon{color:var(--pink);background:linear-gradient(135deg,rgba(255,61,138,0.1),rgba(251,191,36,0.05));border-color:rgba(255,61,138,0.2)}
+    .feature:nth-child(3) .feature-icon{color:var(--gold);background:linear-gradient(135deg,rgba(251,191,36,0.1),rgba(255,61,138,0.05));border-color:rgba(251,191,36,0.2)}
+    .feature:nth-child(4) .feature-icon{color:#34d399;background:linear-gradient(135deg,rgba(52,211,153,0.1),rgba(0,229,255,0.05));border-color:rgba(52,211,153,0.2)}
+    .feature:nth-child(5) .feature-icon{color:var(--purple-2);background:linear-gradient(135deg,rgba(167,139,250,0.1),rgba(124,58,237,0.05));border-color:rgba(167,139,250,0.2)}
+    .feature:nth-child(6) .feature-icon{color:var(--pink-2);background:linear-gradient(135deg,rgba(255,122,176,0.1),rgba(255,61,138,0.05));border-color:rgba(255,122,176,0.2)}
+    .feature-icon svg{width:22px;height:22px}
+    .feature-title{
+      font-family:'Unbounded',sans-serif;
+      font-weight:600;font-size:18px;letter-spacing:-0.01em;
+      color:var(--text-1);
+    }
+    .feature-desc{font-size:13.5px;color:var(--text-2);line-height:1.65}
+    .feature-meta{
+      margin-top:auto;
+      display:flex;align-items:center;gap:8px;
+      font-family:'JetBrains Mono',monospace;font-size:10.5px;
+      letter-spacing:0.12em;text-transform:uppercase;
+      color:var(--text-3);
+    }
+    .feature-meta::before{
+      content:"";width:14px;height:1px;background:var(--cyan);
+    }
+
+    /* =========================================================
+       11. TARGET USERS
+       ========================================================= */
+    .users-grid{
+      display:grid;grid-template-columns:repeat(5,1fr);gap:16px;
+    }
+    @media (max-width:1024px){.users-grid{grid-template-columns:repeat(3,1fr)}}
+    @media (max-width:600px){.users-grid{grid-template-columns:repeat(2,1fr)}}
+    .user{
+      padding:24px 20px;text-align:center;
+      display:flex;flex-direction:column;align-items:center;gap:14px;
+      transition:transform .3s ease;
+    }
+    .user:hover{transform:translateY(-4px)}
+    .user-avatar{
+      width:64px;height:64px;border-radius:50%;
+      display:grid;place-items:center;
+      font-family:'Unbounded',sans-serif;
+      font-weight:700;font-size:22px;
+      background:var(--grad-1);
+      color:#04050a;
+      box-shadow:0 8px 24px -8px rgba(0,229,255,0.5);
+      position:relative;
+    }
+    .user-avatar::after{
+      content:"";position:absolute;inset:-4px;border-radius:50%;
+      border:1px solid rgba(0,229,255,0.25);
+    }
+    .user:nth-child(2) .user-avatar{background:linear-gradient(135deg,#ff3d8a,#fbbf24)}
+    .user:nth-child(3) .user-avatar{background:linear-gradient(135deg,#fbbf24,#34d399)}
+    .user:nth-child(4) .user-avatar{background:linear-gradient(135deg,#7c3aed,#00e5ff)}
+    .user:nth-child(5) .user-avatar{background:linear-gradient(135deg,#ff3d8a,#7c3aed)}
+    .user-role{
+      font-family:'Unbounded',sans-serif;
+      font-weight:600;font-size:15px;color:var(--text-1);
+      letter-spacing:-0.01em;
+    }
+    .user-case{font-size:12.5px;color:var(--text-2);line-height:1.55}
+    .user-tag{
+      font-family:'JetBrains Mono',monospace;
+      font-size:10px;letter-spacing:0.12em;
+      color:var(--cyan);text-transform:uppercase;
+      padding:3px 8px;border-radius:4px;
+      background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);
+    }
+
+    /* =========================================================
+       12. VALUE
+       ========================================================= */
+    .value{position:relative}
+    .value-grid{
+      display:grid;grid-template-columns:repeat(3,1fr);gap:20px;
+    }
+    @media (max-width:900px){.value-grid{grid-template-columns:1fr}}
+    .metric{
+      padding:36px 32px;
+      position:relative;overflow:hidden;
+    }
+    .metric::after{
+      content:"";position:absolute;
+      right:-30px;bottom:-30px;width:160px;height:160px;
+      border-radius:50%;
+      background:radial-gradient(circle,rgba(0,229,255,0.18),transparent 70%);
+      pointer-events:none;
+    }
+    .metric:nth-child(2)::after{background:radial-gradient(circle,rgba(255,61,138,0.18),transparent 70%)}
+    .metric:nth-child(3)::after{background:radial-gradient(circle,rgba(124,58,237,0.2),transparent 70%)}
+    .metric-label{
+      font-family:'JetBrains Mono',monospace;
+      font-size:11px;letter-spacing:0.18em;
+      color:var(--cyan);text-transform:uppercase;
+      margin-bottom:18px;
+    }
+    .metric:nth-child(2) .metric-label{color:var(--pink)}
+    .metric:nth-child(3) .metric-label{color:var(--purple-2)}
+    .metric-value{
+      display:flex;align-items:baseline;gap:6px;
+      font-family:'Unbounded',sans-serif;
+      font-weight:800;
+      font-size:clamp(48px,6vw,76px);
+      line-height:1;letter-spacing:-0.04em;
+      color:var(--text-1);
+      margin-bottom:14px;
+    }
+    .metric-unit{
+      font-size:24px;font-weight:600;
+      color:var(--text-2);
+    }
+    .metric-title{
+      font-family:'Unbounded',sans-serif;
+      font-weight:500;font-size:18px;letter-spacing:-0.01em;
+      color:var(--text-1);margin-bottom:8px;
+    }
+    .metric-desc{font-size:13.5px;color:var(--text-2);line-height:1.65}
+
+    /* =========================================================
+       13. CTA / FOOTER
+       ========================================================= */
+    .cta{
+      padding:120px 0;
+      position:relative;
+    }
+    .cta-card{
+      padding:64px;
+      border-radius:28px;
+      text-align:center;
+      position:relative;overflow:hidden;
+      background:linear-gradient(180deg,rgba(0,229,255,0.04),rgba(124,58,237,0.06));
+      border:1px solid rgba(0,229,255,0.18);
+    }
+    .cta-card::before{
+      content:"";position:absolute;inset:0;pointer-events:none;
+      background:
+        radial-gradient(circle at 20% 30%,rgba(0,229,255,0.15),transparent 50%),
+        radial-gradient(circle at 80% 70%,rgba(255,61,138,0.15),transparent 50%);
+    }
+    .cta-card > *{position:relative}
+    .cta h2{
+      font-family:'Unbounded',sans-serif;
+      font-weight:700;font-size:clamp(32px,4.4vw,56px);
+      line-height:1.1;letter-spacing:-0.025em;
+      color:var(--text-1);
+      max-width:760px;margin:18px auto 18px;
+    }
+    .cta p{font-size:16.5px;color:var(--text-2);max-width:560px;margin:0 auto 32px;line-height:1.7}
+    .cta-actions{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+
+    footer{
+      padding:60px 0 50px;
+      border-top:1px solid rgba(255,255,255,0.06);
+      text-align:center;
+    }
+    .footer-logo{
+      display:inline-flex;align-items:center;gap:10px;
+      font-family:'Unbounded',sans-serif;font-weight:700;font-size:18px;
+      margin-bottom:18px;
+    }
+    .footer-tagline{
+      font-size:13.5px;color:var(--text-2);
+      max-width:520px;margin:0 auto 24px;line-height:1.6;
+    }
+    .footer-meta{
+      display:flex;gap:24px;justify-content:center;flex-wrap:wrap;
+      font-family:'JetBrains Mono',monospace;
+      font-size:11px;letter-spacing:0.18em;text-transform:uppercase;
+      color:var(--text-3);
+    }
+    .footer-meta span{display:inline-flex;align-items:center;gap:8px}
+    .footer-meta .dot{width:4px;height:4px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+    .footer-copy{
+      margin-top:24px;font-size:12px;color:var(--text-4);
+    }
+
+    /* =========================================================
+       14. RESPONSIVE TWEAKS
+       ========================================================= */
+    @media (max-width:1024px){
+      section{padding:80px 0}
+      .section-head{margin-bottom:48px}
+      .container{padding:0 22px}
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-ambient" aria-hidden="true"></div>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-noise" aria-hidden="true"></div>
+
+  <!-- ============ NAV ============ -->
+  <nav class="nav" id="nav">
+    <div class="container nav-inner">
+      <a href="#hero" class="logo">
+        <span class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 4c4 4 10 4 14 0M5 20c4-4 10-4 14 0M5 4v16M19 4v16"/>
+          </svg>
+        </span>
+        DeckDNA<span style="color:var(--text-3);font-weight:400;margin-left:2px">.AI</span>
+      </a>
+      <div class="nav-links">
+        <a class="nav-link" href="#pain">Pain</a>
+        <a class="nav-link" href="#solution">Solution</a>
+        <a class="nav-link" href="#workflow">Workflow</a>
+        <a class="nav-link" href="#features">Features</a>
+        <a class="nav-link" href="#users">Users</a>
+        <a class="nav-link" href="#value">Value</a>
+      </div>
+      <a class="nav-cta" href="#workflow">
+        View Workflow
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+  </nav>
+
+  <!-- ============ HERO ============ -->
+  <header class="hero" id="hero">
+    <div class="container">
+      <div class="hero-grid">
+        <div class="hero-content">
+          <div class="hero-badge">
+            <span class="hero-badge-dot">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
+            </span>
+            <span>Built for <b>TRAE AI Contest</b> · 元素级生成引擎</span>
+          </div>
+
+          <h1>
+            <span class="deck">Deck</span><span class="dna">DNA</span>
+          </h1>
+
+          <p class="hero-tagline">
+            <span class="accent">From Poster Image</span> to Editable Native PPT.
+          </p>
+          <p class="hero-desc">
+            把海报级视觉"DNA"注入原生 PPTX —— 视觉理解 · 元素拆解 · OpenXML 写入。
+            不是网页伪 PPT，不是单张图片，而是真正可拆分、可编辑、可复用的<strong style="color:var(--text-1);font-weight:600">原生 PPT 元素</strong>。
+          </p>
+
+          <div class="hero-actions">
+            <a class="btn-primary" href="#workflow">
+              View Workflow
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+            </a>
+            <a class="btn-ghost" href="#features">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              6 Core Features
+            </a>
+          </div>
+
+          <div class="hero-meta">
+            <div class="hero-meta-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 12 2 2 4-4M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z"/></svg>
+              <span><b>OpenXML</b> · 100% 原生</span>
+            </div>
+            <div class="hero-meta-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M3 12h18M3 17h12"/></svg>
+              <span><b>元素级</b> · 可拆可改</span>
+            </div>
+            <div class="hero-meta-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              <span><b>PPTX</b> · 即开即用</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="dna-stage">
+            <div class="orbit" aria-hidden="true"></div>
+            <div class="orbit orbit-2" aria-hidden="true"></div>
+            <div class="deco-dot d1" aria-hidden="true"></div>
+            <div class="deco-dot d2" aria-hidden="true"></div>
+            <div class="deco-dot d3" aria-hidden="true"></div>
+            <div class="deco-dot d4" aria-hidden="true"></div>
+
+            <div class="layer-stack">
+              <!-- L1 background -->
+              <div class="layer-card l1">
+                <span class="lbl">LAYER · BACKGROUND</span>
+                <div class="layer-content"><div class="layer-bg"></div></div>
+              </div>
+              <!-- L2 image -->
+              <div class="layer-card l2">
+                <span class="lbl" style="color:var(--pink);background:rgba(255,61,138,0.1);border-color:rgba(255,61,138,0.3)">LAYER · IMAGE</span>
+                <div class="layer-content"><div class="layer-image"></div></div>
+              </div>
+              <!-- L3 shapes -->
+              <div class="layer-card l3">
+                <span class="lbl" style="color:var(--gold);background:rgba(251,191,36,0.1);border-color:rgba(251,191,36,0.3)">LAYER · SHAPES</span>
+                <div class="layer-content"><div class="layer-shapes">
+                  <div class="circ"></div><div class="sq"></div><div class="tri"></div>
+                </div></div>
+              </div>
+              <!-- L4 text -->
+              <div class="layer-card l4">
+                <span class="lbl" style="color:var(--purple-2);background:rgba(167,139,250,0.1);border-color:rgba(167,139,250,0.3)">LAYER · TEXT</span>
+                <div class="layer-content"><div class="layer-text">
+                  <div class="l1"></div><div class="l2"></div><div class="l3"></div>
+                </div></div>
+              </div>
+              <!-- L5 icons -->
+              <div class="layer-card l5">
+                <span class="lbl" style="color:#34d399;background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.3)">LAYER · ICONS</span>
+                <div class="layer-content"><div class="layer-icons">
+                  <div class="ic c1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+                  <div class="ic c2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg></div>
+                  <div class="ic c3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7l3-7Z"/></svg></div>
+                  <div class="ic c4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M9 21V9"/></svg></div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="scroll-cue" aria-hidden="true">SCROLL</div>
+  </header>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ PAIN POINTS ============ -->
+  <section class="pain" id="pain">
+    <div class="container">
+      <div class="section-head">
+        <div class="reveal"><span class="eyebrow pink">01 · Pain Points</span></div>
+        <h2 class="section-title reveal" data-d="1">三种演示困境，<br/>DeckDNA AI 一次解决</h2>
+        <p class="section-subtitle reveal" data-d="2">
+          当前 AI 演示工具要么"好看却改不动"、要么"能改却没设计感"、要么"做出来却交不出去"——我们看见这些断点。
+        </p>
+      </div>
+
+      <div class="pain-grid">
+        <div class="glass pain-card reveal" data-d="1">
+          <div class="icon-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" fill-opacity="0.15"/>
+              <path d="M8 11h8M8 14h5"/>
+              <path d="M14.5 17.5 17 20l3-3" stroke-width="2.2"/>
+            </svg>
+          </div>
+          <div class="pain-tag">Pain · 01</div>
+          <div class="pain-title">AI 海报<em>好看</em>，<br/>却改不动</div>
+          <p class="pain-desc">
+            Midjourney / 各类海报 AI 输出一张位图。文字、形状、图标全都糊在像素里——想换一句话？想改一个数字？得整张重画。
+          </p>
+          <div class="pain-vs">现状 / <b>Flat Image, No Edit</b></div>
+        </div>
+
+        <div class="glass pain-card reveal" data-d="2">
+          <div class="icon-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="14" rx="2"/>
+              <path d="M3 9h18"/>
+              <path d="M8 13h2M14 13h2M8 16h8" stroke-width="2"/>
+              <path d="M9 4V2M15 4V2" stroke-width="2"/>
+            </svg>
+          </div>
+          <div class="pain-tag">Pain · 02</div>
+          <div class="pain-title">传统 PPT <em>可编辑</em>，<br/>但不好看</div>
+          <p class="pain-desc">
+            Office / Keynote 自带模板同质化严重。想做出创赛、品牌发布级别的视觉？模板不够用，套版式又像"实习生 PPT"。
+          </p>
+          <div class="pain-vs">现状 / <b>Editable but Boring</b></div>
+        </div>
+
+        <div class="glass pain-card reveal" data-d="3">
+          <div class="icon-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="14" rx="2"/>
+              <path d="M2 8h20"/>
+              <circle cx="6" cy="6" r="0.6" fill="currentColor"/>
+              <circle cx="8" cy="6" r="0.6" fill="currentColor"/>
+              <path d="M8 14h.01M12 14h.01M16 14h.01" stroke-width="2.5"/>
+              <path d="M12 18v3M9 21h6" stroke-width="2"/>
+              <path d="m17 18 2 2 4-4" stroke-width="2"/>
+            </svg>
+          </div>
+          <div class="pain-tag">Pain · 03</div>
+          <div class="pain-title">网页 PPT <em>难交付</em>，<br/>合作方打不开</div>
+          <p class="pain-desc">
+            Gamma / Tome 之类生成的是网页演示。客户用 PowerPoint？老师用 WPS？合伙人要源文件？网页链接无法直接交付、可控性几乎为零。
+          </p>
+          <div class="pain-vs">现状 / <b>Web-only, Not Deliverable</b></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ SOLUTION ============ -->
+  <section class="solution" id="solution">
+    <div class="container">
+      <div class="section-head">
+        <div class="reveal"><span class="eyebrow">02 · Our Solution</span></div>
+        <h2 class="section-title reveal" data-d="1">从一张海报，<br/>到一份<em style="font-style:normal;color:var(--cyan)">真正可编辑</em>的 PPT</h2>
+        <p class="section-subtitle reveal" data-d="2">
+          DeckDNA AI 把"视觉 DNA"解析为可寻址、可编辑的原生 PPT 元素——既保留海报级美学，又让任何人都能在 PowerPoint 中继续创作。
+        </p>
+      </div>
+
+      <div class="solution-wrap">
+        <div class="reveal">
+          <div class="solution-statement">
+            把海报级视觉 <span class="hl">DNA</span>，<br/>
+            注入原生 PPT 元素。
+          </div>
+          <div class="solution-list">
+            <div class="solution-pillar">
+              <div class="num">01</div>
+              <div>
+                <h4>视觉理解 (Visual Understanding)</h4>
+                <p>多模态视觉模型识别海报中的图层、文字、形状、图标、配色与版式关系——不只看"是什么"，更看"它们怎么组合"。</p>
+              </div>
+            </div>
+            <div class="solution-pillar">
+              <div class="num">02</div>
+              <div>
+                <h4>元素级重构 (Element Reconstruction)</h4>
+                <p>把像素级画面拆解成可寻址的语义元素：标题、正文、按钮、形状、图标、装饰几何——每一个都成为独立可编辑的 PPT 节点。</p>
+              </div>
+            </div>
+            <div class="solution-pillar">
+              <div class="num">03</div>
+              <div>
+                <h4>原生写入 (Native OpenXML Writing)</h4>
+                <p>按 OpenXML / DrawingML 规范把元素写入 PPTX，输出可在 PowerPoint / Keynote / WPS 中二次编辑的真正 .pptx 文件。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="compare reveal" data-d="2">
+          <div class="compare-row">
+            <div class="compare-pane before">
+              <span class="pane-tag bad">BEFORE · FLAT IMAGE</span>
+              <div class="lock">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="11" width="16" height="10" rx="2"/>
+                  <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="compare-arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+            </div>
+            <div class="compare-pane after">
+              <span class="pane-tag good">AFTER · NATIVE PPTX</span>
+              <div class="row r1"><span class="lbl">BG</span><div class="bar"></div></div>
+              <div class="row r2"><span class="lbl">IMG</span><div class="bar"></div></div>
+              <div class="row r3"><span class="lbl">TXT</span><div class="bar"></div></div>
+              <div class="row r4"><span class="lbl">SHP</span><div class="bar"></div></div>
+            </div>
+          </div>
+          <div class="compare-caption">
+            <span>输入 · 海报级视觉</span>
+            <span>输出 · 可拆分/可编辑 PPTX</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ WORKFLOW ============ -->
+  <section class="workflow" id="workflow">
+    <div class="container">
+      <div class="section-head">
+        <div class="reveal"><span class="eyebrow purple">03 · How It Works</span></div>
+        <h2 class="section-title reveal" data-d="1">五步完成<br/>海报 → PPT 的元素级生成</h2>
+        <p class="section-subtitle reveal" data-d="2">
+          从"输入主题"到"导出可编辑 PPTX"——一个端到端、可解释的元素级生产链路。
+        </p>
+      </div>
+
+      <div class="workflow-track">
+        <div class="glass step reveal" data-d="1">
+          <div class="step-head">
+            <div class="step-num">STEP · 01</div>
+          </div>
+          <div class="step-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 4h16v12H4z"/><path d="M4 16l4-4 4 4 4-4 4 4"/><circle cx="9" cy="9" r="1.5"/>
+            </svg>
+          </div>
+          <div class="step-title">输入主题 / 上传图像</div>
+          <div class="step-desc">用一句自然语言描述主题，或直接拖入一张海报/截图作为视觉起点。</div>
+          <div class="step-tags">
+            <span class="step-tag">prompt</span>
+            <span class="step-tag">image</span>
+          </div>
+        </div>
+
+        <div class="glass step reveal" data-d="2">
+          <div class="step-head">
+            <div class="step-num">STEP · 02</div>
+          </div>
+          <div class="step-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 17l6-6 4 4 8-9"/><path d="M14 6h7v7"/>
+            </svg>
+          </div>
+          <div class="step-title">生成海报级画面</div>
+          <div class="step-desc">扩散模型按主题/上传图生成一张完整海报级视觉，包含排版、配色、装饰元素。</div>
+          <div class="step-tags">
+            <span class="step-tag">poster</span>
+            <span class="step-tag">layout</span>
+          </div>
+        </div>
+
+        <div class="glass step reveal" data-d="3">
+          <div class="step-head">
+            <div class="step-num">STEP · 03</div>
+          </div>
+          <div class="step-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+          </div>
+          <div class="step-title">视觉模型解析</div>
+          <div class="step-desc">视觉大模型对画面做图层检测、语义分割、文字 OCR、形状识别与版式分析。</div>
+          <div class="step-tags">
+            <span class="step-tag">segmentation</span>
+            <span class="step-tag">ocr</span>
+          </div>
+        </div>
+
+        <div class="glass step reveal" data-d="4">
+          <div class="step-head">
+            <div class="step-num">STEP · 04</div>
+          </div>
+          <div class="step-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+          </div>
+          <div class="step-title">元素级重构</div>
+          <div class="step-desc">把每一块像素区域映射为结构化对象：标题、正文、按钮、图标、形状、装饰几何。</div>
+          <div class="step-tags">
+            <span class="step-tag">reconstruct</span>
+            <span class="step-tag">vectorize</span>
+          </div>
+        </div>
+
+        <div class="glass step reveal" data-d="5">
+          <div class="step-head">
+            <div class="step-num">STEP · 05</div>
+          </div>
+          <div class="step-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h6M9 17h4"/>
+            </svg>
+          </div>
+          <div class="step-title">写入 PPTX · 导出</div>
+          <div class="step-desc">按 OpenXML 规范序列化为 .pptx，可在 PowerPoint/Keynote/WPS 直接打开并继续编辑。</div>
+          <div class="step-tags">
+            <span class="step-tag">openxml</span>
+            <span class="step-tag">.pptx</span>
+          </div>
+        </div>
+
+        <div class="workflow-line" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ CORE FEATURES ============ -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="section-head">
+        <div class="reveal"><span class="eyebrow gold">04 · Core Features</span></div>
+        <h2 class="section-title reveal" data-d="1">六大核心能力<br/>构成元素级生成引擎</h2>
+        <p class="section-subtitle reveal" data-d="2">
+          从像素到矢量、从图像到结构——DeckDNA AI 拥有完整的"理解 → 拆解 → 重建 → 输出"技术栈。
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <div class="glass feature reveal" data-d="1">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+            </svg>
+          </div>
+          <div class="feature-title">图层识别</div>
+          <p class="feature-desc">智能检测背景 / 图像 / 文字 / 形状 / 图标图层结构，建立可寻址的元素清单。</p>
+          <div class="feature-meta">LAYER · DETECT</div>
+        </div>
+
+        <div class="glass feature reveal" data-d="2">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+            </svg>
+          </div>
+          <div class="feature-title">文字重建</div>
+          <p class="feature-desc">OCR 识别 + 字体推断 + 字号映射，把海报文字重建为可编辑的文本框（保留样式）。</p>
+          <div class="feature-meta">TEXT · RECONSTRUCT</div>
+        </div>
+
+        <div class="glass feature reveal" data-d="3">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="8" cy="8" r="4"/><rect x="12" y="12" width="8" height="8" rx="1.5"/><path d="m16 16 3 3 5-5"/>
+            </svg>
+          </div>
+          <div class="feature-title">形状 / 图标还原</div>
+          <p class="feature-desc">从位图边缘反推几何形状，把装饰元素还原为 SVG / DrawingML 可调用的矢量对象。</p>
+          <div class="feature-meta">SHAPE · VECTORIZE</div>
+        </div>
+
+        <div class="glass feature reveal" data-d="4">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 4h18v4H3zM3 10h12v4H3zM3 14h18v6H3z"/>
+              <path d="m17 12 2 2 4-4"/>
+            </svg>
+          </div>
+          <div class="feature-title">版式规范检查</div>
+          <p class="feature-desc">检查对齐 / 间距 / 层级 / 留白，给出版式评分与改进建议，确保视觉规范统一。</p>
+          <div class="feature-meta">LAYOUT · AUDIT</div>
+        </div>
+
+        <div class="glass feature reveal" data-d="5">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h2M9 17h6"/>
+            </svg>
+          </div>
+          <div class="feature-title">PPTX 原生导出</div>
+          <p class="feature-desc">按 OpenXML/DrawingML 规范写入 .pptx，所有元素在 PowerPoint 中可二次编辑、可复用。</p>
+          <div class="feature-meta">EXPORT · .PPTX</div>
+        </div>
+
+        <div class="glass feature reveal" data-d="6">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+            </svg>
+          </div>
+          <div class="feature-title">备注讲稿生成</div>
+          <p class="feature-desc">为每张幻灯片自动生成讲稿备注（演讲者注释），路演 / 答辩开箱即用。</p>
+          <div class="feature-meta">NOTES · SPEAKER</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ TARGET USERS ============ -->
+  <section class="users" id="users">
+    <div class="container">
+      <div class="section-head">
+        <div class="reveal"><span class="eyebrow">05 · Target Users</span></div>
+        <h2 class="section-title reveal" data-d="1">为谁而生？</h2>
+        <p class="section-subtitle reveal" data-d="2">
+          任何需要"高视觉 + 可二次编辑 + 可直接交付"的演示场景，都能从 DeckDNA AI 中受益。
+        </p>
+      </div>
+
+      <div class="users-grid">
+        <div class="glass user reveal" data-d="1">
+          <div class="user-avatar">CT</div>
+          <div class="user-role">创赛团队</div>
+          <p class="user-case">路演 PPT 要"惊艳"评委，DeckDNA 帮你 5 分钟出一版可改的视觉稿。</p>
+          <div class="user-tag">PITCH</div>
+        </div>
+        <div class="glass user reveal" data-d="2">
+          <div class="user-avatar">PM</div>
+          <div class="user-role">产品经理</div>
+          <p class="user-case">PRD / 评审 / 发布稿需要设计感，又必须由团队继续编辑——正好。</p>
+          <div class="user-tag">PRODUCT</div>
+        </div>
+        <div class="glass user reveal" data-d="3">
+          <div class="user-avatar">ED</div>
+          <div class="user-role">教师 / 培训师</div>
+          <p class="user-case">课件既要漂亮又要按学生反馈随时调整，元素级编辑最适合教学迭代。</p>
+          <div class="user-tag">EDUCATION</div>
+        </div>
+        <div class="glass user reveal" data-d="4">
+          <div class="user-avatar">CN</div>
+          <div class="user-role">咨询顾问</div>
+          <p class="user-case">客户提案要"既快又好"，PPT 还要能直接拿给客户改，DeckDNA 一站搞定。</p>
+          <div class="user-tag">CONSULTING</div>
+        </div>
+        <div class="glass user reveal" data-d="5">
+          <div class="user-avatar">ST</div>
+          <div class="user-role">创业路演</div>
+          <p class="user-case">融资路演需要叙事 + 视觉双在线，输出可改 PPT 让投资人在你的稿上继续提问。</p>
+          <div class="user-tag">STARTUP</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ VALUE ============ -->
+  <section class="value" id="value">
+    <div class="container">
+      <div class="section-head">
+        <div class="reveal"><span class="eyebrow pink">06 · Value &amp; Impact</span></div>
+        <h2 class="section-title reveal" data-d="1">不止更快——<br/>重新定义 AI 演示生产链路</h2>
+        <p class="section-subtitle reveal" data-d="2">
+          效率、可复用性、行业范式——DeckDNA AI 让"设计 + 演示"这件事在 AI 时代真正成立。
+        </p>
+      </div>
+
+      <div class="value-grid">
+        <div class="glass metric reveal" data-d="1">
+          <div class="metric-label">EFFICIENCY · 效率</div>
+          <div class="metric-value">
+            <span data-counter="10" data-suffix="x">10x</span>
+          </div>
+          <div class="metric-title">从小时级到分钟级</div>
+          <p class="metric-desc">传统"出图 + 套模板 + 改稿"链路 4–6 小时，DeckDNA 把首版产出压缩到分钟级，剩余时间全部用于"内容打磨"。</p>
+        </div>
+
+        <div class="glass metric reveal" data-d="2">
+          <div class="metric-label">REUSABILITY · 复用</div>
+          <div class="metric-value">
+            <span data-counter="100" data-suffix="%">100%</span>
+          </div>
+          <div class="metric-title">设计资产可复用</div>
+          <p class="metric-desc">所有图层、配色、版式、图标都被结构化为可寻址元素，可被拆解、迁移、跨页复用——设计资产首次真正"可编程"。</p>
+        </div>
+
+        <div class="glass metric reveal" data-d="3">
+          <div class="metric-label">IMPACT · 行业</div>
+          <div class="metric-value">
+            <span data-counter="1" data-suffix="">1</span>
+            <span class="metric-unit">st</span>
+          </div>
+          <div class="metric-title">从"网页 PPT"到"原生 PPT"</div>
+          <p class="metric-desc">AI 演示赛道第一次打通"视觉表现力"与"原生可编辑"的鸿沟，重新定义"AI 演示工具"的产品形态。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- ============ CTA ============ -->
+  <section class="cta">
+    <div class="container">
+      <div class="cta-card glass reveal">
+        <div class="eyebrow">07 · Call to Action</div>
+        <h2>Ready to extract the <span class="gradient-text">DNA</span> from your poster?</h2>
+        <p>把任意海报 / 截图变成一份可拆分、可编辑、可直接交付的原生 PPTX。让 AI 的视觉能力，第一次真正"可拥有"。</p>
+        <div class="cta-actions">
+          <a class="btn-primary" href="#hero">
+            回到顶部
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </a>
+          <a class="btn-ghost" href="#workflow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
+            查看完整工作流
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer>
+    <div class="container">
+      <div class="footer-logo">
+        <span class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 4c4 4 10 4 14 0M5 20c4-4 10-4 14 0M5 4v16M19 4v16"/>
+          </svg>
+        </span>
+        DeckDNA<span style="color:var(--text-3);font-weight:400;margin-left:2px">.AI</span>
+      </div>
+      <p class="footer-tagline">
+        From Poster Image to Editable Native PPT — 把海报级视觉变成可编辑 PPT 的元素级生成引擎。
+      </p>
+      <div class="footer-meta">
+        <span><span class="dot"></span>TRAE AI Contest</span>
+        <span><span class="dot"></span>Creative Demo</span>
+        <span><span class="dot"></span>2026</span>
+      </div>
+      <p class="footer-copy">© DeckDNA AI · 创意展示单页 · Built for TRAE AI 大赛</p>
+    </div>
+  </footer>
+
+  <script>
+    /* =========================================================
+       15. JS · INTERACTIONS
+       ========================================================= */
+    (function(){
+      'use strict';
+
+      // 15.1 Nav scroll state
+      const nav = document.getElementById('nav');
+      const onScroll = () => {
+        if(window.scrollY > 30) nav.classList.add('scrolled');
+        else nav.classList.remove('scrolled');
+      };
+      window.addEventListener('scroll', onScroll, {passive:true});
+      onScroll();
+
+      // 15.2 Reveal on scroll
+      const io = new IntersectionObserver((entries)=>{
+        entries.forEach(e=>{
+          if(e.isIntersecting){
+            e.target.classList.add('in');
+            io.unobserve(e.target);
+          }
+        });
+      },{threshold:0.12, rootMargin:'0px 0px -60px 0px'});
+      document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+      // 15.3 Mouse-following glow on glass cards
+      document.querySelectorAll('.glass').forEach(card=>{
+        const glow = card.querySelector('.glow');
+        if(!glow) return;
+        card.addEventListener('mousemove',(ev)=>{
+          const r = card.getBoundingClientRect();
+          const x = ((ev.clientX - r.left)/r.width)*100;
+          const y = ((ev.clientY - r.top)/r.height)*100;
+          glow.style.setProperty('--mx', x+'%');
+          glow.style.setProperty('--my', y+'%');
+        });
+      });
+
+      // 15.4 Smooth scroll for anchors
+      document.querySelectorAll('a[href^="#"]').forEach(a=>{
+        a.addEventListener('click', (e)=>{
+          const id = a.getAttribute('href');
+          if(id.length <= 1) return;
+          const t = document.querySelector(id);
+          if(!t) return;
+          e.preventDefault();
+          const y = t.getBoundingClientRect().top + window.scrollY - 70;
+          window.scrollTo({top:y, behavior:'smooth'});
+        });
+      });
+
+      // 15.5 Hero parallax for layer stack
+      const stage = document.querySelector('.dna-stage');
+      const cards = document.querySelectorAll('.layer-card');
+      if(stage && cards.length && window.matchMedia('(min-width:1025px)').matches){
+        stage.addEventListener('mousemove',(ev)=>{
+          const r = stage.getBoundingClientRect();
+          const dx = (ev.clientX - (r.left + r.width/2)) / r.width;
+          const dy = (ev.clientY - (r.top + r.height/2)) / r.height;
+          cards.forEach((c,i)=>{
+            const k = (i+1)*4;
+            c.style.transform = (c.style.transform.replace(/translate3d\([^)]+\)/,'') || '') + ` translate3d(${dx*k}px, ${dy*k}px, 0)`;
+          });
+        });
+        stage.addEventListener('mouseleave',()=>{
+          cards.forEach(c=>{
+            c.style.transform = '';
+          });
+        });
+      }
+
+      // 15.6 Counter animation
+      const counters = document.querySelectorAll('[data-counter]');
+      const counterIO = new IntersectionObserver((entries)=>{
+        entries.forEach(e=>{
+          if(e.isIntersecting){
+            const el = e.target;
+            const target = parseFloat(el.dataset.counter);
+            const suffix = el.dataset.suffix || '';
+            const dur = 1600;
+            const start = performance.now();
+            const isInt = Number.isInteger(target);
+            const step = (now)=>{
+              const p = Math.min(1,(now-start)/dur);
+              const ease = 1 - Math.pow(1-p,3);
+              const v = target * ease;
+              el.textContent = (isInt ? Math.round(v) : v.toFixed(1)) + suffix;
+              if(p<1) requestAnimationFrame(step);
+            };
+            requestAnimationFrame(step);
+            counterIO.unobserve(el);
+          }
+        });
+      },{threshold:0.4});
+      counters.forEach(c=>counterIO.observe(c));
+
+      // 15.7 Tilt-on-hover for user avatars
+      document.querySelectorAll('.user-avatar').forEach(a=>{
+        a.addEventListener('mousemove',(ev)=>{
+          const r = a.getBoundingClientRect();
+          const dx = (ev.clientX - (r.left + r.width/2)) / r.width;
+          const dy = (ev.clientY - (r.top + r.height/2)) / r.height;
+          a.style.transform = `perspective(400px) rotateY(${dx*10}deg) rotateX(${-dy*10}deg) translateZ(6px)`;
+        });
+        a.addEventListener('mouseleave',()=>{a.style.transform=''});
+      });
+
+      // 15.8 Add glow element to all glass cards lacking one (defensive)
+      document.querySelectorAll('.glass').forEach(card=>{
+        if(!card.querySelector('.glow')){
+          const g = document.createElement('span');
+          g.className = 'glow';
+          card.appendChild(g);
+        }
+      });
+
+    })();
+  </script>
+</body>
+</html>

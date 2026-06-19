@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>乐器调音器 - 简约清新版</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        // 浅绿柔和配色方案
+                        primary: '#A8E6CF',
+                        'primary-dark': '#88D4AB',
+                        'primary-light': '#C8F0DF',
+                        'bg-start': '#F0FFF4',
+                        'bg-end': '#FFFFFF',
+                        accent: '#2D5A45',
+                        warning: '#FFE66D',
+                        danger: '#FF6B6B',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* 自定义样式补充 */
+        body {
+            background: linear-gradient(135deg, #F0FFF4 0%, #FFFFFF 100%);
+        }
+        .gauge-ring {
+            filter: drop-shadow(0 4px 20px rgba(168, 230, 207, 0.4));
+        }
+        /* 达标高亮动画 */
+        @keyframes pulse-success {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+            50% { box-shadow: 0 0 0 15px rgba(34, 197, 94, 0); }
+        }
+        .in-tune {
+            animation: pulse-success 1s ease-in-out infinite;
+        }
+        /* 波形动画 */
+        @keyframes wave-pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        .wave-pulse {
+            animation: wave-pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4 font-sans">
+    <!-- 主容器 -->
+    <div id="app" class="w-full max-w-md mx-auto">
+        <!-- 顶部乐器切换 Tab -->
+        <div class="flex rounded-xl bg-white/80 backdrop-blur shadow-lg overflow-hidden mb-6">
+            <button id="tab-guitar"
+                class="flex-1 py-3 px-4 text-center font-medium transition-all duration-300 tab-btn active"
+                onclick="switchInstrument('guitar')">
+                🎸 吉他
+            </button>
+            <button id="tab-ukulele"
+                class="flex-1 py-3 px-4 text-center font-medium transition-all duration-300 tab-btn"
+                onclick="switchInstrument('ukulele')">
+                🪕 尤克里里
+            </button>
+        </div>
+
+        <!-- 圆形波形音准表盘 -->
+        <div class="relative flex items-center justify-center mb-6">
+            <canvas id="gauge" class="gauge-ring" width="300" height="300"></canvas>
+            <!-- 中心音高显示 -->
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+                <span id="target-note" class="text-5xl font-bold text-accent">E4</span>
+                <span id="current-freq" class="text-sm text-gray-500 mt-1">-- Hz</span>
+                <span id="tuning-status" class="text-xs mt-2 px-3 py-1 rounded-full bg-gray-100 text-gray-600">
+                    待检测
+                </span>
+            </div>
+        </div>
+
+        <!-- 琴弦快捷按键 -->
+        <div id="string-buttons" class="grid grid-cols-6 gap-2 mb-6">
+            <!-- 动态生成 -->
+        </div>
+
+        <!-- 麦克风状态 -->
+        <div id="mic-status" class="text-center text-sm text-gray-500 mb-4">
+            <span id="mic-indicator" class="inline-block w-2 h-2 rounded-full bg-gray-300 mr-2"></span>
+            <span id="mic-text">点击启用麦克风开始调音</span>
+        </div>
+
+        <!-- 底部使用说明 -->
+        <div class="bg-white/60 backdrop-blur rounded-xl p-4 text-sm text-gray-600 text-center">
+            <p class="mb-1"><strong>使用说明</strong></p>
+            <p>1. 允许麦克风权限</p>
+            <p>2. 选择要调校的琴弦</p>
+            <p>3. 弹奏对应琴弦，观察波形与指示</p>
+            <p class="text-xs text-gray-400 mt-2">绿色高亮 = 音准达标 | 波形实时响应音频</p>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 配置常量 ====================
+        // 吉他标准调弦频率 (Hz)
+        const GUITAR_STRINGS = [
+            { name: 'E2', note: 'E', octave: 2, freq: 82.41 },
+            { name: 'A2', note: 'A', octave: 2, freq: 110.00 },
+            { name: 'D3', note: 'D', octave: 3, freq: 146.83 },
+            { name: 'G3', note: 'G', octave: 3, freq: 196.00 },
+            { name: 'B3', note: 'B', octave: 3, freq: 246.94 },
+            { name: 'E4', note: 'E', octave: 4, freq: 329.63 }
+        ];
+
+        // 尤克里里 GCEA 调弦频率 (Hz)
+        const UKULELE_STRINGS = [
+            { name: 'G4', note: 'G', octave: 4, freq: 392.00 },
+            { name: 'C4', note: 'C', octave: 4, freq: 261.63 },
+            { name: 'E4', note: 'E', octave: 4, freq: 329.63 },
+            { name: 'A4', note: 'A', octave: 4, freq: 440.00 }
+        ];
+
+        // 音准容差 (cents)
+        const PITCH_TOLERANCE = 10;
+
+        // ==================== 状态变量 ====================
+        let currentInstrument = 'guitar';        // 当前乐器
+        let selectedStringIndex = 5;             // 当前选中的弦索引 (吉他默认第6弦E4)
+        let audioContext = null;                  // 音频上下文
+        let analyser = null;                     // 音频分析器
+        let microphone = null;                   // 麦克风流
+        let isListening = false;                 // 是否正在监听
+        let animationId = null;                  // 动画帧ID
+
+        // ==================== DOM 元素 ====================
+        const canvas = document.getElementById('gauge');
+        const ctx = canvas.getContext('2d');
+        const targetNoteEl = document.getElementById('target-note');
+        const currentFreqEl = document.getElementById('current-freq');
+        const tuningStatusEl = document.getElementById('tuning-status');
+        const stringButtonsEl = document.getElementById('string-buttons');
+        const micIndicator = document.getElementById('mic-indicator');
+        const micText = document.getElementById('mic-text');
+
+        // ==================== 初始化 ====================
+        function init() {
+            renderStringButtons();
+            updateTargetDisplay();
+            startVisualization();
+        }
+
+        // ==================== 乐器切换 ====================
+        function switchInstrument(instrument) {
+            currentInstrument = instrument;
+
+            // 更新 Tab 样式
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active', 'bg-primary', 'text-accent');
+                btn.classList.add('text-gray-500');
+            });
+            const activeTab = document.getElementById(`tab-${instrument}`);
+            activeTab.classList.add('active', 'bg-primary', 'text-accent');
+            activeTab.classList.remove('text-gray-500');
+
+            // 切换到尤克里里时选中第4弦(G4)
+            selectedStringIndex = instrument === 'ukulele' ? 0 : 5;
+
+            renderStringButtons();
+            updateTargetDisplay();
+        }
+
+        // ==================== 渲染琴弦按键 ====================
+        function renderStringButtons() {
+            const strings = currentInstrument === 'guitar' ? GUITAR_STRINGS : UKULELE_STRINGS;
+            const cols = currentInstrument === 'guitar' ? 6 : 4;
+
+            stringButtonsEl.className = `grid grid-cols-${cols} gap-2 mb-6`;
+            stringButtonsEl.innerHTML = strings.map((str, i) => `
+                <button onclick="selectString(${i})"
+                    class="string-btn py-3 px-2 rounded-xl font-medium text-sm transition-all duration-300
+                           ${i === selectedStringIndex
+                               ? 'bg-accent text-white shadow-lg scale-105'
+                               : 'bg-white/80 text-gray-600 hover:bg-primary-light'
+                           }">
+                    ${str.name}
+                </button>
+            `).join('');
+        }
+
+        // ==================== 选择琴弦 ====================
+        function selectString(index) {
+            selectedStringIndex = index;
+            renderStringButtons();
+            updateTargetDisplay();
+        }
+
+        // ==================== 更新目标音显示 ====================
+        function updateTargetDisplay() {
+            const strings = currentInstrument === 'guitar' ? GUITAR_STRINGS : UKULELE_STRINGS;
+            const target = strings[selectedStringIndex];
+            targetNoteEl.textContent = target.name;
+        }
+
+        // ==================== 麦克风初始化 ====================
+        async function initMicrophone() {
+            try {
+                // 请求麦克风权限
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                microphone = stream;
+
+                // 创建音频上下文
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+                // 创建分析器节点
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.8;
+
+                // 将麦克风连接到分析器
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+
+                // 更新 UI
+                isListening = true;
+                micIndicator.className = 'inline-block w-2 h-2 rounded-full bg-green-500 mr-2';
+                micText.textContent = '麦克风已启用';
+
+                // 开始分析
+                analyzeAudio();
+
+            } catch (err) {
+                console.error('麦克风初始化失败:', err);
+                micIndicator.className = 'inline-block w-2 h-2 rounded-full bg-red-500 mr-2';
+                micText.textContent = '麦克风访问被拒绝';
+            }
+        }
+
+        // ==================== 音频分析 ====================
+        function analyzeAudio() {
+            if (!isListening || !analyser) return;
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            const frequencyData = new Float32Array(bufferLength);
+
+            // 获取频域数据
+            analyser.getByteFrequencyData(dataArray);
+            analyser.getFloatFrequencyData(frequencyData);
+
+            // 检测基频
+            const detectedFreq = detectPitch(dataArray, frequencyData, audioContext.sampleRate);
+
+            // 获取当前目标频率
+            const strings = currentInstrument === 'guitar' ? GUITAR_STRINGS : UKULELE_STRINGS;
+            const targetFreq = strings[selectedStringIndex].freq;
+
+            // 更新显示
+            if (detectedFreq > 0) {
+                currentFreqEl.textContent = detectedFreq.toFixed(1) + ' Hz';
+
+                // 计算 cents 偏差
+                const cents = 1200 * Math.log2(detectedFreq / targetFreq);
+                updateTuningStatus(cents);
+            } else {
+                currentFreqEl.textContent = '-- Hz';
+                tuningStatusEl.textContent = '待检测';
+                tuningStatusEl.className = 'text-xs mt-2 px-3 py-1 rounded-full bg-gray-100 text-gray-600';
+            }
+
+            // 继续分析循环
+            requestAnimationFrame(analyzeAudio);
+        }
+
+        // ==================== 基频检测 (自相关算法) ====================
+        function detectPitch(dataArray, frequencyData, sampleRate) {
+            // 简单峰值检测方法
+            let maxVal = 0;
+            let maxIndex = 0;
+
+            // 只分析低频部分 (对应大约 60Hz - 1000Hz)
+            const minFreq = 60;
+            const maxFreq = 1000;
+            const binSize = sampleRate / (analyser.fftSize || 2048);
+            const minBin = Math.floor(minFreq / binSize);
+            const maxBin = Math.floor(maxFreq / binSize);
+
+            for (let i = minBin; i <= maxBin && i < frequencyData.length; i++) {
+                const val = frequencyData[i];
+                if (val > maxVal) {
+                    maxVal = val;
+                    maxIndex = i;
+                }
+            }
+
+            // 如果没有检测到足够的信号，返回 0
+            if (maxVal < -60) return 0; // dB 阈值
+
+            // 估算频率
+            const frequency = maxIndex * binSize;
+
+            return frequency;
+        }
+
+        // ==================== 更新音准状态 ====================
+        function updateTuningStatus(cents) {
+            const absCents = Math.abs(cents);
+
+            if (absCents <= PITCH_TOLERANCE) {
+                // 达标
+                tuningStatusEl.textContent = '✓ 音准正确';
+                tuningStatusEl.className = 'text-xs mt-2 px-3 py-1 rounded-full bg-green-100 text-green-700 in-tune';
+            } else if (cents < -PITCH_TOLERANCE) {
+                // 太低
+                tuningStatusEl.textContent = '↓偏低 ' + Math.round(absCents) + ' cents';
+                tuningStatusEl.className = 'text-xs mt-2 px-3 py-1 rounded-full bg-orange-100 text-orange-700';
+            } else {
+                // 太高
+                tuningStatusEl.textContent = '↑偏高 ' + Math.round(absCents) + ' cents';
+                tuningStatusEl.className = 'text-xs mt-2 px-3 py-1 rounded-full bg-red-100 text-red-700';
+            }
+        }
+
+        // ==================== 可视化动画 ====================
+        function startVisualization() {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = 120;
+
+            function draw() {
+                // 清除画布
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 绘制外圈
+                drawOuterRing(centerX, centerY, radius);
+
+                // 绘制刻度
+                drawTicks(centerX, centerY, radius);
+
+                // 如果正在监听，绘制波形
+                if (isListening && analyser) {
+                    drawWaveform(centerX, centerY, radius - 20);
+                }
+
+                // 绘制中心圆
+                drawCenterCircle(centerX, centerY, 60);
+
+                animationId = requestAnimationFrame(draw);
+            }
+
+            draw();
+        }
+
+        // ==================== 绘制外圈 ====================
+        function drawOuterRing(cx, cy, radius) {
+            // 外圈渐变
+            const gradient = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+            gradient.addColorStop(0, '#A8E6CF');
+            gradient.addColorStop(0.5, '#88D4AB');
+            gradient.addColorStop(1, '#A8E6CF');
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 8;
+            ctx.stroke();
+
+            // 发光效果
+            ctx.shadowColor = '#88D4AB';
+            ctx.shadowBlur = 20;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+
+        // ==================== 绘制刻度 ====================
+        function drawTicks(cx, cy, radius) {
+            ctx.strokeStyle = '#2D5A45';
+            ctx.lineWidth = 2;
+
+            for (let i = 0; i < 12; i++) {
+                const angle = (i * 30 - 90) * Math.PI / 180;
+                const innerR = i % 3 === 0 ? radius - 15 : radius - 10;
+                const outerR = radius - 5;
+
+                const x1 = cx + innerR * Math.cos(angle);
+                const y1 = cy + innerR * Math.sin(angle);
+                const x2 = cx + outerR * Math.cos(angle);
+                const y2 = cy + outerR * Math.sin(angle);
+
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+        }
+
+        // ==================== 绘制波形 ====================
+        function drawWaveform(cx, cy, radius) {
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            // 绘制多个环形波形层
+            for (let layer = 0; layer < 3; layer++) {
+                const layerRadius = radius - layer * 15;
+                ctx.beginPath();
+
+                for (let i = 0; i < bufferLength; i++) {
+                    const angle = (i / bufferLength) * Math.PI * 2 - Math.PI / 2;
+                    const dataIndex = Math.floor(i * 0.5); // 只用低频部分
+                    const value = dataArray[dataIndex] / 255;
+                    const waveHeight = value * 30 * (1 - layer * 0.2);
+
+                    const x = cx + (layerRadius + waveHeight) * Math.cos(angle);
+                    const y = cy + (layerRadius + waveHeight) * Math.sin(angle);
+
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+
+                ctx.closePath();
+
+                // 根据层级设置不同透明度
+                const alpha = 0.3 - layer * 0.08;
+                ctx.strokeStyle = `rgba(136, 212, 171, ${alpha})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+
+        // ==================== 绘制中心圆 ====================
+        function drawCenterCircle(cx, cy, radius) {
+            // 渐变填充
+            const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+            gradient.addColorStop(0, '#FFFFFF');
+            gradient.addColorStop(1, '#F0FFF4');
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // 边框
+            ctx.strokeStyle = '#A8E6CF';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        // ==================== 页面加载完成后初始化 ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            init();
+            initMicrophone();
+        });
+
+        // ==================== Tab 样式激活 ====================
+        // 初始化 Tab 样式
+        document.getElementById('tab-guitar').classList.add('bg-primary', 'text-accent');
+        document.getElementById('tab-ukulele').classList.add('text-gray-500');
+    </script>
+</body>
+</html>

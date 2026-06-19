@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>手势阅读系统 - 盲人阅读助手</title>
+<style>
+/* ===== 全局重置：极简、高对比、无装饰 ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  font-family: 'Microsoft YaHei','PingFang SC','Noto Sans SC','SimHei',sans-serif;
+  background: #000; color: #fff;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== 主布局：上摄像头 + 下内容 ===== */
+.app { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+
+/* ===== 摄像头区域 (上半) ===== */
+.camera-section {
+  position: relative; width: 100%; height: 38vh; min-height: 220px;
+  background: #111; overflow: hidden; flex-shrink: 0;
+}
+.camera-section video {
+  width: 100%; height: 100%; object-fit: cover;
+  transform: scaleX(-1); display: block;
+}
+.camera-section canvas {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  transform: scaleX(-1); pointer-events: none;
+}
+.camera-label {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.8); color: #aaa;
+  font-size: 14px; padding: 3px 14px; border-radius: 12px;
+  z-index: 5; pointer-events: none; white-space: nowrap;
+}
+
+/* ===== 手势状态条 ===== */
+.gesture-bar {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.88); border: 1px solid #333; border-radius: 6px;
+  padding: 6px 20px; display: flex; align-items: center; gap: 12px;
+  z-index: 10; font-size: 16px; transition: border-color 0.15s;
+  white-space: nowrap;
+}
+.gesture-bar.active { border-color: #4ade80; }
+.gesture-bar .icon { font-size: 24px; }
+.gesture-bar .label { font-weight: 600; color: #fff; }
+.gesture-bar .sub { font-size: 13px; color: #999; }
+
+/* ===== 内容区域 (下半) ===== */
+.content-section {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  background: #000; min-height: 0;
+}
+
+/* ===== 选择菜单 ===== */
+.menu-screen {
+  display: flex; flex-direction: column; height: 100%; padding: 14px 16px;
+  overflow-y: auto;
+}
+.menu-screen.hidden { display: none; }
+.menu-header {
+  text-align: center; font-size: 20px; font-weight: 700; color: #4ade80;
+  padding: 6px 0 4px 0; letter-spacing: 1px;
+}
+.menu-sub {
+  text-align: center; font-size: 15px; color: #aaa;
+  padding: 2px 0 8px 0;
+}
+.menu-list { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.menu-item {
+  display: flex; align-items: center; gap: 12px;
+  background: #111; border: 1px solid #333; border-radius: 6px;
+  padding: 10px 14px; cursor: pointer;
+}
+.menu-item:hover, .menu-item:focus { background: #1a1a1a; border-color: #4ade80; }
+.menu-item .num {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: #4ade80; color: #000;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 800; flex-shrink: 0;
+}
+.menu-item .info { flex: 1; min-width: 0; }
+.menu-item .title { font-size: 18px; font-weight: 600; }
+.menu-item .author { font-size: 14px; color: #999; margin-top: 1px; }
+.menu-item .hint {
+  font-size: 13px; color: #4ade80; white-space: nowrap;
+  background: rgba(74,222,128,0.1); padding: 2px 10px; border-radius: 10px;
+}
+
+/* ===== 图例 ===== */
+.legend {
+  display: flex; gap: 4px; justify-content: center;
+  padding: 6px 0; flex-wrap: wrap; flex-shrink: 0;
+}
+.legend span {
+  font-size: 13px; color: #777;
+  background: #0d0d0d; padding: 2px 10px; border-radius: 10px; white-space: nowrap;
+}
+.legend span em { color: #aaa; font-style: normal; }
+
+/* ===== 阅读屏幕 ===== */
+.reader-screen {
+  display: flex; flex-direction: column; height: 100%;
+}
+.reader-screen.hidden { display: none; }
+.reader-header {
+  display: flex; align-items: center; padding: 8px 16px;
+  background: #0d0d0d; border-bottom: 1px solid #222; gap: 10px; flex-shrink: 0;
+}
+.reader-header .back-btn {
+  background: #222; border: none; color: #fff;
+  width: 34px; height: 34px; border-radius: 4px;
+  font-size: 18px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+}
+.reader-header .back-btn:hover { background: #333; }
+.reader-header .r-title {
+  font-size: 17px; font-weight: 600; flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reader-header .r-status {
+  font-size: 13px; color: #4ade80; display: flex; align-items: center; gap: 5px;
+}
+.reader-header .r-status.paused { color: #fbbf24; }
+.reader-header .r-status.stopped { color: #666; }
+.reader-body {
+  flex: 1; overflow-y: auto; padding: 16px 18px;
+  font-size: 22px; line-height: 2; color: #eee;
+}
+.reader-body .hl { background: rgba(74,222,128,0.15); }
+
+/* ===== 加载遮罩 ===== */
+.loading {
+  position: fixed; inset: 0; background: #000; z-index: 200;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; transition: opacity 0.3s;
+}
+.loading.hide { opacity: 0; pointer-events: none; }
+.loading .icon { font-size: 40px; margin-bottom: 16px; }
+.loading .text { font-size: 18px; color: #ccc; }
+.loading .sub  { font-size: 14px; color: #666; margin-top: 8px; }
+.loading .err  { font-size: 14px; color: #f87171; margin-top: 10px; display: none; max-width: 80%; text-align: center; }
+.loading .err.show { display: block; }
+.loading .retry { margin-top: 10px; padding: 8px 24px; background: #4ade80; color: #000; border: none; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; display: none; }
+.loading .retry.show { display: inline-block; }
+
+/* ===== Toast 提示 ===== */
+.toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.9); border: 1px solid #333;
+  color: #fff; font-size: 18px; padding: 10px 24px; border-radius: 6px;
+  z-index: 100; opacity: 0; transition: opacity 0.2s;
+  pointer-events: none; text-align: center; max-width: 85vw;
+}
+.toast.show { opacity: 1; }
+
+/* ===== 阅读区滚动条 ===== */
+.reader-body::-webkit-scrollbar, .menu-screen::-webkit-scrollbar { width: 4px; }
+.reader-body::-webkit-scrollbar-track, .menu-screen::-webkit-scrollbar-track { background: transparent; }
+.reader-body::-webkit-scrollbar-thumb, .menu-screen::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+/* ===== 大屏幕适配 ===== */
+@media (min-width: 768px) {
+  .camera-section { height: 35vh; }
+  .menu-item { padding: 12px 18px; }
+  .menu-item .title { font-size: 20px; }
+  .reader-body { font-size: 24px; padding: 20px 28px; }
+}
+
+/* ===== 占位文字 ===== */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); border: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- ===== 加载遮罩 ===== -->
+<div class="loading" id="loadingScreen" role="alert" aria-live="assertive">
+  <div class="icon">&#9819;</div>
+  <div class="text" id="loadText">正在加载手势阅读系统...</div>
+  <div class="sub"  id="loadSub">请稍候</div>
+  <div class="err"  id="loadErr"></div>
+  <button class="retry" id="loadRetry">重新加载</button>
+</div>
+
+<!-- ===== 主应用 ===== -->
+<div class="app" id="app" role="application" aria-label="手势阅读系统">
+
+  <!-- 摄像头区域 -->
+  <div class="camera-section" aria-hidden="true">
+    <div class="camera-label">摄像头 &middot; 面对镜头展示手势</div>
+    <video id="webcam" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+    <div class="gesture-bar" id="gestureBar" aria-live="polite">
+      <span class="icon" id="gestIcon">&#9995;</span>
+      <span>
+        <span class="label" id="gestLabel">等待启动</span>
+        <span class="sub"  id="gestSub">---</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- 内容区域 -->
+  <div class="content-section">
+
+    <!-- 选择菜单 -->
+    <div class="menu-screen" id="menuScreen" role="region" aria-label="文章选择菜单">
+      <div class="menu-header">请选择要朗读的文章</div>
+      <div class="menu-sub">伸出手指 1 到 5 选择 &middot; 拳头暂停 &middot; 手掌返回</div>
+      <div class="menu-list" id="menuList" role="list" aria-label="文章列表"></div>
+      <div class="legend" aria-hidden="true">
+        <span><em>1-5</em> 选择文章</span>
+        <span><em>拳头</em> 暂停/继续</span>
+        <span><em>手掌</em> 返回菜单</span>
+      </div>
+    </div>
+
+    <!-- 阅读界面 -->
+    <div class="reader-screen hidden" id="readerScreen" role="region" aria-label="文章阅读区">
+      <div class="reader-header">
+        <button class="back-btn" id="backBtn" aria-label="返回菜单">&#8592;</button>
+        <span class="r-title" id="readerTitle" aria-live="off">文章标题</span>
+        <span class="r-status" id="readerStatus">
+          <span id="readerStatusDot">&#9679;</span>
+          <span id="readerStatusText">朗读中</span>
+        </span>
+      </div>
+      <div class="reader-body" id="readerBody" role="document" aria-label="文章正文"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast" role="alert" aria-live="assertive"></div>
+
+<!-- ===== MediaPipe ===== -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+
+<!-- ===== 主脚本 ===== -->
+<script>
+// ============================================================
+// 五篇短篇小说（纯文本，无特殊符号，适合语音朗读）
+// 如需修改文章内容，直接编辑下方 ARTICLES 数组即可。
+// 每篇文章结构：{ id, title, author, paragraphs[] }
+// paragraphs 数组每个元素为一个自然段。
+// ============================================================
+var ARTICLES = [
+  // ---- 第1篇 ----
+  {
+    id: 1,
+    title: '一件小事',
+    author: '鲁迅',
+    paragraphs: [
+      '我从乡下跑到京城里，一转眼已经六年了。其间耳闻目睹的所谓国家大事，算起来也很不少；但在我心里，都不留什么痕迹，倘要我寻出这些事的影响来说，便只是增长了我的坏脾气，老实说，便是教我一天比一天的看不起人。',
+      '但有一件小事，却于我有意义，将我从坏脾气里拖开，使我至今忘记不得。',
+      '这是民国六年的冬天，大北风刮得正猛，我因为生计关系，不得不一早在路上走。一路几乎遇不见人，好容易才雇定了一辆人力车，教他拉到S门去。不一会，北风小了，路上浮尘早已刮净，剩下一条洁白的大道来，车夫也跑得更快。刚近S门，忽而车把上带着一个人，慢慢地倒了。',
+      '跌倒的是一个女人，花白头发，衣服都很破烂。伊从马路上突然向车前横截过来；车夫已经让开道，但伊的破棉背心没有上扣，微风吹着，向外展开，所以终于兜着车把。幸而车夫早有点停步，否则伊定要栽一个大斤斗，跌到头破血出了。',
+      '伊伏在地上；车夫便也立住脚。我料定这老女人并没有伤，又没有别人看见，便很怪他多事，要自己惹出是非，也误了我的路。我便对他说：没有什么的。走你的罢！',
+      '车夫毫不理会，或者并没有听到，却放下车子，扶那老女人慢慢起来，搀着臂膊立定，问伊说：你怎么啦？我摔坏了。',
+      '我想，我眼见你慢慢倒地，怎么会摔坏呢，装腔作势罢了，这真可憎恶。车夫多事，也正是自讨苦吃，现在你自己想法去。',
+      '车夫听了这老女人的话，却毫不踌躇，仍然搀着伊的臂膊，便一步一步的向前走。我有些诧异，忙看前面，是一所巡警分驻所，大风之后，外面也不见人。这车夫扶着那老女人，便正是向那大门走去。',
+      '我这时突然感到一种异样的感觉，觉得他满身灰尘的后影，刹时高大了，而且愈走愈大，须仰视才见。而且他对于我，渐渐的又几乎变成一种威压，甚而至于要榨出皮袍下面藏着的小来。',
+      '我的活力这时大约有些凝滞了，坐着没有动，也没有想，直到看见分驻所里走出一个巡警，才下了车。巡警走近我说：你自己雇车罢，他不能拉你了。我没有思索的从外套袋里抓出一大把铜元，交给巡警，说：请你给他。',
+      '风全住了，路上还很静。我走着，一面想，几乎怕敢想到自己。以前的事姑且搁起，这一大把铜元又是什么意思？奖他么？我还能裁判车夫么？我不能回答自己。',
+      '这事到了现在，还是时时记起。我因此也时时熬了苦痛，努力的要想到我自己。几年来的文治武力，在我早如幼小时候所读过的子曰诗云一般，背不上半句了。独有这一件小事，却总是浮在我眼前，有时反更分明，教我惭愧，催我自新，并且增长我的勇气和希望。'
+    ]
+  },
+  // ---- 第2篇 ----
+  {
+    id: 2,
+    title: '龟兔赛跑',
+    author: '伊索寓言',
+    paragraphs: [
+      '兔子有四条腿，一蹦一跳的，跑得可快啦。乌龟也有四条腿，爬呀爬呀，爬得非常慢。',
+      '有一天，兔子碰见了乌龟，笑眯眯地说：乌龟乌龟，咱们来赛跑，好吗？乌龟知道兔子在开他的玩笑，瞪着一双小眼睛，不理也不踩。兔子知道乌龟不敢跟他赛跑，乐得摆着耳朵直蹦跳，还编了一支山歌笑话他。',
+      '乌龟生气了，说：兔子兔子，你别神气，咱们这就来赛跑！',
+      '兔子大吃一惊，说：你，你真敢跟我赛跑？那好，咱们从这儿跑起，看谁先跑到那边山脚下的一棵大树。预备，一，二，三。兔子撒开腿就跑，跑得真快，一会儿就跑得很远了。他回头一看，乌龟才爬了一小段路呢。',
+      '兔子心想：乌龟敢跟兔子赛跑，真是天大的笑话！我呀，在这儿睡上一大觉，等他爬到这儿，我再跑也不迟呀。兔子把身体一歪，合上眼皮，真的睡着了。',
+      '再说乌龟，爬得也真慢，可是他不灰心，一步一步地往前爬。等他爬到兔子身边，已经累得满头大汗了。兔子还在睡觉，乌龟也想休息一会儿，可他知道兔子跑得比他快，只有坚持爬下去才有可能赢。于是他不停地往前爬。',
+      '离大树越来越近了，只差几十步了，十几步了，几步了。终于到了！兔子呢？他还在睡觉呢！兔子醒来后往后一看，唉，乌龟怎么不见了？再往前一看，哎呀，不得了了！乌龟已经爬到大树底下了。',
+      '兔子急忙赶上去，可是已经晚了。乌龟赢了。乌龟胜利了，兔子跑得快，可是它骄傲自满，在半路上睡大觉。乌龟跑得慢，可是它坚持不懈，一步一步地向前爬，最终取得了胜利。这个故事告诉我们：虚心使人进步，骄傲使人落后。'
+    ]
+  },
+  // ---- 第3篇 ----
+  {
+    id: 3,
+    title: '狐狸和葡萄',
+    author: '伊索寓言',
+    paragraphs: [
+      '一只狐狸走过葡萄园，看见架子上挂着一串串晶莹剔透的葡萄。他馋得直流口水，很想摘下来吃个痛快。',
+      '可是葡萄架子太高了，狐狸跳起来去摘，摘了半天也够不着。他跳了又跳，蹦了又蹦，累得气喘吁吁，还是没有摘到一颗葡萄。',
+      '狐狸看着那诱人的葡萄，心里又急又气。他不甘心，后退了几步，使出全身的力气，猛地向上一跳，还是差一点点！',
+      '狐狸试了一次又一次，把吃奶的力气都使出来了，却始终够不着那高高挂着的葡萄。他实在累坏了，再也跳不动了。',
+      '狐狸喘着粗气，望着头顶上的葡萄，忽然把嘴一撇，摇着头说：哼，这些葡萄肯定还没有熟透，一定是酸的，又酸又涩，不好吃！就算给我吃，我还不稀罕呢！',
+      '说完，狐狸拍拍屁股，头也不回地走了。其实啊，葡萄是甜滋滋的。狐狸不过是因为自己摘不到，才故意说葡萄是酸的。',
+      '这个故事告诉我们：有些人能力小，做不成事，就常常借口说时机还没有成熟，用这样的话来安慰自己，给自己找个台阶下。'
+    ]
+  },
+  // ---- 第4篇 ----
+  {
+    id: 4,
+    title: '乌鸦喝水',
+    author: '伊索寓言',
+    paragraphs: [
+      '一只乌鸦飞了好久，又累又渴，到处找水喝。',
+      '忽然，他看见地上有一个大水瓶，里面装着半瓶水。乌鸦高兴极了，连忙飞到水瓶旁边，把嘴伸进瓶口里。可是瓶口太小，瓶里的水又太浅，他的嘴怎么也够不着水。',
+      '乌鸦想把水瓶推倒，可是水瓶太重了，推不动。他想用爪子去抓，可瓶口太窄，爪子伸不进去。',
+      '乌鸦急得围着水瓶团团转，心想：怎么办呢？难道就这样渴死吗？',
+      '乌鸦不甘心，他歇了口气，又开始想办法。他看了看周围的地上，发现有许多小石子。忽然，他灵机一动，想到了一个好主意。',
+      '乌鸦叼起一颗小石子，小心翼翼地放进水瓶里。石子沉到瓶底，水好像升高了一点点。他又叼起一颗石子放进去，水又升高了一些。',
+      '乌鸦一次一次地叼起石子，放进水瓶里。瓶子里的水渐渐地、渐渐地升高了。乌鸦不停地忙碌着，汗水顺着他的羽毛往下滴，可他一刻也不停歇。',
+      '终于，水瓶里的水升到了瓶口。乌鸦把嘴伸进瓶口，喝到了清凉甘甜的水。他喝了个痛快，又精神抖擞地飞上了天空。',
+      '这个故事告诉我们：遇到困难的时候，不要轻易放弃，要善于观察和思考，动脑筋想办法，就一定能找到解决问题的办法。'
+    ]
+  },
+  // ---- 第5篇 ----
+  {
+    id: 5,
+    title: '牧童和狼',
+    author: '伊索寓言',
+    paragraphs: [
+      '从前，有一个放羊的小牧童，每天赶着羊群到村外的山坡上去吃草。',
+      '日子久了，他觉得放羊的日子很无聊，就想找点儿乐子。他对着山下种田的农夫们大声喊：狼来了！狼来了！救命啊！',
+      '山下的农夫们听到喊声，急忙放下手中的农活，拿着锄头、木棒，气喘吁吁地跑上山来。可他们到了山坡上一看，哪里有狼的影子？小牧童却在一旁笑得前仰后合。',
+      '过了几天，小牧童又觉得无聊了，他又对着山下大喊：狼来了！狼来了！快来帮忙啊！善良的农夫们再次跑上山来。可是他们看到的，依然是那个哈哈大笑的小牧童，根本没有狼。',
+      '又过了几天，狼真的来了！一只大灰狼张着血盆大口，朝羊群扑了过来。小牧童吓得浑身发抖，拼命地朝山下大喊：狼来了！狼来了！救命啊！这次是真的，狼真的来了！',
+      '山下的农夫们听到喊声，互相看了看，说：这孩子又在骗人了，别理他！没有一个人上山来。',
+      '狼咬死了一只又一只羊，小牧童眼睁睁地看着羊群被狼冲散，后悔得哭了起来。他喊破了嗓子，也没有一个人来帮他。',
+      '这个故事告诉我们：说谎是一种不好的行为，既不尊重别人，也会失去别人对自己的信任。那些常常说谎的人，即使有一天说了真话，也再没有人会相信他了。'
+    ]
+  }
+];
+
+// ============================================================
+// DOM 引用
+// ============================================================
+var $    = function(id) { return document.getElementById(id); };
+var vid  = $('webcam');
+var cvs  = $('overlay');
+var menuScr = $('menuScreen');
+var readScr = $('readerScreen');
+var menuList  = $('menuList');
+var rTitle   = $('readerTitle');
+var rBody    = $('readerBody');
+var rStatus  = $('readerStatus');
+var rStatusTxt = $('readerStatusText');
+var backBtn  = $('backBtn');
+var toastEl  = $('toast');
+var gBar  = $('gestureBar');
+var gIcon = $('gestIcon');
+var gLabel= $('gestLabel');
+var gSub  = $('gestSub');
+var loadScr  = $('loadingScreen');
+var loadTxt  = $('loadText');
+var loadSub  = $('loadSub');
+var loadErr  = $('loadErr');
+var loadRetry= $('loadRetry');
+
+// ============================================================
+// 状态
+// ============================================================
+var S = {
+  screen: 'menu',            // 'menu' | 'reading'
+  currentArticle: null,
+  isSpeaking: false,
+  isPaused: false,
+  pauseIndex: 0,             // 暂停时记录读到哪个句子
+  lastAction: 0,
+  cooldown: 1500,            // 手势冷却(毫秒)，可调小提高灵敏度
+  voiceReady: false,
+  selVoice: null,
+  hands: null,
+  camStream: null,
+  detectTimer: null,
+  processing: false
+};
+
+// ============================================================
+// Toast
+// ============================================================
+var toastTimer = null;
+function showToast(msg, dur) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { toastEl.classList.remove('show'); }, dur || 2500);
+}
+
+// ============================================================
+// 语音播报（用于操作提示，与朗读分离）
+// 每次播报前取消当前朗读，播报完毕后自动继续。
+// ============================================================
+function speakNow(text, callback) {
+  if (!S.voiceReady) { if (callback) callback(); return; }
+  window.speechSynthesis.cancel();
+  var u = new SpeechSynthesisUtterance(text);
+  u.lang = 'zh-CN';
+  u.rate = 0.80;             // 播报语速稍慢，清晰
+  u.volume = 1.0;
+  if (S.selVoice) u.voice = S.selVoice;
+  u.onend = function() { if (callback) callback(); };
+  u.onerror = function() { if (callback) callback(); };
+  window.speechSynthesis.speak(u);
+  return u;
+}
+
+// ============================================================
+// 构建菜单
+// ============================================================
+function buildMenu() {
+  menuList.innerHTML = '';
+  for (var i = 0; i < ARTICLES.length; i++) {
+    var a = ARTICLES[i];
+    var div = document.createElement('div');
+    div.className = 'menu-item';
+    div.setAttribute('role', 'listitem');
+    div.setAttribute('tabindex', '0');
+    div.setAttribute('aria-label', '文章 ' + a.id + '：' + a.title + '，作者 ' + a.author);
+    div.innerHTML =
+      '<div class="num">' + a.id + '</div>' +
+      '<div class="info"><div class="title">' + a.title + '</div><div class="author">' + a.author + '</div></div>' +
+      '<span class="hint">伸 ' + a.id + ' 根手指</span>';
+    div.addEventListener('click', function(idx) { return function() { selectArticle(idx); }; }(i));
+    menuList.appendChild(div);
+  }
+}
+buildMenu();
+
+// ============================================================
+// 屏幕切换
+// ============================================================
+function showMenuScreen() {
+  menuScr.classList.remove('hidden');
+  readScr.classList.add('hidden');
+  S.screen = 'menu';
+  stopRead();
+  rStatus.className = 'r-status stopped';
+  rStatusTxt.textContent = '已停止';
+}
+
+function showReadScreen() {
+  menuScr.classList.add('hidden');
+  readScr.classList.remove('hidden');
+  S.screen = 'reading';
+}
+
+backBtn.addEventListener('click', function() {
+  stopRead();
+  showMenuScreen();
+  speakNow('已返回文章选择页');
+});
+
+// ============================================================
+// 语音引擎初始化
+// ============================================================
+function initVoice(cb) {
+  var v = window.speechSynthesis.getVoices();
+  if (v.length > 0) {
+    S.selVoice = v.filter(function(x) { return x.lang.startsWith('zh'); })[0] || v[0];
+    S.voiceReady = true;
+    if (cb) cb();
+  } else {
+    window.speechSynthesis.onvoiceschanged = function() {
+      var vv = window.speechSynthesis.getVoices();
+      S.selVoice = vv.filter(function(x) { return x.lang.startsWith('zh'); })[0] || vv[0];
+      S.voiceReady = true;
+      if (cb) cb();
+    };
+    setTimeout(function() { S.voiceReady = true; if (cb) cb(); }, 2000);
+  }
+}
+
+// ============================================================
+// 朗读控制
+// ============================================================
+function stopRead() {
+  window.speechSynthesis.cancel();
+  S.isSpeaking = false;
+  S.isPaused = false;
+  S.pauseIndex = 0;
+  clearHL();
+  rStatus.className = 'r-status stopped';
+  rStatusTxt.textContent = '已停止';
+}
+
+function togglePause() {
+  if (S.isPaused) {
+    // 恢复：播报后重新从暂停位置开始读
+    var art = S.currentArticle;
+    var idx = S.pauseIndex;
+    speakNow('继续朗读', function() {
+      readFrom(art, idx);
+    });
+  } else if (S.isSpeaking) {
+    // 暂停：先存位置
+    window.speechSynthesis.pause();
+    S.isPaused = true;
+    rStatus.className = 'r-status paused';
+    rStatusTxt.textContent = '已暂停';
+    // 播报提示
+    var u2 = new SpeechSynthesisUtterance('已暂停朗读');
+    u2.lang = 'zh-CN'; u2.rate = 0.8;
+    if (S.selVoice) u2.voice = S.selVoice;
+    window.speechSynthesis.speak(u2);
+  }
+}
+
+function selectArticle(idx) {
+  var art = ARTICLES[idx];
+  if (!art) return;
+  S.currentArticle = art;
+  rTitle.textContent = art.title + ' — ' + art.author;
+  showReadScreen();
+  // 先语音播报再开始朗读
+  speakNow('已打开第' + art.id + '篇文章《' + art.title + '》，开始朗读', function() {
+    readArticle(art, 0);
+  });
+}
+
+function clearHL() {
+  var els = document.querySelectorAll('.hl');
+  for (var i = 0; i < els.length; i++) els[i].className = '';
+}
+
+function readArticle(art, startIdx) {
+  if (!S.voiceReady) return;
+  stopRead();
+  var full = art.paragraphs.join(' ');
+  var sents = full.match(/[^。！？\n]+[。！？]?/g) || [full];
+  rBody.innerHTML = '';
+  var doms = [];
+  for (var i = 0; i < sents.length; i++) {
+    var sp = document.createElement('span');
+    sp.textContent = sents[i] + ' ';
+    sp.style.cursor = 'pointer';
+    sp.addEventListener('click', function(a, si) { return function() { readFrom(a, si); }; }(art, i));
+    rBody.appendChild(sp);
+    doms.push(sp);
+  }
+  readFrom(art, startIdx || 0);
+}
+
+function readFrom(art, idx) {
+  if (!S.voiceReady) return;
+  stopRead();
+  var full = art.paragraphs.join(' ');
+  var sents = full.match(/[^。！？\n]+[。！？]?/g) || [full];
+  if (idx >= sents.length) {
+    showToast('文章已朗读完毕');
+    rStatus.className = 'r-status stopped';
+    rStatusTxt.textContent = '已结束';
+    return;
+  }
+  S.pauseIndex = idx;
+  clearHL();
+  var spans = rBody.children;
+  if (spans[idx]) { spans[idx].className = 'hl'; spans[idx].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  var remain = sents.slice(idx).join(' ');
+  var u = new SpeechSynthesisUtterance(remain);
+  u.lang = 'zh-CN'; u.rate = 0.85; u.volume = 1.0;
+  if (S.selVoice) u.voice = S.selVoice;
+  u.onstart = function() { S.isSpeaking = true; S.isPaused = false; rStatus.className = 'r-status'; rStatusTxt.textContent = '朗读中'; };
+  u.onend   = function() { S.isSpeaking = false; clearHL(); rStatus.className = 'r-status stopped'; rStatusTxt.textContent = '已结束'; };
+  u.onboundary = function(e) {
+    if (e.name === 'word') {
+      var ci = e.charIndex || 0, cc = 0;
+      for (var i = 0; i < sents.length; i++) {
+        cc += sents[i].length;
+        if (cc > ci) {
+          clearHL();
+          if (spans[i]) { spans[i].className = 'hl'; spans[i].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+          break;
+        }
+      }
+    }
+  };
+  u.onerror = function() { S.isSpeaking = false; };
+  window.speechSynthesis.speak(u);
+}
+
+// ============================================================
+// 手势识别 - 手指计数
+// ============================================================
+function countFingers(lm) {
+  if (!lm || lm.length < 21) return -1;
+  var px = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+  var py = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+  var hs = Math.sqrt((lm[0].x - lm[9].x)*(lm[0].x - lm[9].x) + (lm[0].y - lm[9].y)*(lm[0].y - lm[9].y));
+  var cnt = 0;
+  var td = Math.sqrt((lm[4].x - px)*(lm[4].x - px) + (lm[4].y - py)*(lm[4].y - py));
+  if (hs > 0 && td / hs > 0.4) cnt++;
+  var pairs = [[8,6],[12,10],[16,14],[20,18]];
+  for (var i = 0; i < pairs.length; i++) {
+    if (lm[pairs[i][0]].y < lm[pairs[i][1]].y - 0.015) cnt++;
+  }
+  return cnt;
+}
+
+// ============================================================
+// 手势处理
+// ============================================================
+function updateBar(cnt) {
+  gBar.className = 'gesture-bar active';
+  var icons = ['&#9994;','&#9757;','&#9996;','&#129307;','&#129308;','&#9995;'];
+  var labs = ['拳头','1根手指','2根手指','3根手指','4根手指','手掌'];
+  var subs = ['暂停或继续','选择文章一','选择文章二','选择文章三','选择文章四','返回菜单'];
+  if (cnt >= 0 && cnt <= 5) {
+    gIcon.innerHTML = icons[cnt];
+    gLabel.textContent = labs[cnt];
+    gSub.textContent = subs[cnt];
+  }
+}
+
+function handleGesture(cnt) {
+  var now = Date.now();
+  if (now - S.lastAction < S.cooldown) return;
+  S.lastAction = now;
+
+  if (S.screen === 'menu') {
+    if (cnt >= 1 && cnt <= 5) {
+      var idx = cnt - 1;
+      var art = ARTICLES[idx];
+      if (art) selectArticle(idx);
+    }
+  } else {
+    if (cnt === 0) {
+      // 拳头：暂停/继续
+      if (S.isSpeaking || S.isPaused) togglePause();
+    } else if (cnt === 5) {
+      // 手掌：返回菜单
+      stopRead();
+      showMenuScreen();
+      speakNow('已停止朗读，返回文章选择页');
+    } else if (cnt >= 1 && cnt <= 4) {
+      var idx2 = cnt - 1;
+      var art2 = ARTICLES[idx2];
+      if (art2 && art2.id !== (S.currentArticle && S.currentArticle.id)) {
+        selectArticle(idx2);
+      }
+    }
+  }
+}
+
+// ============================================================
+// 手部骨架绘制
+// ============================================================
+var CONN = [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]
+];
+
+function drawHand(ctx, lm, w, h) {
+  if (!lm) return;
+  ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  for (var i = 0; i < CONN.length; i++) {
+    var p1 = lm[CONN[i][0]], p2 = lm[CONN[i][1]];
+    if (p1 && p2) { ctx.beginPath(); ctx.moveTo(p1.x*w, p1.y*h); ctx.lineTo(p2.x*w, p2.y*h); ctx.stroke(); }
+  }
+  for (var j = 0; j < lm.length; j++) {
+    ctx.beginPath(); ctx.arc(lm[j].x*w, lm[j].y*h, 4, 0, 2*Math.PI);
+    ctx.fillStyle = '#22d3ee'; ctx.fill();
+  }
+}
+
+// ============================================================
+// MediaPipe 设置
+// ============================================================
+function setupHands() {
+  if (typeof Hands === 'undefined') {
+    loadErr.textContent = '手势识别库下载失败，请检查网络后刷新页面';
+    loadErr.className = 'err show';
+    loadRetry.className = 'retry show';
+    loadRetry.addEventListener('click', function() { location.reload(); });
+    return;
+  }
+  try {
+    var hands = new Hands({
+      locateFile: function(file) { return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/' + file; }
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6
+    });
+    var ctx = cvs.getContext('2d');
+    hands.onResults(function(results) {
+      ctx.clearRect(0, 0, cvs.width, cvs.height);
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        var lm = results.multiHandLandmarks[0];
+        drawHand(ctx, lm, cvs.width, cvs.height);
+        var cnt = countFingers(lm);
+        if (cnt >= 0 && cnt <= 5) { updateBar(cnt); handleGesture(cnt); }
+      } else {
+        gBar.className = 'gesture-bar';
+        gIcon.innerHTML = '&#9995;'; gLabel.textContent = '未检测到手部'; gSub.textContent = '请将手对准镜头';
+      }
+      S.processing = false;
+    });
+    S.hands = hands;
+    S.detectTimer = setInterval(function() {
+      if (S.processing || !S.camStream || vid.readyState < 2) return;
+      S.processing = true;
+      try { hands.send({ image: vid }); } catch(e) { S.processing = false; }
+    }, 100);
+  } catch(e) {
+    loadErr.textContent = '手势识别初始化失败：' + (e.message || '未知错误');
+    loadErr.className = 'err show';
+    loadRetry.className = 'retry show';
+    loadRetry.addEventListener('click', function() { location.reload(); });
+  }
+}
+
+// ============================================================
+// 摄像头启动
+// ============================================================
+function startCam(cb) {
+  navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+    audio: false
+  }).then(function(stream) {
+    vid.srcObject = stream;
+    S.camStream = stream;
+    vid.play();
+    if (cb) cb();
+  }).catch(function(err) {
+    if (cb) cb(new Error('摄像头访问失败：' + (err.message || '请检查权限')));
+  });
+}
+
+// ============================================================
+// Canvas 尺寸
+// ============================================================
+function syncCanvas() {
+  var r = vid.getBoundingClientRect();
+  if (r.width === 0 || r.height === 0) return;
+  var dpr = window.devicePixelRatio || 1;
+  var w = Math.round(r.width * dpr);
+  var h = Math.round(r.height * dpr);
+  if (cvs.width !== w || cvs.height !== h) {
+    cvs.width  = w;
+    cvs.height = h;
+    cvs.style.width  = r.width + 'px';
+    cvs.style.height = r.height + 'px';
+  }
+}
+
+// ============================================================
+// 加载完成后播报菜单
+// ============================================================
+function announceMenu() {
+  var txt = '手势阅读系统已就绪，请伸出手指选择文章。';
+  for (var i = 0; i < ARTICLES.length; i++) {
+    txt += '文章' + (i+1) + '，' + ARTICLES[i].title + '。';
+  }
+  speakNow(txt);
+}
+
+// ============================================================
+// 主启动
+// ============================================================
+function main() {
+  loadTxt.textContent = '正在加载语音引擎';
+  initVoice(function() {
+    loadTxt.textContent = '正在启动摄像头';
+    startCam(function(err) {
+      if (err) {
+        loadErr.textContent = err.message;
+        loadErr.className = 'err show';
+        loadRetry.className = 'retry show';
+        loadRetry.addEventListener('click', function() { location.reload(); });
+        loadTxt.textContent = '加载失败';
+        return;
+      }
+      vid.addEventListener('loadeddata', function() { syncCanvas(); }, { once: true });
+      window.addEventListener('resize', syncCanvas);
+      loadTxt.textContent = '正在加载手势识别引擎';
+      // 给 MediaPipe 脚本加载时间
+      setTimeout(function() {
+        setupHands();
+        loadScr.className = 'loading hide';
+        // 页面加载完毕，语音播报菜单
+        setTimeout(function() { announceMenu(); }, 500);
+      }, 500);
+    });
+  });
+}
+
+main();
+
+// ============================================================
+// 键盘备选（供调试，非盲人必需）
+// ============================================================
+document.addEventListener('keydown', function(e) {
+  if (e.key >= '1' && e.key <= '5') handleGesture(parseInt(e.key));
+  if (e.key === '0') handleGesture(0);
+  if (e.key === ' ' || e.key === 'Space') {
+    e.preventDefault();
+    if (S.screen === 'reading' && (S.isSpeaking || S.isPaused)) togglePause();
+  }
+  if (e.key === 'Escape' || e.key === 'Backspace') {
+    if (S.screen === 'reading') { stopRead(); showMenuScreen(); speakNow('已停止朗读，返回文章选择页'); }
+  }
+});
+
+// ============================================================
+// 使用说明（控制台查看）
+// ============================================================
+console.log('=== 手势阅读系统 ===');
+console.log('手势控制：');
+console.log('  1-5根手指 = 选择对应文章');
+console.log('  拳头     = 暂停/继续朗读');
+console.log('  手掌     = 返回文章列表');
+console.log('键盘备选：');
+console.log('  数字键1-5 = 选文  0 = 暂停/继续');
+console.log('  Esc/退格  = 返回  Space = 暂停/继续');
+console.log('');
+console.log('如需调整手势灵敏度，修改 S.cooldown 值（当前 ' + S.cooldown + 'ms）');
+console.log('如需调整朗读语速，修改 readFrom() 中 u.rate 值（当前 0.85）');
+</script>
+</body>
+</html>

@@ -1,0 +1,1110 @@
+export default {
+  async fetch(request, env) {
+    const CONFIG = {
+      ADMIN_PASSWORD: '123456',
+      ROLE_USER: 0,
+      ROLE_ADMIN: 1,
+      ALLOW_METHOD: 'POST',
+      SRV_SERVICE: '_minecraft',
+      SRV_PROTO: '_tcp',
+      SRV_PRIORITY: 0,
+      SRV_WEIGHT: 5,
+      SRV_TTL: 120
+    };
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // --------------------------------------------------------------------
+    // GET — 提供页面
+    // --------------------------------------------------------------------
+    if (request.method === 'GET') {
+      if (path === '/' || path === '/index.html') {
+        return new Response(userHTML(), { headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-cache' } });
+      }
+      if (path === '/admin' || path === '/admin.html') {
+        return new Response(adminHTML(), { headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-cache' } });
+      }
+      return new Response('404', { status: 404 });
+    }
+
+    // --------------------------------------------------------------------
+    // POST — API
+    // --------------------------------------------------------------------
+    let isAdmin = false;
+    try {
+      if (request.method !== CONFIG.ALLOW_METHOD) {
+        return Response.json(
+          { success: false, msg: '仅支持 POST' },
+          { status: 405 }
+        );
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        return Response.json(
+          { success: false, msg: 'JSON 格式错误' },
+          { status: 400 }
+        );
+      }
+
+      const password = body.password?.trim();
+      const role = Number(body.role) || CONFIG.ROLE_USER;
+      const user_id = body.user_id?.trim();
+      isAdmin = role === CONFIG.ROLE_ADMIN;
+
+      const makeError = (adminMsg, userMsg = '调用失败，权限不足') => {
+        return Response.json({
+          success: false,
+          msg: isAdmin ? adminMsg : userMsg
+        }, { headers: { 'Cache-Control': 'no-store' } });
+      };
+
+      // 管理员操作需要验证密码
+      const checkAdmin = () => {
+        if (!password || password !== CONFIG.ADMIN_PASSWORD) {
+          return true; // 验证失败
+        }
+        return false; // 验证通过
+      };
+
+      if (path !== '/check-srv' && path !== '/manage-srv' && path !== '/domains') {
+        if (!isAdmin && !user_id) {
+          return makeError('user_id 不能为空');
+        }
+      }
+
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS config (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `).run();
+
+      // 迁移：确保 srv_records 表结构正确
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS srv_records (
+          record_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          port INTEGER NOT NULL,
+          target TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `).run();
+
+      // 兼容旧表：如果缺少 user_id 列则添加
+      try {
+        await env.DB.prepare('SELECT user_id FROM srv_records LIMIT 1').first();
+      } catch {
+        await env.DB.prepare('ALTER TABLE srv_records ADD COLUMN user_id TEXT NOT NULL DEFAULT \'unknown\'').run();
+      }
+
+      // 兼容旧表：如果缺少 manage_password 列则添加
+      try {
+        await env.DB.prepare('SELECT manage_password FROM srv_records LIMIT 1').first();
+      } catch {
+        await env.DB.prepare('ALTER TABLE srv_records ADD COLUMN manage_password TEXT NOT NULL DEFAULT \'\'').run();
+      }
+
+      // 兼容旧表：如果缺少 domain 列则添加
+      try {
+        await env.DB.prepare('SELECT domain FROM srv_records LIMIT 1').first();
+      } catch {
+        await env.DB.prepare('ALTER TABLE srv_records ADD COLUMN domain TEXT NOT NULL DEFAULT \'mcportal.top\'').run();
+      }
+
+      // 兼容旧表：如果缺少 expires_at 列则添加
+      try {
+        await env.DB.prepare('SELECT expires_at FROM srv_records LIMIT 1').first();
+      } catch {
+        await env.DB.prepare('ALTER TABLE srv_records ADD COLUMN expires_at TEXT NOT NULL DEFAULT \'\'').run();
+      }
+
+      const getConfig = async (k) => {
+        const row = await env.DB.prepare('SELECT value FROM config WHERE key = ?')
+          .bind(k).first();
+        return row?.value;
+      };
+
+      const api_token = await getConfig('api_token');
+      const domainsJson = await getConfig('domains');
+      let domains = [];
+      try { domains = JSON.parse(domainsJson || '[]'); } catch { domains = []; }
+      const cfReady = !!(api_token && domains.length > 0);
+
+      const getZoneId = (domain) => {
+        const d = domains.find(x => x.domain === domain);
+        return d ? d.zone_id : null;
+      };
+
+      const cfHeaders = {
+        'Authorization': 'Bearer ' + api_token,
+        'Content-Type': 'application/json'
+      };
+      const cfApiBase = (zone_id) => `https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records`;
+
+      // --------------------------------------------------------------------
+      // 1. 设置 API
+      // --------------------------------------------------------------------
+      if (path === '/set-api') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+        const { api_token, domains: newDomains } = body;
+        if (!api_token || !newDomains || !newDomains.length) return makeError('参数不完整');
+
+        await env.DB.prepare('INSERT OR REPLACE INTO config (key,value) VALUES (?,?)')
+          .bind('api_token', api_token).run();
+        await env.DB.prepare('INSERT OR REPLACE INTO config (key,value) VALUES (?,?)')
+          .bind('domains', JSON.stringify(newDomains)).run();
+
+        return Response.json({ success: true, msg: 'API配置成功' });
+      }
+
+      // --------------------------------------------------------------------
+      // 2. 状态
+      // --------------------------------------------------------------------
+      if (path === '/status') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+        const countRow = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM srv_records').first();
+        return Response.json({
+          success: true,
+          status: 'running',
+          api_config: {
+            api_token: api_token ? '***' : null,
+            domains: domains.map(d => ({ domain: d.domain, zone_id: d.zone_id }))
+          },
+          srv_count: countRow?.cnt || 0
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 3. 数据统计
+      // --------------------------------------------------------------------
+      if (path === '/stats') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+
+        let total = 0, users = 0;
+        let byUser = [];
+
+        try {
+          total = ((await env.DB.prepare('SELECT COUNT(*) AS cnt FROM srv_records').first())?.cnt) || 0;
+        } catch(e) { total = -1; }
+
+        try {
+          users = ((await env.DB.prepare('SELECT COUNT(*) AS cnt FROM (SELECT DISTINCT user_id FROM srv_records)').first())?.cnt) || 0;
+        } catch(e) { users = 0; }
+
+        try {
+          const r = await env.DB.prepare('SELECT user_id, COUNT(*) AS cnt FROM srv_records GROUP BY user_id ORDER BY cnt DESC LIMIT 10').all();
+          byUser = r.results;
+        } catch(e) { byUser = []; }
+
+        return Response.json({
+          success: true,
+          stats: {
+            total: total,
+            users: users,
+            today: 0,
+            week: 0,
+            byUser: byUser,
+            trend: []
+          }
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 4. 用户列表
+      // --------------------------------------------------------------------
+      if (path === '/list-users') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+
+        let users = [];
+        try {
+          const r = await env.DB.prepare(`
+            SELECT user_id, COUNT(*) AS record_count,
+                   MAX(created_at) AS last_active,
+                   MIN(created_at) AS first_active
+            FROM srv_records
+            GROUP BY user_id
+            ORDER BY record_count DESC
+          `).all();
+          users = r.results;
+        } catch(e) { users = []; }
+
+        return Response.json({
+          success: true,
+          users: users
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 5. 删除用户
+      // --------------------------------------------------------------------
+      if (path === '/del-user') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+        const { target_user_id } = body;
+        if (!target_user_id) return makeError('target_user_id 不能为空');
+
+        const records = await env.DB.prepare('SELECT record_id, domain FROM srv_records WHERE user_id = ?')
+          .bind(target_user_id).all();
+
+        if (cfReady) {
+          for (const r of records.results) {
+            const zone_id = getZoneId(r.domain);
+            if (zone_id) {
+              await fetch(`${cfApiBase(zone_id)}/${r.record_id}`, { method: 'DELETE', headers: cfHeaders });
+            }
+          }
+        }
+
+        await env.DB.prepare('DELETE FROM srv_records WHERE user_id = ?')
+          .bind(target_user_id).run();
+
+        return Response.json({
+          success: true,
+          msg: `已删除用户 ${target_user_id} 及其 ${records.results.length} 条记录`
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 6. 添加 SRV
+      // --------------------------------------------------------------------
+      if (path === '/add-srv') {
+        const err = (msg) => Response.json({ success: false, msg: msg });
+        if (!cfReady) return err('API未配置');
+        const { name, port, target, manage_password, domain } = body;
+        if (!name || !port || !target || !domain) return err('参数缺失');
+        if (!manage_password || manage_password.length < 4) return err('请设置至少4位的管理密码');
+
+        const zone_id = getZoneId(domain);
+        if (!zone_id) return err('域名未配置: ' + domain);
+
+        const fullName = name + '.' + domain;
+        const exists = await env.DB.prepare('SELECT 1 FROM srv_records WHERE name = ? AND domain = ?')
+          .bind(name, domain).first();
+        if (exists) return err('名称已存在');
+
+        const resp = await fetch(cfApiBase(zone_id), {
+          method: 'POST',
+          headers: cfHeaders,
+          body: JSON.stringify({
+            type: 'SRV',
+            name: '_minecraft._tcp.' + fullName,
+            data: {
+              service: '_minecraft',
+              proto: '_tcp',
+              name: name,
+              priority: 0,
+              weight: 5,
+              port: port,
+              target: target
+            },
+            ttl: 120
+          })
+        });
+
+        const result = await resp.json();
+
+        if (!result.success) {
+          return err(`Cloudflare 错误: ${JSON.stringify(result.errors)}`);
+        }
+
+        const rid = result.result.id;
+        const srvStr = `_minecraft._tcp.${fullName} 0 5 ${port} ${target}.`;
+        const expiresAt = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString();
+
+        await env.DB.prepare(`
+          INSERT INTO srv_records (record_id, name, port, target, user_id, manage_password, domain, expires_at)
+          VALUES (?,?,?,?,?,?,?,?)
+        `).bind(rid, name, port, target, user_id, manage_password, domain, expiresAt).run();
+
+        return Response.json({
+          success: true,
+          msg: 'SRV记录添加成功',
+          record_id: rid,
+          name: fullName,
+          srv: srvStr
+        });
+      }
+
+      if (path === '/domains') {
+        return Response.json({
+          success: true,
+          domains: domains.map(d => d.domain)
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 7. 查询域名
+      // --------------------------------------------------------------------
+      if (path === '/check-srv') {
+        const { name, domain } = body;
+        if (!name || !domain) return Response.json({ success: false, msg: '参数缺失' });
+        const record = await env.DB.prepare('SELECT name, port, target, user_id, created_at, domain, expires_at FROM srv_records WHERE name = ? AND domain = ?')
+          .bind(name, domain).first();
+        if (!record) return Response.json({ success: true, exists: false });
+        // 检查过期
+        if (record.expires_at && new Date(record.expires_at) < new Date()) {
+          return Response.json({ success: true, exists: false, expired: true, msg: '该域名已过期' });
+        }
+        return Response.json({ success: true, exists: true, record: record });
+      }
+
+      // --------------------------------------------------------------------
+      // 8. 管理域名
+      // --------------------------------------------------------------------
+      if (path === '/manage-srv') {
+        const err = (msg) => Response.json({ success: false, msg: msg });
+        const { name, manage_password, action, target, port, domain } = body;
+        if (!name || !manage_password || !domain) return err('参数缺失');
+
+        const record = await env.DB.prepare('SELECT * FROM srv_records WHERE name = ? AND domain = ?')
+          .bind(name, domain).first();
+        if (!record) return err('域名不存在');
+        if (record.manage_password !== manage_password) return err('管理密码错误');
+
+        // 检查是否过期
+        const now = new Date();
+        const expired = record.expires_at && new Date(record.expires_at) < now;
+
+        if (action === 'renew') {
+          if (!cfReady) return err('API未配置');
+          const newExp = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString();
+          await env.DB.prepare('UPDATE srv_records SET expires_at = ? WHERE name = ? AND domain = ?')
+            .bind(newExp, name, domain).run();
+          return Response.json({ success: true, msg: '续期成功，已延长6个月', expires_at: newExp });
+        }
+
+        if (action === 'delete') {
+          if (!cfReady) return err('API未配置');
+          const zone_id = getZoneId(domain);
+          if (zone_id) {
+            await fetch(`${cfApiBase(zone_id)}/${record.record_id}`, {
+              method: 'DELETE',
+              headers: cfHeaders
+            });
+          }
+          await env.DB.prepare('DELETE FROM srv_records WHERE name = ? AND domain = ?').bind(name, domain).run();
+          return Response.json({ success: true, msg: '域名删除成功' });
+        }
+
+        if (expired && action !== 'delete') {
+          // 自动删除过期域名
+          const zone_id = getZoneId(domain);
+          if (zone_id) {
+            try { await fetch(`${cfApiBase(zone_id)}/${record.record_id}`, { method: 'DELETE', headers: cfHeaders }); } catch {}
+          }
+          await env.DB.prepare('DELETE FROM srv_records WHERE name = ? AND domain = ?').bind(name, domain).run();
+          return err('域名已过期，已被自动删除。请重新创建');
+        }
+
+        if (action === 'update') {
+          if (!target || !port) return err('请填写服务器地址和端口');
+          if (!cfReady) return err('API未配置');
+          const zone_id = getZoneId(domain);
+          if (!zone_id) return err('域名未配置');
+
+          const fullName = name + '.' + domain;
+          const cfResp = await fetch(`${cfApiBase(zone_id)}/${record.record_id}`, {
+            method: 'PATCH',
+            headers: cfHeaders,
+            body: JSON.stringify({
+              type: 'SRV',
+              name: '_minecraft._tcp.' + fullName,
+              data: {
+                service: '_minecraft',
+                proto: '_tcp',
+                name: name,
+                priority: 0,
+                weight: 5,
+                port: port,
+                target: target
+              },
+              ttl: 120
+            })
+          });
+          const cfResult = await cfResp.json();
+          if (!cfResult.success) return err(`Cloudflare 错误: ${JSON.stringify(cfResult.errors)}`);
+
+          await env.DB.prepare('UPDATE srv_records SET port = ?, target = ? WHERE name = ? AND domain = ?')
+            .bind(port, target, name, domain).run();
+
+          return Response.json({ success: true, msg: '域名更新成功' });
+        }
+
+        if (action === 'info') {
+          const daysLeft = record.expires_at ? Math.max(0, Math.ceil((new Date(record.expires_at) - now) / (24 * 60 * 60 * 1000))) : 0;
+          return Response.json({
+            success: true,
+            record: {
+              name: record.name,
+              domain: record.domain,
+              port: record.port,
+              target: record.target,
+              user_id: record.user_id,
+              created_at: record.created_at,
+              expires_at: record.expires_at,
+              days_left: daysLeft,
+              expired: expired
+            }
+          });
+        }
+
+        return err('未知操作');
+      }
+
+      // --------------------------------------------------------------------
+      // 9. 列表
+      // --------------------------------------------------------------------
+      if (path === '/list-srv') {
+        if (isAdmin && checkAdmin()) return makeError('密码错误');
+        let stmt;
+        if (isAdmin) {
+          stmt = env.DB.prepare('SELECT * FROM srv_records ORDER BY created_at DESC');
+        } else {
+          stmt = env.DB.prepare('SELECT * FROM srv_records WHERE user_id = ? ORDER BY created_at DESC')
+            .bind(user_id);
+        }
+        const { results } = await stmt.all();
+        return Response.json({ success: true, list: results });
+      }
+
+      // --------------------------------------------------------------------
+      // 10. 删除单条
+      // --------------------------------------------------------------------
+      if (path === '/del-srv') {
+        if (isAdmin && checkAdmin()) return makeError('密码错误');
+        if (!cfReady) return makeError('API未配置');
+        const { record_id } = body;
+        if (!record_id) return makeError('record_id 不能为空');
+
+        const record = await env.DB.prepare('SELECT * FROM srv_records WHERE record_id = ?')
+          .bind(record_id).first();
+        if (!record) return makeError('记录不存在');
+
+        if (!isAdmin && record.user_id !== user_id) {
+          return makeError('无权限删除此记录');
+        }
+
+        const zone_id = getZoneId(record.domain);
+        if (zone_id) {
+          await fetch(`${cfApiBase(zone_id)}/${record_id}`, {
+            method: 'DELETE',
+            headers: cfHeaders
+          });
+        }
+
+        await env.DB.prepare('DELETE FROM srv_records WHERE record_id = ?')
+          .bind(record_id).run();
+
+        return Response.json({
+          success: true,
+          msg: 'SRV记录删除成功',
+          record_id: record_id
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 11. 清空所有
+      // --------------------------------------------------------------------
+      if (path === '/db-truncate-all') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+        const all = await env.DB.prepare('SELECT record_id, domain FROM srv_records').all();
+        if (cfReady) {
+          for (const r of all.results) {
+            const zone_id = getZoneId(r.domain);
+            if (zone_id) {
+              await fetch(`${cfApiBase(zone_id)}/${r.record_id}`, { method: 'DELETE', headers: cfHeaders });
+            }
+          }
+        }
+        await env.DB.prepare('DELETE FROM srv_records').run();
+        return Response.json({
+          success: true,
+          msg: `已清空 ${all.results.length} 条SRV记录`
+        });
+      }
+
+      // --------------------------------------------------------------------
+      // 12. 增量同步
+      // --------------------------------------------------------------------
+      if (path === '/db-sync-increment') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+        if (!cfReady) return makeError('API未配置');
+
+        const local = await env.DB.prepare('SELECT record_id FROM srv_records').all();
+        const localIds = new Set(local.results.map(x => x.record_id));
+
+        let added = 0;
+        for (const d of domains) {
+          const resp = await fetch(cfApiBase(d.zone_id) + '?type=SRV', { headers: cfHeaders });
+          const cloud = await resp.json();
+          if (!cloud.success) continue;
+          for (const r of cloud.result) {
+            if (!localIds.has(r.id)) {
+              await env.DB.prepare(`
+                INSERT OR IGNORE INTO srv_records(record_id,name,port,target,user_id,domain)
+                VALUES(?,?,?,?,?,?)
+              `).bind(r.id, r.data.name, r.data.port, r.data.target, 'admin', d.domain).run();
+              added++;
+            }
+          }
+        }
+        return Response.json({ success: true, msg: `增量同步完成，新增 ${added} 条` });
+      }
+
+      // --------------------------------------------------------------------
+      // 13. 全量同步
+      // --------------------------------------------------------------------
+      if (path === '/db-sync-full') {
+        if (!isAdmin) return makeError('无权限');
+        if (checkAdmin()) return makeError('密码错误');
+        if (!cfReady) return makeError('API未配置');
+
+        const local = await env.DB.prepare('SELECT record_id, domain FROM srv_records').all();
+        const localIds = new Set(local.results.map(x => x.record_id));
+
+        let delLocal = 0, delCloud = 0;
+        for (const d of domains) {
+          const resp = await fetch(cfApiBase(d.zone_id) + '?type=SRV', { headers: cfHeaders });
+          const cloud = await resp.json();
+          if (!cloud.success) continue;
+          const cloudIds = new Set(cloud.result.map(x => x.id));
+
+          // 删除本地多余的
+          for (const lr of local.results) {
+            if (lr.domain === d.domain && !cloudIds.has(lr.record_id)) {
+              await env.DB.prepare('DELETE FROM srv_records WHERE record_id = ?').bind(lr.record_id).run();
+              delLocal++;
+            }
+          }
+          // 删除云端多余的
+          for (const id of cloudIds) {
+            if (!localIds.has(id)) {
+              await fetch(`${cfApiBase(d.zone_id)}/${id}`, { method: 'DELETE', headers: cfHeaders });
+              delCloud++;
+            }
+          }
+        }
+        return Response.json({
+          success: true,
+          msg: '全量同步完成',
+          deleted_local: delLocal,
+          deleted_cloud: delCloud
+        });
+      }
+
+      return makeError('接口不存在');
+    } catch (e) {
+      return Response.json({
+        success: false,
+        msg: e.message || '服务器内部错误'
+      }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    }
+  }
+};
+
+// ==========================================================
+// 用户端页面
+// ==========================================================
+function userHTML() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>MC SRV - Minecraft 短域名</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#fff;color:#333;-webkit-tap-highlight-color:transparent}
+.header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0}
+.header-left{font-size:18px;font-weight:700;color:#111;letter-spacing:0.5px}
+.header-right{display:flex;align-items:center;gap:20px}
+.header-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.header-icon svg{width:20px;height:20px;fill:#555}
+.main{padding:24px 16px;max-width:420px;margin:0 auto}
+.modal{background:#fff;border-radius:16px;padding:28px 20px 20px;box-shadow:0 2px 20px rgba(0,0,0,0.08)}
+.modal-title{font-size:20px;font-weight:700;color:#111;text-align:center;margin-bottom:8px}
+.modal-subtitle{font-size:13px;color:#999;text-align:center;line-height:1.5;margin-bottom:24px}
+.domain-row{display:flex;align-items:center;border:1.5px solid #e5e5e5;border-radius:10px;padding:0 14px;height:48px;margin-bottom:24px;transition:border-color .2s}
+.domain-row:focus-within{border-color:#333}
+.domain-row .globe{flex-shrink:0;margin-right:10px}
+.domain-row .globe svg{width:20px;height:20px;fill:#999}
+.domain-row input{flex:1;border:none;outline:none;font-size:15px;color:#333;background:transparent;min-width:0}
+.domain-row input::placeholder{color:#ccc}
+.domain-row .divider{width:1px;height:24px;background:#e5e5e5;margin:0 10px;flex-shrink:0}
+.domain-row select{flex-shrink:0;border:none;outline:none;font-size:14px;color:#333;background:transparent;cursor:pointer;-webkit-appearance:none;appearance:none;padding-right:16px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right center}
+.btn-next{display:block;margin-left:auto;padding:10px 28px;background:#e0e0e0;color:#999;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:not-allowed}
+.btn-next.active{background:#111;color:#fff;cursor:pointer}
+.btn-full{display:block;width:100%;padding:12px;background:#111;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;text-align:center}
+.btn-outline{display:block;width:100%;padding:12px;background:#fff;border:1.5px solid #e5e5e5;color:#333;border-radius:8px;font-size:14px;cursor:pointer;text-align:center}
+.btn-danger{display:block;width:100%;padding:12px;background:#fff;border:1.5px solid #fcc;color:#e33;border-radius:8px;font-size:14px;cursor:pointer;text-align:center}
+.footer-hint{text-align:center;margin-top:32px;font-size:12px;color:#bbb}
+.step{display:none}.step.show{display:block}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:13px;color:#666;margin-bottom:4px;font-weight:500}
+.form-group input{width:100%;padding:10px 14px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:14px;outline:none;background:#fff}
+.form-group input:focus{border-color:#333}
+.alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;display:none}
+.alert.show{display:block}.alert-error{background:#fff0f0;color:#c33}.alert-success{background:#f0fff0;color:#3a3}
+.info-box{background:#f9f9f9;border-radius:10px;padding:16px;margin-bottom:16px}
+.info-row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid #eee}
+.info-row:last-child{border-bottom:none}
+.info-label{color:#999}.info-value{color:#333;font-weight:500;text-align:right;word-break:break-all}
+.btn-back{background:none;border:none;color:#666;font-size:14px;cursor:pointer;padding:0}
+.btn-copy{padding:8px 20px;background:#111;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;margin-top:12px}
+.mt-12{margin-top:12px}.mt-8{margin-top:8px}
+.loading{text-align:center;padding:20px;color:#999;font-size:14px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">MC SRV</div>
+  <div class="header-right">
+    <div class="header-icon" title="翻译"><svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11 7.92 9.63 9.46 8.12 10.68A13.7 13.7 0 015.07 8H3.06a15.6 15.6 0 003.72 5.23L2.18 17.9 3.6 19.32l4.6-4.6 2.54 2.54.13-.13V17.13z"/></svg></div>
+    <div class="header-icon" title="信息"><svg viewBox="0 0 24 24"><path d="M11 17h2v-6h-2v6zm1-15C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM11 9h2V7h-2v2z"/></svg></div>
+    <div class="header-icon" title="价格"><svg viewBox="0 0 24 24"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg></div>
+    <div class="header-icon" title="菜单"><svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></div>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Step 1: 选择域名 -->
+  <div class="step show" id="step1">
+    <div class="modal">
+      <div class="modal-title">挑选你喜欢的域名</div>
+      <div class="modal-subtitle">您可以自由发挥，来为您的服务器获得简短好记的入服口令</div>
+      <div class="domain-row">
+        <span class="globe"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg></span>
+        <input type="text" id="prefixInput" placeholder="域名前缀" maxlength="63" autocomplete="off">
+        <span class="divider"></span>
+        <select id="domainSelect"></select>
+      </div>
+      <button class="btn-next" id="btnNext" disabled>下一步</button>
+    </div>
+    <div class="footer-hint">为您的 Minecraft 服务器获取简短好记的域名</div>
+  </div>
+
+  <!-- Step 2: 创建域名 -->
+  <div class="step" id="stepCreate">
+    <div class="modal">
+      <button class="btn-back" onclick="goBack()">← 返回</button>
+      <div class="modal-title" style="margin-top:12px">创建域名</div>
+      <div class="modal-subtitle" id="create-domain"></div>
+      <div id="alert" class="alert"></div>
+      <div class="form-group"><label>服务器地址</label><input type="text" id="target" placeholder="例如: play.hypixel.net"></div>
+      <div class="form-group"><label>端口</label><input type="number" id="port" placeholder="25565" value="25565"></div>
+      <div class="form-group"><label>设置管理密码</label><input type="password" id="mpw" placeholder="至少4位，用于后续管理域名"></div>
+      <div class="form-group"><label>确认管理密码</label><input type="password" id="mpw2" placeholder="再次输入管理密码"></div>
+      <button class="btn-full" onclick="createRecord()">创建域名</button>
+    </div>
+  </div>
+
+  <!-- Step 3: 管理域名 - 输密码 -->
+  <div class="step" id="stepManageLogin">
+    <div class="modal">
+      <button class="btn-back" onclick="goBack()">← 返回</button>
+      <div class="modal-title" style="margin-top:12px">管理域名</div>
+      <div class="modal-subtitle" id="manage-domain"></div>
+      <div id="alert2" class="alert"></div>
+      <div class="info-box" id="manage-info"></div>
+      <div class="form-group"><label>管理密码</label><input type="password" id="mpw-login" placeholder="输入该域名的管理密码"></div>
+      <button class="btn-full" onclick="loginManage()">验证进入</button>
+    </div>
+  </div>
+
+  <!-- Step 4: 管理面板 -->
+  <div class="step" id="stepManagePanel">
+    <div class="modal">
+      <button class="btn-back" onclick="goBack()">← 返回</button>
+      <div class="modal-title" style="margin-top:12px">管理域名</div>
+      <div class="modal-subtitle" id="panel-domain"></div>
+      <div id="alert3" class="alert"></div>
+      <div class="info-box">
+        <div class="info-row"><span class="info-label">当前地址</span><span class="info-value" id="info-target">-</span></div>
+        <div class="info-row"><span class="info-label">当前端口</span><span class="info-value" id="info-port">-</span></div>
+        <div class="info-row"><span class="info-label">创建时间</span><span class="info-value" id="info-time">-</span></div>
+        <div class="info-row"><span class="info-label">到期时间</span><span class="info-value" id="info-expire">-</span></div>
+        <div class="info-row"><span class="info-label">剩余天数</span><span class="info-value" id="info-days" style="color:#e33">-</span></div>
+      </div>
+      <button class="btn-full" id="btn-renew" onclick="renewRecord()" style="background:#fff;border:1.5px solid #333;color:#333">续费 6 个月</button>
+      <div style="font-weight:600;font-size:13px;color:#666;margin-top:16px;margin-bottom:8px">修改服务器信息</div>
+      <div class="form-group"><label>修改服务器地址</label><input type="text" id="edit-target" placeholder="新服务器地址"></div>
+      <div class="form-group"><label>修改端口</label><input type="number" id="edit-port" placeholder="25565"></div>
+      <button class="btn-full mt-8" onclick="updateRecord()">保存修改</button>
+      <button class="btn-danger mt-12" onclick="deleteRecord()">删除此域名</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API='';
+var input=document.getElementById('prefixInput');
+var btn=document.getElementById('btnNext');
+var domainSelect=document.getElementById('domainSelect');
+var currentName='';
+var currentDomain='';
+var currentPw='';
+input.addEventListener('input',function(){var v=this.value.trim();if(v&&currentDomain){btn.classList.add('active');btn.disabled=false}else{btn.classList.remove('active');btn.disabled=true}});
+domainSelect.addEventListener('change',function(){currentDomain=this.value;var v=input.value.trim();if(v&&currentDomain){btn.classList.add('active');btn.disabled=false}else{btn.classList.remove('active');btn.disabled=true}});
+btn.addEventListener('click',function(){checkDomain()});
+
+// 加载可用域名
+fetch(API+'/domains',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}).then(function(r){return r.json()}).then(function(d){
+  if(d.success&&d.domains.length){
+    d.domains.forEach(function(dom){var o=document.createElement('option');o.value=dom;o.textContent='.'+dom;domainSelect.appendChild(o)});
+    currentDomain=d.domains[0];
+    domainSelect.value=currentDomain;
+  }
+});
+
+function $(id){return document.getElementById(id)}
+function showStep(id){document.querySelectorAll('.step').forEach(function(s){s.classList.remove('show')});$(id).classList.add('show')}
+function goBack(){showStep('step1')}
+function showAlert(msg,type){var el=document.querySelector('.step.show .alert');if(!el)return;el.textContent=msg;el.className='alert alert-'+type+' show';setTimeout(function(){el.className='alert'},5000)}
+function showAlertEl(el,msg,type){el.textContent=msg;el.className='alert alert-'+type+' show';setTimeout(function(){el.className='alert'},5000)}
+function date(s){return s?new Date(s).toLocaleString('zh-CN'):'-'}
+
+async function checkDomain(){
+  var name=input.value.trim();if(!name)return;
+  currentName=name;
+  try{
+    var r=await fetch(API+'/check-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,domain:currentDomain})});
+    var d=await r.json();
+    if(!d.success){showAlert(d.msg,'error');return}
+    if(d.expired){
+      showAlert('该域名已过期，已被自动删除。请重新创建','error');
+      return;
+    }
+    if(d.exists){
+      $('manage-domain').textContent=name+'.'+currentDomain;
+      $('manage-info').innerHTML='<div class="info-row"><span class="info-label">服务器地址</span><span class="info-value">'+esc(d.record.target)+'</span></div><div class="info-row"><span class="info-label">端口</span><span class="info-value">'+d.record.port+'</span></div><div class="info-row"><span class="info-label">创建时间</span><span class="info-value">'+date(d.record.created_at)+'</span></div>';
+      showStep('stepManageLogin');
+    }else{
+      $('create-domain').textContent=name+'.'+currentDomain;
+      $('target').value='';$('port').value='25565';$('mpw').value='';$('mpw2').value='';
+      showStep('stepCreate');
+    }
+  }catch(e){showAlert('网络错误: '+e.message,'error')}
+}
+
+async function createRecord(){
+  var name=currentName;
+  var domain=currentDomain;
+  var target=$('target').value.trim();
+  var port=parseInt($('port').value);
+  var mpw=$('mpw').value.trim();
+  var mpw2=$('mpw2').value.trim();
+  if(!target)return showAlert('请输入服务器地址','error');
+  if(!port||port<1||port>65535)return showAlert('端口号无效','error');
+  if(!mpw||mpw.length<4)return showAlert('管理密码至少4位','error');
+  if(mpw!==mpw2)return showAlert('两次密码不一致','error');
+  var btn=document.querySelector('#stepCreate .btn-full');btn.disabled=true;btn.textContent='创建中...';
+  try{
+    var r=await fetch(API+'/add-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,port:port,target:target,manage_password:mpw,role:0,user_id:name,domain:domain})});
+    var d=await r.json();
+    if(d.success){
+      showAlert(d.msg,'success');
+      currentPw=mpw;
+      setTimeout(function(){showManagePanel()},1000);
+    }else{showAlert(d.msg,'error')}
+  }catch(e){showAlert('网络错误: '+e.message,'error')}
+  btn.disabled=false;btn.textContent='创建域名';
+}
+
+async function loginManage(){
+  var mpw=$('mpw-login').value.trim();
+  if(!mpw)return showAlert('请输入管理密码','error');
+  currentPw=mpw;
+  try{
+    var r=await fetch(API+'/manage-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:currentName,manage_password:mpw,action:'info',domain:currentDomain})});
+    var d=await r.json();
+    if(d.success){
+      showManagePanel();
+    }else{
+      showAlert(d.msg,'error');
+    }
+  }catch(e){showAlert('网络错误: '+e.message,'error')}
+}
+
+function showManagePanel(){
+  $('panel-domain').textContent=currentName+'.'+currentDomain;
+  fetch(API+'/manage-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:currentName,manage_password:currentPw,action:'info',domain:currentDomain})}).then(function(r){return r.json()}).then(function(d){
+    if(d.success){
+      $('info-target').textContent=d.record.target;
+      $('info-port').textContent=d.record.port;
+      $('info-time').textContent=date(d.record.created_at);
+      $('info-expire').textContent=d.record.expires_at?date(d.record.expires_at):'永久';
+      var days=d.record.days_left;
+      var daysEl=$('info-days');
+      daysEl.textContent=days+' 天';
+      daysEl.style.color=days<=30?'#e33':days<=60?'#e90':'#393';
+      if(days<=30){
+        $('btn-renew').style.background='#e33';$('btn-renew').style.color='#fff';$('btn-renew').style.borderColor='#e33';
+      }
+      $('edit-target').value=d.record.target;
+      $('edit-port').value=d.record.port;
+    }
+  });
+  showStep('stepManagePanel');
+}
+
+async function renewRecord(){
+  try{
+    var r=await fetch(API+'/manage-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:currentName,manage_password:currentPw,action:'renew',domain:currentDomain})});
+    var d=await r.json();
+    if(d.success){showAlertEl($('alert3'),d.msg,'success');showManagePanel()}else{showAlertEl($('alert3'),d.msg,'error')}
+  }catch(e){showAlertEl($('alert3'),'网络错误','error')}
+}
+
+async function updateRecord(){
+  var target=$('edit-target').value.trim();
+  var port=parseInt($('edit-port').value);
+  if(!target)return showAlertEl($('alert3'),'请输入服务器地址','error');
+  if(!port||port<1||port>65535)return showAlertEl($('alert3'),'端口号无效','error');
+  try{
+    var r=await fetch(API+'/manage-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:currentName,manage_password:currentPw,action:'update',target:target,port:port,domain:currentDomain})});
+    var d=await r.json();
+    if(d.success){showAlertEl($('alert3'),d.msg,'success');showManagePanel()}else{showAlertEl($('alert3'),d.msg,'error')}
+  }catch(e){showAlertEl($('alert3'),'网络错误','error')}
+}
+
+async function deleteRecord(){
+  if(!confirm('确定删除域名 '+currentName+'.'+currentDomain+' ？此操作不可撤销！'))return;
+  try{
+    var r=await fetch(API+'/manage-srv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:currentName,manage_password:currentPw,action:'delete',domain:currentDomain})});
+    var d=await r.json();
+    if(d.success){alert('已删除');goBack()}else{showAlertEl($('alert3'),d.msg,'error')}
+  }catch(e){showAlertEl($('alert3'),'网络错误','error')}
+}
+
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+</script>
+</body></html>`;
+}
+
+// ==========================================================
+// 管理员页面
+// ==========================================================
+function adminHTML() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>管理后台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f5;color:#333;min-height:100vh}
+.login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-box{background:#fff;border-radius:16px;padding:40px 30px;width:100%;max-width:360px;box-shadow:0 2px 20px rgba(0,0,0,0.08)}
+.login-box h2{font-size:20px;font-weight:700;color:#111;text-align:center;margin-bottom:6px}
+.login-box .sub{font-size:13px;color:#999;text-align:center;margin-bottom:28px}
+.login-box input{width:100%;padding:12px 14px;border:1.5px solid #e5e5e5;border-radius:10px;font-size:15px;outline:none;font-family:inherit;background:#fff;margin-bottom:16px}
+.login-box input:focus{border-color:#333}
+.login-box .btn{width:100%;padding:12px;background:#111;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:500;cursor:pointer;font-family:inherit}
+.login-box .err{font-size:13px;color:#c33;text-align:center;margin-top:12px;display:none}
+.admin-content{display:none}
+.container{max-width:800px;margin:0 auto;padding:20px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fff;border-bottom:1px solid #eee;margin-bottom:20px}
+.header h1{font-size:18px;font-weight:700;color:#111}
+.header a{color:#666;text-decoration:none;font-size:14px}
+.tabs{display:flex;gap:4px;margin-bottom:20px;background:#fff;border-radius:10px;padding:4px;flex-wrap:wrap}
+.tab{flex:1;padding:10px;text-align:center;font-size:14px;cursor:pointer;border-radius:8px;color:#666;transition:all .2s;white-space:nowrap}
+.tab.active{background:#111;color:#fff}
+.tab-content{display:none}.tab-content.active{display:block}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:#fff;padding:16px;border-radius:10px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.stat-num{font-size:28px;font-weight:700;color:#111}.stat-label{font-size:12px;color:#999;margin-top:4px}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:13px;color:#666;margin-bottom:4px;font-weight:500}
+input,select{width:100%;padding:10px 14px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:14px;outline:none;font-family:inherit;background:#fff}
+input:focus,select:focus{border-color:#333}
+.btn{padding:10px 24px;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit}
+.btn-dark{background:#111;color:#fff}.btn-outline{background:#fff;border:1.5px solid #e5e5e5;color:#333}.btn-danger{background:#fff;border:1.5px solid #fcc;color:#e33}
+.btn-sm{padding:6px 14px;font-size:13px}.btn-block{display:block;width:100%}
+.alert2{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;display:none}
+.alert2.show{display:block}.alert2-error{background:#fff0f0;color:#c33}.alert2-success{background:#f0fff0;color:#3a3}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #f0f0f0;font-size:13px}
+th{color:#999;font-weight:500}td{color:#333}
+.empty{text-align:center;padding:30px;color:#bbb}
+.chart-row{display:flex;align-items:center;margin-bottom:8px;gap:10px}
+.chart-label{width:90px;font-size:12px;color:#666;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.chart-bar{flex:1;height:20px;background:#f0f0f0;border-radius:4px;overflow:hidden}
+.chart-fill{height:100%;background:#111;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-size:11px;color:#fff;font-weight:600;min-width:30px}
+.mt-12{margin-top:12px}.mt-16{margin-top:16px}
+</style>
+</head>
+<body>
+
+<!-- 登录界面 -->
+<div class="login-screen" id="login-screen">
+  <div class="login-box">
+    <h2>管理后台</h2>
+    <div class="sub">请输入管理员密码</div>
+    <input type="password" id="login-pw" placeholder="管理员密码" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn" onclick="doLogin()">进入后台</button>
+    <div class="err" id="login-err">密码错误</div>
+  </div>
+</div>
+
+<!-- 后台内容（初始隐藏） -->
+<div class="admin-content" id="admin-content">
+<div class="container">
+  <div class="header"><h1>管理后台</h1><a href="/">← 返回首页</a></div>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('stats')">数据统计</div>
+    <div class="tab" onclick="switchTab('users')">用户管理</div>
+    <div class="tab" onclick="switchTab('records')">记录管理</div>
+    <div class="tab" onclick="switchTab('config')">系统配置</div>
+    <div class="tab" onclick="switchTab('sync')">同步工具</div>
+  </div>
+  <div id="alert2" class="alert2"></div>
+
+  <div id="tab-stats" class="tab-content active">
+    <div class="stats">
+      <div class="stat"><div class="stat-num" id="s-total">-</div><div class="stat-label">总记录</div></div>
+      <div class="stat"><div class="stat-num" id="s-users">-</div><div class="stat-label">用户数</div></div>
+      <div class="stat"><div class="stat-num" id="s-today">-</div><div class="stat-label">今日新增</div></div>
+      <div class="stat"><div class="stat-num" id="s-week">-</div><div class="stat-label">本周新增</div></div>
+    </div>
+    <div style="font-weight:600;margin-bottom:12px">按用户分布</div><div id="chart-users"></div>
+    <div style="font-weight:600;margin-bottom:12px;margin-top:16px">每日趋势</div><div id="chart-trend"></div>
+    <button class="btn btn-dark btn-block mt-16" onclick="loadStats()">刷新</button>
+  </div>
+
+  <div id="tab-users" class="tab-content">
+    <button class="btn btn-dark btn-block" onclick="loadUsers()">加载用户列表</button>
+    <table class="mt-12"><thead><tr><th>用户ID</th><th>记录数</th><th>最后活跃</th><th>操作</th></tr></thead><tbody id="users-tb"><tr><td colspan="4" class="empty">点击加载用户列表</td></tr></tbody></table>
+  </div>
+
+  <div id="tab-records" class="tab-content">
+    <button class="btn btn-dark btn-block" onclick="loadAllRecords()">加载全部记录</button>
+    <table class="mt-12"><thead><tr><th>子域名</th><th>端口</th><th>目标</th><th>用户</th><th>时间</th><th>操作</th></tr></thead><tbody id="records-tb"><tr><td colspan="6" class="empty">点击加载全部记录</td></tr></tbody></table>
+  </div>
+
+  <div id="tab-config" class="tab-content">
+    <div class="form-group"><label>API Token</label><input type="password" id="cf-token" placeholder="Cloudflare API Token（需 DNS 权限）"></div>
+    <div style="font-weight:600;margin-bottom:8px;font-size:13px;color:#666">域名列表（每行一个：域名=ZoneID）</div>
+    <div class="form-group"><textarea id="cf-domains" rows="5" style="width:100%;padding:10px 14px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:13px;font-family:monospace;outline:none;resize:vertical" placeholder="mcportal.top=41eef88acbcac4a7b53bba8ae6ea7169
+3mc.cc.cd=d7781f2d94dbcd31f58c953cf2117598
+2mc.cc.cd=c7a21d49e2479eaac829b06ca7a1b885
+1mc.cc.cd=ea388b85f37e622603abcf6fa45974b9"></textarea></div>
+    <button class="btn btn-dark btn-block" onclick="setApi()">保存配置</button>
+    <button class="btn btn-outline btn-block mt-12" onclick="getStatus()">查看状态</button>
+    <div class="stat mt-12" id="status-box" style="display:none"><pre id="status-json" style="font-size:12px;white-space:pre-wrap;text-align:left"></pre></div>
+  </div>
+
+  <div id="tab-sync" class="tab-content">
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-outline" style="flex:1" onclick="syncIncr()">增量同步</button>
+      <button class="btn btn-outline" style="flex:1" onclick="syncFull()">全量同步</button>
+      <button class="btn btn-danger" style="flex:1" onclick="truncate()">清空全部</button>
+    </div>
+    <div class="stat mt-12" id="sync-box" style="display:none"><pre id="sync-json" style="font-size:12px;white-space:pre-wrap;text-align:left"></pre></div>
+  </div>
+</div>
+</div>
+
+<script>
+const API='';
+var loginPassword='';
+function $(id){return document.getElementById(id)}
+function showAlert(msg,type){var el=$('alert2');el.textContent=msg;el.className='alert2 alert2-'+type+' show';setTimeout(function(){el.className='alert2'},5000)}
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+async function api(p,b){var r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json()}
+function date(s){return s?new Date(s).toLocaleString('zh-CN'):'-'}
+
+function doLogin(){
+  var pw=$('login-pw').value.trim();
+  if(!pw){$('login-err').textContent='请输入密码';$('login-err').style.display='block';return}
+  loginPassword=pw;
+  // 先用 stats 接口验证密码
+  api('/stats',{password:loginPassword,role:1}).then(function(d){
+    if(d.success){
+      $('login-screen').style.display='none';
+      $('admin-content').style.display='block';
+      $('login-err').style.display='none';
+      loadStats();
+    }else{
+      $('login-err').textContent='密码错误';
+      $('login-err').style.display='block';
+      loginPassword='';
+    }
+  }).catch(function(){
+    $('login-err').textContent='网络错误，请重试';
+    $('login-err').style.display='block';
+    loginPassword='';
+  });
+}
+
+function switchTab(id){
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
+  document.querySelectorAll('.tab-content').forEach(function(t){t.classList.remove('active')});
+  document.querySelector('.tab[onclick="switchTab(\\''+id+'\\')"]').classList.add('active');
+  $('tab-'+id).classList.add('active');
+  if(id==='stats')loadStats();
+}
+
+function chart(el,data,kf,vf){
+  if(!data||!data.length){$(el).innerHTML='<div class="empty">暂无数据</div>';return}
+  var max=Math.max.apply(null,data.map(function(d){return d[vf]}));
+  $(el).innerHTML=data.map(function(d){return '<div class="chart-row"><div class="chart-label">'+esc(d[kf])+'</div><div class="chart-bar"><div class="chart-fill" style="width:'+Math.round(d[vf]/max*100)+'%">'+d[vf]+'</div></div></div>'}).join('')
+}
+
+async function loadStats(){
+  try{var d=await api('/stats',{password:loginPassword,role:1});if(d.success){var s=d.stats;$('s-total').textContent=s.total;$('s-users').textContent=s.users;$('s-today').textContent=s.today;$('s-week').textContent=s.week;chart('chart-users',s.byUser,'user_id','cnt');chart('chart-trend',s.trend,'day','cnt')}else showAlert(d.msg,'error')}catch(e){showAlert('网络错误','error')}
+}
+async function loadUsers(){
+  var d=await api('/list-users',{password:loginPassword,role:1});if(!d.success)return showAlert(d.msg,'error');
+  var tb=$('users-tb');
+  if(!d.users.length){tb.innerHTML='<tr><td colspan="4" class="empty">暂无用户</td></tr>';return}
+  tb.innerHTML=d.users.map(function(u){return '<tr><td>'+esc(u.user_id)+'</td><td>'+u.record_count+'</td><td style="font-size:12px;color:#999">'+date(u.last_active)+'</td><td><button class="btn btn-danger btn-sm" onclick="delUser(\\''+esc(u.user_id)+'\\')">删除</button></td></tr>'}).join('')
+}
+async function delUser(uid){
+  if(!confirm('确定删除用户 '+uid+' 及所有记录？'))return;
+  var d=await api('/del-user',{password:loginPassword,role:1,target_user_id:uid});d.success?showAlert(d.msg,'success'):showAlert(d.msg,'error');if(d.success)loadUsers()
+}
+async function loadAllRecords(){
+  var d=await api('/list-srv',{password:loginPassword,role:1});if(!d.success)return showAlert(d.msg,'error');
+  var tb=$('records-tb');
+  if(!d.list.length){tb.innerHTML='<tr><td colspan="6" class="empty">暂无记录</td></tr>';return}
+  tb.innerHTML=d.list.map(function(r){return '<tr><td>'+esc(r.name)+'.'+esc(r.domain||'mcportal.top')+'</td><td>'+r.port+'</td><td>'+esc(r.target)+'</td><td>'+esc(r.user_id)+'</td><td style="font-size:12px;color:#999">'+date(r.created_at)+'</td><td><button class="btn btn-danger btn-sm" onclick="delRec(\\''+esc(r.record_id)+'\\')">删除</button></td></tr>'}).join('')
+}
+async function delRec(rid){
+  if(!confirm('确定删除？'))return;
+  var d=await api('/del-srv',{record_id:rid,password:loginPassword,role:1});d.success?showAlert(d.msg,'success'):showAlert(d.msg,'error');if(d.success)loadAllRecords()
+}
+async function setApi(){
+  var t=$('cf-token').value.trim();
+  var dt=$('cf-domains').value.trim();
+  if(!t||!dt)return showAlert('请填写完整','error');
+  var lines=dt.split('\n');var domains=[];
+  for(var i=0;i<lines.length;i++){
+    var line=lines[i].trim();if(!line)continue;
+    var parts=line.split('=');if(parts.length<2)continue;
+    domains.push({domain:parts[0].trim(),zone_id:parts[1].trim()});
+  }
+  if(!domains.length)return showAlert('域名格式错误','error');
+  var d=await api('/set-api',{password:loginPassword,role:1,api_token:t,domains:domains});d.success?showAlert(d.msg,'success'):showAlert(d.msg,'error')
+}
+async function getStatus(){
+  var d=await api('/status',{password:loginPassword,role:1});$('status-box').style.display='block';$('status-json').textContent=JSON.stringify(d,null,2)
+}
+async function syncIncr(){var d=await api('/db-sync-increment',{password:loginPassword,role:1});$('sync-box').style.display='block';$('sync-json').textContent=JSON.stringify(d,null,2)}
+async function syncFull(){var d=await api('/db-sync-full',{password:loginPassword,role:1});$('sync-box').style.display='block';$('sync-json').textContent=JSON.stringify(d,null,2)}
+async function truncate(){if(!confirm('确定清空全部？不可撤销！'))return;var d=await api('/db-truncate-all',{password:loginPassword,role:1});$('sync-box').style.display='block';$('sync-json').textContent=JSON.stringify(d,null,2)}
+</script>
+</body></html>`;
+}

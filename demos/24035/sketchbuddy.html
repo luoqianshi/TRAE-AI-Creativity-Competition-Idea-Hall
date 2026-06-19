@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SKETCHBUDDY // AI 画布</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0A0A0A;
+    --fg: #FFFFFF;
+    --accent: #FF3B00;
+    --accent2: #00E5FF;
+    --gray: #1A1A1A;
+    --gray2: #2A2A2A;
+    --muted: #888;
+  }
+
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    overflow-x: hidden;
+    line-height: 1.4;
+    cursor: crosshair;
+  }
+
+  /* ===== CURSOR TRAIL ===== */
+  .trail {
+    position: fixed;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    pointer-events: none;
+    z-index: 9999;
+    mix-blend-mode: difference;
+    transition: transform 0.15s;
+  }
+
+  /* ===== NOISE OVERLAY ===== */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  /* ===== GRID ===== */
+  .grid-bg {
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 80px 80px;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  /* ===== NAV ===== */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    z-index: 50;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 20px 40px;
+    border-bottom: 1px solid var(--gray2);
+    background: rgba(10,10,10,0.85);
+    backdrop-filter: blur(20px);
+  }
+  .logo {
+    font-size: 18px; font-weight: 900; letter-spacing: -1px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .logo::before {
+    content: ''; width: 14px; height: 14px;
+    background: var(--accent);
+    display: inline-block;
+  }
+  .nav-meta {
+    display: flex; gap: 32px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 2px; color: var(--muted);
+  }
+  .nav-meta span { display: flex; align-items: center; gap: 6px; }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent2);
+    box-shadow: 0 0 8px var(--accent2);
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    min-height: 100vh;
+    padding: 120px 40px 40px;
+    position: relative; z-index: 2;
+    display: flex; flex-direction: column;
+  }
+
+  .hero-top {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 3px;
+    color: var(--muted); margin-bottom: 60px;
+  }
+  .hero-top .version::before {
+    content: '['; color: var(--accent);
+  }
+  .hero-top .version::after {
+    content: ']'; color: var(--accent);
+  }
+
+  h1 {
+    font-size: clamp(60px, 14vw, 220px);
+    font-weight: 900;
+    line-height: 0.85;
+    letter-spacing: -0.06em;
+    margin-bottom: 40px;
+  }
+  h1 .row { display: block; overflow: hidden; }
+  h1 .char {
+    display: inline-block;
+    transform: translateY(100%);
+    animation: rise 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  @keyframes rise { to { transform: translateY(0); } }
+  h1 .accent { color: var(--accent); }
+  h1 .outline {
+    -webkit-text-stroke: 2px var(--fg);
+    color: transparent;
+  }
+
+  .hero-sub {
+    display: grid; grid-template-columns: 2fr 1fr;
+    gap: 60px; align-items: end;
+    padding-top: 40px;
+    border-top: 1px solid var(--gray2);
+  }
+  .hero-sub p {
+    font-size: 20px; line-height: 1.5;
+    max-width: 640px;
+  }
+  .hero-sub p strong { color: var(--accent); font-weight: 700; }
+
+  .cta-row {
+    display: flex; flex-direction: column; gap: 16px;
+    align-items: flex-end;
+  }
+  .cta {
+    display: inline-block;
+    padding: 18px 32px;
+    border: 2px solid var(--fg);
+    color: var(--fg);
+    text-decoration: none;
+    font-size: 14px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+    transition: all 0.2s;
+    background: transparent;
+  }
+  .cta:hover {
+    background: var(--accent); border-color: var(--accent);
+    transform: translate(-4px, -4px);
+    box-shadow: 8px 8px 0 var(--fg);
+  }
+  .cta.alt {
+    border-color: var(--accent2); color: var(--accent2);
+  }
+  .cta.alt:hover {
+    background: var(--accent2); color: var(--bg);
+    box-shadow: 8px 8px 0 var(--accent);
+  }
+
+  /* ===== MARQUEE ===== */
+  .marquee {
+    border-top: 1px solid var(--gray2);
+    border-bottom: 1px solid var(--gray2);
+    overflow: hidden;
+    padding: 18px 0;
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .marquee-track {
+    display: flex; gap: 60px;
+    animation: scroll 30s linear infinite;
+    white-space: nowrap;
+    font-size: 16px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: -0.5px;
+  }
+  .marquee-track span { display: flex; align-items: center; gap: 60px; }
+  .marquee-track .dot { width: 12px; height: 12px; background: var(--accent); }
+  @keyframes scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  /* ===== SECTION BASE ===== */
+  section {
+    position: relative; z-index: 2;
+    padding: 120px 40px;
+  }
+  .section-head {
+    display: flex; justify-content: space-between; align-items: end;
+    border-bottom: 1px solid var(--gray2);
+    padding-bottom: 30px; margin-bottom: 60px;
+  }
+  .section-tag {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 3px;
+    color: var(--muted);
+  }
+  .section-tag::before { content: '> '; color: var(--accent); }
+  .section-title {
+    font-size: clamp(36px, 6vw, 80px);
+    font-weight: 900; letter-spacing: -0.04em;
+    line-height: 0.95;
+  }
+
+  /* ===== PAIN POINTS ===== */
+  .pain-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    border: 1px solid var(--gray2);
+  }
+  .pain-card {
+    padding: 50px 40px;
+    border-right: 1px solid var(--gray2);
+    border-bottom: 1px solid var(--gray2);
+    position: relative;
+    transition: background 0.3s;
+  }
+  .pain-card:hover { background: var(--gray); }
+  .pain-card:nth-child(3n) { border-right: none; }
+  .pain-num {
+    font-size: 80px; font-weight: 900;
+    color: transparent; -webkit-text-stroke: 1px var(--accent);
+    line-height: 1; margin-bottom: 30px;
+    letter-spacing: -0.05em;
+  }
+  .pain-card h3 {
+    font-size: 22px; font-weight: 800;
+    margin-bottom: 16px; letter-spacing: -0.5px;
+  }
+  .pain-card p {
+    font-size: 14px; color: var(--muted); line-height: 1.6;
+  }
+
+  /* ===== WORKFLOW ===== */
+  .workflow {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 80px; align-items: center;
+  }
+  .workflow-steps { display: flex; flex-direction: column; gap: 0; }
+  .step {
+    display: grid; grid-template-columns: 60px 1fr 80px;
+    align-items: center;
+    padding: 30px 0;
+    border-bottom: 1px solid var(--gray2);
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+  .step:hover { padding-left: 20px; background: var(--gray); }
+  .step-num {
+    font-size: 13px; font-weight: 800;
+    color: var(--accent);
+  }
+  .step-body h4 {
+    font-size: 24px; font-weight: 800;
+    margin-bottom: 4px; letter-spacing: -0.5px;
+  }
+  .step-body p { font-size: 13px; color: var(--muted); }
+  .step-time {
+    font-size: 11px; text-align: right;
+    color: var(--accent2); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+
+  .workflow-demo {
+    aspect-ratio: 1;
+    border: 1px solid var(--gray2);
+    position: relative;
+    background: var(--gray);
+    overflow: hidden;
+  }
+  .demo-canvas {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+  }
+  .demo-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--gray2);
+    display: flex; gap: 8px; align-items: center;
+    font-size: 11px; color: var(--muted);
+  }
+  .demo-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .demo-dot.r { background: var(--accent); }
+  .demo-dot.y { background: #FFD700; }
+  .demo-dot.g { background: #00C853; }
+  .demo-body {
+    flex: 1; position: relative;
+    background: linear-gradient(135deg, var(--gray) 0%, #222 100%);
+    padding: 20px;
+  }
+  .mock-frame {
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    width: 60%; aspect-ratio: 9/16;
+    position: absolute; left: 10%; top: 15%;
+    box-shadow: 0 0 30px rgba(255,59,0,0.3);
+    overflow: hidden;
+  }
+  .mock-bar {
+    height: 8px; margin: 6px;
+    background: var(--gray2);
+  }
+  .mock-bar.l { width: 60%; background: var(--accent); }
+  .mock-bar.m { width: 80%; }
+  .mock-bar.s { width: 40%; }
+  .mock-block {
+    background: var(--gray);
+    margin: 8px 6px;
+    height: 40px;
+  }
+  .typing-cursor {
+    position: absolute; right: 12px; bottom: 12px;
+    font-size: 10px; color: var(--accent2);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .typing-cursor::after {
+    content: ''; width: 6px; height: 12px;
+    background: var(--accent2);
+    animation: blink 0.6s infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ===== FEATURES ===== */
+  .feature-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 0; border: 1px solid var(--gray2);
+  }
+  .feature {
+    padding: 50px 30px;
+    border-right: 1px solid var(--gray2);
+    border-bottom: 1px solid var(--gray2);
+    aspect-ratio: 1;
+    display: flex; flex-direction: column; justify-content: space-between;
+    position: relative;
+    transition: all 0.3s;
+  }
+  .feature:hover {
+    background: var(--accent); color: var(--bg);
+  }
+  .feature:hover .feat-icon { border-color: var(--bg); }
+  .feature:hover .feat-meta { color: var(--bg); }
+  .feature:nth-child(4n) { border-right: none; }
+  .feat-icon {
+    width: 50px; height: 50px;
+    border: 1px solid var(--fg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; font-weight: 900;
+  }
+  .feat-title {
+    font-size: 22px; font-weight: 800;
+    margin-bottom: 8px; letter-spacing: -0.5px;
+  }
+  .feat-desc {
+    font-size: 12px; opacity: 0.8; line-height: 1.5;
+  }
+  .feat-meta {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+    color: var(--muted); margin-top: 20px;
+  }
+
+  /* ===== PRODUCT SHOWCASE ===== */
+  .product-showcase {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 60px; align-items: center;
+  }
+  .product-info h2 {
+    font-size: clamp(40px, 6vw, 80px);
+    font-weight: 900; letter-spacing: -0.04em;
+    line-height: 0.95; margin-bottom: 30px;
+  }
+  .product-info p {
+    font-size: 16px; line-height: 1.6;
+    color: var(--muted); margin-bottom: 30px;
+    max-width: 480px;
+  }
+  .product-list {
+    list-style: none; padding: 0; margin: 0;
+  }
+  .product-list li {
+    padding: 16px 0;
+    border-bottom: 1px solid var(--gray2);
+    display: flex; align-items: center; gap: 16px;
+    font-size: 15px;
+  }
+  .product-list li::before {
+    content: '→'; color: var(--accent); font-weight: 900;
+    font-size: 18px;
+  }
+  .product-list li strong { color: var(--fg); }
+
+  /* APP WINDOW (深色产品截图) */
+  .app-window {
+    background: #0E1424;
+    border: 1px solid #2A3142;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(255,59,0,0.2),
+      0 20px 60px rgba(0,0,0,0.5),
+      0 0 80px rgba(255,59,0,0.1);
+    aspect-ratio: 9/16;
+    max-height: 720px;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .app-titlebar {
+    display: flex; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #1A2236;
+    background: #0A0F1E;
+    gap: 12px;
+  }
+  .traffic-lights { display: flex; gap: 6px; }
+  .traffic-lights i {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block;
+  }
+  .traffic-lights i:nth-child(1) { background: #FF5F57; }
+  .traffic-lights i:nth-child(2) { background: #FEBC2E; }
+  .traffic-lights i:nth-child(3) { background: #28C840; }
+  .app-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: #E5E7EB;
+  }
+  .app-logo {
+    width: 28px; height: 28px; border-radius: 7px;
+    background: linear-gradient(135deg, #FF3B00, #FF6B00);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; color: white; font-size: 13px;
+  }
+  .app-version { font-size: 11px; color: #6B7280; }
+  .app-statusbar {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: #10B981;
+  }
+  .app-statusbar .live-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #10B981;
+    box-shadow: 0 0 6px #10B981;
+    animation: pulse 1.5s infinite;
+  }
+  .app-toolbar {
+    display: flex; align-items: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid #1A2236;
+    background: #0A0F1E;
+    gap: 8px;
+  }
+  .app-pill {
+    padding: 6px 12px;
+    background: #1A2236;
+    border: 1px solid #2A3142;
+    border-radius: 6px;
+    font-size: 11px; color: #D1D5DB;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .app-pill .live-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #10B981;
+  }
+  .app-pill.outline {
+    background: transparent;
+    color: #9CA3AF;
+  }
+  .app-spacer { flex: 1; }
+  .app-icon-btn {
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    color: #6B7280; font-size: 14px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+  }
+  .app-icon-btn:hover { border-color: #2A3142; color: #E5E7EB; }
+
+  .app-main {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 40px 24px;
+    position: relative;
+    background:
+      radial-gradient(ellipse at center, rgba(255,59,0,0.06) 0%, transparent 60%);
+  }
+  .app-empty-icon {
+    width: 64px; height: 64px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #FF8A3D, #FFB347);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 30px;
+    font-size: 32px;
+    box-shadow: 0 8px 30px rgba(255,138,61,0.3);
+  }
+  .app-title {
+    font-size: 22px; font-weight: 700; color: #F3F4F6;
+    margin-bottom: 14px; letter-spacing: -0.3px;
+  }
+  .app-subtitle {
+    font-size: 13px; color: #9CA3AF;
+    text-align: center; max-width: 320px;
+    line-height: 1.6; margin-bottom: 24px;
+  }
+  .app-suggestions {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    justify-content: center;
+  }
+  .app-chip {
+    padding: 8px 16px;
+    background: #1A2236;
+    border: 1px solid #2A3142;
+    border-radius: 20px;
+    font-size: 12px; color: #D1D5DB;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .app-chip:hover {
+    background: #2A3142; color: #FF8A3D;
+    border-color: #FF3B00;
+  }
+  .app-inputbar {
+    border-top: 1px solid #1A2236;
+    background: #0A0F1E;
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .app-input {
+    flex: 1; height: 40px;
+    background: #1A2236;
+    border: 1px solid #2A3142;
+    border-radius: 8px;
+    padding: 0 16px;
+    display: flex; align-items: center;
+    color: #6B7280; font-size: 13px;
+  }
+  .app-input::before {
+    content: '✦'; color: #FF8A3D; margin-right: 8px;
+  }
+  .app-action-btn {
+    width: 40px; height: 40px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 16px;
+  }
+  .app-action-btn.image { background: #1A2236; color: #9CA3AF; }
+  .app-action-btn.image:hover { background: #2A3142; color: #FF8A3D; }
+  .app-action-btn.send {
+    background: linear-gradient(135deg, #FF3B00, #FF6B00);
+  }
+
+  /* ===== STATS ===== */
+  .stats {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .stats .section-head { border-color: var(--bg); }
+  .stats .section-title { color: var(--bg); }
+  .stats .section-tag { color: #444; }
+  .stats .section-tag::before { color: var(--accent); }
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+  }
+  .stat {
+    padding: 60px 30px;
+    border-right: 1px solid var(--bg);
+  }
+  .stat:last-child { border-right: none; }
+  .stat-value {
+    font-size: clamp(60px, 8vw, 120px);
+    font-weight: 900; letter-spacing: -0.05em;
+    line-height: 0.9;
+  }
+  .stat-value::after {
+    content: attr(data-unit);
+    font-size: 0.3em; vertical-align: top;
+    color: var(--accent);
+  }
+  .stat-label {
+    font-size: 13px; text-transform: uppercase;
+    letter-spacing: 2px; margin-top: 16px;
+    color: #444;
+  }
+
+  /* ===== COMPARISON ===== */
+  .compare {
+    display: grid; grid-template-columns: 1fr 80px 1fr;
+    gap: 30px; align-items: stretch;
+  }
+  .compare-col {
+    border: 1px solid var(--gray2);
+    padding: 40px;
+  }
+  .compare-col.bad { background: var(--gray); }
+  .compare-col.good { background: var(--accent); color: var(--bg); }
+  .compare-arrow {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px; font-weight: 900; color: var(--accent2);
+  }
+  .compare-title {
+    font-size: 14px; text-transform: uppercase; letter-spacing: 2px;
+    margin-bottom: 30px; padding-bottom: 16px;
+    border-bottom: 1px solid currentColor;
+  }
+  .compare-item {
+    padding: 16px 0;
+    font-size: 16px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px dashed currentColor;
+  }
+  .compare-item:last-child { border-bottom: none; }
+  .compare-item::before {
+    content: '×'; color: var(--accent); font-weight: 900;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .compare-col.good .compare-item::before { content: '✓'; color: var(--bg); }
+
+  /* ===== FOOTER ===== */
+  footer {
+    border-top: 1px solid var(--gray2);
+    padding: 80px 40px 40px;
+    position: relative; z-index: 2;
+  }
+  .footer-big {
+    font-size: clamp(80px, 16vw, 280px);
+    font-weight: 900;
+    letter-spacing: -0.07em;
+    line-height: 0.8;
+    margin-bottom: 40px;
+  }
+  .footer-big .a { color: var(--accent); }
+  .footer-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-top: 40px;
+    border-top: 1px solid var(--gray2);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 2px;
+    color: var(--muted);
+  }
+
+  /* ===== SCROLL REVEAL ===== */
+  .reveal {
+    opacity: 0;
+    transform: translateY(40px);
+    transition: opacity 0.8s, transform 0.8s;
+  }
+  .reveal.in {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 1024px) {
+    .pain-grid, .feature-grid { grid-template-columns: repeat(2, 1fr); }
+    .pain-card:nth-child(3n) { border-right: 1px solid var(--gray2); }
+    .pain-card:nth-child(2n) { border-right: none; }
+    .feature:nth-child(4n) { border-right: 1px solid var(--gray2); }
+    .feature:nth-child(2n) { border-right: none; }
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .stat:nth-child(2n) { border-right: none; }
+    .workflow { grid-template-columns: 1fr; }
+    .compare { grid-template-columns: 1fr; }
+    .compare-arrow { transform: rotate(90deg); padding: 20px 0; }
+    .hero-sub { grid-template-columns: 1fr; gap: 30px; }
+    .cta-row { align-items: flex-start; }
+    .product-showcase { grid-template-columns: 1fr; gap: 40px; }
+    .app-window { max-height: 600px; }
+  }
+  @media (max-width: 640px) {
+    nav { padding: 16px 20px; }
+    .nav-meta { display: none; }
+    section, .hero { padding-left: 20px; padding-right: 20px; }
+    .pain-grid, .feature-grid { grid-template-columns: 1fr; }
+    .pain-card, .feature { border-right: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<!-- NAV -->
+<nav>
+  <div class="logo">SKETCHBUDDY</div>
+  <div class="nav-meta">
+    <span><i class="live-dot"></i> SYSTEM ONLINE</span>
+    <span>v1.0.0 BETA</span>
+    <span>2025 / 06</span>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-top">
+    <div class="version">SKETCH//UI//AI//2025</div>
+    <div>// 创意编号 #001</div>
+  </div>
+
+  <h1>
+    <span class="row"><span class="char" style="animation-delay:.05s">画</span><span class="char" style="animation-delay:.1s">布</span></span>
+    <span class="row"><span class="char outline" style="animation-delay:.2s">即</span><span class="char outline" style="animation-delay:.25s">是</span><span class="char outline" style="animation-delay:.3s">对</span><span class="char outline" style="animation-delay:.35s">话</span><span class="char" style="animation-delay:.4s">.</span></span>
+    <span class="row"><span class="char" style="animation-delay:.5s">S</span><span class="char" style="animation-delay:.55s">K</span><span class="char" style="animation-delay:.6s">E</span><span class="char" style="animation-delay:.65s">T</span><span class="char" style="animation-delay:.7s">C</span><span class="char" style="animation-delay:.75s">H</span></span>
+  </h1>
+
+  <div class="hero-sub">
+    <p>
+      <strong>SketchBuddy</strong> 是设计师的 AI 画布。
+      用自然语言描述你的设计想法，上传参考图，AI 自动理解并产出可在 <strong>Sketch</strong> 中直接打开的 UI 稿。
+      <br><br>
+      从 PRD 到 Sketch，跳过 Figma、跳过反复改稿、跳过组件库查找。一次对话，一张设计稿。
+    </p>
+    <div class="cta-row">
+      <a href="#workflow" class="cta">查看流程 →</a>
+      <a href="#features" class="cta alt">核心能力</a>
+    </div>
+  </div>
+</section>
+
+<!-- MARQUEE -->
+<div class="marquee">
+  <div class="marquee-track">
+    <span>
+      <span>AI 生成 UI</span><i class="dot"></i>
+      <span>参考图理解</span><i class="dot"></i>
+      <span>Sketch 原生输出</span><i class="dot"></i>
+      <span>设计系统驱动</span><i class="dot"></i>
+      <span>一键落地</span><i class="dot"></i>
+      <span>从想法到画布</span><i class="dot"></i>
+    </span>
+    <span>
+      <span>AI 生成 UI</span><i class="dot"></i>
+      <span>参考图理解</span><i class="dot"></i>
+      <span>Sketch 原生输出</span><i class="dot"></i>
+      <span>设计系统驱动</span><i class="dot"></i>
+      <span>一键落地</span><i class="dot"></i>
+      <span>从想法到画布</span><i class="dot"></i>
+    </span>
+  </div>
+</div>
+
+<!-- PAIN POINTS -->
+<section id="pain" class="reveal">
+  <div class="section-head">
+    <div class="section-tag">01 // THE PROBLEM</div>
+    <div class="section-title">设计稿<br>不该这么慢。</div>
+  </div>
+
+  <div class="pain-grid">
+    <div class="pain-card">
+      <div class="pain-num">01</div>
+      <h3>工具链断裂</h3>
+      <p>PRD 写在文档、参考图在 Figma、组件库在内部 Wiki、最终输出要到 Sketch——每个环节切换都是一次心智负担。</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-num">02</div>
+      <h3>AI 难以落地</h3>
+      <p>ChatGPT 能写代码、能写设计建议，但导不进 Sketch、装不进设计系统，最后还是要手动重画一遍。</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-num">03</div>
+      <h3>参考图难复用</h3>
+      <p>看到一张好看的设计图，想「按这个风格再做一个新页面」？通常做法是：照着画。或者：找个外包。</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-num">04</div>
+      <h3>改稿成本高</h3>
+      <p>产品改一句、设计师改一版，循环往复。一个移动端首屏，3 个工作日，60% 时间在「对齐规范」。</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-num">05</div>
+      <h3>规范执行难</h3>
+      <p>设计系统写得再细，落到具体页面时总有人用错色号、圆角、间距——评审时才发现。</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-num">06</div>
+      <h3>重复劳动</h3>
+      <p>按钮、卡片、列表——80% 的元素在重复造。设计师的时间应该花在「判断美丑」，而不是「拖拽对齐」。</p>
+    </div>
+  </div>
+</section>
+
+<!-- WORKFLOW -->
+<section id="workflow" class="reveal">
+  <div class="section-head">
+    <div class="section-tag">02 // THE FLOW</div>
+    <div class="section-title">一句话<br>一张稿。</div>
+  </div>
+
+  <div class="workflow">
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-num">01</div>
+        <div class="step-body">
+          <h4>描述需求</h4>
+          <p>在输入框写下你的设计想法，或上传参考图</p>
+        </div>
+        <div class="step-time">10s</div>
+      </div>
+      <div class="step">
+        <div class="step-num">02</div>
+        <div class="step-body">
+          <h4>AI 理解意图</h4>
+          <p>视觉模型分析参考图，LLM 理解业务需求</p>
+        </div>
+        <div class="step-time">5s</div>
+      </div>
+      <div class="step">
+        <div class="step-num">03</div>
+        <div class="step-body">
+          <h4>匹配设计系统</h4>
+          <p>调用企业视觉规范、ArcoDesign、Ant Design 等 Skill</p>
+        </div>
+        <div class="step-time">3s</div>
+      </div>
+      <div class="step">
+        <div class="step-num">04</div>
+        <div class="step-body">
+          <h4>生成 Sketch 指令</h4>
+          <p>输出符合 Sketch 图层模型的 JSON 指令集</p>
+        </div>
+        <div class="step-time">8s</div>
+      </div>
+      <div class="step">
+        <div class="step-num">05</div>
+        <div class="step-body">
+          <h4>Sketch 自动执行</h4>
+          <p>通过 MCP 协议，Sketch 中真实生成设计稿</p>
+        </div>
+        <div class="step-time">12s</div>
+      </div>
+    </div>
+
+    <div class="workflow-demo">
+      <div class="demo-canvas">
+        <div class="demo-header">
+          <span class="demo-dot r"></span>
+          <span class="demo-dot y"></span>
+          <span class="demo-dot g"></span>
+          <span style="margin-left:auto">untitled.sketch</span>
+        </div>
+        <div class="demo-body">
+          <div class="mock-frame">
+            <div class="mock-block" style="height:80px; background: linear-gradient(135deg, var(--accent), #FF6B00);"></div>
+            <div class="mock-bar l" style="margin-top:16px;"></div>
+            <div class="mock-bar m" style="margin-top:8px;"></div>
+            <div class="mock-bar s" style="margin-top:8px;"></div>
+            <div class="mock-block" style="height:50px; margin-top:16px;"></div>
+            <div class="mock-block" style="height:50px;"></div>
+            <div class="mock-block" style="height:50px;"></div>
+            <div class="mock-block" style="height:30px; background: var(--accent); margin-top:16px; width:60%;"></div>
+          </div>
+          <div class="typing-cursor">GENERATING</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features" class="reveal">
+  <div class="section-head">
+    <div class="section-tag">03 // CAPABILITIES</div>
+    <div class="section-title">不只是<br>画图工具。</div>
+  </div>
+
+  <div class="feature-grid">
+    <div class="feature">
+      <div class="feat-icon">AI</div>
+      <div>
+        <div class="feat-title">参考图理解</div>
+        <div class="feat-desc">上传 UI 截图，AI 识别布局、配色、组件类型，转化为可复用的设计描述</div>
+      </div>
+      <div class="feat-meta">→ VISION MODEL</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">DS</div>
+      <div>
+        <div class="feat-title">设计系统驱动</div>
+        <div class="feat-desc">内置企业视觉规范、ArcoDesign、Ant Design 等 Skill 库，自动匹配色号、字号、间距</div>
+      </div>
+      <div class="feat-meta">→ SKILL LIBRARY</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">SK</div>
+      <div>
+        <div class="feat-title">Sketch 原生</div>
+        <div class="feat-desc">通过 MCP 协议直连 Sketch，生成可编辑的图层，不是位图、不是 PDF</div>
+      </div>
+      <div class="feat-meta">→ MCP PROTOCOL</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">CC</div>
+      <div>
+        <div class="feat-title">对话式迭代</div>
+        <div class="feat-desc">「把按钮改成圆角」「主色换成蓝色」——像和设计师聊天一样改稿</div>
+      </div>
+      <div class="feat-meta">→ CHAT MODIFY</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">PG</div>
+      <div>
+        <div class="feat-title">批量生成</div>
+        <div class="feat-desc">一次描述生成多套方案，横向对比，挑最好的那版继续迭代</div>
+      </div>
+      <div class="feat-meta">→ MULTI VARIANT</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">EX</div>
+      <div>
+        <div class="feat-title">组件复用</div>
+        <div class="feat-desc">生成的设计稿基于 Symbols，可在其他项目中被引用、组合、修改</div>
+      </div>
+      <div class="feat-meta">→ SKETCH SYMBOLS</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">FX</div>
+      <div>
+        <div class="feat-title">企业 SSO 集成</div>
+        <div class="feat-desc">企业 SSO 登录，与内部用户系统、权限管理无缝衔接</div>
+      </div>
+      <div class="feat-meta">→ ENTERPRISE AUTH</div>
+    </div>
+    <div class="feature">
+      <div class="feat-icon">∞</div>
+      <div>
+        <div class="feat-title">持续学习</div>
+        <div class="feat-desc">每次生成都会被记录，团队的设计偏好自动沉淀为专属 Skill</div>
+      </div>
+      <div class="feat-meta">→ TEAM MEMORY</div>
+    </div>
+  </div>
+</section>
+
+<!-- PRODUCT SHOWCASE -->
+<section class="reveal">
+  <div class="section-head">
+    <div class="section-tag">04 // THE INTERFACE</div>
+    <div class="section-title">看到它<br>就能用。</div>
+  </div>
+
+  <div class="product-showcase">
+    <div class="product-info">
+      <h2>一个画布<br>完成所有事。</h2>
+      <p>SketchBuddy 极简设计：左侧对话，右侧 Sketch 实时预览。无需在多个工具间切换，一切发生在同一个窗口里。</p>
+      <ul class="product-list">
+        <li><strong>对话式输入</strong> · 自然语言 + 参考图</li>
+        <li><strong>实时生成</strong> · 30 秒出稿</li>
+        <li><strong>Sketch 直连</strong> · 不用导出导入</li>
+        <li><strong>设计系统</strong> · 58 / Arco / Ant 自动匹配</li>
+        <li><strong>对话式改稿</strong> · 像聊天一样改设计</li>
+        <li><strong>SSO 登录</strong> · 企业账号无缝接入</li>
+      </ul>
+    </div>
+
+    <div class="app-window">
+      <div class="app-titlebar">
+        <div class="traffic-lights">
+          <i></i><i></i><i></i>
+        </div>
+        <div class="app-brand">
+          <div class="app-logo">A</div>
+          <div>
+            <div>SketchBuddy</div>
+            <div class="app-version">V0.3.0 · 检查更新</div>
+          </div>
+        </div>
+        <div class="app-statusbar">
+          <span class="live-dot"></span>
+          Sketch 已连接
+        </div>
+      </div>
+
+      <div class="app-toolbar">
+        <div class="app-pill outline">AI 默认模型</div>
+        <div class="app-spacer"></div>
+        <div class="app-icon-btn">⊞</div>
+        <div class="app-icon-btn">⌖</div>
+      </div>
+
+      <div class="app-main">
+        <div class="app-empty-icon">🎨</div>
+        <div class="app-title">SketchBuddy</div>
+        <div class="app-subtitle">在 Sketch 中通过 AI 对话直接生成 UI 设计稿</div>
+        <div class="app-suggestions">
+          <div class="app-chip">画一个登录页面</div>
+          <div class="app-chip">设计仪表盘</div>
+          <div class="app-chip">生成按钮组件</div>
+        </div>
+      </div>
+
+      <div class="app-inputbar">
+        <div class="app-input">描述你的设计需求 ...</div>
+        <div class="app-action-btn image">⚡</div>
+        <div class="app-action-btn image">⊡</div>
+        <div class="app-action-btn send">➤</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section class="stats reveal">
+  <div class="section-head">
+    <div class="section-tag">05 // THE IMPACT</div>
+    <div class="section-title">效率提升<br>看得见。</div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="stat-value" data-unit="x">15</div>
+      <div class="stat-label">出稿速度提升</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" data-unit="%">90</div>
+      <div class="stat-label">规范执行准确率</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" data-unit="h">3</div>
+      <div class="stat-label">单稿耗时（天→小时）</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" data-unit="%">0</div>
+      <div class="stat-label">工具切换成本</div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARE -->
+<section class="reveal">
+  <div class="section-head">
+    <div class="section-tag">06 // BEFORE / AFTER</div>
+    <div class="section-title">传统方式<br>vs SketchBuddy</div>
+  </div>
+
+  <div class="compare">
+    <div class="compare-col bad">
+      <div class="compare-title">// 传统设计流程</div>
+      <div class="compare-item">写 PRD：1-2 天</div>
+      <div class="compare-item">查设计规范：30 分钟</div>
+      <div class="compare-item">拖组件拼页面：1 天</div>
+      <div class="compare-item">对齐色号/间距：反复改</div>
+      <div class="compare-item">导出 Sketch：手动</div>
+      <div class="compare-item">评审修改：另算 N 天</div>
+    </div>
+
+    <div class="compare-arrow">→</div>
+
+    <div class="compare-col good">
+      <div class="compare-title">// SketchBuddy</div>
+      <div class="compare-item">描述需求：10 秒</div>
+      <div class="compare-item">AI 自动匹配规范：0 秒</div>
+      <div class="compare-item">生成设计稿：30 秒</div>
+      <div class="compare-item">自动遵循设计系统</div>
+      <div class="compare-item">直连 Sketch 输出</div>
+      <div class="compare-item">对话式迭代改稿</div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-big">
+    BUILT<br>
+    FOR <span class="a">/</span> DESIGNERS<br>
+    WHO <span class="a">CODE</span>.
+  </div>
+  <div class="footer-row">
+    <div>© 2025 SKETCHBUDDY // 企业 AI DESIGN TEAM</div>
+    <div>BEIJING → SHANGHAI → SHENZHEN</div>
+    <div>VERSION 1.0.0 / BUILD 20250610</div>
+  </div>
+</footer>
+
+<script>
+  // CURSOR TRAIL
+  const trailCount = 8;
+  const trails = [];
+  for (let i = 0; i < trailCount; i++) {
+    const el = document.createElement('div');
+    el.className = 'trail';
+    el.style.opacity = (1 - i / trailCount) * 0.6;
+    document.body.appendChild(el);
+    trails.push({ el, x: 0, y: 0 });
+  }
+  let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
+  document.addEventListener('mousemove', e => {
+    mouseX = e.clientX; mouseY = e.clientY;
+  });
+  function animateTrail() {
+    let x = mouseX, y = mouseY;
+    trails.forEach((t, i) => {
+      t.x += (x - t.x) * 0.3;
+      t.y += (y - t.y) * 0.3;
+      t.el.style.transform = `translate(${t.x - 4}px, ${t.y - 4}px) scale(${1 - i / trailCount * 0.5})`;
+      x = t.x; y = t.y;
+    });
+    requestAnimationFrame(animateTrail);
+  }
+  animateTrail();
+
+  // REVEAL ON SCROLL
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) e.target.classList.add('in');
+    });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  // STAT COUNTER ANIMATION
+  const statObserver = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const el = e.target;
+        const target = parseInt(el.textContent);
+        const dur = 1500;
+        const start = performance.now();
+        function tick(now) {
+          const t = Math.min((now - start) / dur, 1);
+          const eased = 1 - Math.pow(1 - t, 3);
+          el.textContent = Math.floor(target * eased);
+          if (t < 1) requestAnimationFrame(tick);
+          else el.textContent = target;
+        }
+        requestAnimationFrame(tick);
+        statObserver.unobserve(el);
+      }
+    });
+  });
+  document.querySelectorAll('.stat-value').forEach(el => statObserver.observe(el));
+
+  // PARALLAX HERO
+  window.addEventListener('scroll', () => {
+    const scrolled = window.scrollY;
+    const hero = document.querySelector('h1');
+    if (hero && scrolled < window.innerHeight) {
+      hero.style.transform = `translateY(${scrolled * 0.3}px)`;
+      hero.style.opacity = 1 - scrolled / window.innerHeight;
+    }
+  });
+</script>
+
+</body>
+</html>

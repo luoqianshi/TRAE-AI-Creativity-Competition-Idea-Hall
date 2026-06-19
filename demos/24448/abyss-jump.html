@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>深渊跳跃</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a1a;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+canvas {
+  display: block;
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ==================== 游戏配置 ====================
+const CONFIG = {
+  GRAVITY: 0.35,
+  PLAYER_SIZE: 18,
+  OBSTACLE_GAP_MIN: 180,
+  OBSTACLE_GAP_MAX: 280,
+  OBSTACLE_WIDTH_MIN: 60,
+  OBSTACLE_WIDTH_MAX: 120,
+  INITIAL_SPEED: 2.5,
+  MAX_SPEED: 8,
+  SPEED_INCREMENT: 0.0008,
+  SMASH_COOLDOWN: 300,
+  SMASH_RADIUS: 60,
+  PARTICLE_COUNT: 15,
+  STAR_COUNT: 80,
+  BG_COLOR_TOP: '#0a0a2e',
+  BG_COLOR_BOTTOM: '#1a0a3e',
+};
+
+// ==================== Canvas 初始化 ====================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ==================== 游戏状态 ====================
+let gameState = 'menu'; // menu, playing, gameover
+let score = 0;
+let depth = 0;
+let highScore = parseInt(localStorage.getItem('abyssJumpHighScore')) || 0;
+let speed = CONFIG.INITIAL_SPEED;
+let lastSmashTime = 0;
+let screenShake = 0;
+let comboCount = 0;
+let comboTimer = 0;
+let showCombo = false;
+let comboText = '';
+let comboAlpha = 0;
+
+// ==================== 玩家 ====================
+const player = {
+  x: 0,
+  y: 0,
+  vy: 0,
+  size: CONFIG.PLAYER_SIZE,
+  rotation: 0,
+  targetRotation: 0,
+  isSmashing: false,
+  smashTimer: 0,
+  trail: [],
+  glowIntensity: 0,
+  invincible: false,
+  invincibleTimer: 0,
+};
+
+function resetPlayer() {
+  player.x = W / 2;
+  player.y = H * 0.15;
+  player.vy = 0;
+  player.rotation = 0;
+  player.targetRotation = 0;
+  player.isSmashing = false;
+  player.smashTimer = 0;
+  player.trail = [];
+  player.glowIntensity = 0;
+  player.invincible = false;
+  player.invincibleTimer = 0;
+}
+
+// ==================== 障碍物 ====================
+let obstacles = [];
+let obstacleTimer = 0;
+
+function createObstacle() {
+  const gap = CONFIG.OBSTACLE_GAP_MIN + Math.random() * (CONFIG.OBSTACLE_GAP_MAX - CONFIG.OBSTACLE_GAP_MIN);
+  const w = CONFIG.OBSTACLE_WIDTH_MIN + Math.random() * (CONFIG.OBSTACLE_WIDTH_MAX - CONFIG.OBSTACLE_WIDTH_MIN);
+  const type = Math.random() < 0.3 ? 'moving' : (Math.random() < 0.5 ? 'wide' : 'normal');
+  const colors = ['#ff4466', '#ff6644', '#ff44aa', '#ff8844', '#cc44ff'];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+
+  const obs = {
+    x: Math.random() * (W - gap - w * 2) + w,
+    y: -60,
+    width: w,
+    height: 20 + Math.random() * 15,
+    gap: gap,
+    color: color,
+    type: type,
+    health: type === 'wide' ? 2 : 1,
+    maxHealth: type === 'wide' ? 2 : 1,
+    shakeX: 0,
+    alpha: 1,
+    cracked: false,
+    moveSpeed: type === 'moving' ? (1 + Math.random() * 2) * (Math.random() < 0.5 ? 1 : -1) : 0,
+    moveRange: type === 'moving' ? 40 + Math.random() * 40 : 0,
+    originX: 0,
+    glowPhase: Math.random() * Math.PI * 2,
+  };
+  obs.originX = obs.x;
+  return obs;
+}
+
+// ==================== 粒子系统 ====================
+let particles = [];
+
+function spawnParticles(x, y, color, count, type) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+    const spd = type === 'smash' ? 3 + Math.random() * 6 : 1 + Math.random() * 3;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd - (type === 'smash' ? 2 : 0),
+      life: 1,
+      decay: 0.015 + Math.random() * 0.02,
+      size: type === 'smash' ? 3 + Math.random() * 5 : 2 + Math.random() * 3,
+      color: color,
+      type: type,
+      gravity: type === 'smash' ? 0.1 : 0.02,
+    });
+  }
+}
+
+function spawnScoreParticle(x, y, text) {
+  particles.push({
+    x, y,
+    vx: (Math.random() - 0.5) * 2,
+    vy: -2,
+    life: 1,
+    decay: 0.012,
+    size: 16,
+    color: '#ffdd44',
+    type: 'text',
+    text: text,
+    gravity: 0.01,
+  });
+}
+
+// ==================== 背景星星 ====================
+let stars = [];
+function initStars() {
+  stars = [];
+  for (let i = 0; i < CONFIG.STAR_COUNT; i++) {
+    stars.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      size: 0.5 + Math.random() * 2,
+      speed: 0.2 + Math.random() * 0.8,
+      twinkle: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.02 + Math.random() * 0.04,
+    });
+  }
+}
+initStars();
+
+// ==================== 背景深度线 ====================
+let depthLines = [];
+function initDepthLines() {
+  depthLines = [];
+  for (let i = 0; i < 20; i++) {
+    depthLines.push({
+      y: Math.random() * H,
+      alpha: 0.03 + Math.random() * 0.06,
+      width: 0.5 + Math.random() * 1.5,
+    });
+  }
+}
+initDepthLines();
+
+// ==================== 输入处理 ====================
+function handleInput() {
+  if (gameState === 'menu') {
+    startGame();
+  } else if (gameState === 'playing') {
+    smash();
+  } else if (gameState === 'gameover') {
+    if (Date.now() - gameOverTime > 800) {
+      gameState = 'menu';
+    }
+  }
+}
+
+canvas.addEventListener('mousedown', (e) => { e.preventDefault(); handleInput(); });
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleInput(); }, { passive: false });
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'Enter') {
+    e.preventDefault();
+    handleInput();
+  }
+});
+
+// ==================== 冲破障碍 ====================
+function smash() {
+  const now = Date.now();
+  if (now - lastSmashTime < CONFIG.SMASH_COOLDOWN) return;
+  lastSmashTime = now;
+
+  player.isSmashing = true;
+  player.smashTimer = 12;
+  player.glowIntensity = 1;
+  player.invincible = true;
+  player.invincibleTimer = 20;
+  screenShake = 8;
+
+  // 检测碰撞范围内的障碍物
+  let hitCount = 0;
+  obstacles.forEach(obs => {
+    const dx = player.x - obs.x;
+    const dy = player.y - obs.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < CONFIG.SMASH_RADIUS + obs.width / 2) {
+      obs.health--;
+      obs.shakeX = 10;
+      if (obs.health <= 0) {
+        obs.alpha = 0;
+        spawnParticles(obs.x, obs.y, obs.color, CONFIG.PARTICLE_COUNT, 'smash');
+        const bonus = obs.type === 'wide' ? 50 : (obs.type === 'moving' ? 30 : 20);
+        score += bonus;
+        spawnScoreParticle(obs.x, obs.y - 20, `+${bonus}`);
+        hitCount++;
+      } else {
+        obs.cracked = true;
+        spawnParticles(obs.x, obs.y, obs.color, 8, 'smash');
+      }
+    }
+  });
+
+  // 连击系统
+  if (hitCount > 0) {
+    comboCount += hitCount;
+    comboTimer = 60;
+    if (comboCount >= 2) {
+      showCombo = true;
+      comboText = `${comboCount}x 连击!`;
+      comboAlpha = 1;
+      const comboBonus = comboCount * 10;
+      score += comboBonus;
+    }
+  }
+
+  // 冲击波粒子
+  for (let i = 0; i < 20; i++) {
+    const angle = (Math.PI * 2 / 20) * i;
+    particles.push({
+      x: player.x,
+      y: player.y,
+      vx: Math.cos(angle) * 4,
+      vy: Math.sin(angle) * 4,
+      life: 0.6,
+      decay: 0.03,
+      size: 2,
+      color: '#44ddff',
+      type: 'ring',
+      gravity: 0,
+    });
+  }
+}
+
+// ==================== 游戏控制 ====================
+let gameOverTime = 0;
+
+function startGame() {
+  gameState = 'playing';
+  score = 0;
+  depth = 0;
+  speed = CONFIG.INITIAL_SPEED;
+  obstacles = [];
+  particles = [];
+  obstacleTimer = 0;
+  comboCount = 0;
+  comboTimer = 0;
+  showCombo = false;
+  screenShake = 0;
+  resetPlayer();
+}
+
+function gameOver() {
+  gameState = 'gameover';
+  gameOverTime = Date.now();
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem('abyssJumpHighScore', highScore);
+  }
+  // 死亡特效
+  spawnParticles(player.x, player.y, '#ff4444', 30, 'smash');
+  spawnParticles(player.x, player.y, '#ffaa44', 20, 'smash');
+  screenShake = 15;
+}
+
+// ==================== 绘制函数 ====================
+function drawBackground() {
+  // 渐变背景
+  const depthFactor = Math.min(depth / 5000, 1);
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  const r1 = Math.floor(10 + depthFactor * 20);
+  const g1 = Math.floor(10 - depthFactor * 5);
+  const b1 = Math.floor(46 + depthFactor * 30);
+  const r2 = Math.floor(26 + depthFactor * 30);
+  const g2 = Math.floor(10 - depthFactor * 5);
+  const b2 = Math.floor(62 + depthFactor * 20);
+  grad.addColorStop(0, `rgb(${r1},${g1},${b1})`);
+  grad.addColorStop(1, `rgb(${r2},${g2},${b2})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // 星星
+  stars.forEach(star => {
+    star.twinkle += star.twinkleSpeed;
+    const alpha = 0.3 + Math.sin(star.twinkle) * 0.3;
+    star.y += star.speed * speed * 0.3;
+    if (star.y > H) {
+      star.y = -5;
+      star.x = Math.random() * W;
+    }
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(200, 220, 255, ${alpha})`;
+    ctx.fill();
+  });
+
+  // 深度线
+  depthLines.forEach(line => {
+    line.y += speed * 0.5;
+    if (line.y > H) {
+      line.y = -10;
+      line.alpha = 0.03 + Math.random() * 0.06;
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, line.y);
+    ctx.lineTo(W, line.y);
+    ctx.strokeStyle = `rgba(100, 120, 200, ${line.alpha})`;
+    ctx.lineWidth = line.width;
+    ctx.stroke();
+  });
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(player.rotation);
+
+  // 光晕
+  if (player.glowIntensity > 0) {
+    const glowSize = player.size * 2.5 * player.glowIntensity;
+    const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, glowSize);
+    glow.addColorStop(0, `rgba(68, 221, 255, ${0.4 * player.glowIntensity})`);
+    glow.addColorStop(1, 'rgba(68, 221, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(-glowSize, -glowSize, glowSize * 2, glowSize * 2);
+  }
+
+  // 无敌闪烁
+  if (player.invincible && Math.floor(player.invincibleTimer / 3) % 2 === 0) {
+    ctx.globalAlpha = 0.6;
+  }
+
+  const s = player.size;
+
+  // 身体
+  ctx.beginPath();
+  ctx.arc(0, 0, s, 0, Math.PI * 2);
+  const bodyGrad = ctx.createRadialGradient(-s * 0.3, -s * 0.3, 0, 0, 0, s);
+  bodyGrad.addColorStop(0, '#66eeff');
+  bodyGrad.addColorStop(0.6, '#3399ff');
+  bodyGrad.addColorStop(1, '#1166cc');
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+  ctx.strokeStyle = '#88ddff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // 眼睛
+  const eyeOffsetX = s * 0.3;
+  const eyeOffsetY = -s * 0.15;
+  const eyeSize = s * 0.22;
+
+  // 左眼
+  ctx.beginPath();
+  ctx.arc(-eyeOffsetX, eyeOffsetY, eyeSize, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-eyeOffsetX + eyeSize * 0.2, eyeOffsetY, eyeSize * 0.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#112244';
+  ctx.fill();
+
+  // 右眼
+  ctx.beginPath();
+  ctx.arc(eyeOffsetX, eyeOffsetY, eyeSize, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(eyeOffsetX + eyeSize * 0.2, eyeOffsetY, eyeSize * 0.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#112244';
+  ctx.fill();
+
+  // 冲击表情
+  if (player.isSmashing) {
+    ctx.beginPath();
+    ctx.arc(0, s * 0.35, s * 0.25, 0, Math.PI);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  } else {
+    // 微笑
+    ctx.beginPath();
+    ctx.arc(0, s * 0.2, s * 0.2, 0.1, Math.PI - 0.1);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // 拖尾
+  player.trail.forEach((t, i) => {
+    const alpha = t.life * 0.4;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, player.size * t.life * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(68, 170, 255, ${alpha})`;
+    ctx.fill();
+  });
+}
+
+function drawObstacle(obs) {
+  if (obs.alpha <= 0) return;
+
+  ctx.save();
+  ctx.globalAlpha = obs.alpha;
+  ctx.translate(obs.x + obs.shakeX, obs.y);
+
+  const hw = obs.width / 2;
+  const hh = obs.height / 2;
+
+  // 光晕
+  obs.glowPhase += 0.03;
+  const glowAlpha = 0.15 + Math.sin(obs.glowPhase) * 0.1;
+  ctx.shadowColor = obs.color;
+  ctx.shadowBlur = 15;
+
+  // 主体
+  const grad = ctx.createLinearGradient(-hw, -hh, -hw, hh);
+  grad.addColorStop(0, obs.color);
+  grad.addColorStop(1, shadeColor(obs.color, -30));
+  ctx.fillStyle = grad;
+
+  // 圆角矩形
+  const r = 6;
+  ctx.beginPath();
+  ctx.moveTo(-hw + r, -hh);
+  ctx.lineTo(hw - r, -hh);
+  ctx.quadraticCurveTo(hw, -hh, hw, -hh + r);
+  ctx.lineTo(hw, hh - r);
+  ctx.quadraticCurveTo(hw, hh, hw - r, hh);
+  ctx.lineTo(-hw + r, hh);
+  ctx.quadraticCurveTo(-hw, hh, -hw, hh - r);
+  ctx.lineTo(-hw, -hh + r);
+  ctx.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+
+  // 裂纹
+  if (obs.cracked) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-hw * 0.3, -hh);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(hw * 0.2, hh);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(hw * 0.4, -hh * 0.5);
+    ctx.stroke();
+  }
+
+  // 血量指示（多血量障碍）
+  if (obs.maxHealth > 1) {
+    const barW = obs.width * 0.6;
+    const barH = 3;
+    const barY = -hh - 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(-barW / 2, barY, barW, barH);
+    ctx.fillStyle = obs.health > 1 ? '#44ff88' : '#ff4444';
+    ctx.fillRect(-barW / 2, barY, barW * (obs.health / obs.maxHealth), barH);
+  }
+
+  // 移动类型标记
+  if (obs.type === 'moving') {
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('↔', 0, 4);
+  }
+
+  ctx.restore();
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.save();
+    ctx.globalAlpha = p.life;
+
+    if (p.type === 'text') {
+      ctx.font = `bold ${p.size}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+    } else if (p.type === 'ring') {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.fill();
+    }
+    ctx.restore();
+  });
+}
+
+function drawUI() {
+  // 分数
+  ctx.save();
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 4;
+  ctx.fillText(`分数: ${score}`, 20, 45);
+
+  // 深度
+  ctx.font = '18px sans-serif';
+  ctx.fillStyle = 'rgba(200,220,255,0.7)';
+  ctx.fillText(`深度: ${Math.floor(depth)}m`, 20, 72);
+
+  // 速度
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(200,220,255,0.5)';
+  ctx.fillText(`速度: ${speed.toFixed(1)}x`, 20, 94);
+
+  // 最高分
+  ctx.textAlign = 'right';
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = 'rgba(255,220,100,0.6)';
+  ctx.fillText(`最高: ${highScore}`, W - 20, 45);
+
+  // 连击显示
+  if (showCombo && comboAlpha > 0) {
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${32 + comboCount * 2}px sans-serif`;
+    ctx.fillStyle = `rgba(255, 220, 68, ${comboAlpha})`;
+    ctx.shadowColor = 'rgba(255, 180, 0, 0.5)';
+    ctx.shadowBlur = 10;
+    ctx.fillText(comboText, W / 2, H * 0.3);
+  }
+
+  // 冲击冷却指示
+  const now = Date.now();
+  const cooldownLeft = Math.max(0, CONFIG.SMASH_COOLDOWN - (now - lastSmashTime));
+  if (cooldownLeft > 0 && gameState === 'playing') {
+    const progress = 1 - cooldownLeft / CONFIG.SMASH_COOLDOWN;
+    const barW = 60;
+    const barH = 4;
+    const barX = player.x - barW / 2;
+    const barY = player.y + player.size + 15;
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = progress >= 1 ? '#44ddff' : '#ff8844';
+    ctx.fillRect(barX, barY, barW * progress, barH);
+  }
+
+  ctx.restore();
+}
+
+function drawMenu() {
+  // 半透明遮罩
+  ctx.fillStyle = 'rgba(10, 10, 30, 0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  // 标题
+  const titleY = H * 0.3;
+  ctx.font = 'bold 52px sans-serif';
+  ctx.fillStyle = '#44ddff';
+  ctx.shadowColor = 'rgba(68, 221, 255, 0.5)';
+  ctx.shadowBlur = 20;
+  ctx.fillText('深渊跳跃', W / 2, titleY);
+
+  // 副标题
+  ctx.shadowBlur = 0;
+  ctx.font = '20px sans-serif';
+  ctx.fillStyle = 'rgba(200, 220, 255, 0.7)';
+  ctx.fillText('向下坠落，冲破一切', W / 2, titleY + 40);
+
+  // 操作说明
+  const instY = H * 0.5;
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.fillText('点击屏幕 / 按空格键 冲破障碍物', W / 2, instY);
+  ctx.fillText('下落越深，分数越高', W / 2, instY + 28);
+
+  // 最高分
+  if (highScore > 0) {
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = 'rgba(255, 220, 100, 0.8)';
+    ctx.fillText(`最高分: ${highScore}`, W / 2, instY + 70);
+  }
+
+  // 开始提示
+  const pulse = 0.6 + Math.sin(Date.now() * 0.004) * 0.4;
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillStyle = `rgba(68, 221, 255, ${pulse})`;
+  ctx.fillText('点击开始', W / 2, H * 0.72);
+
+  // 装饰小人
+  ctx.translate(W / 2, H * 0.85);
+  const bob = Math.sin(Date.now() * 0.003) * 8;
+  ctx.translate(0, bob);
+  const s = 25;
+  ctx.beginPath();
+  ctx.arc(0, 0, s, 0, Math.PI * 2);
+  const bodyGrad = ctx.createRadialGradient(-s * 0.3, -s * 0.3, 0, 0, 0, s);
+  bodyGrad.addColorStop(0, '#66eeff');
+  bodyGrad.addColorStop(0.6, '#3399ff');
+  bodyGrad.addColorStop(1, '#1166cc');
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+  ctx.strokeStyle = '#88ddff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // 眼睛
+  ctx.beginPath(); ctx.arc(-s * 0.3, -s * 0.15, s * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.beginPath(); ctx.arc(-s * 0.3 + s * 0.04, -s * 0.15, s * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = '#112244'; ctx.fill();
+  ctx.beginPath(); ctx.arc(s * 0.3, -s * 0.15, s * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.beginPath(); ctx.arc(s * 0.3 + s * 0.04, -s * 0.15, s * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = '#112244'; ctx.fill();
+  // 微笑
+  ctx.beginPath(); ctx.arc(0, s * 0.2, s * 0.2, 0.1, Math.PI - 0.1);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(10, 10, 30, 0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  ctx.font = 'bold 44px sans-serif';
+  ctx.fillStyle = '#ff4466';
+  ctx.shadowColor = 'rgba(255, 68, 102, 0.5)';
+  ctx.shadowBlur = 15;
+  ctx.fillText('游戏结束', W / 2, H * 0.35);
+
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`得分: ${score}`, W / 2, H * 0.45);
+
+  ctx.font = '20px sans-serif';
+  ctx.fillStyle = 'rgba(200, 220, 255, 0.7)';
+  ctx.fillText(`深度: ${Math.floor(depth)}m`, W / 2, H * 0.52);
+
+  if (score >= highScore && score > 0) {
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillStyle = '#ffdd44';
+    ctx.fillText('新纪录!', W / 2, H * 0.59);
+  } else {
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = 'rgba(255, 220, 100, 0.6)';
+    ctx.fillText(`最高分: ${highScore}`, W / 2, H * 0.59);
+  }
+
+  const pulse = 0.5 + Math.sin(Date.now() * 0.004) * 0.5;
+  ctx.font = '20px sans-serif';
+  ctx.fillStyle = `rgba(200, 220, 255, ${pulse})`;
+  ctx.fillText('点击重新开始', W / 2, H * 0.7);
+
+  ctx.restore();
+}
+
+// ==================== 工具函数 ====================
+function shadeColor(color, percent) {
+  const num = parseInt(color.replace('#', ''), 16);
+  const amt = Math.round(2.55 * percent);
+  const R = Math.max(0, Math.min(255, (num >> 16) + amt));
+  const G = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + amt));
+  const B = Math.max(0, Math.min(255, (num & 0x0000FF) + amt));
+  return `rgb(${R},${G},${B})`;
+}
+
+// ==================== 更新逻辑 ====================
+function update() {
+  if (gameState !== 'playing') return;
+
+  // 速度递增
+  speed = Math.min(CONFIG.MAX_SPEED, speed + CONFIG.SPEED_INCREMENT);
+
+  // 玩家下落
+  player.vy += CONFIG.GRAVITY;
+  player.y += player.vy;
+
+  // 深度和分数
+  depth += speed * 0.5;
+  score += Math.floor(speed * 0.3);
+
+  // 旋转
+  if (player.isSmashing) {
+    player.targetRotation += 0.5;
+  } else {
+    player.targetRotation = Math.sin(Date.now() * 0.002) * 0.1;
+  }
+  player.rotation += (player.targetRotation - player.rotation) * 0.15;
+
+  // 冲击状态
+  if (player.isSmashing) {
+    player.smashTimer--;
+    if (player.smashTimer <= 0) player.isSmashing = false;
+  }
+
+  // 无敌状态
+  if (player.invincible) {
+    player.invincibleTimer--;
+    if (player.invincibleTimer <= 0) player.invincible = false;
+  }
+
+  // 光晕衰减
+  player.glowIntensity *= 0.92;
+
+  // 拖尾
+  if (Math.random() < 0.5) {
+    player.trail.push({
+      x: player.x + (Math.random() - 0.5) * 6,
+      y: player.y - player.size * 0.5,
+      life: 1,
+    });
+  }
+  player.trail.forEach(t => t.life -= 0.04);
+  player.trail = player.trail.filter(t => t.life > 0);
+
+  // 生成障碍物
+  obstacleTimer++;
+  const spawnRate = Math.max(30, 80 - depth * 0.005);
+  if (obstacleTimer >= spawnRate) {
+    obstacleTimer = 0;
+    obstacles.push(createObstacle());
+  }
+
+  // 更新障碍物
+  obstacles.forEach(obs => {
+    obs.y += speed;
+    if (obs.type === 'moving') {
+      obs.x = obs.originX + Math.sin(obs.y * 0.02) * obs.moveRange;
+    }
+    if (obs.shakeX > 0) obs.shakeX *= -0.8;
+    if (Math.abs(obs.shakeX) < 0.5) obs.shakeX = 0;
+  });
+
+  // 碰撞检测（非无敌时）
+  if (!player.invincible) {
+    obstacles.forEach(obs => {
+      if (obs.alpha <= 0) return;
+      const dx = Math.abs(player.x - obs.x);
+      const dy = Math.abs(player.y - obs.y);
+      if (dx < obs.width / 2 + player.size * 0.7 && dy < obs.height / 2 + player.size * 0.7) {
+        gameOver();
+      }
+    });
+  }
+
+  // 清理超出屏幕的障碍物
+  obstacles = obstacles.filter(obs => obs.y < H + 100 && obs.alpha > 0);
+
+  // 更新粒子
+  particles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += p.gravity;
+    p.life -= p.decay;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  // 连击计时
+  if (comboTimer > 0) {
+    comboTimer--;
+    if (comboTimer <= 0) {
+      comboCount = 0;
+      showCombo = false;
+    }
+  }
+  if (comboAlpha > 0) comboAlpha -= 0.015;
+
+  // 屏幕震动衰减
+  if (screenShake > 0) screenShake *= 0.85;
+  if (screenShake < 0.5) screenShake = 0;
+
+  // 边界限制
+  if (player.y > H - player.size) {
+    player.y = H - player.size;
+    player.vy = 0;
+  }
+}
+
+// ==================== 主渲染循环 ====================
+function render() {
+  ctx.save();
+
+  // 屏幕震动
+  if (screenShake > 0) {
+    const shakeX = (Math.random() - 0.5) * screenShake;
+    const shakeY = (Math.random() - 0.5) * screenShake;
+    ctx.translate(shakeX, shakeY);
+  }
+
+  drawBackground();
+
+  if (gameState === 'playing' || gameState === 'gameover') {
+    // 绘制障碍物
+    obstacles.forEach(drawObstacle);
+    // 绘制粒子
+    drawParticles();
+    // 绘制玩家
+    if (gameState === 'playing') drawPlayer();
+    // 绘制UI
+    drawUI();
+  }
+
+  if (gameState === 'menu') drawMenu();
+  if (gameState === 'gameover') drawGameOver();
+
+  ctx.restore();
+}
+
+function gameLoop() {
+  update();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ==================== 启动游戏 ====================
+resetPlayer();
+gameLoop();
+</script>
+</body>
+</html>

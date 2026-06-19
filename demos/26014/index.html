@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZMQ 示波器</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+        .plot-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            background: #16213e;
+        }
+        .plot-container {
+            flex: 1;
+            position: relative;
+            background: #0f0f23;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        #oscilloscope {
+            width: 100%;
+            height: 100%;
+        }
+        .control-panel {
+            width: 320px;
+            background: #1a1a2e;
+            padding: 20px;
+            overflow-y: auto;
+            border-left: 1px solid #333;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+        .section:last-child {
+            border-bottom: none;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            color: #4ade80;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            margin-bottom: 4px;
+            color: #a0a0a0;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #2a2a4a;
+            color: #e0e0e0;
+            font-size: 14px;
+            outline: none;
+        }
+        .form-group input:focus, .form-group select:focus {
+            border-color: #4ade80;
+        }
+        .form-row {
+            display: flex;
+            gap: 10px;
+        }
+        .form-row .form-group {
+            flex: 1;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+        .btn {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #4ade80;
+            color: #0f0f23;
+        }
+        .btn-primary:hover {
+            background: #22c55e;
+        }
+        .btn-danger {
+            background: #f87171;
+            color: #0f0f23;
+        }
+        .btn-danger:hover {
+            background: #ef4444;
+        }
+        .btn-secondary {
+            background: #60a5fa;
+            color: #0f0f23;
+        }
+        .btn-secondary:hover {
+            background: #3b82f6;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+        .btn-group .btn {
+            flex: 1;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .channel-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .channel-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .channel-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+        .channel-item input[type="number"] {
+            flex: 1;
+            padding: 4px;
+            font-size: 12px;
+        }
+        .channel-item label {
+            font-size: 12px;
+            color: #a0a0a0;
+            white-space: nowrap;
+        }
+        .speed-display {
+            background: #2a2a4a;
+            padding: 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 14px;
+            color: #fbbf24;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-connected {
+            background: #4ade80;
+            animation: pulse 1.5s infinite;
+        }
+        .status-disconnected {
+            background: #6b7280;
+        }
+        .status-running {
+            background: #fbbf24;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div class="plot-area">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h1 style="color: #4ade80;">ZMQ 示波器</h1>
+            <div class="speed-display" id="speedDisplay">0 MB/s</div>
+        </div>
+        <div class="plot-container">
+            <canvas id="oscilloscope"></canvas>
+        </div>
+    </div>
+    <div class="control-panel">
+        <div class="section">
+            <div class="section-title">
+                <span class="status-indicator status-disconnected" id="connStatus"></span>
+                ZMQ 连接设置
+            </div>
+            <div class="form-group">
+                <label for="ipInput">ZMQ IP 地址</label>
+                <input type="text" id="ipInput" value="127.0.0.1">
+            </div>
+            <div class="form-group">
+                <label for="portInput">ZMQ 端口</label>
+                <input type="text" id="portInput" value="5000">
+            </div>
+            <button class="btn btn-primary" id="connectBtn">连接</button>
+        </div>
+
+        <div class="section">
+            <div class="section-title">数据设置</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="channelCountInput">通道数</label>
+                    <input type="number" id="channelCountInput" value="8" min="1" max="16">
+                </div>
+                <div class="form-group">
+                    <label for="sampleCountInput">采样数据抽点</label>
+                    <input type="number" id="sampleCountInput" value="10" min="1">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="sampleFreqInput">采样率 (Hz)</label>
+                    <input type="number" id="sampleFreqInput" value="200000" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="historyLengthInput">历史数据长度 (秒)</label>
+                    <input type="number" id="historyLengthInput" value="0.1" step="0.01">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="dataTypeSelect">数据类型</label>
+                <select id="dataTypeSelect">
+                    <option value="float32">float32</option>
+                    <option value="uint32">uint32</option>
+                    <option value="int32">int32</option>
+                </select>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="timestampCheckbox">
+                <label for="timestampCheckbox">尾部时间戳</label>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">CP 设置</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="cpChInput">CP 通道 (从1开始)</label>
+                    <input type="number" id="cpChInput" value="1" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="cpBitInput">CP Bit</label>
+                    <input type="number" id="cpBitInput" value="31" min="0" max="31">
+                </div>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="cpCheckbox" checked>
+                <label for="cpCheckbox">显示 CP</label>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">通道显示</div>
+            <div class="channel-grid" id="channelGrid">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">
+                <span class="status-indicator status-disconnected" id="runStatus"></span>
+                控制
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" id="startBtn" disabled>开始</button>
+                <button class="btn btn-danger" id="stopBtn" disabled>停止</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <button class="btn btn-secondary" id="saveConfigBtn">保存配置</button>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let chart = null;
+        let running = false;
+        let connected = false;
+        
+        let config = {
+            ip: '127.0.0.1',
+            port: '5000',
+            sample_count: '10',
+            channel_count: '8',
+            history_length: '0.1',
+            sample_freq: '200000.0',
+            cp_ch: '1',
+            cp_bit: '31',
+            data_type: 'float32',
+            timestamp_enable: false
+        };
+
+        let channelData = [];
+        let cpData = [];
+        let channelEnabled = [];
+        let channelCoeff = [];
+        let validDataLen = 0;
+
+        const channelColors = [
+            '#4ade80', '#f87171', '#60a5fa', '#fbbf24',
+            '#a78bfa', '#fb7185', '#22d3ee', '#a3e635'
+        ];
+
+        function initChart() {
+            const ctx = document.getElementById('oscilloscope').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(validDataLen).fill(''),
+                    datasets: []
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                color: '#e0e0e0',
+                                font: { size: 12 },
+                                padding: 15
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: '#2a2a4a',
+                            titleColor: '#e0e0e0',
+                            bodyColor: '#e0e0e0',
+                            borderColor: '#444',
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false
+                        },
+                        y: {
+                            display: true,
+                            grid: {
+                                color: '#333',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: '#a0a0a0',
+                                font: { size: 11 }
+                            }
+                        }
+                    }
+                }
+            });
+            updateChartDatasets();
+        }
+
+        function updateChartDatasets() {
+            if (!chart) return;
+            
+            const datasets = [];
+            
+            if (document.getElementById('cpCheckbox').checked) {
+                datasets.push({
+                    label: 'CP',
+                    data: cpData,
+                    borderColor: '#ffffff',
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0
+                });
+            }
+            
+            const channelCount = parseInt(config.channel_count);
+            for (let i = 0; i < channelCount; i++) {
+                if (channelEnabled[i]) {
+                    datasets.push({
+                        label: `通道 ${i + 1}`,
+                        data: channelData[i],
+                        borderColor: channelColors[i % channelColors.length],
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        fill: false,
+                        tension: 0
+                    });
+                }
+            }
+            
+            chart.data.datasets = datasets;
+            chart.update('none');
+        }
+
+        function initChannelGrid() {
+            const grid = document.getElementById('channelGrid');
+            grid.innerHTML = '';
+            
+            const channelCount = parseInt(config.channel_count);
+            channelData = [];
+            channelEnabled = [];
+            channelCoeff = [];
+            cpData = [];
+            
+            validDataLen = Math.floor(parseFloat(config.history_length) * parseFloat(config.sample_freq) / parseInt(config.sample_count));
+            
+            for (let i = 0; i < channelCount; i++) {
+                channelData.push(new Array(validDataLen).fill(0));
+                channelEnabled.push(true);
+                channelCoeff.push(1.0);
+                
+                const item = document.createElement('div');
+                item.className = 'channel-item';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `chCheckbox${i}`;
+                checkbox.checked = true;
+                checkbox.addEventListener('change', (e) => {
+                    channelEnabled[i] = e.target.checked;
+                    updateChartDatasets();
+                });
+                
+                const label = document.createElement('label');
+                label.htmlFor = `chCheckbox${i}`;
+                label.textContent = `CH${i + 1}`;
+                
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.id = `chCoeff${i}`;
+                input.value = '1.0';
+                input.step = '0.1';
+                input.addEventListener('change', (e) => {
+                    channelCoeff[i] = parseFloat(e.target.value) || 1.0;
+                });
+                
+                item.appendChild(checkbox);
+                item.appendChild(label);
+                item.appendChild(input);
+                grid.appendChild(item);
+            }
+            
+            cpData = new Array(validDataLen).fill(0);
+            
+            if (chart) {
+                chart.data.labels = Array(validDataLen).fill('');
+                updateChartDatasets();
+            }
+        }
+
+        function updateData(newData) {
+            const channelCount = parseInt(config.channel_count);
+            
+            if (newData.cp) {
+                const cpLen = newData.cp.length;
+                if (cpLen >= validDataLen) {
+                    cpData = newData.cp.slice(0, validDataLen);
+                } else {
+                    cpData = cpData.slice(cpLen).concat(newData.cp);
+                }
+            }
+            
+            for (let i = 0; i < channelCount; i++) {
+                const chData = newData.channels[`ch${i}`];
+                if (chData) {
+                    const dataLen = chData.length;
+                    const coeff = channelCoeff[i];
+                    if (dataLen >= validDataLen) {
+                        channelData[i] = chData.slice(0, validDataLen).map(v => v * coeff);
+                    } else {
+                        const shifted = channelData[i].slice(dataLen);
+                        channelData[i] = shifted.concat(chData.map(v => v * coeff));
+                    }
+                }
+            }
+            
+            if (chart) {
+                chart.update('none');
+            }
+        }
+
+        function connectSocket() {
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+            
+            socket.on('config', (cfg) => {
+                config = cfg;
+                document.getElementById('ipInput').value = cfg.ip;
+                document.getElementById('portInput').value = cfg.port;
+                document.getElementById('sampleCountInput').value = cfg.sample_count;
+                document.getElementById('channelCountInput').value = cfg.channel_count;
+                document.getElementById('historyLengthInput').value = cfg.history_length;
+                document.getElementById('sampleFreqInput').value = cfg.sample_freq;
+                document.getElementById('cpChInput').value = cfg.cp_ch;
+                document.getElementById('cpBitInput').value = cfg.cp_bit;
+                document.getElementById('dataTypeSelect').value = cfg.data_type || 'float32';
+                document.getElementById('timestampCheckbox').checked = cfg.timestamp_enable || false;
+                
+                initChannelGrid();
+                initChart();
+            });
+            
+            socket.on('connected', (msg) => {
+                if (msg.success) {
+                    connected = true;
+                    document.getElementById('connStatus').className = 'status-indicator status-connected';
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('startBtn').disabled = false;
+                } else {
+                    alert('连接失败: ' + msg.error);
+                }
+            });
+            
+            socket.on('started', () => {
+                running = true;
+                document.getElementById('runStatus').className = 'status-indicator status-running';
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+            });
+            
+            socket.on('stopped', () => {
+                running = false;
+                document.getElementById('runStatus').className = 'status-indicator status-disconnected';
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            });
+            
+            socket.on('data', (data) => {
+                updateData(data);
+            });
+            
+            socket.on('speed', (data) => {
+                document.getElementById('speedDisplay').textContent = data.speed;
+            });
+            
+            socket.on('config_saved', () => {
+                alert('配置已保存');
+            });
+            
+            socket.on('disconnect', () => {
+                connected = false;
+                running = false;
+                document.getElementById('connStatus').className = 'status-indicator status-disconnected';
+                document.getElementById('runStatus').className = 'status-indicator status-disconnected';
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = true;
+            });
+        }
+
+        document.getElementById('connectBtn').addEventListener('click', () => {
+            const cfg = {
+                ip: document.getElementById('ipInput').value,
+                port: document.getElementById('portInput').value,
+                sample_count: document.getElementById('sampleCountInput').value,
+                channel_count: document.getElementById('channelCountInput').value,
+                history_length: document.getElementById('historyLengthInput').value,
+                sample_freq: document.getElementById('sampleFreqInput').value,
+                cp_ch: document.getElementById('cpChInput').value,
+                cp_bit: document.getElementById('cpBitInput').value,
+                data_type: document.getElementById('dataTypeSelect').value,
+                timestamp_enable: document.getElementById('timestampCheckbox').checked
+            };
+            
+            config = cfg;
+            initChannelGrid();
+            initChart();
+            
+            socket.emit('connect_zmq', cfg);
+        });
+
+        document.getElementById('startBtn').addEventListener('click', () => {
+            socket.emit('start');
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            socket.emit('stop');
+        });
+
+        document.getElementById('cpCheckbox').addEventListener('change', () => {
+            updateChartDatasets();
+        });
+
+        document.getElementById('saveConfigBtn').addEventListener('click', () => {
+            const cfg = {
+                ip: document.getElementById('ipInput').value,
+                port: document.getElementById('portInput').value,
+                sample_count: document.getElementById('sampleCountInput').value,
+                channel_count: document.getElementById('channelCountInput').value,
+                history_length: document.getElementById('historyLengthInput').value,
+                sample_freq: document.getElementById('sampleFreqInput').value,
+                cp_ch: document.getElementById('cpChInput').value,
+                cp_bit: document.getElementById('cpBitInput').value,
+                data_type: document.getElementById('dataTypeSelect').value,
+                timestamp_enable: document.getElementById('timestampCheckbox').checked
+            };
+            socket.emit('save_config', cfg);
+        });
+
+        connectSocket();
+    </script>
+</body>
+</html>

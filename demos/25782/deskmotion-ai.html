@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="DeskMotion AI — 基于视觉大模型的桌面运动分析系统。普通摄像头即可完成姿态识别、动作评分与个性化训练指导。" />
+<title>DeskMotion AI · 基于视觉大模型的桌面运动分析系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Manrope:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#070809;
+    --bg-soft:#0d0f12;
+    --panel:#0f1216;
+    --ink:#f2f5f3;
+    --muted:#8a938d;
+    --faint:#565d58;
+    --line:rgba(255,255,255,.08);
+    --line-2:rgba(255,255,255,.14);
+    --lime:#c8f135;
+    --lime-deep:#a4cf1f;
+    --cyan:#41e3d4;
+    --glow-lime:rgba(200,241,53,.5);
+    --glow-cyan:rgba(65,227,212,.45);
+    --display:"Bricolage Grotesque","Noto Sans SC",sans-serif;
+    --body:"Manrope","Noto Sans SC",sans-serif;
+    --mono:"JetBrains Mono","Noto Sans SC",monospace;
+    --maxw:1240px;
+    --ease:cubic-bezier(.2,.7,.2,1);
+  }
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--body);
+    font-weight:400;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+    cursor:none;
+  }
+  @media (hover:none){ body{cursor:auto} }
+
+  ::selection{background:var(--lime);color:#0a0b0c}
+
+  /* ---------- atmosphere ---------- */
+  .grain{
+    position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.05;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    mix-blend-mode:overlay;
+  }
+  .grid-bg{
+    position:fixed;inset:0;z-index:0;pointer-events:none;
+    background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:64px 64px;
+    -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 0%,transparent 70%);
+            mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 0%,transparent 70%);
+    opacity:.5;
+  }
+
+  /* ---------- custom cursor ---------- */
+  .cursor,.cursor-dot{position:fixed;top:0;left:0;z-index:9999;pointer-events:none;border-radius:50%;mix-blend-mode:difference}
+  .cursor{width:34px;height:34px;border:1.5px solid #fff;transform:translate(-50%,-50%);transition:width .25s var(--ease),height .25s var(--ease),background .25s}
+  .cursor-dot{width:5px;height:5px;background:#fff;transform:translate(-50%,-50%)}
+  .cursor.hovering{width:56px;height:56px;background:rgba(255,255,255,.12)}
+  @media (hover:none){.cursor,.cursor-dot{display:none}}
+
+  /* ---------- layout ---------- */
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px;position:relative;z-index:2}
+  section{position:relative;z-index:2}
+
+  .kicker{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--lime);display:inline-flex;align-items:center;gap:.7rem;margin-bottom:1.4rem;
+  }
+  .kicker::before{content:"";width:26px;height:1px;background:var(--lime);display:inline-block}
+
+  h2.sec{
+    font-family:var(--display);font-weight:600;letter-spacing:-.02em;line-height:1.05;
+    font-size:clamp(2rem,4.6vw,3.6rem);margin-bottom:1.1rem;
+  }
+  .lead{color:var(--muted);font-size:clamp(1rem,1.5vw,1.18rem);max-width:60ch;font-weight:300}
+  .accent{color:var(--lime)}
+  .accent-c{color:var(--cyan)}
+
+  .sec-head{margin-bottom:3.4rem;max-width:840px}
+  section.block{padding:clamp(5rem,11vw,9rem) 0}
+
+  /* ---------- nav ---------- */
+  header.nav{
+    position:fixed;top:0;left:0;right:0;z-index:100;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:1.1rem clamp(20px,4vw,40px);
+    transition:background .4s var(--ease),border-color .4s,backdrop-filter .4s;
+    border-bottom:1px solid transparent;
+  }
+  header.nav.scrolled{background:rgba(7,8,9,.72);backdrop-filter:blur(16px) saturate(160%);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:.7rem;font-family:var(--display);font-weight:700;font-size:1.06rem;letter-spacing:-.01em}
+  .brand .mark{width:30px;height:30px;flex:none}
+  .nav-links{display:flex;gap:2rem;font-size:.86rem;color:var(--muted)}
+  .nav-links a{color:inherit;text-decoration:none;position:relative;transition:color .25s}
+  .nav-links a::after{content:"";position:absolute;left:0;bottom:-5px;width:0;height:1px;background:var(--lime);transition:width .3s var(--ease)}
+  .nav-links a:hover{color:var(--ink)}
+  .nav-links a:hover::after{width:100%}
+  .nav-cta{font-family:var(--mono);font-size:.76rem;letter-spacing:.06em;border:1px solid var(--line-2);
+    padding:.6rem 1.1rem;border-radius:100px;color:var(--ink);text-decoration:none;transition:.3s var(--ease)}
+  .nav-cta:hover{background:var(--lime);color:#0a0b0c;border-color:var(--lime)}
+  @media(max-width:860px){.nav-links{display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{min-height:100svh;display:flex;align-items:center;position:relative;overflow:hidden;padding-top:80px}
+  .hero-glow{position:absolute;inset:0;z-index:0;pointer-events:none}
+  .hero-glow span{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55}
+  .hero-glow .g1{width:540px;height:540px;background:radial-gradient(circle,var(--glow-lime),transparent 65%);top:-12%;right:-6%;animation:float1 14s ease-in-out infinite}
+  .hero-glow .g2{width:480px;height:480px;background:radial-gradient(circle,var(--glow-cyan),transparent 65%);bottom:-18%;left:-8%;animation:float2 17s ease-in-out infinite}
+  @keyframes float1{50%{transform:translate(-40px,30px) scale(1.08)}}
+  @keyframes float2{50%{transform:translate(40px,-26px) scale(1.1)}}
+
+  .hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:2rem;align-items:center;width:100%}
+  @media(max-width:960px){.hero-grid{grid-template-columns:1fr;gap:3rem}}
+
+  .hero-badge{
+    display:inline-flex;align-items:center;gap:.6rem;font-family:var(--mono);font-size:.74rem;letter-spacing:.12em;
+    color:var(--muted);border:1px solid var(--line);border-radius:100px;padding:.45rem .9rem;margin-bottom:1.8rem;
+  }
+  .hero-badge .pulse{width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 0 0 var(--glow-lime);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 var(--glow-lime)}70%{box-shadow:0 0 0 10px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+  .hero h1{
+    font-family:var(--display);font-weight:600;letter-spacing:-.035em;line-height:.98;
+    font-size:clamp(2.7rem,7vw,5.6rem);margin-bottom:1.5rem;
+  }
+  .hero h1 .out{
+    background:linear-gradient(120deg,var(--lime),var(--cyan));
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  }
+  .hero p.sub{font-size:clamp(1rem,1.7vw,1.22rem);color:var(--muted);max-width:46ch;font-weight:300;margin-bottom:2.4rem}
+  .hero-actions{display:flex;gap:1rem;flex-wrap:wrap;align-items:center}
+  .btn{
+    font-family:var(--body);font-weight:600;font-size:.95rem;text-decoration:none;border-radius:100px;
+    padding:.95rem 1.7rem;display:inline-flex;align-items:center;gap:.6rem;transition:.3s var(--ease);border:1px solid transparent;
+  }
+  .btn-primary{background:var(--lime);color:#0a0b0c;box-shadow:0 0 30px -8px var(--glow-lime)}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 0 44px -6px var(--glow-lime)}
+  .btn-ghost{color:var(--ink);border-color:var(--line-2)}
+  .btn-ghost:hover{border-color:var(--lime);color:var(--lime)}
+
+  .hero-stats{display:flex;gap:2.4rem;margin-top:3.2rem;flex-wrap:wrap}
+  .hero-stats .num{font-family:var(--display);font-weight:600;font-size:1.9rem;letter-spacing:-.02em}
+  .hero-stats .lbl{font-size:.78rem;color:var(--faint);font-family:var(--mono);letter-spacing:.04em}
+
+  /* ---------- pose visual ---------- */
+  .pose-stage{position:relative;aspect-ratio:4/5;border:1px solid var(--line);border-radius:22px;
+    background:linear-gradient(160deg,rgba(255,255,255,.03),transparent);overflow:hidden;
+    box-shadow:inset 0 0 60px -20px rgba(65,227,212,.25)}
+  .pose-stage .corner{position:absolute;width:18px;height:18px;border:2px solid var(--lime);opacity:.7}
+  .pose-stage .c1{top:14px;left:14px;border-right:0;border-bottom:0}
+  .pose-stage .c2{top:14px;right:14px;border-left:0;border-bottom:0}
+  .pose-stage .c3{bottom:14px;left:14px;border-right:0;border-top:0}
+  .pose-stage .c4{bottom:14px;right:14px;border-left:0;border-top:0}
+  .pose-stage svg{position:absolute;inset:0;width:100%;height:100%}
+  .scanline{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+    box-shadow:0 0 14px 2px var(--glow-cyan);animation:scan 4.5s var(--ease) infinite;opacity:.85}
+  @keyframes scan{0%,100%{top:8%}50%{top:92%}}
+  .hud{position:absolute;font-family:var(--mono);font-size:.66rem;letter-spacing:.05em;color:var(--cyan);
+    background:rgba(7,8,9,.6);border:1px solid var(--line);padding:.3rem .55rem;border-radius:6px;backdrop-filter:blur(4px)}
+  .hud-1{top:24px;right:24px}
+  .hud-2{bottom:24px;left:24px;color:var(--lime)}
+  .bone{stroke:url(#boneGrad);stroke-width:2.2;stroke-linecap:round;fill:none;
+    stroke-dasharray:6 0;filter:drop-shadow(0 0 4px rgba(200,241,53,.5))}
+  .joint{fill:var(--lime);filter:drop-shadow(0 0 5px var(--glow-lime))}
+  .joint.cy{fill:var(--cyan);filter:drop-shadow(0 0 5px var(--glow-cyan))}
+
+  /* ---------- marquee ---------- */
+  .marquee{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:1.4rem 0;overflow:hidden;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);
+            mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+  .marquee-track{display:flex;gap:3.2rem;white-space:nowrap;width:max-content;animation:scrollx 32s linear infinite;font-family:var(--display);font-weight:500;
+    font-size:1.05rem;color:var(--faint);align-items:center}
+  .marquee-track span.dot{color:var(--lime)}
+  @keyframes scrollx{to{transform:translateX(-50%)}}
+
+  /* ---------- pain points ---------- */
+  .pain-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem}
+  @media(max-width:880px){.pain-grid{grid-template-columns:1fr}}
+  .pain-card{border:1px solid var(--line);border-radius:18px;padding:2rem 1.8rem;background:var(--panel);transition:.4s var(--ease);position:relative;overflow:hidden}
+  .pain-card::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 80% at 0% 0%,rgba(200,241,53,.07),transparent 60%);opacity:0;transition:.4s}
+  .pain-card:hover{border-color:var(--line-2);transform:translateY(-4px)}
+  .pain-card:hover::before{opacity:1}
+  .pain-card .pn{font-family:var(--mono);font-size:.74rem;color:var(--faint);margin-bottom:1.4rem}
+  .pain-card h4{font-family:var(--display);font-weight:600;font-size:1.3rem;margin-bottom:.7rem;letter-spacing:-.01em}
+  .pain-card p{color:var(--muted);font-size:.95rem;font-weight:300}
+  .pain-card .ic{font-size:1.6rem;margin-bottom:1.2rem;display:block}
+
+  /* ---------- features ---------- */
+  .feat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:20px;overflow:hidden}
+  @media(max-width:980px){.feat-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.feat-grid{grid-template-columns:1fr}}
+  .feat{background:var(--bg-soft);padding:2.1rem 1.7rem;transition:.4s var(--ease);position:relative}
+  .feat:hover{background:#13171b}
+  .feat .fi{width:40px;height:40px;display:grid;place-items:center;border:1px solid var(--line-2);border-radius:11px;margin-bottom:1.3rem;
+    color:var(--lime);transition:.4s var(--ease)}
+  .feat:hover .fi{background:var(--lime);color:#0a0b0c;border-color:var(--lime);transform:rotate(-8deg)}
+  .feat h4{font-family:var(--display);font-weight:600;font-size:1.12rem;margin-bottom:.55rem}
+  .feat p{font-size:.88rem;color:var(--muted);font-weight:300;line-height:1.55}
+  .feat .idx{position:absolute;top:1.4rem;right:1.5rem;font-family:var(--mono);font-size:.7rem;color:var(--faint)}
+
+  /* ---------- architecture ---------- */
+  .arch{display:grid;grid-template-columns:repeat(3,1fr);gap:1.2rem;position:relative}
+  @media(max-width:880px){.arch{grid-template-columns:1fr}}
+  .arch-layer{border:1px solid var(--line);border-radius:18px;padding:1.9rem;background:linear-gradient(165deg,var(--panel),var(--bg-soft));position:relative}
+  .arch-layer .tag{font-family:var(--mono);font-size:.7rem;color:var(--cyan);letter-spacing:.1em;margin-bottom:1rem;display:block}
+  .arch-layer h4{font-family:var(--display);font-weight:600;font-size:1.3rem;margin-bottom:1rem}
+  .arch-chip{display:inline-block;font-size:.78rem;font-family:var(--mono);color:var(--muted);border:1px solid var(--line);
+    border-radius:7px;padding:.32rem .6rem;margin:.25rem .3rem .25rem 0;transition:.3s}
+  .arch-layer:hover .arch-chip{border-color:var(--line-2)}
+  .arch-flow{display:flex;align-items:center;justify-content:center;gap:1rem;flex-wrap:wrap;margin-top:2.4rem;
+    font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+  .arch-flow .node{border:1px solid var(--line-2);border-radius:100px;padding:.5rem 1.1rem;color:var(--ink)}
+  .arch-flow .arrow{color:var(--lime)}
+
+  /* ---------- flow / steps ---------- */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:1.4rem}
+  @media(max-width:980px){.steps{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:520px){.steps{grid-template-columns:1fr}}
+  .step{position:relative;padding-top:2rem}
+  .step .sn{font-family:var(--display);font-weight:700;font-size:3.2rem;line-height:1;color:transparent;
+    -webkit-text-stroke:1.2px var(--line-2);margin-bottom:1rem;transition:.4s var(--ease)}
+  .step:hover .sn{-webkit-text-stroke:1.2px var(--lime);color:rgba(200,241,53,.06)}
+  .step h4{font-family:var(--display);font-weight:600;font-size:1.18rem;margin-bottom:.5rem}
+  .step p{font-size:.9rem;color:var(--muted);font-weight:300}
+  .step::before{content:"";position:absolute;top:2.5rem;left:0;width:100%;height:1px;
+    background:linear-gradient(90deg,var(--lime),transparent);opacity:.25}
+
+  /* ---------- scenarios ---------- */
+  .scene-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:1.2rem}
+  @media(max-width:900px){.scene-grid{grid-template-columns:repeat(2,1fr)}}
+  .scene{border:1px solid var(--line);border-radius:16px;padding:1.7rem 1.4rem;background:var(--panel);transition:.4s var(--ease);
+    grid-column:span 2;display:flex;flex-direction:column;gap:.7rem;min-height:200px;justify-content:flex-end;position:relative;overflow:hidden}
+  .scene:nth-child(1),.scene:nth-child(4){grid-column:span 3}
+  @media(max-width:900px){.scene,.scene:nth-child(1),.scene:nth-child(4){grid-column:span 1}}
+  .scene .glow{position:absolute;width:160px;height:160px;border-radius:50%;filter:blur(60px);opacity:.16;top:-30px;right:-30px;transition:.5s}
+  .scene:hover{border-color:var(--line-2);transform:translateY(-4px)}
+  .scene:hover .glow{opacity:.35}
+  .scene .ic{font-size:1.7rem}
+  .scene h4{font-family:var(--display);font-weight:600;font-size:1.16rem}
+  .scene p{font-size:.86rem;color:var(--muted);font-weight:300}
+
+  /* ---------- business model ---------- */
+  .biz{display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem;align-items:stretch}
+  @media(max-width:880px){.biz{grid-template-columns:1fr}}
+  .biz-card{border:1px solid var(--line);border-radius:20px;padding:2.2rem;background:var(--panel);display:flex;flex-direction:column;transition:.4s var(--ease)}
+  .biz-card.feature{border-color:var(--lime);background:linear-gradient(170deg,rgba(200,241,53,.07),var(--panel));box-shadow:0 0 50px -22px var(--glow-lime)}
+  .biz-card:hover{transform:translateY(-5px)}
+  .biz-card .plan{font-family:var(--mono);font-size:.74rem;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin-bottom:1rem}
+  .biz-card .price{font-family:var(--display);font-weight:600;font-size:2.2rem;letter-spacing:-.02em;margin-bottom:.3rem}
+  .biz-card .price small{font-size:.9rem;color:var(--faint);font-weight:400}
+  .biz-card ul{list-style:none;margin-top:1.4rem;display:flex;flex-direction:column;gap:.7rem;flex:1}
+  .biz-card li{font-size:.9rem;color:var(--muted);font-weight:300;display:flex;gap:.6rem;align-items:flex-start}
+  .biz-card li::before{content:"";width:16px;height:16px;border-radius:50%;border:1px solid var(--lime);flex:none;margin-top:3px;
+    background:radial-gradient(circle,var(--lime) 0 35%,transparent 38%)}
+  .biz-tag{font-family:var(--mono);font-size:.66rem;color:#0a0b0c;background:var(--lime);border-radius:6px;padding:.2rem .5rem;align-self:flex-start;margin-bottom:1rem}
+
+  /* ---------- market ---------- */
+  .market{display:grid;grid-template-columns:1.1fr 1fr;gap:3rem;align-items:center}
+  @media(max-width:900px){.market{grid-template-columns:1fr}}
+  .market-stats{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:18px;overflow:hidden}
+  .market-stats .ms{background:var(--bg-soft);padding:1.8rem}
+  .market-stats .v{font-family:var(--display);font-weight:600;font-size:2.4rem;letter-spacing:-.02em;line-height:1}
+  .market-stats .v .accent{font-size:1.4rem}
+  .market-stats .k{font-size:.82rem;color:var(--muted);margin-top:.5rem;font-weight:300}
+  .bars{display:flex;align-items:flex-end;gap:.9rem;height:160px;margin-top:1.6rem}
+  .bars .bar{flex:1;background:linear-gradient(var(--lime),var(--lime-deep));border-radius:6px 6px 0 0;position:relative;
+    transition:height 1.2s var(--ease);height:0}
+  .bars .bar span{position:absolute;top:-1.5rem;left:0;right:0;text-align:center;font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+  .bars .bar b{position:absolute;bottom:-1.6rem;left:0;right:0;text-align:center;font-family:var(--mono);font-size:.66rem;color:var(--faint);font-weight:400}
+
+  /* ---------- roadmap ---------- */
+  .road{position:relative;padding-left:0}
+  .road-line{display:grid;grid-template-columns:repeat(4,1fr);gap:1.4rem;position:relative}
+  @media(max-width:900px){.road-line{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.road-line{grid-template-columns:1fr}}
+  .road-item{border:1px solid var(--line);border-radius:16px;padding:1.7rem 1.5rem;background:var(--panel);position:relative;transition:.4s var(--ease)}
+  .road-item:hover{border-color:var(--line-2);transform:translateY(-4px)}
+  .road-item .ph{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;color:var(--cyan);margin-bottom:.8rem;display:flex;align-items:center;gap:.5rem}
+  .road-item .ph .dt{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px var(--glow-cyan)}
+  .road-item.done .ph{color:var(--lime)}
+  .road-item.done .ph .dt{background:var(--lime);box-shadow:0 0 8px var(--glow-lime)}
+  .road-item h4{font-family:var(--display);font-weight:600;font-size:1.15rem;margin-bottom:.8rem}
+  .road-item ul{list-style:none;display:flex;flex-direction:column;gap:.45rem}
+  .road-item li{font-size:.84rem;color:var(--muted);font-weight:300;padding-left:1rem;position:relative}
+  .road-item li::before{content:"→";position:absolute;left:0;color:var(--faint)}
+
+  /* ---------- team / vision ---------- */
+  .vision{border:1px solid var(--line);border-radius:26px;padding:clamp(2.4rem,5vw,4rem);position:relative;overflow:hidden;
+    background:linear-gradient(165deg,rgba(65,227,212,.05),rgba(200,241,53,.04),var(--panel))}
+  .vision-glow{position:absolute;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,var(--glow-cyan),transparent 65%);
+    filter:blur(80px);opacity:.4;bottom:-30%;right:-5%}
+  .vision blockquote{font-family:var(--display);font-weight:500;letter-spacing:-.02em;line-height:1.18;
+    font-size:clamp(1.6rem,3.6vw,2.7rem);max-width:22ch;position:relative;z-index:2}
+  .vision blockquote .accent{font-style:normal}
+  .team{display:grid;grid-template-columns:repeat(4,1fr);gap:1.2rem;margin-top:3rem;position:relative;z-index:2}
+  @media(max-width:780px){.team{grid-template-columns:1fr 1fr}}
+  .member{border-top:1px solid var(--line-2);padding-top:1.1rem}
+  .member .av{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,var(--lime),var(--cyan));margin-bottom:1rem;
+    display:grid;place-items:center;font-family:var(--display);font-weight:700;color:#0a0b0c;font-size:1.1rem}
+  .member h5{font-family:var(--display);font-weight:600;font-size:1rem;margin-bottom:.2rem}
+  .member p{font-size:.8rem;color:var(--muted);font-weight:300}
+
+  /* ---------- final cta ---------- */
+  .final{text-align:center;padding:clamp(5rem,12vw,9rem) 0;position:relative}
+  .final h2{font-family:var(--display);font-weight:600;letter-spacing:-.03em;line-height:1;
+    font-size:clamp(2.6rem,8vw,6rem);margin-bottom:1.6rem}
+  .final h2 .out{background:linear-gradient(120deg,var(--lime),var(--cyan));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .final p{color:var(--muted);max-width:48ch;margin:0 auto 2.6rem;font-weight:300;font-size:1.1rem}
+
+  footer{border-top:1px solid var(--line);padding:2.6rem 0;color:var(--faint);font-size:.82rem}
+  .foot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem;font-family:var(--mono)}
+
+  /* ---------- reveal ---------- */
+  .reveal{opacity:0;transform:translateY(28px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
+  .reveal.in{opacity:1;transform:none}
+  .reveal.d1{transition-delay:.08s}.reveal.d2{transition-delay:.16s}.reveal.d3{transition-delay:.24s}
+  .reveal.d4{transition-delay:.32s}.reveal.d5{transition-delay:.4s}.reveal.d6{transition-delay:.48s}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+    .reveal{opacity:1;transform:none}
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="grain"></div>
+<div class="cursor"></div>
+<div class="cursor-dot"></div>
+
+<!-- ===== NAV ===== -->
+<header class="nav" id="nav">
+  <a href="#top" class="brand" data-h>
+    <svg class="mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <rect x="1" y="1" width="30" height="30" rx="8" stroke="#c8f135" stroke-width="1.4"/>
+      <circle cx="16" cy="9" r="2.6" fill="#c8f135"/>
+      <path d="M16 12v7M16 13l-5 3M16 13l5 3M11 16l-2 6M21 16l2 6" stroke="#41e3d4" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="9" cy="22" r="1.6" fill="#c8f135"/><circle cx="23" cy="22" r="1.6" fill="#c8f135"/>
+    </svg>
+    DeskMotion<span style="color:var(--lime)"> AI</span>
+  </a>
+  <nav class="nav-links">
+    <a href="#background" data-h>背景</a>
+    <a href="#features" data-h>功能</a>
+    <a href="#tech" data-h>技术</a>
+    <a href="#scenes" data-h>场景</a>
+    <a href="#business" data-h>商业</a>
+    <a href="#roadmap" data-h>路线图</a>
+  </nav>
+  <a href="#contact" class="nav-cta" data-h>申请试用 ↗</a>
+</header>
+
+<!-- ===== HERO ===== -->
+<section class="hero" id="top">
+  <div class="hero-glow"><span class="g1"></span><span class="g2"></span></div>
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <div class="hero-badge reveal"><span class="pulse"></span>VISION-LLM · 多模态运动智能引擎 v2.0</div>
+        <h1 class="reveal d1">人人都有一位<br><span class="out">AI 运动分析师</span></h1>
+        <p class="sub reveal d2">DeskMotion AI 基于视觉大模型与人体姿态识别，仅凭一颗普通摄像头或一段上传视频，即可完成专业级的<strong style="color:var(--ink);font-weight:600">动作分析、姿态评估与个性化训练指导</strong>。</p>
+        <div class="hero-actions reveal d3">
+          <a href="#contact" class="btn btn-primary" data-h>开始体验 <span aria-hidden>→</span></a>
+          <a href="#tech" class="btn btn-ghost" data-h>查看技术架构</a>
+        </div>
+        <div class="hero-stats reveal d4">
+          <div><div class="num"><span class="count" data-to="98">0</span>%</div><div class="lbl">关键点识别准确率</div></div>
+          <div><div class="num"><span class="count" data-to="33">0</span>+</div><div class="lbl">支持运动场景</div></div>
+          <div><div class="num">0<span style="font-size:1.1rem">元</span></div><div class="lbl">额外硬件成本</div></div>
+        </div>
+      </div>
+
+      <!-- pose capture visual -->
+      <div class="pose-stage reveal d3" aria-hidden="true">
+        <span class="corner c1"></span><span class="corner c2"></span><span class="corner c3"></span><span class="corner c4"></span>
+        <div class="scanline"></div>
+        <div class="hud hud-1">● REC · 60 FPS</div>
+        <div class="hud hud-2">SCORE 92.4 · 标准深蹲</div>
+        <svg viewBox="0 0 320 400" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <linearGradient id="boneGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#c8f135"/><stop offset="1" stop-color="#41e3d4"/>
+            </linearGradient>
+          </defs>
+          <!-- bones -->
+          <g class="poseG">
+            <path class="bone" d="M160 70 L160 130"/>
+            <path class="bone" d="M160 95 L112 140"/>
+            <path class="bone" d="M160 95 L208 140"/>
+            <path class="bone" d="M112 140 L96 205"/>
+            <path class="bone" d="M208 140 L224 205"/>
+            <path class="bone" d="M160 130 L132 215"/>
+            <path class="bone" d="M160 130 L188 215"/>
+            <path class="bone" d="M132 215 L120 300"/>
+            <path class="bone" d="M188 215 L200 300"/>
+            <path class="bone" d="M120 300 L112 360"/>
+            <path class="bone" d="M200 300 L208 360"/>
+            <!-- joints -->
+            <circle class="joint cy" cx="160" cy="58" r="12"/>
+            <circle class="joint" cx="160" cy="95" r="4.5"/>
+            <circle class="joint" cx="160" cy="130" r="4.5"/>
+            <circle class="joint cy" cx="112" cy="140" r="5"/>
+            <circle class="joint cy" cx="208" cy="140" r="5"/>
+            <circle class="joint" cx="96" cy="205" r="4.5"/>
+            <circle class="joint" cx="224" cy="205" r="4.5"/>
+            <circle class="joint cy" cx="132" cy="215" r="5"/>
+            <circle class="joint cy" cx="188" cy="215" r="5"/>
+            <circle class="joint" cx="120" cy="300" r="4.5"/>
+            <circle class="joint" cx="200" cy="300" r="4.5"/>
+            <circle class="joint" cx="112" cy="360" r="4"/>
+            <circle class="joint" cx="208" cy="360" r="4"/>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== MARQUEE ===== -->
+<div class="marquee">
+  <div class="marquee-track">
+    <span>姿态识别</span><span class="dot">✦</span><span>动作评分</span><span class="dot">✦</span><span>训练建议</span><span class="dot">✦</span>
+    <span>损伤预警</span><span class="dot">✦</span><span>历史追踪</span><span class="dot">✦</span><span>多模态分析</span><span class="dot">✦</span>
+    <span>AI运动报告</span><span class="dot">✦</span>
+    <span>姿态识别</span><span class="dot">✦</span><span>动作评分</span><span class="dot">✦</span><span>训练建议</span><span class="dot">✦</span>
+    <span>损伤预警</span><span class="dot">✦</span><span>历史追踪</span><span class="dot">✦</span><span>多模态分析</span><span class="dot">✦</span>
+    <span>AI运动报告</span><span class="dot">✦</span>
+  </div>
+</div>
+
+<!-- ===== BACKGROUND / PAIN POINTS ===== -->
+<section class="block" id="background">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">01 — 项目背景</div>
+      <h2 class="sec">专业运动分析，<br>不该是少数人的特权。</h2>
+      <p class="lead">全民健身与运动康复需求高速增长，但「看得懂动作」始终依赖稀缺的专业人力。错误姿态带来的，是低效训练，更是长期损伤。</p>
+    </div>
+    <div class="pain-grid">
+      <div class="pain-card reveal d1">
+        <span class="ic">🧍</span>
+        <div class="pn">PAIN · 01</div>
+        <h4>看不见的错误</h4>
+        <p>普通用户无法判断自己动作是否标准，错误模式日复一日累积，悄然埋下运动损伤的隐患。</p>
+      </div>
+      <div class="pain-card reveal d2">
+        <span class="ic">💸</span>
+        <div class="pn">PAIN · 02</div>
+        <h4>高昂的指导门槛</h4>
+        <p>一对一私教与专业动作捕捉设备价格高昂，绝大多数训练人群与基层机构难以负担。</p>
+      </div>
+      <div class="pain-card reveal d3">
+        <span class="ic">📉</span>
+        <div class="pn">PAIN · 03</div>
+        <h4>不可量化的进步</h4>
+        <p>训练质量靠「感觉」评价，缺乏客观数据与历史对比，努力难以被看见、被优化。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FEATURES ===== -->
+<section class="block" id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">02 — 核心功能</div>
+      <h2 class="sec">一套引擎，<span class="accent">看懂每一个动作</span>。</h2>
+      <p class="lead">从实时识别到智能报告，DeskMotion AI 覆盖运动分析的完整闭环。</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat reveal d1"><span class="idx">01</span><div class="fi">✶</div><h4>实时姿态识别</h4><p>毫秒级捕捉 33 个人体关键点，构建精确三维骨骼模型。</p></div>
+      <div class="feat reveal d1"><span class="idx">02</span><div class="fi">◎</div><h4>运动动作分析</h4><p>识别动作类型、轨迹与发力顺序，量化关节角度与对称性。</p></div>
+      <div class="feat reveal d2"><span class="idx">03</span><div class="fi">★</div><h4>AI 运动评分</h4><p>对标专业标准库，输出标准度、稳定性与节奏综合评分。</p></div>
+      <div class="feat reveal d2"><span class="idx">04</span><div class="fi">✦</div><h4>AI 训练建议</h4><p>大模型生成个性化纠正建议与下一步训练计划。</p></div>
+      <div class="feat reveal d3"><span class="idx">05</span><div class="fi">⚠</div><h4>运动风险识别</h4><p>识别危险姿态与代偿模式，实时预警潜在损伤风险。</p></div>
+      <div class="feat reveal d3"><span class="idx">06</span><div class="fi">⟲</div><h4>历史数据追踪</h4><p>记录每次训练数据，可视化进步曲线与长期趋势。</p></div>
+      <div class="feat reveal d4"><span class="idx">07</span><div class="fi">⊞</div><h4>多运动场景支持</h4><p>覆盖力量、有氧、瑜伽、康复等 33+ 运动类别。</p></div>
+      <div class="feat reveal d4"><span class="idx">08</span><div class="fi">▤</div><h4>AI 运动报告</h4><p>一键生成结构化分析报告，可分享、可沉淀、可复盘。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TECH ARCHITECTURE ===== -->
+<section class="block" id="tech">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">03 — AI 技术架构</div>
+      <h2 class="sec">视觉大模型驱动的<br><span class="accent-c">多模态分析中枢</span>。</h2>
+      <p class="lead">从像素到洞察，三层架构串联起感知、理解与生成的完整智能链路。</p>
+    </div>
+    <div class="arch">
+      <div class="arch-layer reveal d1">
+        <span class="tag">LAYER 01 · 感知层</span>
+        <h4>视觉感知与姿态估计</h4>
+        <span class="arch-chip">人体关键点检测</span>
+        <span class="arch-chip">3D 姿态重建</span>
+        <span class="arch-chip">多目标追踪</span>
+        <span class="arch-chip">动作时序切分</span>
+        <span class="arch-chip">视频流解码</span>
+      </div>
+      <div class="arch-layer reveal d2">
+        <span class="tag">LAYER 02 · 理解层</span>
+        <h4>视觉大模型语义理解</h4>
+        <span class="arch-chip">Vision-LLM</span>
+        <span class="arch-chip">动作语义识别</span>
+        <span class="arch-chip">标准动作对齐</span>
+        <span class="arch-chip">运动力学评估</span>
+        <span class="arch-chip">异常模式检测</span>
+      </div>
+      <div class="arch-layer reveal d3">
+        <span class="tag">LAYER 03 · 生成层</span>
+        <h4>多模态决策与生成</h4>
+        <span class="arch-chip">个性化建议生成</span>
+        <span class="arch-chip">RAG 知识增强</span>
+        <span class="arch-chip">自然语言报告</span>
+        <span class="arch-chip">训练计划编排</span>
+        <span class="arch-chip">语音反馈</span>
+      </div>
+    </div>
+    <div class="arch-flow reveal d3">
+      <span class="node">摄像头 / 视频</span><span class="arrow">→</span>
+      <span class="node">姿态引擎</span><span class="arrow">→</span>
+      <span class="node">视觉大模型</span><span class="arrow">→</span>
+      <span class="node">AI 决策</span><span class="arrow">→</span>
+      <span class="node" style="border-color:var(--lime);color:var(--lime)">评分 · 建议 · 报告</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===== USER FLOW ===== -->
+<section class="block" id="flow">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">04 — 使用流程</div>
+      <h2 class="sec">四步，从动作到洞察。</h2>
+    </div>
+    <div class="steps">
+      <div class="step reveal d1"><div class="sn">01</div><h4>采集动作</h4><p>打开摄像头实时录制，或直接上传一段运动视频。</p></div>
+      <div class="step reveal d2"><div class="sn">02</div><h4>AI 识别</h4><p>引擎自动捕捉姿态关键点并理解动作语义。</p></div>
+      <div class="step reveal d3"><div class="sn">03</div><h4>智能评估</h4><p>实时输出评分、风险点与标准动作对比。</p></div>
+      <div class="step reveal d4"><div class="sn">04</div><h4>获取报告</h4><p>生成个性化训练建议与可追踪的成长报告。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SCENARIOS ===== -->
+<section class="block" id="scenes">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">05 — 应用场景</div>
+      <h2 class="sec">为每一种运动人群而生。</h2>
+    </div>
+    <div class="scene-grid">
+      <div class="scene reveal d1"><div class="glow" style="background:var(--lime)"></div><span class="ic">🏋️</span><h4>健身与力量训练</h4><p>家庭健身、健身房自助训练的标准动作守护者，实时纠正发力。</p></div>
+      <div class="scene reveal d2"><div class="glow" style="background:var(--cyan)"></div><span class="ic">🏫</span><h4>体育教学</h4><p>体育老师与教练的智能助教，批量评估学生动作完成度。</p></div>
+      <div class="scene reveal d3"><div class="glow" style="background:var(--lime)"></div><span class="ic">🏥</span><h4>康复训练</h4><p>居家康复动作监督，确保安全范围内的精准训练。</p></div>
+      <div class="scene reveal d1"><div class="glow" style="background:var(--cyan)"></div><span class="ic">🎯</span><h4>运动培训机构</h4><p>标准化教学质量，规模化交付专业级动作评估服务。</p></div>
+      <div class="scene reveal d2"><div class="glow" style="background:var(--lime)"></div><span class="ic">🧘</span><h4>瑜伽与体态</h4><p>体态矫正与柔韧训练的精细化姿态指导。</p></div>
+      <div class="scene reveal d3"><div class="glow" style="background:var(--cyan)"></div><span class="ic">🩺</span><h4>健康管理机构</h4><p>为机构提供运动健康数据底座与风险洞察。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== BUSINESS MODEL ===== -->
+<section class="block" id="business">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">06 — 商业模式</div>
+      <h2 class="sec">面向 C 端与 B 端的<br>双轮增长。</h2>
+      <p class="lead">SaaS 订阅、机构授权与 API 开放平台，构建可持续的多元收入结构。</p>
+    </div>
+    <div class="biz">
+      <div class="biz-card reveal d1">
+        <span class="biz-tag" style="background:transparent;color:var(--muted);border:1px solid var(--line)">个人 · C 端</span>
+        <div class="plan">Personal</div>
+        <div class="price">¥29<small>/月起</small></div>
+        <ul>
+          <li>个人运动分析与评分</li>
+          <li>AI 训练建议与报告</li>
+          <li>历史数据追踪</li>
+          <li>多运动场景库</li>
+        </ul>
+      </div>
+      <div class="biz-card feature reveal d2">
+        <span class="biz-tag">推荐 · 增长引擎</span>
+        <div class="plan">机构 · B 端 SaaS</div>
+        <div class="price">订阅制<small>/按席位</small></div>
+        <ul>
+          <li>多账号管理与数据看板</li>
+          <li>批量学员动作评估</li>
+          <li>品牌定制与白标方案</li>
+          <li>教学标准化工具集</li>
+          <li>专属客户成功支持</li>
+        </ul>
+      </div>
+      <div class="biz-card reveal d3">
+        <span class="biz-tag" style="background:transparent;color:var(--cyan);border:1px solid var(--cyan)">平台 · 开放</span>
+        <div class="plan">API 开放平台</div>
+        <div class="price">按量<small>/调用计费</small></div>
+        <ul>
+          <li>姿态识别与评分 API</li>
+          <li>嵌入第三方硬件 / App</li>
+          <li>行业大客户定制</li>
+          <li>数据驱动的健康生态</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== MARKET ===== -->
+<section class="block" id="market">
+  <div class="wrap">
+    <div class="market">
+      <div class="reveal">
+        <div class="kicker">07 — 市场前景</div>
+        <h2 class="sec">站在 <span class="accent">AI × 运动健康</span> 的交汇风口。</h2>
+        <p class="lead" style="margin-bottom:1.6rem">全民健身上升为国家战略，运动健康与 AI 视觉双双进入高速增长期，DeskMotion AI 正处在两条增长曲线的交点。</p>
+        <div class="bars" id="bars">
+          <div class="bar" data-h="42"><span>'24</span><b>起步</b></div>
+          <div class="bar" data-h="61"><span>'25</span><b>验证</b></div>
+          <div class="bar" data-h="80"><span>'26</span><b>放量</b></div>
+          <div class="bar" data-h="100"><span>'27</span><b>规模化</b></div>
+        </div>
+      </div>
+      <div class="market-stats reveal d2">
+        <div class="ms"><div class="v"><span class="count" data-to="5">0</span><span class="accent">万亿+</span></div><div class="k">中国体育产业目标规模</div></div>
+        <div class="ms"><div class="v"><span class="count" data-to="35">0</span><span class="accent">%</span></div><div class="k">AI 视觉年复合增速</div></div>
+        <div class="ms"><div class="v"><span class="count" data-to="4">0</span><span class="accent">亿</span></div><div class="k">运动健身人群基数</div></div>
+        <div class="ms"><div class="v"><span class="count" data-to="0">0</span><span class="accent">硬件</span></div><div class="k">普通摄像头即可运行</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ROADMAP ===== -->
+<section class="block" id="roadmap">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">08 — 产品路线图</div>
+      <h2 class="sec">从单点突破到运动智能平台。</h2>
+    </div>
+    <div class="road-line">
+      <div class="road-item done reveal d1">
+        <div class="ph"><span class="dt"></span>PHASE 01 · 已完成</div>
+        <h4>核心引擎</h4>
+        <ul><li>姿态识别引擎</li><li>动作评分模型</li><li>桌面端 MVP</li></ul>
+      </div>
+      <div class="road-item reveal d2">
+        <div class="ph"><span class="dt"></span>PHASE 02 · 进行中</div>
+        <h4>大模型接入</h4>
+        <ul><li>视觉大模型集成</li><li>AI 建议与报告</li><li>多场景动作库</li></ul>
+      </div>
+      <div class="road-item reveal d3">
+        <div class="ph"><span class="dt"></span>PHASE 03 · 规划</div>
+        <h4>机构与开放平台</h4>
+        <ul><li>B 端 SaaS 看板</li><li>开放 API 平台</li><li>白标定制方案</li></ul>
+      </div>
+      <div class="road-item reveal d4">
+        <div class="ph"><span class="dt"></span>PHASE 04 · 愿景</div>
+        <h4>运动智能生态</h4>
+        <ul><li>可穿戴多模态融合</li><li>个性化训练 Agent</li><li>运动健康数据网络</li></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TEAM / VISION ===== -->
+<section class="block" id="team">
+  <div class="wrap">
+    <div class="vision reveal">
+      <div class="vision-glow"></div>
+      <div class="kicker">09 — 团队与愿景</div>
+      <blockquote>让 <span class="accent">每一次运动</span> 都被 AI <span class="accent-c">看见、理解与守护</span>。</blockquote>
+      <p class="lead" style="margin-top:1.4rem;position:relative;z-index:2">我们由 AI 算法、计算机视觉、运动科学与产品工程的跨界团队组成，致力于降低专业运动分析的门槛，推动 AI 与运动健康产业的深度融合。</p>
+      <div class="team">
+        <div class="member"><div class="av">AI</div><h5>算法与大模型</h5><p>视觉大模型 · 姿态估计 · 多模态融合</p></div>
+        <div class="member"><div class="av">SC</div><h5>运动科学</h5><p>运动力学 · 康复评估 · 标准动作库</p></div>
+        <div class="member"><div class="av">PD</div><h5>产品与设计</h5><p>体验设计 · 场景洞察 · 增长策略</p></div>
+        <div class="member"><div class="av">EN</div><h5>工程与平台</h5><p>实时推理 · 跨端部署 · 数据基建</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FINAL CTA ===== -->
+<section class="final" id="contact">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="kicker" style="justify-content:center">START NOW</div>
+      <h2>让 AI 成为你的<br><span class="out">运动分析师</span></h2>
+      <p>普通摄像头，专业级洞察。现在就加入 DeskMotion AI，重新定义你的训练方式。</p>
+      <div class="hero-actions" style="justify-content:center">
+        <a href="#top" class="btn btn-primary" data-h>申请免费试用 <span aria-hidden>→</span></a>
+        <a href="#tech" class="btn btn-ghost" data-h>下载产品白皮书</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div>© 2026 DeskMotion AI · 基于视觉大模型的桌面运动分析系统</div>
+    <div>BUILT FOR · 创新创业大赛展示</div>
+  </div>
+</footer>
+
+<script>
+  /* custom cursor */
+  (function(){
+    const ring=document.querySelector('.cursor'),dot=document.querySelector('.cursor-dot');
+    if(!ring) return;
+    let rx=0,ry=0,dx=0,dy=0;
+    addEventListener('mousemove',e=>{dx=e.clientX;dy=e.clientY;dot.style.transform=`translate(${dx}px,${dy}px) translate(-50%,-50%)`});
+    (function loop(){rx+=(dx-rx)*.18;ry+=(dy-ry)*.18;ring.style.transform=`translate(${rx}px,${ry}px) translate(-50%,-50%)`;requestAnimationFrame(loop)})();
+    document.querySelectorAll('a,button,[data-h],.pain-card,.feat,.scene,.biz-card,.road-item,.member').forEach(el=>{
+      el.addEventListener('mouseenter',()=>ring.classList.add('hovering'));
+      el.addEventListener('mouseleave',()=>ring.classList.remove('hovering'));
+    });
+  })();
+
+  /* nav scrolled state */
+  const nav=document.getElementById('nav');
+  addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>40),{passive:true});
+
+  /* scroll reveal */
+  const io=new IntersectionObserver((es)=>{
+    es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  },{threshold:.14});
+  document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+  /* count up */
+  function animateCount(el){
+    const to=+el.dataset.to,dur=1400,start=performance.now();
+    function tick(now){
+      const p=Math.min((now-start)/dur,1),ease=1-Math.pow(1-p,3);
+      el.textContent=Math.round(to*ease);
+      if(p<1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+  const cio=new IntersectionObserver((es)=>{
+    es.forEach(e=>{ if(e.isIntersecting){ animateCount(e.target); cio.unobserve(e.target); } });
+  },{threshold:.6});
+  document.querySelectorAll('.count').forEach(el=>cio.observe(el));
+
+  /* bars grow */
+  const bio=new IntersectionObserver((es)=>{
+    es.forEach(e=>{ if(e.isIntersecting){
+      e.target.querySelectorAll('.bar').forEach((b,i)=>setTimeout(()=>b.style.height=b.dataset.h+'%',i*120));
+      bio.unobserve(e.target);
+    }});
+  },{threshold:.4});
+  const bars=document.getElementById('bars'); if(bars) bio.observe(bars);
+</script>
+</body>
+</html>

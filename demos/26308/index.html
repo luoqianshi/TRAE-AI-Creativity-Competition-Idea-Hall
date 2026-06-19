@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安居审 - AI智能合同审核工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1e3a8a',
+                        'primary-light': '#3b82f6',
+                        'primary-dark': '#1e40af',
+                        danger: '#dc2626',
+                        warning: '#f97316',
+                        info: '#3b82f6',
+                        success: '#16a34a',
+                    },
+                    fontFamily: {
+                        sans: ['Noto Sans SC', 'system-ui', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Noto Sans SC', system-ui, sans-serif; background: #f8fafc; }
+        
+        /* 扫描动画 */
+        .scan-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(30, 58, 138, 0.95); z-index: 9999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.8s ease, visibility 0.8s ease;
+        }
+        .scan-overlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+        .scan-line {
+            width: 300px; height: 3px; background: linear-gradient(90deg, transparent, #60a5fa, transparent);
+            animation: scanMove 2s ease-in-out infinite; margin: 30px 0;
+        }
+        @keyframes scanMove {
+            0%, 100% { transform: translateY(-80px); opacity: 0; }
+            50% { transform: translateY(80px); opacity: 1; }
+        }
+        .scan-document {
+            width: 240px; height: 320px; border: 2px solid rgba(96, 165, 250, 0.4);
+            border-radius: 8px; position: relative; overflow: hidden;
+            background: rgba(255,255,255,0.05);
+        }
+        .scan-document::before {
+            content: ''; position: absolute; top: 20px; left: 20px; right: 20px; height: 8px;
+            background: rgba(96, 165, 250, 0.3); border-radius: 4px;
+        }
+        .scan-document::after {
+            content: ''; position: absolute; top: 40px; left: 20px; right: 40px; height: 6px;
+            background: rgba(96, 165, 250, 0.2); border-radius: 3px;
+        }
+        .scan-text { color: #93bbfc; font-size: 14px; margin-top: 20px; letter-spacing: 2px; }
+        .scan-dots::after {
+            content: ''; animation: dots 1.5s steps(4, end) infinite;
+        }
+        @keyframes dots { 0%, 20% { content: ''; } 40% { content: '.'; } 60% { content: '..'; } 80%, 100% { content: '...'; } }
+        
+        /* 脉冲动画 */
+        .pulse-btn {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+            50% { box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); }
+        }
+        
+        /* 风险卡片 */
+        .risk-card { transition: all 0.3s ease; cursor: pointer; }
+        .risk-card:hover { transform: translateY(-4px); box-shadow: 0 12px 24px rgba(0,0,0,0.1); }
+        
+        /* 条款展开动画 */
+        .clause-content {
+            max-height: 0; overflow: hidden; transition: max-height 0.4s ease, padding 0.4s ease;
+        }
+        .clause-content.expanded {
+            max-height: 600px;
+        }
+        
+        /* 法条弹窗 */
+        .law-popup {
+            position: absolute; background: white; border: 1px solid #e5e7eb;
+            border-radius: 12px; padding: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+            z-index: 100; width: 320px; opacity: 0; visibility: hidden; transition: all 0.3s ease;
+            pointer-events: none;
+        }
+        .law-popup.show { opacity: 1; visibility: visible; pointer-events: auto; }
+        
+        /* 对比视图 */
+        .compare-view {
+            display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; align-items: start;
+        }
+        .compare-arrow {
+            display: flex; align-items: center; justify-content: center;
+            color: #6b7280; font-size: 24px;
+        }
+        
+        /* Tab切换 */
+        .tab-btn { transition: all 0.3s ease; position: relative; }
+        .tab-btn.active::after {
+            content: ''; position: absolute; bottom: -2px; left: 0; right: 0;
+            height: 3px; background: #1e3a8a; border-radius: 2px;
+        }
+        
+        /* 滚动条美化 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+        
+        /* 响应式 */
+        @media (max-width: 1024px) {
+            .compare-view { grid-template-columns: 1fr; }
+            .compare-arrow { transform: rotate(90deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- 扫描动画覆盖层 -->
+    <div class="scan-overlay" id="scanOverlay">
+        <div class="scan-document"></div>
+        <div class="scan-line"></div>
+        <div class="scan-text">AI正在智能分析合同条款<span class="scan-dots"></span></div>
+        <div class="text-blue-300 text-sm mt-4">已识别 23 个条款 · 正在比对法律数据库</div>
+    </div>
+
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xl font-bold text-primary">安居审</span>
+                </div>
+                <div class="hidden md:flex items-center space-x-8">
+                    <a href="#" class="text-gray-700 hover:text-primary font-medium transition">首页</a>
+                    <a href="#demo" class="text-gray-700 hover:text-primary font-medium transition">功能演示</a>
+                    <a href="#cases" class="text-gray-700 hover:text-primary font-medium transition">案例库</a>
+                    <a href="#about" class="text-gray-700 hover:text-primary font-medium transition">关于我们</a>
+                </div>
+                <button class="md:hidden text-gray-700" onclick="toggleMobileMenu()">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <!-- 移动端菜单 -->
+        <div id="mobileMenu" class="hidden md:hidden bg-white border-t">
+            <div class="px-4 py-3 space-y-2">
+                <a href="#" class="block py-2 text-gray-700 hover:text-primary">首页</a>
+                <a href="#demo" class="block py-2 text-gray-700 hover:text-primary">功能演示</a>
+                <a href="#cases" class="block py-2 text-gray-700 hover:text-primary">案例库</a>
+                <a href="#about" class="block py-2 text-gray-700 hover:text-primary">关于我们</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero区域 -->
+    <section class="bg-gradient-to-br from-primary via-primary-dark to-slate-900 text-white py-20 lg:py-32">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h1 class="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 leading-tight">
+                3分钟，让合同陷阱<span class="text-blue-300">无处遁形</span>
+            </h1>
+            <p class="text-xl md:text-2xl text-blue-100 mb-4 font-light">
+                AI智能审核 · 法律条文引用 · 修改建议生成
+            </p>
+            <p class="text-blue-200 mb-10 max-w-2xl mx-auto">
+                基于300万+真实判例训练，精准识别合同风险，为您的房产交易保驾护航
+            </p>
+            <button class="pulse-btn bg-blue-500 hover:bg-blue-400 text-white font-bold py-4 px-10 rounded-full text-lg transition transform hover:scale-105" onclick="scrollToDemo()">
+                立即体验
+                <svg class="w-5 h-5 inline-block ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                </svg>
+            </button>
+            <div class="mt-12 flex justify-center space-x-8 text-sm text-blue-200">
+                <div class="flex items-center"><svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>免费试用</div>
+                <div class="flex items-center"><svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>专业法律团队审核</div>
+                <div class="flex items-center"><svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>数据安全加密</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 核心演示区 -->
+    <section id="demo" class="py-16 bg-gray-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl font-bold text-gray-900 mb-4">智能审核演示</h2>
+                <p class="text-gray-600">上传合同，AI自动识别风险，生成专业审核报告</p>
+            </div>
+
+            <!-- 场景切换Tab -->
+            <div class="flex justify-center mb-8">
+                <div class="bg-white rounded-xl p-1.5 shadow-sm inline-flex">
+                    <button class="tab-btn active px-6 py-2.5 rounded-lg font-medium text-sm" data-scene="house" onclick="switchScene('house')">二手房买卖</button>
+                    <button class="tab-btn px-6 py-2.5 rounded-lg font-medium text-sm text-gray-500" data-scene="rent" onclick="switchScene('rent')">租房合同</button>
+                    <button class="tab-btn px-6 py-2.5 rounded-lg font-medium text-sm text-gray-500" data-scene="decorate" onclick="switchScene('decorate')">装修合同</button>
+                </div>
+            </div>
+
+            <!-- 演示主区域 -->
+            <div class="grid lg:grid-cols-5 gap-6">
+                <!-- 左侧：上传区域 -->
+                <div class="lg:col-span-2">
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-full">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">合同文件</h3>
+                        <div class="border-2 border-dashed border-blue-200 rounded-xl p-8 text-center bg-blue-50/50">
+                            <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <svg class="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                </svg>
+                            </div>
+                            <p class="text-gray-900 font-medium mb-1">二手房买卖合同.pdf</p>
+                            <p class="text-gray-500 text-sm mb-3">2.3 MB · 共12页</p>
+                            <div class="flex items-center justify-center space-x-2 text-green-600 text-sm">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                                <span>上传成功</span>
+                            </div>
+                        </div>
+                        <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+                            <div class="flex justify-between text-sm mb-2">
+                                <span class="text-gray-600">审核进度</span>
+                                <span class="text-primary font-medium">100%</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2">
+                                <div class="bg-primary h-2 rounded-full" style="width: 100%"></div>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-2">已识别 23 个条款 · 发现 9 处风险</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧：审核结果仪表盘 -->
+                <div class="lg:col-span-3">
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                        <!-- 风险统计卡片 -->
+                        <div class="grid grid-cols-3 gap-4 mb-6">
+                            <div class="risk-card bg-red-50 border border-red-100 rounded-xl p-4 text-center" onclick="filterRisk('severe')">
+                                <div class="text-3xl font-bold text-red-600 mb-1">2</div>
+                                <div class="text-red-700 font-medium text-sm">严重风险</div>
+                                <div class="text-red-400 text-xs mt-1">需立即处理</div>
+                            </div>
+                            <div class="risk-card bg-orange-50 border border-orange-100 rounded-xl p-4 text-center" onclick="filterRisk('warning')">
+                                <div class="text-3xl font-bold text-orange-600 mb-1">3</div>
+                                <div class="text-orange-700 font-medium text-sm">警告风险</div>
+                                <div class="text-orange-400 text-xs mt-1">建议修改</div>
+                            </div>
+                            <div class="risk-card bg-blue-50 border border-blue-100 rounded-xl p-4 text-center" onclick="filterRisk('suggest')">
+                                <div class="text-3xl font-bold text-blue-600 mb-1">4</div>
+                                <div class="text-blue-700 font-medium text-sm">建议优化</div>
+                                <div class="text-blue-400 text-xs mt-1">可进一步提升</div>
+                            </div>
+                        </div>
+
+                        <!-- 风险条款列表 -->
+                        <div class="space-y-3" id="riskList">
+                            <!-- 条款1：严重 -->
+                            <div class="risk-item border border-red-200 rounded-xl overflow-hidden" data-risk="severe">
+                                <div class="bg-red-50 px-4 py-3 flex items-center justify-between cursor-pointer" onclick="toggleClause(this)">
+                                    <div class="flex items-center space-x-3">
+                                        <span class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded">严重</span>
+                                        <span class="font-medium text-gray-900 text-sm">违约金条款过高</span>
+                                    </div>
+                                    <svg class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </div>
+                                <div class="clause-content bg-white">
+                                    <div class="p-4 space-y-4">
+                                        <div class="compare-view">
+                                            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                                                <div class="text-red-600 text-xs font-bold mb-2">原始条款</div>
+                                                <p class="text-red-800 text-sm">"买方逾期付款，每日按<span class="bg-red-200 px-1 rounded">总房款0.5%</span>支付违约金"</p>
+                                            </div>
+                                            <div class="compare-arrow">→</div>
+                                            <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                                                <div class="text-green-600 text-xs font-bold mb-2">建议修改</div>
+                                                <p class="text-green-800 text-sm">"买方逾期付款，每日按<span class="bg-green-200 px-1 rounded">未付款项的万分之五</span>支付违约金"</p>
+                                            </div>
+                                        </div>
+                                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                            <div class="flex items-start space-x-2">
+                                                <svg class="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                                </svg>
+                                                <div>
+                                                    <div class="text-yellow-800 font-medium text-sm">风险分析</div>
+                                                    <p class="text-yellow-700 text-sm mt-1">日违约金0.5%折合年利率182.5%，远超法定合理范围（通常不超过万分之五），可能被法院认定为显失公平而调整。</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="relative">
+                                            <div class="flex items-center space-x-2 text-sm text-gray-600 cursor-pointer hover:text-primary" onmouseenter="showLawPopup(this, 'law1')" onmouseleave="hideLawPopup('law1')">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                                                </svg>
+                                                <span class="font-medium">法律依据：《民法典》第585条</span>
+                                            </div>
+                                            <div class="law-popup" id="law1">
+                                                <div class="text-primary font-bold text-sm mb-2">《民法典》第585条</div>
+                                                <p class="text-gray-600 text-sm leading-relaxed">当事人可以约定一方违约时应当根据违约情况向对方支付一定数额的违约金，也可以约定因违约产生的损失赔偿额的计算方法。</p>
+                                                <p class="text-gray-600 text-sm leading-relaxed mt-2">约定的违约金过分高于造成的损失的，人民法院或者仲裁机构可以根据当事人的请求予以适当减少。</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 条款2：严重 -->
+                            <div class="risk-item border border-red-200 rounded-xl overflow-hidden" data-risk="severe">
+                                <div class="bg-red-50 px-4 py-3 flex items-center justify-between cursor-pointer" onclick="toggleClause(this)">
+                                    <div class="flex items-center space-x-3">
+                                        <span class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded">严重</span>
+                                        <span class="font-medium text-gray-900 text-sm">定金条款违法</span>
+                                    </div>
+                                    <svg class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </div>
+                                <div class="clause-content bg-white">
+                                    <div class="p-4 space-y-4">
+                                        <div class="compare-view">
+                                            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                                                <div class="text-red-600 text-xs font-bold mb-2">原始条款</div>
+                                                <p class="text-red-800 text-sm">"定金人民币20万元，<span class="bg-red-200 px-1 rounded">任何情况下不予退还</span>"</p>
+                                            </div>
+                                            <div class="compare-arrow">→</div>
+                                            <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                                                <div class="text-green-600 text-xs font-bold mb-2">建议修改</div>
+                                                <p class="text-green-800 text-sm">"定金不超过总房款20%，因卖方原因未能签约<span class="bg-green-200 px-1 rounded">双倍返还</span>"</p>
+                                            </div>
+                                        </div>
+                                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                            <div class="flex items-start space-x-2">
+                                                <svg class="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                                </svg>
+                                                <div>
+                                                    <div class="text-yellow-800 font-medium text-sm">风险分析</div>
+                                                    <p class="text-yellow-700 text-sm mt-1">"任何情况下不予退还"违反定金罚则，且定金不得超过主合同标的额20%。若卖方违约也应双倍返还。</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="relative">
+                                            <div class="flex items-center space-x-2 text-sm text-gray-600 cursor-pointer hover:text-primary" onmouseenter="showLawPopup(this, 'law2')" onmouseleave="hideLawPopup('law2')">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                                                </svg>
+                                                <span class="font-medium">法律依据：《民法典》第586、587条</span>
+                                            </div>
+                                            <div class="law-popup" id="law2">
+                                                <div class="text-primary font-bold text-sm mb-2">《民法典》第586条</div>
+                                                <p class="text-gray-600 text-sm leading-relaxed">当事人可以约定一方向对方给付定金作为债权的担保。定金合同自实际交付定金时成立。定金的数额由当事人约定；但是，不得超过主合同标的额的百分之二十，超过部分不产生定金的效力。</p>
+                                                <div class="text-primary font-bold text-sm mb-2 mt-3">《民法典》第587条</div>
+                                                <p class="text-gray-600 text-sm leading-relaxed">债务人履行债务的，定金应当抵作价款或者收回。给付定金的一方不履行债务或者履行债务不符合约定，致使不能实现合同目的的，无权请求返还定金；收受定金的一方不履行债务或者履行债务不符合约定，致使不能实现合同目的的，应当双倍返还定金。</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 条款3：警告 -->
+                            <div class="risk-item border border-orange-200 rounded-xl overflow-hidden" data-risk="warning">
+                                <div class="bg-orange-50 px-4 py-3 flex items-center justify-between cursor-pointer" onclick="toggleClause(this)">
+                                    <div class="flex items-center space-x-3">
+                                        <span class="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded">警告</span>
+                                        <span class="font-medium text-gray-900 text-sm">费用转嫁条款</span>
+                                    </div>
+                                    <svg class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </div>
+                                <div class="clause-content bg-white">
+                                    <div class="p-4 space-y-4">
+                                        <div class="compare-view">
+                                            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                                                <div class="text-red-600 text-xs font-bold mb-2">原始条款</div>
+                                                <p class="text-red-800 text-sm">"房屋交割前的<span class="bg-red-200 px-1 rounded">物业费、水电费由买方承担</span>"</p>
+                                            </div>
+                                            <div class="compare-arrow">→</div>
+                                            <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                                                <div class="text-green-600 text-xs font-bold mb-2">建议修改</div>
+                                                <p class="text-green-800 text-sm">"以交割日为界，之前费用由<span class="bg-green-200 px-1 rounded">卖方结清并提供缴费凭证</span>"</p>
+                                            </div>
+                                        </div>
+                                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                            <div class="flex items-start space-x-2">
+                                                <svg class="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                                </svg>
+                                                <div>
+                                                    <div class="text-yellow-800 font-medium text-sm">风险分析</div>
+                                                    <p class="text-yellow-700 text-sm mt-1">卖方可能将长期欠费转嫁给买方，交割时应要求卖方提供所有费用结清证明。</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 条款4：警告 -->
+                            <div class="risk-item border border-orange-200 rounded-xl overflow-hidden" data-risk="warning">
+                                <div class="bg-orange-50 px-4 py-3 flex items-center justify-between cursor-pointer" onclick="toggleClause(this)">
+                                    <div class="flex items-center space-x-3">
+                                        <span class="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded">警告</span>
+                                        <span class="font-medium text-gray-900 text-sm">增项费用条款模糊</span>
+                                    </div>
+                                    <svg class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </div>
+                                <div class="clause-content bg-white">
+                                    <div class="p-4 space-y-4">
+                                        <div class="compare-view">
+                                            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                                                <div class="text-red-600 text-xs font-bold mb-2">原始条款</div>
+                                                <p class="text-red-800 text-sm">"装修工程增项费用<span class="bg-red-200 px-1 rounded">不得超过合同总价10%</span>"</p>
+                                            </div>
+                                            <div class="compare-arrow">→</div>
+                                            <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                                                <div class="text-green-600 text-xs font-bold mb-2">建议修改</div>
+                                                <p class="text-green-800 text-sm">"增项费用不得超过合同总价10%，<span class="bg-green-200 px-1 rounded">超出部分需书面确认，否则由施工方承担</span>"</p>
+                                            </div>
+                                        </div>
+                                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                            <div class="flex items-start space-x-2">
+                                                <svg class="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                                </svg>
+                                                <div>
+                                                    <div class="text-yellow-800 font-medium text-sm">风险分析</div>
+                                                    <p class="text-yellow-700 text-sm mt-1">未约定超出10%部分的处理方式，施工方可能随意增项，导致预算严重超支。</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 条款5：建议 -->
+                            <div class="risk-item border border-blue-200 rounded-xl overflow-hidden" data-risk="suggest">
+                                <div class="bg-blue-50 px-4 py-3 flex items-center justify-between cursor-pointer" onclick="toggleClause(this)">
+                                    <div class="flex items-center space-x-3">
+                                        <span class="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded">建议</span>
+                                        <span class="font-medium text-gray-900 text-sm">争议管辖条款</span>
+                                    </div>
+                                    <svg class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </div>
+                                <div class="clause-content bg-white">
+                                    <div class="p-4 space-y-4">
+                                        <div class="compare-view">
+                                            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                                                <div class="text-red-600 text-xs font-bold mb-2">原始条款</div>
+                                                <p class="text-red-800 text-sm">"争议提交<span class="bg-red-200 px-1 rounded">卖方所在地</span>仲裁委员会"</p>
+                                            </div>
+                                            <div class="compare-arrow">→</div>
+                                            <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                                                <div class="text-green-600 text-xs font-bold mb-2">建议修改</div>
+                                                <p class="text-green-800 text-sm">"争议提交<span class="bg-green-200 px-1 rounded">房屋所在地人民法院</span>管辖"</p>
+                                            </div>
+                                        </div>
+                                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                            <div class="flex items-start space-x-2">
+                                                <svg class="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                                </svg>
+                                                <div>
+                                                    <div class="text-yellow-800 font-medium text-sm">风险分析</div>
+                                                    <p class="text-yellow-700 text-sm mt-1">约定卖方所在地仲裁增加买方维权成本，改为房屋所在地法院管辖更公平合理。</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 生成补充协议按钮 -->
+                        <div class="mt-6">
+                            <button class="w-full bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-xl transition flex items-center justify-center space-x-2" onclick="generateAgreement()">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                </svg>
+                                <span>生成补充协议</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 补充协议弹窗 -->
+    <div id="agreementModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                <h3 class="text-xl font-bold text-gray-900">补充协议</h3>
+                <button onclick="closeAgreement()" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="p-6">
+                <div class="border border-gray-300 rounded-lg p-8 bg-gray-50">
+                    <div class="text-center mb-8">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-2">补充协议</h2>
+                        <p class="text-gray-600">合同编号：___________</p>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <p class="text-gray-800 mb-4">甲方（卖方）：________________ 身份证号：________________</p>
+                        <p class="text-gray-800 mb-4">乙方（买方）：________________ 身份证号：________________</p>
+                        <p class="text-gray-800">鉴于甲乙双方于____年____月____日签订的《房屋买卖合同》，经双方协商一致，就以下条款达成补充协议：</p>
+                    </div>
+
+                    <div class="space-y-4 mb-8">
+                        <div class="bg-white border border-gray-200 rounded-lg p-4">
+                            <div class="font-bold text-gray-900 mb-2">第一条 违约金条款</div>
+                            <p class="text-gray-700 text-sm">原合同约定的"每日按总房款0.5%支付违约金"调整为"每日按未付款项的万分之五支付违约金"，该标准符合法律规定及市场惯例。</p>
+                        </div>
+                        <div class="bg-white border border-gray-200 rounded-lg p-4">
+                            <div class="font-bold text-gray-900 mb-2">第二条 定金条款</div>
+                            <p class="text-gray-700 text-sm">定金数额不得超过总房款的20%。因甲方（卖方）原因导致合同无法履行的，应向乙方双倍返还定金；因乙方（买方）原因导致合同无法履行的，无权要求返还定金。</p>
+                        </div>
+                        <div class="bg-white border border-gray-200 rounded-lg p-4">
+                            <div class="font-bold text-gray-900 mb-2">第三条 费用承担</div>
+                            <p class="text-gray-700 text-sm">房屋交割日（以实际交付钥匙为准）之前的物业费、水电费、燃气费等所有费用由甲方承担，甲方应在交割前结清并提供缴费凭证。</p>
+                        </div>
+                        <div class="bg-white border border-gray-200 rounded-lg p-4">
+                            <div class="font-bold text-gray-900 mb-2">第四条 争议解决</div>
+                            <p class="text-gray-700 text-sm">因本合同引起的争议，双方应友好协商解决；协商不成的，任何一方均可向房屋所在地人民法院提起诉讼。</p>
+                        </div>
+                    </div>
+
+                    <div class="border-t pt-6">
+                        <p class="text-gray-800 mb-6">本补充协议一式两份，甲乙双方各执一份，自双方签字（盖章）之日起生效，与原合同具有同等法律效力。</p>
+                        <div class="grid grid-cols-2 gap-8">
+                            <div>
+                                <p class="font-bold text-gray-900 mb-4">甲方（签字）：</p>
+                                <p class="text-gray-600">日期：____年____月____日</p>
+                            </div>
+                            <div>
+                                <p class="font-bold text-gray-900 mb-4">乙方（签字）：</p>
+                                <p class="text-gray-600">日期：____年____月____日</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-6 flex justify-end space-x-3">
+                    <button onclick="closeAgreement()" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition">关闭</button>
+                    <button class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition flex items-center space-x-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                        </svg>
+                        <span>下载PDF</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 信任背书区 -->
+    <section class="bg-primary py-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
+                <div class="text-white">
+                    <div class="text-4xl font-bold mb-2">12,000+</div>
+                    <div class="text-blue-200">已帮助用户审核合同</div>
+                </div>
+                <div class="text-white">
+                    <div class="text-4xl font-bold mb-2">38,000+</div>
+                    <div class="text-blue-200">识别风险条款</div>
+                </div>
+                <div class="text-white">
+                    <div class="text-4xl font-bold mb-2">¥5,200</div>
+                    <div class="text-blue-200">平均为用户节省</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer class="bg-slate-900 text-gray-400 py-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <div class="flex items-center space-x-2 mb-4">
+                        <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                            </svg>
+                        </div>
+                        <span class="text-white font-bold">安居审</span>
+                    </div>
+                    <p class="text-sm">用AI守护您的房产交易安全</p>
+                </div>
+                <div>
+                    <h4 class="text-white font-medium mb-4">产品服务</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#" class="hover:text-white transition">合同审核</a></li>
+                        <li><a href="#" class="hover:text-white transition">风险评估</a></li>
+                        <li><a href="#" class="hover:text-white transition">补充协议</a></li>
+                        <li><a href="#" class="hover:text-white transition">法律咨询</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="text-white font-medium mb-4">支持场景</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#" class="hover:text-white transition">二手房买卖</a></li>
+                        <li><a href="#" class="hover:text-white transition">租房合同</a></li>
+                        <li><a href="#" class="hover:text-white transition">装修合同</a></li>
+                        <li><a href="#" class="hover:text-white transition">物业合同</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="text-white font-medium mb-4">联系我们</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li>客服热线：400-888-9999</li>
+                        <li>邮箱：support@anjushen.com</li>
+                        <li>工作时间：9:00-21:00</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-gray-800 mt-8 pt-8 text-center text-sm">
+                <p> 安居审. All rights reserved. | 京ICP备XXXXXXXX号</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // 扫描动画
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                document.getElementById('scanOverlay').classList.add('hidden');
+            }, 3000);
+        });
+
+        // 移动端菜单
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobileMenu');
+            menu.classList.toggle('hidden');
+        }
+
+        // 滚动到演示区
+        function scrollToDemo() {
+            document.getElementById('demo').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 条款展开/收起
+        function toggleClause(header) {
+            const content = header.nextElementSibling;
+            const arrow = header.querySelector('svg');
+            content.classList.toggle('expanded');
+            arrow.style.transform = content.classList.contains('expanded') ? 'rotate(180deg)' : '';
+        }
+
+        // 法条弹窗
+        function showLawPopup(element, popupId) {
+            const popup = document.getElementById(popupId);
+            const rect = element.getBoundingClientRect();
+            popup.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+            popup.style.left = rect.left + 'px';
+            popup.classList.add('show');
+        }
+
+        function hideLawPopup(popupId) {
+            document.getElementById(popupId).classList.remove('show');
+        }
+
+        // 风险筛选
+        function filterRisk(type) {
+            const items = document.querySelectorAll('.risk-item');
+            items.forEach(item => {
+                if (type === 'all' || item.dataset.risk === type) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        // 场景切换
+        function switchScene(scene) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+                btn.classList.add('text-gray-500');
+            });
+            document.querySelector(`[data-scene="${scene}"]`).classList.add('active');
+            document.querySelector(`[data-scene="${scene}"]`).classList.remove('text-gray-500');
+            
+            // 这里可以添加切换不同场景数据的逻辑
+            console.log('切换到场景：', scene);
+        }
+
+        // 生成补充协议
+        function generateAgreement() {
+            document.getElementById('agreementModal').classList.remove('hidden');
+            document.getElementById('agreementModal').classList.add('flex');
+        }
+
+        function closeAgreement() {
+            document.getElementById('agreementModal').classList.add('hidden');
+            document.getElementById('agreementModal').classList.remove('flex');
+        }
+
+        // 点击弹窗外部关闭
+        document.getElementById('agreementModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeAgreement();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>On My Own · 独自坚强</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:'SimSun','STSong','Noto Serif SC',serif}
+canvas{display:block;image-rendering:pixelated}
+#hud{position:fixed;top:16px;left:16px;z-index:15;pointer-events:none}
+#hud .chapter{color:#c8a84b;font-size:13px;letter-spacing:.15em;opacity:.85}
+#hud .death-count{color:#804040;font-size:11px;margin-top:4px;letter-spacing:.1em;opacity:.6}
+#hud .runes{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap;max-width:320px}
+#hud .rune{width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  border:1px solid rgba(200,168,75,.3);border-radius:3px;font-size:14px;color:#c8a84b;
+  background:rgba(200,168,75,.06);transition:all .3s}
+#hud .rune.active{background:rgba(200,168,75,.2);border-color:#c8a84b;box-shadow:0 0 8px rgba(200,168,75,.25)}
+#hud .word-target{color:#7a8ca0;font-size:11px;margin-top:6px;letter-spacing:.1em}
+#hud .ability{color:#556;font-size:10px;margin-top:10px;line-height:1.8}
+#dialog{position:fixed;bottom:50px;left:50%;transform:translateX(-50%);max-width:650px;width:88%;
+  background:rgba(8,10,18,.94);border:1px solid rgba(200,168,75,.3);border-radius:4px;
+  padding:16px 22px;color:#d4cfc5;font-size:14px;line-height:1.85;display:none;z-index:20;
+  pointer-events:auto;backdrop-filter:blur(4px)}
+#dialog .speaker{color:#c8a84b;font-size:12px;margin-bottom:4px;letter-spacing:.12em}
+#dialog .hint{color:#445;font-size:11px;margin-top:8px;text-align:right}
+#title-screen{position:fixed;inset:0;z-index:50;
+  background:radial-gradient(ellipse at 25% 35%,#0e1a3a 0%,#07080f 65%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 1.2s}
+#title-screen h1{font-size:clamp(36px,8vw,56px);color:transparent;
+  background:linear-gradient(135deg,#fff 10%,#e8d08a 50%,#c8a84b 90%);
+  -webkit-background-clip:text;background-clip:text;font-weight:700;letter-spacing:.08em}
+#title-screen .en{color:#6a7a8a;font-size:clamp(14px,2.5vw,20px);letter-spacing:.4em;margin:6px 0 50px}
+#title-screen .start{color:#c8a84b;font-size:13px;letter-spacing:.25em;animation:pulse 2.5s ease-in-out infinite}
+#title-screen .controls{position:absolute;bottom:30px;color:#334;font-size:11px;line-height:2.2;text-align:center}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+#death-screen{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.88);display:none;
+  flex-direction:column;align-items:center;justify-content:center;transition:opacity .5s}
+#death-screen .msg{color:#803030;font-size:22px;letter-spacing:.2em;margin-bottom:16px}
+#death-screen .sub{color:#556;font-size:12px;margin-bottom:20px}
+#death-screen .retry{color:#c8a84b;font-size:13px;letter-spacing:.2em;animation:pulse 2s ease-in-out infinite}
+#chapter-transition{position:fixed;inset:0;z-index:35;background:#000;display:none;
+  flex-direction:column;align-items:center;justify-content:center;transition:opacity 1.8s}
+#chapter-transition .ch-num{color:#c8a84b;font-size:14px;letter-spacing:.4em;margin-bottom:8px}
+#chapter-transition .ch-name{color:#fff;font-size:clamp(22px,4vw,32px);font-weight:700;letter-spacing:.15em}
+#chapter-transition .ch-sub{color:#6a7a8a;font-size:12px;margin-top:6px;letter-spacing:.2em}
+</style>
+</head>
+<body>
+
+<div id="title-screen">
+  <h1>独自坚强</h1>
+  <div class="en">ON MY OWN</div>
+  <div class="start">按 ENTER 开始旅程</div>
+  <div class="controls">
+    ← → / A D 移动 &nbsp;&nbsp; 空格 / ↑ 跳跃 &nbsp;&nbsp; J 下砸攻击（第二章起）<br>
+    靠近藤蔓自动抓取 &nbsp;&nbsp; E 对话继续 &nbsp;&nbsp; 拾取符文自动拼读
+  </div>
+</div>
+
+<div id="death-screen">
+  <div class="msg">光芒熄灭...</div>
+  <div class="sub"></div>
+  <div class="retry">按 ENTER 重试</div>
+</div>
+
+<div id="chapter-transition">
+  <div class="ch-num"></div>
+  <div class="ch-name"></div>
+  <div class="ch-sub"></div>
+</div>
+
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="chapter"></div>
+  <div class="death-count"></div>
+  <div class="runes"></div>
+  <div class="word-target"></div>
+  <div class="ability"></div>
+</div>
+
+<div id="dialog">
+  <div class="speaker"></div>
+  <div class="text"></div>
+  <div class="hint">按 E 继续</div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+//  On My Own · 独自坚强 — MVP Platformer
+// ══════════════════════════════════════════════
+
+const C = document.getElementById('game');
+const ctx = C.getContext('2d');
+let W, H;
+
+// ─── Physics ───
+const G = 0.52, FRIC = 0.84, MAX_VY = 13;
+const COYOTE = 7, JUMP_BUF = 6; // frames
+
+// ─── State ───
+let state = 'title', chapter = 1, deaths = 0, gTime = 0;
+let shakeT = 0, shakeI = 0;
+let checkpoint = {x:0,y:0};
+
+// ─── Audio (Web Audio API) ───
+let audioCtx = null;
+function initAudio(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+function playTone(freq, dur, type='sine', vol=0.08){
+  if(!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function sfxJump(){ playTone(520, 0.12, 'sine', 0.06); }
+function sfxLand(){ playTone(120, 0.08, 'triangle', 0.05); }
+function sfxSlam(){ playTone(80, 0.25, 'sawtooth', 0.1); playTone(60, 0.3, 'square', 0.06); }
+function sfxRune(){ playTone(660, 0.15, 'sine', 0.08); setTimeout(()=>playTone(880, 0.2, 'sine', 0.06), 100); }
+function sfxRuneWord(){ playTone(440, 0.1, 'sine', 0.07); setTimeout(()=>playTone(660, 0.1, 'sine', 0.07), 80); setTimeout(()=>playTone(880, 0.2, 'sine', 0.08), 160); }
+function sfxDeath(){ playTone(200, 0.3, 'sawtooth', 0.08); playTone(100, 0.5, 'square', 0.05); }
+function sfxHurt(){ playTone(150, 0.15, 'square', 0.07); }
+function sfxExit(){ playTone(523, 0.1, 'sine', 0.06); setTimeout(()=>playTone(659, 0.1, 'sine', 0.06), 100); setTimeout(()=>playTone(784, 0.15, 'sine', 0.07), 200); }
+
+// ─── Input ───
+const keys = {}, kp = {};
+document.addEventListener('keydown', e => { if(!keys[e.code]) kp[e.code]=true; keys[e.code]=true; e.preventDefault(); });
+document.addEventListener('keyup', e => keys[e.code]=false);
+function jp(c){ return kp[c]===true; }
+function kl(c){ return keys[c]===true; }
+
+function resize(){ W=C.width=innerWidth; H=C.height=innerHeight; }
+addEventListener('resize', resize); resize();
+
+// ─── Particles ───
+const parts = [];
+function emit(x,y,o={}){ parts.push({x,y,vx:o.vx||(Math.random()-.5)*2,vy:o.vy||-Math.random()*2-.5,
+  life:o.life||50,ml:o.life||50,sz:o.sz||2+Math.random()*2,col:o.col||'#c8a84b',
+  grav:o.grav||0,shrink:o.shrink!==false}); }
+function tickParts(){ for(let i=parts.length-1;i>=0;i--){ const p=parts[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=p.grav; if(--p.life<=0) parts.splice(i,1); }}
+function drawParts(cx,cy){ parts.forEach(p=>{ const a=p.life/p.ml, s=p.shrink?p.sz*a:p.sz;
+  ctx.globalAlpha=a*.75; ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x-cx,p.y-cy,s,0,Math.PI*2); ctx.fill(); }); ctx.globalAlpha=1; }
+
+// ─── Camera ───
+const cam = {x:0,y:0};
+function tickCam(){
+  const tx=P.x-W/2+P.w/2, ty=P.y-H/2+P.h/2;
+  cam.x+=(tx-cam.x)*.09; cam.y+=(ty-cam.y)*.09;
+  const lv=lvl(); if(lv){ cam.x=Math.max(0,Math.min(lv.w-W,cam.x)); cam.y=Math.max(0,Math.min(lv.h-H,cam.y)); }
+}
+
+// ─── Moving Hazards ───
+const movers = [];
+function tickMovers(){
+  for(let i=movers.length-1;i>=0;i--){
+    const m=movers[i];
+    m.x+=m.vx; m.y+=m.vy; m.vy+=(m.grav||0); m.life--;
+    if(m.life<=0){ movers.splice(i,1); continue; }
+    if(overlap(P,m) && P.inv<=0) kill();
+  }
+}
+function drawMovers(cx,cy){
+  movers.forEach(m=>{
+    const sx=m.x-cx, sy=m.y-cy;
+    ctx.globalAlpha = m.life < 20 ? m.life/20 : 1;
+    ctx.fillStyle = m.col || '#5a4a30';
+    ctx.fillRect(sx,sy,m.w,m.h);
+    ctx.strokeStyle = m.border || '#8a7050';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx,sy,m.w,m.h);
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ─── Player ───
+const P = {
+  x:0,y:0,w:18,h:26,vx:0,vy:0,ground:false,face:1,
+  crawl:true, anim:0, animT:0, lightR:85, inv:0,
+  slam:false, slamV:0,
+  swing:false, sVine:null, sAng:0, sAngV:0,
+  coyoteT:0, jumpBuf:0,
+  trail:[], wallSlide:false, canDJ:false, dblJump:false,
+};
+
+function resetP(x,y){
+  Object.assign(P,{x,y,vx:0,vy:0,ground:false,slam:false,swing:false,inv:60,trail:[],
+    coyoteT:0,jumpBuf:0,wallSlide:false,canDJ:false,dblJump:false});
+  P.crawl = chapter===1;
+  P.dblJump = false;
+}
+
+function tickP(){
+  const spd = P.crawl ? 2.2 : 3.8;
+  const jf = chapter===1 ? -10.8 : chapter===2 ? -11.2 : -11.5;
+
+  let mx=0;
+  if(kl('ArrowLeft')||kl('KeyA')) mx=-1;
+  if(kl('ArrowRight')||kl('KeyD')) mx=1;
+  if(mx) P.face=mx>0?1:-1;
+
+  // ─── Vine swing ───
+  if(P.swing && P.sVine){
+    const v=P.sVine;
+    P.sAngV += mx*0.004;
+    P.sAngV *= 0.994;
+    P.sAng += P.sAngV;
+    P.x = v.x + Math.sin(P.sAng)*v.len - P.w/2;
+    P.y = v.y + Math.cos(P.sAng)*v.len - P.h/2;
+    P.vx = Math.cos(P.sAng)*v.len*P.sAngV;
+    P.vy = -Math.sin(P.sAng)*v.len*P.sAngV;
+    if(jp('Space')||jp('KeyW')||jp('ArrowUp')){
+      P.swing=false; P.vx*=1.6; P.vy=Math.min(P.vy,-7);
+      sfxJump();
+    }
+    return;
+  }
+
+  // Horizontal
+  P.vx += mx*(P.ground?0.9:0.55);
+  P.vx *= FRIC;
+  if(Math.abs(P.vx)<0.08) P.vx=0;
+
+  // Coyote time
+  if(P.ground) P.coyoteT=COYOTE; else if(P.coyoteT>0) P.coyoteT--;
+
+  // Jump buffer
+  if(jp('Space')||jp('KeyW')||jp('ArrowUp')) P.jumpBuf=JUMP_BUF;
+  else if(P.jumpBuf>0) P.jumpBuf--;
+
+  // Jump
+  if(P.jumpBuf>0 && P.coyoteT>0){
+    P.vy=jf; P.ground=false; P.coyoteT=0; P.jumpBuf=0;
+    if(P.dblJump) P.canDJ=true; // restore DJ on ground jump
+    sfxJump();
+    for(let i=0;i<6;i++) emit(P.x+P.w/2,P.y+P.h,{vx:(Math.random()-.5)*3,vy:-Math.random()*2,life:18,sz:2,col:'#778899'});
+  }
+
+  // Double jump (ch3+)
+  if(chapter>=3 && P.canDJ && !P.ground && (jp('Space')||jp('KeyW')||jp('ArrowUp')) && P.coyoteT<=0){
+    P.vy = jf*0.8; P.canDJ=false; sfxJump();
+    for(let i=0;i<8;i++) emit(P.x+P.w/2,P.y+P.h/2,{vx:(Math.random()-.5)*3,vy:(Math.random()-.5)*3,life:20,sz:2.5,col:'#4caf7d'});
+  }
+
+  // Wall slide (ch2+)
+  P.wallSlide=false;
+  if(chapter>=2 && !P.ground && P.vy>0 && mx!==0){
+    const lv=lvl(); if(lv){
+      const testBox={x:P.x+mx*2,y:P.y,w:P.w,h:P.h};
+      const plats=getPlats();
+      for(const p of plats){
+        if(overlap(testBox,p)){ P.wallSlide=true; P.vy=Math.min(P.vy,1.5); break; }
+      }
+    }
+  }
+
+  // Wall jump
+  if(P.wallSlide && (jp('Space')||jp('KeyW')||jp('ArrowUp'))){
+    P.vy=jf*0.85; P.vx=-P.face*6; P.face=-P.face; sfxJump();
+    for(let i=0;i<5;i++) emit(P.x+(P.face>0?0:P.w),P.y+P.h/2,{vx:-P.face*2,vy:-Math.random()*2,life:15,sz:2,col:'#c04040'});
+  }
+
+  // Slam (ch2+)
+  if(jp('KeyJ') && chapter>=2 && !P.ground && !P.slam){
+    P.slam=true; P.slamV=16; P.vy=P.slamV; shakeT=8; shakeI=3; sfxSlam();
+  }
+  if(P.slam){ P.vy=P.slamV; P.vx*=0.2; }
+
+  // Gravity
+  if(!P.slam){ P.vy+=G; if(P.vy>MAX_VY) P.vy=MAX_VY; }
+
+  // Wind glide (ch3) - hold jump in air
+  if(chapter>=3 && !P.ground && (kl('Space')||kl('KeyW')||kl('ArrowUp')) && P.vy>1){
+    P.vy*=0.9; P.vx*=0.99;
+    if(gTime%3===0) emit(P.x+P.w/2,P.y+P.h,{vx:(Math.random()-.5),vy:1,life:15,sz:1.5,col:'#4caf7d'});
+  }
+
+  // Move & Collide
+  P.x+=P.vx; colX();
+  P.y+=P.vy;
+  const wasGround=P.ground;
+  P.ground=false;
+  colY();
+  if(P.ground && !wasGround) sfxLand();
+
+  // ─── Auto vine grab ───
+  if(!P.swing && !P.ground){
+    const lv=lvl(); if(lv && lv.vines){
+      for(const v of lv.vines){
+        if(!v.active) continue;
+        const dx=(P.x+P.w/2)-v.x, dy=P.y-v.y;
+        const d=Math.sqrt(dx*dx+dy*dy);
+        if(d<v.len+20 && d>v.len*0.3){
+          P.swing=true; P.sVine=v; P.sAng=Math.atan2(dx,dy); P.sAngV=P.vx*0.012;
+          sfxJump(); break;
+        }
+      }
+    }
+  }
+
+  // ─── Rune collect ───
+  const lv=lvl();
+  if(lv && lv.runes) lv.runes.forEach(r=>{
+    if(r.got) return;
+    if(Math.abs(P.x+P.w/2-r.x)<22 && Math.abs(P.y+P.h/2-r.y)<22){
+      r.got=true; runes.push(r); sfxRune(); shakeT=4; shakeI=2;
+      for(let i=0;i<10;i++) emit(r.x,r.y,{vx:(Math.random()-.5)*4,vy:(Math.random()-.5)*4,life:35,sz:3,col:r.tp==='i'?'#c04040':'#a04080'});
+      checkWords(); updHUD();
+    }
+  });
+
+  // ─── Wind zones (ch3) ───
+  if(lv && lv.winds) lv.winds.forEach(wz=>{
+    if(P.x>wz.x&&P.x<wz.x+wz.w&&P.y>wz.y&&P.y<wz.y+wz.h){
+      P.vy+=wz.force; P.vx+=wz.hforce||0;
+      if(gTime%4===0) emit(P.x+P.w/2,P.y+P.h/2,{vx:(wz.hforce||0)*2,vy:wz.force*-2,life:12,sz:1.5,col:'#2a5a2a'});
+    }
+  });
+
+  // ─── Hazards ───
+  if(lv && lv.hazards) lv.hazards.forEach(h=>{ if(overlap(P,h)) kill(); });
+  tickMovers();
+  if(P.y>(lv?lv.h:2000)+100) kill();
+
+  // ─── Exit ───
+  if(lv && lv.exit && overlap(P,{x:lv.exit.x,y:lv.exit.y,w:36,h:56})){
+    sfxExit(); nextChap();
+  }
+
+  // Inv & anim
+  if(P.inv>0) P.inv--;
+  P.animT++; if(P.animT>7){P.animT=0;P.anim=(P.anim+1)%4;}
+
+  // Trail
+  P.trail.push({x:P.x+P.w/2,y:P.y+P.h/2,l:12});
+  if(P.trail.length>16) P.trail.shift();
+  P.trail.forEach(t=>t.l--);
+  P.trail=P.trail.filter(t=>t.l>0);
+
+  // Ambient
+  if(Math.random()<.12) emit(P.x+P.w/2+(Math.random()-.5)*50,P.y+P.h/2+(Math.random()-.5)*35,{
+    vx:(Math.random()-.5)*.4,vy:-Math.random()*.6-.2,life:25+Math.random()*25,sz:1+Math.random(),
+    col:chapter===1?'#445':chapter===2?'#803030':'#4caf7d',grav:-0.01});
+}
+
+function kill(){
+  if(P.inv>0) return;
+  state='dead'; deaths++; sfxDeath(); shakeT=12; shakeI=5;
+  for(let i=0;i<18;i++) emit(P.x+P.w/2,P.y+P.h/2,{vx:(Math.random()-.5)*6,vy:(Math.random()-.5)*6,life:35,sz:2+Math.random()*3,col:'#c8a84b'});
+  const ds=document.getElementById('death-screen');
+  ds.querySelector('.sub').textContent=`第 ${deaths} 次坠落`;
+  ds.style.display='flex';
+}
+
+// ─── Collision ───
+function getPlats(){
+  const lv=lvl(); if(!lv) return [];
+  let r=[...lv.platforms];
+  if(lv.rp) lv.rp.forEach(rp=>{ if(rp.mat) r.push(rp); });
+  if(lv.brk) lv.brk.forEach(b=>{ if(!b.broke) r.push(b); });
+  return r;
+}
+function colX(){
+  for(const p of getPlats()){
+    if(overlap(P,p)){
+      if(P.vx>0) P.x=p.x-P.w; else if(P.vx<0) P.x=p.x+p.w;
+      P.vx=0;
+    }
+  }
+}
+function colY(){
+  for(const p of getPlats()){
+    if(overlap(P,p)){
+      if(P.vy>0){
+        P.y=p.y-P.h; P.vy=0; P.ground=true;
+        if(P.slam){
+          P.slam=false; shakeT=10; shakeI=4; sfxSlam();
+          const lv=lvl();
+          if(lv&&lv.brk) lv.brk.forEach(b=>{
+            if(!b.broke&&Math.abs((P.x+P.w/2)-(b.x+b.w/2))<55&&Math.abs(P.y+P.h-b.y)<8){
+              b.broke=true;
+              for(let i=0;i<8;i++) emit(b.x+b.w/2,b.y+b.h/2,{vx:(Math.random()-.5)*5,vy:-Math.random()*4,life:28,sz:3+Math.random()*3,col:'#6a5030'});
+            }
+          });
+          for(let i=0;i<8;i++) emit(P.x+P.w/2,P.y+P.h,{vx:(Math.random()-.5)*5,vy:-Math.random()*3-1,life:22,sz:2+Math.random()*2,col:'#c04040'});
+        }
+      } else if(P.vy<0){ P.y=p.y+p.h; P.vy=0; }
+    }
+  }
+}
+function overlap(a,b){ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y; }
+function lvl(){ return levels[chapter]; }
+
+// ─── Rune System ───
+let runes=[], actWord=null;
+const WORDS={
+  '生':{i:'sh',f:'eng',pid:'rp1'}, '存':{i:'c',f:'un',pid:'rp2'},
+  '光':{i:'g',f:'uang',pid:'rp3'}, '路':{i:'l',f:'u',pid:'rp4'},
+};
+function checkWords(){
+  const lv=lvl(); if(!lv||!lv.rp) return;
+  for(const[w,d] of Object.entries(WORDS)){
+    const hi=runes.some(r=>r.tp==='i'&&r.val===d.i);
+    const hf=runes.some(r=>r.tp==='f'&&r.val===d.f);
+    if(hi&&hf) lv.rp.forEach(rp=>{
+      if(rp.pid===d.pid&&!rp.mat){
+        rp.mat=true; actWord=w; sfxRuneWord(); shakeT=6; shakeI=2;
+        for(let i=0;i<15;i++) emit(rp.x+rp.w/2,rp.y+rp.h/2,{vx:(Math.random()-.5)*5,vy:(Math.random()-.5)*5,life:45,sz:3+Math.random()*3,col:'#e8d08a'});
+        showDlg('远古之语',`「${w}」— 虚幻通路凝结为实体！`);
+      }
+    });
+  }
+}
+function updHUD(){
+  const rd=document.getElementById('hud').querySelector('.runes');
+  const td=document.getElementById('hud').querySelector('.word-target');
+  const ab=document.getElementById('hud').querySelector('.ability');
+  rd.innerHTML='';
+  runes.forEach(r=>{ const d=document.createElement('div'); d.className='rune active'; d.textContent=r.disp; rd.appendChild(d); });
+  if(chapter===2) td.textContent='拼读：生(sh+eng) · 存(c+un) · 光(g+uang) · 路(l+u)';
+  else td.textContent='';
+  const abs=['跳跃'];
+  if(chapter>=2) abs.push('下砸[J]','墙跳');
+  if(chapter>=3) abs.push('滑翔','二段跳');
+  ab.textContent='能力：'+abs.join(' / ');
+}
+
+// ─── Shadow ───
+const SH={x:0,y:0,w:18,h:26,active:false,rec:[],hitT:0,op:0};
+function tickShadow(){
+  if(chapter<3||!SH.active) return;
+  if(gTime%2===0) SH.rec.push({x:P.x,y:P.y});
+  if(SH.rec.length>150) SH.rec.shift();
+  if(SH.rec.length>15){ const t=SH.rec.shift(); SH.x+=(t.x-SH.x)*.05; SH.y+=(t.y-SH.y)*.05; }
+  SH.op=Math.min(1,SH.op+.008);
+  if(SH.hitT>0) SH.hitT--;
+  if(SH.hitT<=0 && overlap(P,SH)){
+    SH.hitT=80; P.vx+=(P.x<SH.x?-6:6); P.vy=-5; shakeT=8; shakeI=3; sfxHurt();
+    for(let i=0;i<6;i++) emit(P.x+P.w/2,P.y+P.h/2,{vx:(Math.random()-.5)*4,vy:(Math.random()-.5)*4,life:25,sz:3,col:'#4040a0'});
+    showDlg('阴影','...你跑不掉的...');
+  }
+}
+function drawSH(cx,cy){
+  if(!SH.active||SH.op<=0) return;
+  ctx.globalAlpha=SH.op*.55;
+  // Body
+  ctx.fillStyle='#12122a';
+  ctx.beginPath(); ctx.ellipse(SH.x-cx+SH.w/2,SH.y-cy+SH.h*.65,SH.w/2,SH.h*.35,0,0,Math.PI*2); ctx.fill();
+  // Head
+  ctx.fillStyle='#1a1a3a';
+  ctx.beginPath(); ctx.ellipse(SH.x-cx+SH.w/2,SH.y-cy+SH.h*.2,SH.w*.35,8,0,0,Math.PI*2); ctx.fill();
+  // Eyes
+  ctx.fillStyle='#6060a0';
+  ctx.fillRect(SH.x-cx+4,SH.y-cy+6,2,2);
+  ctx.fillRect(SH.x-cx+11,SH.y-cy+6,2,2);
+  // Aura
+  ctx.globalAlpha=SH.op*.12;
+  const g=ctx.createRadialGradient(SH.x-cx+SH.w/2,SH.y-cy+SH.h/2,5,SH.x-cx+SH.w/2,SH.y-cy+SH.h/2,45);
+  g.addColorStop(0,'#20204a'); g.addColorStop(1,'transparent');
+  ctx.fillStyle=g; ctx.fillRect(SH.x-cx-30,SH.y-cy-20,80,70);
+  ctx.globalAlpha=1;
+}
+
+// ─── Dialogue ───
+let dlgQ=[], dlgA=false;
+function showDlg(s,t){ dlgQ.push({s,t}); if(!dlgA) advDlg(); }
+function advDlg(){
+  if(!dlgQ.length){ dlgA=false; document.getElementById('dialog').style.display='none'; return; }
+  dlgA=true; const d=dlgQ.shift();
+  const el=document.getElementById('dialog');
+  el.querySelector('.speaker').textContent=d.s;
+  el.querySelector('.text').textContent=d.t;
+  el.style.display='block';
+}
+
+// ════════════════════════════════════
+//  LEVELS
+// ════════════════════════════════════
+const levels={};
+
+// ─── Ch1: 枯叶深渊 ───
+levels[1]={
+  name:'枯叶深渊',sub:'The Withered Abyss',
+  w:3600,h:1200,sx:80,sy:820,
+  bg1:'#08090f',bg2:'#0f1018',pc:'#181a22',pb:'#282a33',
+  platforms:[],hazards:[],vines:[],runes:[],rp:[],brk:[],winds:[],exit:null,
+  fallingRockTimer:0,
+  init(){
+    this.platforms=[]; this.hazards=[]; this.vines=[]; this.fallingRockTimer=0;
+    // Ground
+    for(let i=0;i<58;i++) this.platforms.push({x:i*64,y:960,w:64,h:240});
+    // Remove pits
+    this.platforms=this.platforms.filter(p=>p.y===960?!(
+      (p.x>=576&&p.x<768)||(p.x>=1344&&p.x<1536)||(p.x>=2112&&p.x<2304)||(p.x>=2880&&p.x<3072)
+    ):true);
+    // Platforms — 间距控制在80px内，确保ch1跳跃(-10.8)可轻松到达
+    this.platforms.push(
+      // 入门区：递进式平台
+      {x:120,y:880,w:130,h:16},{x:300,y:830,w:100,h:16},{x:460,y:780,w:120,h:16},
+      // 中段区
+      {x:640,y:830,w:100,h:16},{x:800,y:780,w:110,h:16},{x:970,y:730,w:90,h:16},
+      {x:1130,y:680,w:130,h:16},{x:1330,y:740,w:100,h:16},
+      // 深渊区：藤蔓摆荡
+      {x:1530,y:740,w:80,h:16},{x:1700,y:680,w:100,h:16},
+      {x:1880,y:740,w:90,h:16},{x:2050,y:680,w:110,h:16},
+      // 高地区
+      {x:2230,y:740,w:100,h:16},{x:2400,y:680,w:90,h:16},
+      {x:2560,y:740,w:120,h:16},{x:2740,y:680,w:100,h:16},
+      // 出口区
+      {x:2900,y:740,w:140,h:16},
+      // 墙壁（深渊两侧）
+      {x:768,y:850,w:16,h:110},{x:1536,y:760,w:16,h:200},{x:2304,y:760,w:16,h:200},
+    );
+    // Spikes in pits
+    this.hazards.push(
+      {x:576,y:1140,w:192,h:16},{x:1344,y:1140,w:192,h:16},
+      {x:2112,y:1140,w:192,h:16},{x:2880,y:1140,w:192,h:16}
+    );
+    // Vines — 悬挂在深渊上方
+    this.vines.push(
+      {x:672,y:710,len:120,active:true},{x:1440,y:650,len:100,active:true},
+      {x:2208,y:650,len:100,active:true},{x:2976,y:650,len:90,active:true},
+    );
+    this.exit={x:2960,y:680};
+  },
+  tick(){
+    // Falling rocks every ~4.5 seconds, only after player advances
+    if(++this.fallingRockTimer>270 && P.x>800){
+      this.fallingRockTimer=0;
+      const rx=P.x+P.w/2+(Math.random()-.5)*500;
+      movers.push({x:rx,y:cam.y-40,w:22,h:22,vy:2.5,grav:0.12,life:220,col:'#3a3020',border:'#5a4a30'});
+    }
+  }
+};
+
+// ─── Ch2: 失落字符 ───
+levels[2]={
+  name:'失落字符',sub:'Lost Glyphs',
+  w:4000,h:1200,sx:80,sy:820,
+  bg1:'#100606',bg2:'#180a0a',pc:'#1a1010',pb:'#3a2020',
+  platforms:[],hazards:[],vines:[],runes:[],rp:[],brk:[],winds:[],exit:null,
+  init(){
+    this.platforms=[]; this.hazards=[]; this.vines=[]; this.runes=[]; this.rp=[]; this.brk=[];
+    // Ground
+    for(let i=0;i<64;i++) this.platforms.push({x:i*64,y:960,w:64,h:240});
+    // Pits for rune bridges
+    this.platforms=this.platforms.filter(p=>p.y===960?!(
+      (p.x>=640&&p.x<832)||(p.x>=1408&&p.x<1600)||(p.x>=2176&&p.x<2368)||(p.x>=2944&&p.x<3136)
+    ):true);
+    // Platforms
+    this.platforms.push(
+      {x:140,y:860,w:100,h:16},{x:320,y:780,w:110,h:16},{x:500,y:700,w:80,h:16},
+      {x:660,y:780,w:80,h:16},{x:860,y:720,w:100,h:16},{x:1040,y:640,w:70,h:16},
+      {x:1180,y:580,w:90,h:16},{x:1340,y:520,w:60,h:16},
+      {x:1440,y:760,w:100,h:16},{x:1640,y:680,w:90,h:16},{x:1820,y:600,w:70,h:16},
+      {x:1960,y:540,w:90,h:16},{x:2120,y:480,w:60,h:16},
+      {x:2220,y:760,w:100,h:16},{x:2420,y:680,w:90,h:16},{x:2600,y:600,w:70,h:16},
+      {x:2740,y:540,w:90,h:16},{x:2900,y:480,w:60,h:16},
+      {x:3020,y:680,w:100,h:16},{x:3220,y:580,w:120,h:16},
+      {x:3420,y:480,w:80,h:16},{x:3580,y:400,w:140,h:16},
+      // Walls
+      {x:832,y:720,w:16,h:240},{x:1600,y:680,w:16,h:280},{x:2368,y:720,w:16,h:240},{x:3136,y:600,w:16,h:360},
+    );
+    // Breakable floors
+    this.brk.push(
+      {x:860,y:860,w:100,h:16,broke:false},{x:1640,y:860,w:100,h:16,broke:false},
+      {x:3020,y:860,w:100,h:16,broke:false},
+    );
+    // Spikes
+    this.hazards.push(
+      {x:640,y:1140,w:192,h:16},{x:1408,y:1140,w:192,h:16},
+      {x:2176,y:1140,w:192,h:16},{x:2944,y:1140,w:192,h:16},
+    );
+    // Runes
+    this.runes=[
+      {x:360,y:750,tp:'i',val:'sh',disp:'sh',got:false},
+      {x:540,y:670,tp:'f',val:'eng',disp:'eng',got:false},
+      {x:900,y:690,tp:'i',val:'c',disp:'c',got:false},
+      {x:1080,y:610,tp:'f',val:'un',disp:'un',got:false},
+      {x:1700,y:650,tp:'i',val:'g',disp:'g',got:false},
+      {x:1860,y:570,tp:'f',val:'uang',disp:'uang',got:false},
+      {x:2480,y:650,tp:'i',val:'l',disp:'l',got:false},
+      {x:2640,y:570,tp:'f',val:'u',disp:'u',got:false},
+    ];
+    // Ghost platforms
+    this.rp=[
+      {x:660,y:890,w:160,h:16,pid:'rp1',mat:false},
+      {x:1430,y:890,w:160,h:16,pid:'rp2',mat:false},
+      {x:2198,y:890,w:160,h:16,pid:'rp3',mat:false},
+      {x:2966,y:890,w:160,h:16,pid:'rp4',mat:false},
+    ];
+    this.exit={x:3630,y:320};
+  }
+};
+
+// ─── Ch3: 风聚磨坊 ───
+levels[3]={
+  name:'风聚磨坊',sub:'The Wind Mill',
+  w:3400,h:1400,sx:80,sy:820,
+  bg1:'#060f06',bg2:'#0a180a',pc:'#101c10',pb:'#1e3a1e',
+  platforms:[],hazards:[],vines:[],runes:[],rp:[],brk:[],winds:[],exit:null,
+  init(){
+    this.platforms=[]; this.hazards=[]; this.vines=[]; this.winds=[];
+    // Ground
+    for(let i=0;i<54;i++) this.platforms.push({x:i*64,y:960,w:64,h:240});
+    this.platforms=this.platforms.filter(p=>p.y===960?!(
+      (p.x>=768&&p.x<960)||(p.x>=1600&&p.x<1792)||(p.x>=2496&&p.x<2688)
+    ):true);
+    this.platforms.push(
+      {x:180,y:860,w:120,h:16},{x:380,y:760,w:100,h:16},{x:560,y:660,w:140,h:16},
+      {x:800,y:760,w:120,h:16},{x:1000,y:660,w:100,h:16},{x:1180,y:560,w:120,h:16},
+      {x:1400,y:480,w:80,h:16},{x:1560,y:560,w:100,h:16},{x:1720,y:480,w:80,h:16},
+      {x:1900,y:400,w:140,h:16},{x:2100,y:340,w:80,h:16},{x:2260,y:400,w:100,h:16},
+      {x:2440,y:320,w:80,h:16},{x:2600,y:260,w:120,h:16},{x:2800,y:200,w:100,h:16},
+      {x:2960,y:150,w:140,h:16},
+      // Walls
+      {x:960,y:600,w:16,h:360},{x:1792,y:500,w:16,h:300},
+    );
+    // Updraft wind zones
+    this.winds.push(
+      {x:400,y:700,w:200,h:260,force:-0.35,hforce:0},
+      {x:1200,y:500,w:200,h:260,force:-0.35,hforce:0},
+      {x:2000,y:350,w:200,h:300,force:-0.4,hforce:0},
+    );
+    this.hazards.push(
+      {x:768,y:1140,w:192,h:16},{x:1600,y:1140,w:192,h:16},{x:2496,y:1140,w:192,h:16},
+    );
+    this.exit={x:3020,y:70};
+    SH.active=true; SH.op=0; SH.x=P.x-100; SH.y=P.y; SH.rec=[];
+  }
+};
+
+// ════════════════════════════════════
+//  Chapter Management
+// ════════════════════════════════════
+function startChap(ch){
+  chapter=ch; const lv=levels[ch]; if(!lv) return;
+  lv.init(); runes=[]; actWord=null;
+  resetP(lv.sx,lv.sy); checkpoint={x:lv.sx,y:lv.sy};
+  cam.x=P.x-W/2; cam.y=P.y-H/2;
+  parts.length=0; movers.length=0;
+  updHUD();
+  document.getElementById('hud').querySelector('.chapter').textContent=`第${ch}章 · ${lv.name}`;
+  document.getElementById('hud').querySelector('.death-count').textContent=deaths>0?`坠落 ${deaths} 次`:'';
+  showChapTrans(ch,lv.name,lv.sub);
+}
+
+function showChapTrans(n,name,sub){
+  const el=document.getElementById('chapter-transition');
+  el.querySelector('.ch-num').textContent=`CHAPTER ${n}`;
+  el.querySelector('.ch-name').textContent=name;
+  el.querySelector('.ch-sub').textContent=sub;
+  el.style.display='flex'; el.style.opacity='1'; state='transition';
+  setTimeout(()=>{
+    el.style.opacity='0';
+    setTimeout(()=>{
+      el.style.display='none'; state='playing';
+      if(n===1) setTimeout(()=>showDlg('内心','好冷...好暗...我必须爬出去...'),500);
+      else if(n===2) setTimeout(()=>showDlg('远古回声','那些符文...读懂它们，通路就会显现...'),500);
+      else if(n===3) setTimeout(()=>showDlg('？','......你跑不掉的......'),800);
+    },1000);
+  },2200);
+}
+
+function nextChap(){
+  const n=chapter+1;
+  if(levels[n]) startChap(n);
+  else { showDlg('星火','伤痕不会消失...但它们化为了照亮前路的光。'); setTimeout(()=>{state='title';document.getElementById('title-screen').style.display='flex';document.getElementById('title-screen').style.opacity='1';},6000); }
+}
+
+// ════════════════════════════════════
+//  Rendering
+// ════════════════════════════════════
+function drawBG(){
+  const lv=lvl(); if(!lv) return;
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,lv.bg1); g.addColorStop(1,lv.bg2);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // Parallax far
+  ctx.fillStyle=lv.bg2==='#0f1018'?'#0b0c12':lv.bg2==='#180a0a'?'#120808':'#081008';
+  for(let i=0;i<10;i++){
+    const mx=i*380-(cam.x*.08)%380, mh=180+Math.sin(i*1.8)*70;
+    ctx.beginPath(); ctx.moveTo(mx,H); ctx.lineTo(mx+80,H-mh); ctx.lineTo(mx+190,H-mh+35);
+    ctx.lineTo(mx+280,H-mh-15); ctx.lineTo(mx+380,H); ctx.fill();
+  }
+  // Parallax mid
+  ctx.fillStyle=lv.pc;
+  for(let i=0;i<14;i++){
+    const mx=i*280-(cam.x*.25)%280, mh=100+Math.sin(i*2.5)*40;
+    ctx.beginPath(); ctx.moveTo(mx,H); ctx.lineTo(mx+50,H-mh); ctx.lineTo(mx+140,H-mh+25);
+    ctx.lineTo(mx+230,H-mh-8); ctx.lineTo(mx+280,H); ctx.fill();
+  }
+  // Stars
+  ctx.fillStyle='rgba(180,180,210,0.25)';
+  for(let i=0;i<40;i++){
+    const sx=(i*151+40)%W, sy=(i*89+20)%(H*.45), ss=1+(i%3)*.4;
+    ctx.globalAlpha=(Math.sin(gTime*.025+i)*.25+.6)*.35;
+    ctx.fillRect(sx,sy,ss,ss);
+  }
+  ctx.globalAlpha=1;
+}
+
+function drawPlats(){
+  const lv=lvl(); if(!lv) return;
+  const cx=cam.x, cy=cam.y;
+  // Platforms
+  ctx.fillStyle=lv.pc; ctx.strokeStyle=lv.pb; ctx.lineWidth=1;
+  lv.platforms.forEach(p=>{
+    const sx=p.x-cx,sy=p.y-cy;
+    if(sx+p.w<-50||sx>W+50||sy+p.h<-50||sy>H+50) return;
+    ctx.fillRect(sx,sy,p.w,p.h); ctx.strokeRect(sx+.5,sy+.5,p.w-1,p.h-1);
+  });
+  // Breakables
+  if(lv.brk) lv.brk.forEach(b=>{
+    if(b.broke) return;
+    const sx=b.x-cx,sy=b.y-cy;
+    ctx.fillStyle='#2a1e10'; ctx.strokeStyle='#5a4020';
+    ctx.fillRect(sx,sy,b.w,b.h); ctx.strokeRect(sx,sy,b.w,b.h);
+    ctx.strokeStyle='#4a3018'; ctx.beginPath();
+    ctx.moveTo(sx+b.w*.3,sy); ctx.lineTo(sx+b.w*.5,sy+b.h);
+    ctx.moveTo(sx+b.w*.7,sy); ctx.lineTo(sx+b.w*.55,sy+b.h); ctx.stroke();
+  });
+  // Rune ghost platforms
+  if(lv.rp) lv.rp.forEach(rp=>{
+    const sx=rp.x-cx,sy=rp.y-cy;
+    if(rp.mat){
+      ctx.fillStyle='#302810'; ctx.strokeStyle='#c8a84b'; ctx.lineWidth=2;
+      ctx.fillRect(sx,sy,rp.w,rp.h); ctx.strokeRect(sx,sy,rp.w,rp.h);
+      ctx.globalAlpha=.12+Math.sin(gTime*.05)*.04; ctx.fillStyle='#c8a84b';
+      ctx.fillRect(sx-2,sy-2,rp.w+4,rp.h+4); ctx.globalAlpha=1;
+    } else {
+      ctx.globalAlpha=.18+Math.sin(gTime*.03+rp.x*.01)*.08;
+      ctx.fillStyle='#3a3050'; ctx.fillRect(sx,sy,rp.w,rp.h);
+      ctx.setLineDash([4,4]); ctx.strokeStyle='#5a5080'; ctx.lineWidth=1;
+      ctx.strokeRect(sx,sy,rp.w,rp.h); ctx.setLineDash([]);
+      // Word hint on ghost platform
+      ctx.globalAlpha=.4;
+      ctx.fillStyle='#8a80a0'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+      const wordForRp = Object.entries(WORDS).find(([k,v])=>v.pid===rp.pid);
+      if(wordForRp) ctx.fillText(wordForRp[0],sx+rp.w/2,sy+rp.h/2+3);
+      ctx.globalAlpha=1;
+    }
+  });
+  // Spikes
+  if(lv.hazards) lv.hazards.forEach(h=>{
+    const sx=h.x-cx,sy=h.y-cy;
+    ctx.fillStyle='#401010'; ctx.strokeStyle='#802020'; ctx.lineWidth=1;
+    const sw=14;
+    for(let i=0;i<Math.floor(h.w/sw);i++){
+      ctx.beginPath(); ctx.moveTo(sx+i*sw,sy+h.h);
+      ctx.lineTo(sx+i*sw+sw/2,sy); ctx.lineTo(sx+(i+1)*sw,sy+h.h); ctx.fill(); ctx.stroke();
+    }
+  });
+}
+
+function drawVines(){
+  const lv=lvl(); if(!lv||!lv.vines) return;
+  const cx=cam.x,cy=cam.y;
+  lv.vines.forEach(v=>{
+    const sx=v.x-cx,sy=v.y-cy;
+    const sway=Math.sin(gTime*.018+v.x)*.06;
+    ctx.strokeStyle='#2a4a20'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(sx,sy);
+    ctx.quadraticCurveTo(sx+Math.sin(sway)*v.len*.5,sy+v.len*.5,sx+Math.sin(sway)*v.len*.2,sy+v.len);
+    ctx.stroke();
+    ctx.fillStyle='#1a3a15';
+    for(let i=0;i<3;i++){
+      const ly=sy+v.len*(.3+i*.22),lx=sx+Math.sin(sway)*v.len*(.3+i*.15);
+      ctx.beginPath(); ctx.ellipse(lx+7,ly,5,2.5,.4,0,Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle='#3a2a15'; ctx.fillRect(sx-5,sy-4,10,7);
+  });
+}
+
+function drawWinds(){
+  const lv=lvl(); if(!lv||!lv.winds) return;
+  const cx=cam.x,cy=cam.y;
+  lv.winds.forEach(wz=>{
+    const sx=wz.x-cx,sy=wz.y-cy;
+    // Semi-transparent zone indicator
+    ctx.globalAlpha=.06+Math.sin(gTime*.04)*.02;
+    ctx.fillStyle='#2a5a2a';
+    ctx.fillRect(sx,sy,wz.w,wz.h);
+    // Wind lines
+    ctx.globalAlpha=.15;
+    ctx.strokeStyle='#3a7a3a'; ctx.lineWidth=1;
+    for(let i=0;i<5;i++){
+      const lx=sx+20+i*(wz.w-40)/4;
+      const ly=sy+wz.h-((gTime*2+i*40)%wz.h);
+      ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(lx,ly-20); ctx.stroke();
+      // Arrow
+      ctx.beginPath(); ctx.moveTo(lx-4,ly-16); ctx.lineTo(lx,ly-22); ctx.lineTo(lx+4,ly-16); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  });
+}
+
+function drawRunes(){
+  const lv=lvl(); if(!lv||!lv.runes) return;
+  const cx=cam.x,cy=cam.y;
+  lv.runes.forEach(r=>{
+    if(r.got) return;
+    const sx=r.x-cx,sy=r.y-cy;
+    const bob=Math.sin(gTime*.04+r.x*.08)*5;
+    // Glow
+    ctx.globalAlpha=.25+Math.sin(gTime*.055+r.y)*.08;
+    const gg=ctx.createRadialGradient(sx,sy+bob,2,sx,sy+bob,22);
+    gg.addColorStop(0,r.tp==='i'?'#c04040':'#a04080'); gg.addColorStop(1,'transparent');
+    ctx.fillStyle=gg; ctx.fillRect(sx-22,sy+bob-22,44,44); ctx.globalAlpha=1;
+    // Circle
+    ctx.fillStyle=r.tp==='i'?'#351010':'#251025';
+    ctx.strokeStyle=r.tp==='i'?'#c04040':'#a04080'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(sx,sy+bob,13,0,Math.PI*2); ctx.fill(); ctx.stroke();
+    // Text
+    ctx.fillStyle=r.tp==='i'?'#e06060':'#c060a0';
+    ctx.font='bold 10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(r.disp,sx,sy+bob);
+    // Particle
+    if(Math.random()<.08) emit(r.x+(Math.random()-.5)*16,r.y+bob,{
+      vx:(Math.random()-.5)*.4,vy:-Math.random()*.4,life:18,sz:1.2,
+      col:r.tp==='i'?'#c04040':'#a04080',grav:-0.015});
+  });
+}
+
+function drawExit(){
+  const lv=lvl(); if(!lv||!lv.exit) return;
+  const cx=cam.x,cy=cam.y;
+  const sx=lv.exit.x-cx,sy=lv.exit.y-cy;
+  const pulse=Math.sin(gTime*.045)*.2+.8;
+  const ec=chapter>=3?'#4caf7d':chapter===2?'#c04040':'#c8a84b';
+  // Glow
+  ctx.globalAlpha=.25*pulse;
+  const pg=ctx.createRadialGradient(sx+18,sy+28,4,sx+18,sy+28,55);
+  pg.addColorStop(0,ec); pg.addColorStop(1,'transparent');
+  ctx.fillStyle=pg; ctx.fillRect(sx-37,sy-27,110,110); ctx.globalAlpha=1;
+  // Door
+  ctx.strokeStyle=ec; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(sx,sy+56); ctx.lineTo(sx,sy+8);
+  ctx.arc(sx+18,sy+8,18,Math.PI,0); ctx.lineTo(sx+36,sy+56); ctx.stroke();
+  // Arrow
+  ctx.fillStyle=ec; ctx.globalAlpha=pulse;
+  ctx.beginPath(); ctx.moveTo(sx+12,sy+22); ctx.lineTo(sx+24,sy+22); ctx.lineTo(sx+18,sy+15); ctx.fill();
+  ctx.globalAlpha=1;
+}
+
+function drawP(){
+  const cx=cam.x,cy=cam.y;
+  const px=P.x-cx,py=P.y-cy;
+  // Trail
+  P.trail.forEach(t=>{
+    ctx.globalAlpha=t.l/12*.25;
+    ctx.fillStyle=chapter===1?'#334':chapter===2?'#602020':'#2a5a20';
+    ctx.beginPath(); ctx.arc(t.x-cx,t.y-cy,2.5,0,Math.PI*2); ctx.fill();
+  }); ctx.globalAlpha=1;
+  // Light
+  const lp=Math.sin(gTime*.055)*.08+.92, lr=P.lightR*lp;
+  ctx.globalAlpha=.12;
+  const lg=ctx.createRadialGradient(px+P.w/2,py+P.h/2,4,px+P.w/2,py+P.h/2,lr);
+  const lc=chapter===1?'#556677':chapter===2?'#c04040':chapter===3?'#4caf7d':'#c8a84b';
+  lg.addColorStop(0,lc); lg.addColorStop(1,'transparent');
+  ctx.fillStyle=lg; ctx.fillRect(px+P.w/2-lr,py+P.h/2-lr,lr*2,lr*2); ctx.globalAlpha=1;
+  // Inv flash
+  if(P.inv>0&&Math.floor(P.inv/3)%2) return;
+  const bc=chapter===1?'#4a5a6a':chapter===2?'#c04030':'#c8a84b';
+  const bb=chapter===1?'#6a7a8a':chapter===2?'#e06040':'#e8d08a';
+  // Body
+  const bH=P.crawl&&!P.slam?P.h*.55:P.h;
+  const bY=P.crawl&&!P.slam?py+P.h*.45:py;
+  ctx.fillStyle=bc;
+  ctx.beginPath(); ctx.ellipse(px+P.w/2,bY+bH*.65,P.w/2,bH*.35,0,0,Math.PI*2); ctx.fill();
+  // Head
+  ctx.fillStyle=bb;
+  const fH=P.crawl?5:9, hY=bY+bH*.18;
+  ctx.beginPath(); ctx.ellipse(px+P.w/2,hY,P.w*.32,fH,0,0,Math.PI*2); ctx.fill();
+  // Flame tip
+  const fl=Math.sin(gTime*.14)*2;
+  ctx.fillStyle='#fff'; ctx.globalAlpha=.65;
+  ctx.beginPath(); ctx.ellipse(px+P.w/2+fl,hY-fH*.5,2.5,4,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  // Eyes
+  if(!P.crawl){
+    ctx.fillStyle='#fff';
+    ctx.fillRect(px+P.w/2+P.face*3-1,hY,2,2);
+    ctx.fillRect(px+P.w/2+P.face*7-1,hY,2,2);
+  }
+  // Wall slide sparks
+  if(P.wallSlide&&gTime%4===0) emit(P.x+(P.face>0?P.w:0),P.y+P.h*.5,{vx:-P.face*1.5,vy:-Math.random(),life:10,sz:1.5,col:'#c04040'});
+  // Slam
+  if(P.slam){
+    ctx.globalAlpha=.45; ctx.fillStyle='#c04040';
+    ctx.beginPath(); ctx.arc(px+P.w/2,py+P.h+4,12,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  }
+}
+
+// ════════════════════════════════════
+//  Main Loop
+// ════════════════════════════════════
+function update(){
+  gTime++;
+  if(state==='playing'){
+    tickP(); tickShadow(); tickCam(); tickParts(); tickMovers();
+    const lv=lvl(); if(lv&&lv.tick) lv.tick();
+  } else { tickParts(); }
+  if(shakeT>0) shakeT--;
+  Object.keys(kp).forEach(k=>delete kp[k]);
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  let sx=0,sy=0;
+  if(shakeT>0){ sx=(Math.random()-.5)*shakeI*2; sy=(Math.random()-.5)*shakeI*2; }
+  ctx.save(); ctx.translate(sx,sy);
+  drawBG(); drawWinds(); drawPlats(); drawVines(); drawRunes(); drawExit();
+  drawParts(cam.x,cam.y); drawMovers(cam.x,cam.y); drawSH(cam.x,cam.y); drawP();
+  ctx.restore();
+  // Vignette
+  const vg=ctx.createRadialGradient(W/2,H/2,H*.28,W/2,H/2,H*.82);
+  vg.addColorStop(0,'transparent'); vg.addColorStop(1,'rgba(0,0,0,.55)');
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+}
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+// ─── Input ───
+document.addEventListener('keydown',e=>{
+  initAudio();
+  if(e.code==='Enter'){
+    if(state==='title'){
+      const el=document.getElementById('title-screen');
+      el.style.opacity='0'; setTimeout(()=>{el.style.display='none';startChap(1);},1000);
+    } else if(state==='dead'){
+      document.getElementById('death-screen').style.display='none';
+      resetP(checkpoint.x,checkpoint.y);
+      cam.x=P.x-W/2; cam.y=P.y-H/2;
+      state='playing';
+    }
+  }
+  if(e.code==='KeyE'&&state==='playing'&&dlgA) advDlg();
+});
+
+// ─── Start ───
+loop();
+</script>
+</body>
+</html>

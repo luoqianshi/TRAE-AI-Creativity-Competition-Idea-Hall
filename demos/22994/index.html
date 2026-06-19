@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>校园宿舍用电数据监测仪表盘</title>
+
+    <!--
+      配置说明：
+      - 使用 Tailwind CSS (Play CDN) 进行样式编排
+      - 使用自定义 CSS 变量定义浅蓝科技配色主题
+      - 所有脚本均为纯静态，无后端依赖
+    -->
+
+    <!-- Tailwind CSS Play CDN（内嵌使用，可在没有网络时降级为备用样式） -->
+    <script>
+      // 将 tailwind 的配置写在 window 上
+      tailwind = {
+        theme: {
+          extend: {
+          colors: {
+            brand: {
+              50:  '#f0f9ff',
+              100: '#e0f2fe',
+              200: '#bae6fd',
+              300: '#7dd3fc',
+              400: '#38bdf8',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+              800: '#075985',
+              900: '#0c4a6e',
+            },
+          },
+          fontFamily: {
+            sans: ['"PingFang SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+          },
+          boxShadow: {
+            soft: '0 8px 30px rgba(14,165,233,0.12)',
+          },
+        }
+      };
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 备用样式：当 Tailwind CDN 无法加载时使用的样式兜底 -->
+    <noscript>
+      <style>
+        body { background:#f1f5f9; font-family: "PingFang SC","Microsoft YaHei",sans-serif; }
+        .card { background:#fff; padding:16px; border-radius:12px; margin:12px 0; }
+        .title { font-size:18px; color:#0369a1; font-weight:600; }
+      </style>
+    </noscript>
+
+    <style>
+      /* ========================================================
+         自定义样式区 —— 用于补充 Tailwind 无法表达的细节动画/渐变效果
+         修改建议：如需更换主题色只需修改下方 CSS 变量即可
+         ======================================================== */
+      :root {
+        --brand-50:  #f0f9ff;
+        --brand-100: #e0f2fe;
+        --brand-300: #7dd3fc;
+        --brand-500: #0ea5e9;
+        --brand-600: #0284c7;
+        --brand-700: #0369a1;
+        --brand-900: #0c4a6e;
+        --warn: #f59e0b;
+        --danger: #ef4444;
+        --success:#10b981;
+      }
+
+      html { scroll-behavior: smooth; }
+      body {
+        background:
+          radial-gradient(1200px 600px at 10% -10%, #e0f2fe 0%, transparent 60%),
+          radial-gradient(1000px 500px at 110% 10%, #dbeafe 0%, transparent 55%),
+          #f0f9ff;
+        color: #0f172a;
+      }
+
+      /* 科技感网格背景（仅在关键卡片上叠加使用） */
+      .tech-grid {
+        background-image:
+          linear-gradient(rgba(14,165,233,0.08) 1px, transparent 1px,
+          linear-gradient(90deg, rgba(14,165,233,0.08) 1px, transparent 1px);
+        background-size: 28px 28px;
+      }
+
+      /* 滚动渐入动画：使用 IntersectionObserver 触发 */
+      .fade-item {
+        opacity: 0;
+        transform: translateY(18px);
+        transition: opacity 600ms cubic-bezier(.2,.7,.2,1), transform 600ms cubic-bezier(.2,.7,.2,1);
+        will-change: transform, opacity;
+      }
+      .fade-item.is-visible { opacity: 1; transform: none; }
+
+      /* 渐变文字 */
+      .text-gradient {
+        background: linear-gradient(135deg, #0ea5e9, #6366f1);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+
+      /* 折线图 SVG 通用样式（可被 JS 覆盖） */
+      .chart-line { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+      .chart-area { fill: url(#areaGradient); opacity:.55); }
+      .chart-dot { fill: #fff; stroke-width: 2; }
+      .chart-grid { stroke: rgba(14,165,233,0.12); stroke-dasharray: 4 4; }
+
+      /* 脉冲指示灯 */
+      .pulse-dot {
+        position: relative;
+      }
+      .pulse-dot::after {
+        content: '';
+        position: absolute;
+        inset: -6px;
+        border-radius: 9999px;
+        background: inherit;
+        opacity: .35;
+        animation: pulseRing 1.8s ease-out infinite;
+      }
+      @keyframes pulseRing {
+        0%   { transform: scale(.6); opacity:.55; }
+        100% { transform: scale(1.4); opacity: 0; }
+      }
+
+      /* 宿舍卡片 hover */
+      .dorm-card {
+        transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+        cursor: pointer;
+      }
+      .dorm-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 30px rgba(14,165,233,.18);
+        border-color: var(--brand-300);
+      }
+      .dorm-card.is-active {
+        border-color: var(--brand-500);
+        box-shadow: 0 12px 30px rgba(14,165,233,.22);
+      }
+
+      /* 图表 tooltip（由 JS 动态控制显示位置） */
+      .chart-tooltip {
+        position: absolute;
+        pointer-events: none;
+        background: rgba(12,74,110,.96);
+        color: #fff;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+        transform: translate(-50%, -120%);
+        white-space: nowrap;
+        opacity: 0;
+        transition: opacity .15s ease;
+        box-shadow: 0 6px 18px rgba(2,132,199,.25);
+      }
+      .chart-tooltip.is-visible { opacity: 1; }
+      .chart-tooltip::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        bottom: -5px;
+        transform: translateX(-50%) rotate(45deg);
+        width: 8px; height: 8px;
+        background: rgba(12,74,110,.96);
+      }
+
+      /* 自定义滚动条，用于横向宿舍列表 */
+      .thin-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
+      .thin-scroll::-webkit-scrollbar-thumb { background: rgba(14,165,233,.35); border-radius: 999px; }
+
+      /* 底部操作栏粘性定位 */
+      .sticky-bottom {
+        position: sticky;
+        bottom: 0;
+        backdrop-filter: saturate(180%) blur(12px);
+        background: rgba(255,255,255,.75);
+        border-top: 1px solid rgba(14,165,233,.18);
+      }
+
+      /* 响应式调整：小屏下图表字号缩小以避免横向滚动 */
+      @media (max-width: 640px) {
+        .stat-number { font-size: 28px; }
+      }
+    </style>
+</head>
+
+<body class="min-h-screen text-slate-800">
+
+<!-- =================================================================
+  顶部导航栏：品牌 Logo + 菜单 + 状态指示
+  ================================================================= -->
+<header class="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-brand-100">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 grid place-items-center text-white shadow-soft">
+                <!-- 闪电图标：表示能耗监测 -->
+                <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>
+                </svg>
+            </div>
+            <div class="leading-tight">
+                <div class="text-[15px] font-semibold text-brand-700">校园能耗监测中心</div>
+                <div class="text-[11px] text-slate-500 hidden sm:block">Campus Energy Monitoring Dashboard</div>
+            </div>
+        </div>
+
+        <nav class="hidden md:flex items-center gap-6 text-sm text-slate-600">
+            <a href="#overview" class="hover:text-brand-600">总览</a>
+            <a href="#chart" class="hover:text-brand-600">耗电趋势</a>
+            <a href="#dorms" class="hover:text-brand-600">宿舍管理</a>
+            <a href="#alert" class="hover:text-brand-600">异常警示</a>
+        </nav>
+
+        <div class="flex items-center gap-3">
+            <div class="hidden sm:flex items-center gap-2 text-xs text-slate-500">
+                <span class="pulse-dot inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span id="liveStatus">实时同步中</span>
+            </div>
+            <div class="text-right">
+                <div id="clock" class="text-sm font-medium text-slate-700">--:--:--</div>
+                <div id="dateTag" class="text-[11px] text-slate-500">----/--/--</div>
+            </div>
+        </div>
+    </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- ============================================================
+      页头标题 + 整体能耗卡片：欢迎语与核心KPI
+      ============================================================ -->
+    <section id="overview" class="fade-item">
+        <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-4">
+            <div>
+                <h1 class="text-2xl sm:text-3xl font-semibold text-gradient">高校宿舍用电数据监测</h1>
+                <p class="text-sm text-slate-500 mt-1">实时统计周期：近 7 天 · 统计范围：全校 6 栋宿舍楼 · 数据为静态演示数据</p>
+            </div>
+            <div class="flex gap-2 text-xs">
+                <button data-range="7"  class="range-btn active px-3 py-1.5 rounded-lg bg-brand-600 text-white shadow-soft">近 7 天</button>
+                <button data-range="14" class="range-btn px-3 py-1.5 rounded-lg bg-white text-slate-600 border border-brand-100 hover:border-brand-300">近 14 天</button>
+                <button data-range="30" class="range-btn px-3 py-1.5 rounded-lg bg-white text-slate-600 border border-brand-100 hover:border-brand-300">近 30 天</button>
+            </div>
+        </div>
+
+        <!-- KPI 四宫格 -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="fade-item rounded-2xl bg-white p-5 border border-brand-100/70 shadow-soft">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500">今日总耗电</span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-600">kWh</span>
+                </div>
+                <div class="mt-2 stat-number text-3xl font-bold text-brand-700" id="kpiToday">2,846.5</div>
+                <div class="mt-1 text-xs text-slate-500">较昨日 <span class="text-emerald-600 font-medium">↓ 4.2%</span></div>
+            </div>
+            <div class="fade-item rounded-2xl bg-white p-5 border border-brand-100/70 shadow-soft">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500">本月累计耗电</span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-600">kWh</span>
+                </div>
+                <div class="mt-2 stat-number text-3xl font-bold text-brand-700" id="kpiMonth">78,420</div>
+                <div class="mt-1 text-xs text-slate-500">环比上月 <span class="text-rose-500 font-medium">↑ 2.6%</span></div>
+            </div>
+            <div class="fade-item rounded-2xl bg-white p-5 border border-brand-100/70 shadow-soft">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500">平均每间宿舍</span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-600">kWh/间</span>
+                </div>
+                <div class="mt-2 stat-number text-3xl font-bold text-brand-700">6.82</div>
+                <div class="mt-1 text-xs text-slate-500">较同期 <span class="text-emerald-600 font-medium">↓ 1.1%</span></div>
+            </div>
+            <div class="fade-item rounded-2xl bg-white p-5 border border-brand-100/70 shadow-soft">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500">异常告警数量</span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600">条</span>
+                </div>
+                <div class="mt-2 stat-number text-3xl font-bold text-amber-600" id="kpiAlert">5</div>
+                <div class="mt-1 text-xs text-slate-500">较昨日 <span class="text-rose-500 font-medium">无变化</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+      分宿舍折线耗电图表：SVG 手绘折线图，支持 hover 显示数值
+      ============================================================ -->
+    <section id="chart" class="fade-item">
+        <div class="rounded-2xl bg-white p-5 sm:p-6 border border-brand-100/70 shadow-soft tech-grid">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-brand-700">宿舍耗电趋势</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">当前选中：<span id="currentDorm" class="text-brand-600 font-medium">全部楼栋平均</span> · 单位 kWh</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                    <span class="inline-flex items-center gap-1.5"><span class="w-3 h-[3px] rounded-full bg-brand-500"></span>每日耗电</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="w-3 h-[3px] rounded-full bg-indigo-400"></span>参考阈值(8 kWh)</span>
+                </div>
+            </div>
+
+            <!-- SVG 折线图容器：相对定位便于放置 tooltip -->
+            <div id="chartWrap" class="relative w-full">
+                <svg id="lineChart" viewBox="0 0 900 320" class="w-full h-[260px] sm:h-[320px]">
+                    <defs>
+                        <!-- 折线下方填充渐变 -->
+                        <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#38bdf8" stop-opacity=".45"/>
+                            <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                    <!-- 由 JS 动态注入：网格线 / Y轴刻度 / 折线 / 面积 / 点 / X轴标签 -->
+                </svg>
+                <div id="chartTooltip" class="chart-tooltip"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+      宿舍卡片区域：按楼栋分组，点击切换详情
+      ============================================================ -->
+    <section id="dorms" class="fade-item">
+        <div class="flex items-end justify-between mb-3">
+            <div>
+                <h2 class="text-lg font-semibold text-brand-700">楼栋 · 宿舍明细</h2>
+                <p class="text-xs text-slate-500 mt-0.5">点击任意卡片查看该宿舍的近 7 天耗电趋势与详情</p>
+            </div>
+            <div class="text-xs text-slate-400">共 <span id="dormCount">0</span> 间样本宿舍</div>
+        </div>
+
+        <!-- 宿舍卡片横向滚动 + 网格 -->
+        <div id="dormList" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+
+        <!-- 选中宿舍详情面板（点击卡片后显示） -->
+        <div id="dormDetail" class="hidden mt-5 rounded-2xl bg-white p-5 sm:p-6 border border-brand-100/70 shadow-soft">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-100 to-brand-200 grid place-items-center">
+                        <svg viewBox="0 0 24 24" class="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="font-semibold text-brand-700" id="detailName">-</div>
+                        <div class="text-xs text-slate-500" id="detailMeta">宿舍楼 · -</div>
+                    </div>
+                </div>
+                <button id="btnCloseDetail" class="self-end md:self-center text-xs px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600">关闭详情</button>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div class="rounded-xl bg-brand-50/70 p-3">
+                    <div class="text-xs text-slate-500">7日均值</div>
+                    <div class="text-lg font-semibold text-brand-700 mt-1" id="dAvg">-</div>
+                </div>
+                <div class="rounded-xl bg-brand-50/70 p-3">
+                    <div class="text-xs text-slate-500">峰值单日</div>
+                    <div class="text-lg font-semibold text-brand-700 mt-1" id="dMax">-</div>
+                </div>
+                <div class="rounded-xl bg-brand-50/70 p-3">
+                    <div class="text-xs text-slate-500">最低单日</div>
+                    <div class="text-lg font-semibold text-brand-700 mt-1" id="dMin">-</div>
+                </div>
+                <div class="rounded-xl bg-brand-50/70 p-3">
+                    <div class="text-xs text-slate-500">健康状态</div>
+                    <div class="text-lg font-semibold mt-1" id="dStatus">-</div>
+                </div>
+            </div>
+
+            <div class="mt-4 text-xs text-slate-500 leading-relaxed" id="dNote"></div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+      用电异常警示板块：告警列表 + 处理建议
+      ============================================================ -->
+    <section id="alert" class="fade-item">
+        <div class="flex items-end justify-between mb-3">
+            <div>
+                <h2 class="text-lg font-semibold text-brand-700">用电异常警示</h2>
+                <p class="text-xs text-slate-500 mt-0.5">基于阈值(8 kWh) / 突变量 / 周末异常等规则生成</p>
+            </div>
+            <div class="text-xs text-slate-400">共 <span id="alertCount">0</span> 条告警</div>
+        </div>
+
+        <div id="alertList" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+    </section>
+</main>
+
+<!-- ================================================================
+  底部操作栏：固定在视窗底部，提供快捷操作
+  ================================================================ -->
+<footer class="sticky-bottom mt-6">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div class="text-xs text-slate-500">© 校园能耗监测中心 · 本页为静态演示页面，数据仅用于可视化示例</div>
+        <div class="flex items-center gap-2 text-xs">
+            <button id="btnReset" class="px-3 py-1.5 rounded-lg bg-white text-slate-600 border border-brand-100 hover:border-brand-300">重置视图</button>
+            <button id="btnRefresh" class="px-3 py-1.5 rounded-lg bg-brand-600 text-white shadow-soft hover:bg-brand-700">刷新演示数据</button>
+            <a href="#overview" class="px-3 py-1.5 rounded-lg bg-white text-slate-600 border border-brand-100 hover:border-brand-300">返回顶部</a>
+        </div>
+    </div>
+</footer>
+
+<script>
+/* ==========================================================================
+ * 全局数据与工具函数
+ *   1) DORMS：每间宿舍的静态演示数据（名称、所属楼栋、近N日耗电序列、备注）
+ *   2) 随机生成工具：用于“刷新演示数据”
+ *   3) 告警生成规则：根据数据自动计算异常列表
+ * ========================================================================== */
+
+/** 生成一个宿舍的初始近 N 日耗电数据（默认近 30 日，足够支撑不同区间切换） */
+function makeSeries(base, volatility, days = 30) {
+  const arr = [];
+  for (let i = 0; i < days; i++) {
+    // 用一个简单的伪随机模式，保证数据"看起来合理"
+    const wave = Math.sin((i / days) * Math.PI * 2 + base * 0.07) * volatility;
+    const noise = (Math.random() - 0.5) * volatility * 0.9;
+    let val = base + wave + noise;
+    // 周末略高（假设 index 5,6 对应周末）
+    const wd = (i + 1) % 7;
+    if (wd === 5 || wd === 6) val += Math.random() * 1.2;
+    if (val < 1) val = 1 + Math.random() * 0.6;
+    arr.push(Number(val.toFixed(2)));
+  }
+  return arr;
+}
+
+/** 生成一组可复现的演示宿舍数据（按楼栋分组） */
+function buildDorms() {
+  const buildings = ['竹苑1号楼', '兰苑2号楼', '梅苑3号楼', '菊苑4号楼', '松苑5号楼', '枫苑6号楼'];
+  const rooms = ['101','103','202','305','412','508','601'];
+  const bases = [5.2, 6.4, 4.8, 7.3, 5.9, 6.8, 4.5, 8.2, 5.6, 6.1, 7.8, 5.0];
+  const notes = [
+    '作息规律，以照明与电脑使用为主。',
+    '空调使用较频繁，建议关注夏季曲线。',
+    '工作日耗电稳定，周末略有上升。',
+    '存在夜间高耗电情况，需核实是否有违规电器。',
+    '近期新装设备，数据表现正常。',
+    '历史平均略高于同楼层，建议定期节能宣传。',
+  ];
+
+  const list = [];
+  let idx = 0;
+  buildings.forEach((b, bi) => {
+    rooms.slice(0, 2).forEach((r, ri) => {
+      const base = bases[idx % bases.length];
+      list.push({
+        id: 'D' + (idx + 1),
+        name: `${b} · ${r}`,
+        building: b,
+        room: r,
+        series: makeSeries(base, 1.6),
+        note: notes[idx % notes.length],
+        // 健康状态：由 series 计算，高于 8 视为需关注
+      });
+      idx++;
+    });
+  });
+  return list;
+}
+
+/** 根据某宿舍的近 range 日数据计算统计值 */
+function statsOf(dorm, range) {
+  const slice = dorm.series.slice(-range);
+  const sum = slice.reduce((a, b) => a + b, 0);
+  const max = Math.max(...slice);
+  const min = Math.min(...slice);
+  const avg = sum / slice.length;
+  return { sum, max, min, avg, slice };
+}
+
+/** 计算"平均楼栋"数据：将所有宿舍每日均值作为整体趋势 */
+function aggregateSeries(dorms, range) {
+  const arr = [];
+  for (let i = 0; i < range; i++) {
+    let total = 0;
+    dorms.forEach(d => { total += d.series[d.series.length - range + i]; });
+    arr.push(Number((total / dorms.length).toFixed(2)));
+  }
+  return arr;
+}
+
+/** 生成告警列表：基于阈值/突变的简单规则 */
+function buildAlerts(dorms, range) {
+  const alerts = [];
+  dorms.forEach(d => {
+    const s = statsOf(d, range);
+    // 规则 1：有一天超过阈值
+    if (s.max > 8) {
+      alerts.push({
+        level: 'warn',
+        title: `${d.name} 单日耗电超过阈值`,
+        desc: `近 ${range} 日内最高 ${s.max.toFixed(2)} kWh，参考阈值 8 kWh。`,
+        action: '建议核查空调与大功率电器使用时间。'
+      });
+    }
+    // 规则 2：均值偏高
+    if (s.avg > 7) {
+      alerts.push({
+        level: 'info',
+        title: `${d.name} 平均耗电偏高`,
+        desc: `近 ${range} 日均值 ${s.avg.toFixed(2)} kWh。`,
+        action: '可进行节能提醒与宿舍走访。'
+      });
+    }
+    // 规则 3：峰值/最低值差异过大
+    if (s.max - s.min > 4) {
+      alerts.push({
+        level: 'danger',
+        title: `${d.name} 存在异常波动`,
+        desc: `峰值与谷值差异 ${(s.max - s.min).toFixed(2)} kWh，疑似短暂大功率设备使用。`,
+        action: '建议查看用电时段并提醒用电安全。'
+      });
+    }
+  });
+  // 只保留前若干条，避免页面过长
+  return alerts.slice(0, 6);
+}
+
+/* ==========================================================================
+ * SVG 折线图绘制
+ *   使用原生 SVG + 线性插值，避免任何外部图表库依赖
+ *   关键点：
+ *   - viewBox 900x320 固定坐标
+ *   - Y 轴动态计算最大值（取 10 或数据最大值再取整）
+ *   - 提供 hover 交互：鼠标在 SVG 上移动时高亮最近一个数据点
+ * ========================================================================== */
+
+function renderChart(series, labels) {
+  const svg = document.getElementById('lineChart');
+  const width = 900, height = 320;
+  const padLeft = 44, padRight = 16, padTop = 20, padBottom = 36;
+  const innerW = width - padLeft - padRight;
+  const innerH = height - padTop - padBottom;
+
+  // 清理旧内容（保留 <defs>）
+  while (svg.childElementCount > 1) svg.removeChild(svg.lastChild);
+
+  const max = Math.max(10, Math.ceil(Math.max(...series)));
+  const stepX = innerW / (series.length - 1 || 1);
+  const yOf = v => padTop + innerH - (v / max) * innerH;
+  const xOf = i => padLeft + i * stepX;
+
+  // 1) 网格线 + Y 轴刻度（4 条）
+  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  for (let i = 0; i <= 4; i++) {
+    const y = padTop + (innerH * i) / 4;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', padLeft); line.setAttribute('x2', width - padRight);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('class', 'chart-grid');
+    group.appendChild(line);
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', padLeft - 8);
+    text.setAttribute('y', y + 4);
+    text.setAttribute('text-anchor', 'end');
+    text.setAttribute('font-size', '11');
+    text.setAttribute('fill', '#64748b');
+    text.textContent = Math.round(max - (max * i) / 4);
+    group.appendChild(text);
+  }
+
+  // 2) 阈值参考线（y = 8）
+  const refY = yOf(8);
+  const refLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  refLine.setAttribute('x1', padLeft); refLine.setAttribute('x2', width - padRight);
+  refLine.setAttribute('y1', refY); refLine.setAttribute('y2', refY);
+  refLine.setAttribute('stroke', '#818cf8'); refLine.setAttribute('stroke-dasharray', '4 4');
+  refLine.setAttribute('stroke-width', '1.4');
+  group.appendChild(refLine);
+
+  // 3) 面积填充
+  const areaD =
+    'M' + xOf(0) + ',' + yOf(series[0]) +
+    series.slice(1).map((v, i) => ' L' + xOf(i + 1) + ',' + yOf(v)).join('') +
+    ' L' + xOf(series.length - 1) + ',' + (padTop + innerH) +
+    ' L' + xOf(0) + ',' + (padTop + innerH) + ' Z';
+  const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  area.setAttribute('d', areaD);
+  area.setAttribute('class', 'chart-area');
+  group.appendChild(area);
+
+  // 4) 折线
+  const lineD = 'M' + xOf(0) + ',' + yOf(series[0]) +
+    series.slice(1).map((v, i) => ' L' + xOf(i + 1) + ',' + yOf(v)).join('');
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  line.setAttribute('d', lineD);
+  line.setAttribute('class', 'chart-line');
+  line.setAttribute('stroke', '#0ea5e9');
+  // 添加描边动画（数据"生长"效果）
+  const totalLen = line.getTotalLength ? line.getTotalLength() : 2000;
+  line.setAttribute('stroke-dasharray', totalLen);
+  line.setAttribute('stroke-dashoffset', totalLen);
+  group.appendChild(line);
+
+  // 5) 数据点（可被 hover 高亮）
+  const points = [];
+  series.forEach((v, i) => {
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('cx', xOf(i));
+    c.setAttribute('cy', yOf(v));
+    c.setAttribute('r', 4);
+    c.setAttribute('class', 'chart-dot');
+    c.setAttribute('stroke', '#0ea5e9');
+    c.setAttribute('data-idx', i);
+    group.appendChild(c);
+    points.push(c);
+  });
+
+  // 6) X 轴标签（根据长度适当跳过，避免拥挤）
+  const skip = Math.ceil(series.length / 8);
+  series.forEach((_, i) => {
+    if (i % skip !== 0 && i !== series.length - 1) return;
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('x', xOf(i));
+    t.setAttribute('y', padTop + innerH + 20);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('font-size', '11');
+    t.setAttribute('fill', '#64748b');
+    t.textContent = labels[i] || '';
+    group.appendChild(t);
+  });
+
+  svg.appendChild(group);
+
+  // 折线"生长"动画
+  requestAnimationFrame(() => {
+    line.style.transition = 'stroke-dashoffset 900ms cubic-bezier(.2,.7,.2,1)';
+    line.setAttribute('stroke-dashoffset', 0);
+  });
+
+  // 7) hover 交互：在 SVG 上移动时显示最近的数据点
+  const tooltip = document.getElementById('chartTooltip');
+  const wrap = document.getElementById('chartWrap');
+  svg.addEventListener('mousemove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const scaleX = rect.width / width;
+    const localX = (e.clientX - rect.left) / scaleX;
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < series.length; i++) {
+      const d = Math.abs(localX - xOf(i));
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    points.forEach(p => p.setAttribute('r', p.getAttribute('data-idx') == bestIdx ? 6 : 4));
+    tooltip.classList.add('is-visible');
+    tooltip.textContent = `${labels[bestIdx]}：${series[bestIdx].toFixed(2)} kWh`;
+    // 相对 wrap 定位：以比例换算
+    const ratioX = xOf(bestIdx) / width;
+    const ratioY = yOf(series[bestIdx]) / height;
+    tooltip.style.left = (ratioX * 100) + '%';
+    tooltip.style.top = (ratioY * 100) + '%';
+  });
+  svg.addEventListener('mouseleave', () => {
+    tooltip.classList.remove('is-visible');
+    points.forEach(p => p.setAttribute('r', 4));
+  });
+
+  // 初始点做一个小的脉冲：直接用 CSS 也可，但这里保持简单
+}
+
+/* ==========================================================================
+ * 页面级渲染：宿舍卡片、告警、详情面板
+ * ========================================================================== */
+
+let STATE = {
+  dorms: [],
+  range: 7,          // 当前展示的时间范围
+  activeId: null,    // 当前选中宿舍
+  showAggregate: true, // 默认展示全部楼栋的平均
+};
+
+/** 日期标签：取最近 range 天 */
+function buildLabels(range) {
+  const out = [];
+  const now = new Date();
+  for (let i = range - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 86400000);
+    out.push((d.getMonth() + 1) + '/' + d.getDate());
+  }
+  return out;
+}
+
+function renderDormCards() {
+  const list = document.getElementById('dormList');
+  list.innerHTML = '';
+  STATE.dorms.forEach(d => {
+    const s = statsOf(d, STATE.range);
+    const over = s.avg > 7 ? 'warn' : 'ok';
+    const card = document.createElement('div');
+    card.className = 'dorm-card fade-item rounded-2xl bg-white p-4 border border-slate-100';
+    card.dataset.id = d.id;
+    card.innerHTML = `
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-sm font-semibold text-brand-700">${d.name}</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">近 ${STATE.range} 日平均</div>
+        </div>
+        <span class="text-[10px] px-2 py-0.5 rounded-full ${over==='warn' ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600'}">
+          ${over==='warn' ? '偏高' : '正常'}
+        </span>
+      </div>
+      <div class="mt-2 text-2xl font-bold text-brand-700">${s.avg.toFixed(2)}<span class="text-xs text-slate-400 ml-1">kWh</span></div>
+      <div class="mt-2 text-[11px] text-slate-500">峰值 ${s.max.toFixed(2)} · 谷值 ${s.min.toFixed(2)}</div>
+      <div class="mt-3 flex items-end gap-[2px] h-10">
+        ${s.slice.map(v => {
+          const h = Math.max(4, (v / Math.max(...s.slice)) * 36);
+          const color = v > 8 ? '#f59e0b' : '#0ea5e9';
+          return `<div title="${v.toFixed(2)} kWh" style="height:${h}px;background:${color};opacity:.75;border-radius:2px;flex:1;"></div>`;
+        }).join('')}
+      </div>
+    `;
+    card.addEventListener('click', () => selectDorm(d.id));
+    list.appendChild(card);
+  });
+  document.getElementById('dormCount').textContent = STATE.dorms.length;
+}
+
+function selectDorm(id) {
+  STATE.activeId = id;
+  STATE.showAggregate = false;
+  const dorm = STATE.dorms.find(d => d.id === id);
+
+  // 高亮卡片
+  document.querySelectorAll('.dorm-card').forEach(c => {
+    c.classList.toggle('is-active', c.dataset.id === id);
+  });
+
+  // 更新图表为该宿舍数据
+  const s = statsOf(dorm, STATE.range);
+  renderChart(s.slice, buildLabels(STATE.range));
+  document.getElementById('currentDorm').textContent = dorm.name;
+
+  // 详情面板
+  const panel = document.getElementById('dormDetail');
+  panel.classList.remove('hidden');
+  document.getElementById('detailName').textContent = dorm.name;
+  document.getElementById('detailMeta').textContent = dorm.building + ' · 房间号 ' + dorm.room;
+  document.getElementById('dAvg').textContent = s.avg.toFixed(2) + ' kWh';
+  document.getElementById('dMax').textContent = s.max.toFixed(2) + ' kWh';
+  document.getElementById('dMin').textContent = s.min.toFixed(2) + ' kWh';
+  const status = document.getElementById('dStatus');
+  if (s.max > 8) { status.textContent = '需关注'; status.className = 'text-lg font-semibold mt-1 text-amber-600'; }
+  else if (s.avg > 7) { status.textContent = '偏高'; status.className = 'text-lg font-semibold mt-1 text-orange-500'; }
+  else { status.textContent = '正常'; status.className = 'text-lg font-semibold mt-1 text-emerald-600'; }
+  document.getElementById('dNote').textContent = dorm.note;
+
+  // 平滑滚动至详情
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderAlerts() {
+  const alerts = buildAlerts(STATE.dorms, STATE.range);
+  const wrap = document.getElementById('alertList');
+  wrap.innerHTML = '';
+  if (!alerts.length) {
+    wrap.innerHTML = `<div class="col-span-full rounded-xl bg-white p-4 border border-brand-100/70 text-sm text-slate-500 text-center">暂无异常告警</div>`;
+  } else {
+    alerts.forEach(a => {
+      const colorMap = {
+        warn:   { bar:'#f59e0b', text:'text-amber-600',  bg:'bg-amber-50',   tag:'待处理' },
+        danger: { bar:'#ef4444', text:'text-rose-600',   bg:'bg-rose-50',    tag:'高风险' },
+        info:   { bar:'#0ea5e9', text:'text-sky-600',    bg:'bg-sky-50',     tag:'提示' },
+      }[a.level];
+      const div = document.createElement('div');
+      div.className = 'fade-item rounded-xl bg-white p-4 border border-slate-100 flex gap-3';
+      div.innerHTML = `
+        <div style="width:4px;background:${colorMap.bar};border-radius:999px;"></div>
+        <div class="flex-1">
+          <div class="flex items-center justify-between gap-3">
+            <div class="text-sm font-semibold text-slate-800">${a.title}</div>
+            <span class="text-[10px] px-2 py-0.5 rounded-full ${colorMap.bg} ${colorMap.text}">${colorMap.tag}</span>
+          </div>
+          <div class="text-xs text-slate-500 mt-1.5 leading-relaxed">${a.desc}</div>
+          <div class="text-xs text-slate-600 mt-2">🔧 ${a.action}</div>
+        </div>
+      `;
+      wrap.appendChild(div);
+    });
+  }
+  document.getElementById('alertCount').textContent = alerts.length;
+  document.getElementById('kpiAlert').textContent = alerts.length;
+}
+
+function renderAggregate() {
+  // 初始或点击"重置"时使用：展示整体平均趋势
+  STATE.showAggregate = true;
+  STATE.activeId = null;
+  const series = aggregateSeries(STATE.dorms, STATE.range);
+  renderChart(series, buildLabels(STATE.range));
+  document.getElementById('currentDorm').textContent = '全部楼栋平均';
+
+  // 更新顶部 KPI（根据 range 动态变化）
+  const day = series[series.length - 1];
+  const month = series.reduce((a,b)=>a+b,0) * (30 / series.length);
+  document.getElementById('kpiToday').textContent = day.toFixed(1).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  document.getElementById('kpiMonth').textContent = Math.round(month).toLocaleString();
+  // 清空宿舍卡片高亮
+  document.querySelectorAll('.dorm-card').forEach(c => c.classList.remove('is-active'));
+  document.getElementById('dormDetail').classList.add('hidden');
+}
+
+/* ==========================================================================
+ * 滚动渐入动画
+ * ========================================================================== */
+function initFadeIn() {
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('is-visible');
+        io.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.08 });
+  document.querySelectorAll('.fade-item').forEach(el => io.observe(el));
+}
+
+/* ==========================================================================
+ * 时钟与按钮交互
+ * ========================================================================== */
+function initClock() {
+  const tick = () => {
+    const d = new Date();
+    const pad = n => (n < 10 ? '0' + n : n);
+    document.getElementById('clock').textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    document.getElementById('dateTag').textContent = `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())}`;
+  };
+  tick(); setInterval(tick, 1000);
+}
+
+function initRangeButtons() {
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.range-btn').forEach(b => {
+        b.classList.remove('active','bg-brand-600','text-white');
+        b.classList.add('bg-white','text-slate-600','border','border-brand-100');
+      });
+      btn.classList.add('active','bg-brand-600','text-white');
+      btn.classList.remove('bg-white','text-slate-600','border','border-brand-100');
+
+      STATE.range = Number(btn.dataset.range);
+      renderDormCards();
+      renderAlerts();
+      if (STATE.activeId) {
+        const dorm = STATE.dorms.find(d => d.id === STATE.activeId);
+        const s = statsOf(dorm, STATE.range);
+        renderChart(s.slice, buildLabels(STATE.range));
+      } else {
+        renderAggregate();
+      }
+    });
+  });
+}
+
+function initActions() {
+  document.getElementById('btnCloseDetail').addEventListener('click', () => {
+    document.getElementById('dormDetail').classList.add('hidden');
+    STATE.activeId = null;
+    document.querySelectorAll('.dorm-card').forEach(c => c.classList.remove('is-active'));
+    renderAggregate();
+  });
+  document.getElementById('btnRefresh').addEventListener('click', () => {
+    STATE.dorms = buildDorms();
+    renderDormCards();
+    renderAlerts();
+    renderAggregate();
+    initFadeIn();
+  });
+  document.getElementById('btnReset').addEventListener('click', () => {
+    // 重置为默认 7 天 + 整体趋势
+    document.querySelector('.range-btn[data-range="7"]').click();
+  });
+}
+
+/* ==========================================================================
+ * 启动：DOMContentLoaded 后初始化所有组件
+ * ========================================================================== */
+function boot() {
+  STATE.dorms = buildDorms();
+  renderDormCards();
+  renderAlerts();
+  renderAggregate();
+  initFadeIn();
+  initClock();
+  initRangeButtons();
+  initActions();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+</script>
+
+</body>
+</html>

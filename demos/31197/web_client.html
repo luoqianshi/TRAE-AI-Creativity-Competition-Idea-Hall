@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCXRF数据分析系统</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 26px;
+        }
+        .header-panel {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f8f8;
+            border-radius: 8px;
+        }
+        .header-panel label {
+            font-weight: bold;
+            color: #333;
+        }
+        .header-panel input[type="text"],
+        .header-panel input[type="date"] {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .header-panel input[type="date"] {
+            min-width: 170px;
+        }
+        button {
+            padding: 8px 18px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        button.primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+        button.primary:hover {
+            background-color: #45a049;
+        }
+        button.export {
+            background-color: #2196F3;
+            color: white;
+        }
+        button.export:hover {
+            background-color: #1976D2;
+        }
+        button:disabled {
+            background-color: #cccccc !important;
+            color: #666666 !important;
+            cursor: not-allowed !important;
+            opacity: 0.6;
+        }
+        .status {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .status-connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status-disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        .date-range {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 10px 8px;
+            text-align: center;
+            border: 1px solid #ddd;
+            font-size: 13px;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        .data-count {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            background-color: #e8f5e9;
+            border-radius: 5px;
+            font-weight: bold;
+            color: #2e7d32;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        .no-data {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PCXRF数据分析系统 - 当日数据明细</h1>
+        
+        <div class="header-panel">
+            <label>服务器:</label>
+            <input type="text" id="serverIp" value="192.168.101.91" placeholder="服务器IP (开发用localhost,生产用192.168.101.91)">
+            <input type="text" id="serverPort" value="8651" placeholder="端口" style="width: 80px;">
+            <button id="connectBtn" class="primary">连接服务器</button>
+            <button id="localBtn" class="export">本地连接</button>
+            
+            <div class="date-range">
+                <label>日期:</label>
+                <input type="date" id="queryDate" value="">
+                <button id="queryBtn" class="primary" disabled>查询数据</button>
+                <button id="getAllBtn" class="primary" disabled>获取全部数据</button>
+            </div>
+            
+            <button id="exportBtn" class="export" disabled>导出Excel</button>
+            <span id="connectionStatus" class="status status-disconnected">未连接</span>
+        </div>
+        
+        <div class="data-count" id="dataCount">数据统计: 共 0 条记录</div>
+        
+        <div id="dataContainer">
+            <div class="loading">正在连接服务器...</div>
+        </div>
+    </div>
+    
+    <script>
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        document.getElementById('queryDate').value = todayStr;
+        
+        let serverUrl = 'http://192.168.101.91:8651/api';
+        let allData = [];
+        let allComponents = {};
+        let isConnected = false;
+        
+        function updateServerUrl() {
+            const ip = document.getElementById('serverIp').value;
+            const port = document.getElementById('serverPort').value;
+            serverUrl = `http://${ip}:${port}/api`;
+        }
+        
+        function setConnected(connected) {
+            isConnected = connected;
+            const buttons = ['queryBtn', 'getAllBtn', 'exportBtn'];
+            buttons.forEach(id => {
+                document.getElementById(id).disabled = !connected;
+            });
+        }
+        
+        async function connectServer() {
+            updateServerUrl();
+            document.getElementById('connectionStatus').className = 'status status-disconnected';
+            document.getElementById('connectionStatus').textContent = '连接中...';
+            document.getElementById('dataContainer').innerHTML = '<div class="loading">正在连接服务器...</div>';
+            setConnected(false);
+            
+            try {
+                // 只验证连接是否成功，不加载任何数据
+                const response = await fetch(`${serverUrl}/data`, { timeout: 5000 });
+                if (!response.ok) throw new Error('连接失败');
+                
+                document.getElementById('connectionStatus').className = 'status status-connected';
+                document.getElementById('connectionStatus').textContent = '已连接';
+                setConnected(true);
+                
+            } catch (error) {
+                document.getElementById('dataContainer').innerHTML = `<div class="no-data">连接失败: ${error.message}</div>`;
+                document.getElementById('connectionStatus').className = 'status status-disconnected';
+                document.getElementById('connectionStatus').textContent = '未连接';
+                setConnected(false);
+            }
+        }
+        
+        async function queryData() {
+            const queryDate = document.getElementById('queryDate').value;
+            if (!queryDate) {
+                alert('请选择查询日期');
+                return;
+            }
+            
+            updateServerUrl();
+            document.getElementById('connectionStatus').className = 'status status-disconnected';
+            document.getElementById('connectionStatus').textContent = '查询中...';
+            document.getElementById('dataContainer').innerHTML = '<div class="loading">正在查询数据...</div>';
+            
+            try {
+                const response = await fetch(`${serverUrl}/data/by_date?start_date=${queryDate}&end_date=${queryDate}`);
+                if (!response.ok) throw new Error('查询失败');
+                allData = await response.json();
+                
+                if (allData.length === 0) {
+                    document.getElementById('dataContainer').innerHTML = '<div class="no-data">该日期暂无数据</div>';
+                    document.getElementById('dataCount').textContent = `数据统计: 共 0 条记录`;
+                    document.getElementById('connectionStatus').className = 'status status-connected';
+                    document.getElementById('connectionStatus').textContent = '已连接';
+                    return;
+                }
+                
+                await loadAllComponents();
+                displayData();
+                
+                document.getElementById('connectionStatus').className = 'status status-connected';
+                document.getElementById('connectionStatus').textContent = '已连接';
+            } catch (error) {
+                alert('查询数据失败: ' + error.message);
+                document.getElementById('connectionStatus').className = 'status status-disconnected';
+                document.getElementById('connectionStatus').textContent = '未连接';
+            }
+        }
+        
+        async function loadAllComponents() {
+            allComponents = {};
+            let totalLoaded = 0;
+            
+            console.log(`开始加载成分数据，主数据数量: ${allData.length}`);
+            console.log(`主数据列表:`, allData.map(item => `ID:${item.id}, 名称:${item.sample_name}`).join(', '));
+            
+            for (const item of allData) {
+                try {
+                    const response = await fetch(`${serverUrl}/components/${item.id}`);
+                    const components = await response.json();
+                    
+                    console.log(`获取ID ${item.id} (${item.sample_name}) 的成分数据 - 原始响应:`, components);
+                    
+                    if (Array.isArray(components)) {
+                        const validComponents = components.filter(c => c.comp_name && c.conc !== undefined);
+                        allComponents[item.id] = validComponents;
+                        totalLoaded += validComponents.length;
+                        console.log(`  → 有效成分: ${validComponents.length} 条`);
+                    } else {
+                        allComponents[item.id] = [];
+                        console.log(`  → 成分数据不是数组，设为空数组`);
+                    }
+                } catch (error) {
+                    console.error(`获取ID ${item.id} 的成分数据失败:`, error);
+                    allComponents[item.id] = [];
+                }
+            }
+            
+            console.log(`加载完成 - 主数据: ${Object.keys(allComponents).length} 条, 成分数据: ${totalLoaded} 条`);
+        }
+        
+        function displayData() {
+            const container = document.getElementById('dataContainer');
+            
+            // 基础固定元素列表（按用户要求的顺序）
+            const baseElements = ['烧损', 'SiO2', 'Al2O3', 'CaO', 'MgO', 'Fe2O3', 'K2O', 'Na2O', 'TiO2', 'Cr2O3', 'ZrO2', 'P2O5'];
+            const specialElements = ['SUM']; // 特殊元素
+            
+            // 收集所有数据中出现的独特元素
+            const allUniqueElements = new Set();
+            allData.forEach(item => {
+                const components = allComponents[item.id] || [];
+                components.forEach(comp => {
+                    if (comp.comp_name) {
+                        const cleanName = comp.comp_name.trim();
+                        // 跳过空名称和已在基础列表或特殊列表中的元素（包括ZnO和ZrO2）
+                        if (cleanName && !baseElements.includes(cleanName) && !specialElements.includes(cleanName) && cleanName !== 'ZnO') {
+                            allUniqueElements.add(cleanName);
+                        }
+                    }
+                });
+            });
+            
+            // 将新元素转换为数组并排序
+            const newElements = Array.from(allUniqueElements).sort();
+            
+            // 最终元素列表：基础元素 + SUM + 新元素（新元素显示在SUM后面）
+            const elementList = [...baseElements, ...specialElements, ...newElements];
+            
+            console.log('动态生成的元素列表:', elementList);
+            
+            // 按日期倒序排序：最早的数据显示在最上面，最新的数据显示在最下面
+            const sortedData = [...allData].sort((a, b) => {
+                const dateA = a.meas_date || '';
+                const dateB = b.meas_date || '';
+                return dateA.localeCompare(dateB); // 升序排列，最早的在前面
+            });
+            
+            let html = '<table><thead><tr>';
+            html += '<th>日期</th><th>名称</th><th>组别</th>';
+            elementList.forEach(elem => {
+                html += `<th>${elem}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+            
+            sortedData.forEach(item => {
+                const components = allComponents[item.id] || [];
+                const compMap = {};
+                components.forEach(comp => {
+                    if (comp.comp_name && comp.conc) {
+                        // 去除前后空格，确保字段名匹配
+                        const cleanName = comp.comp_name.trim();
+                        compMap[cleanName] = comp.conc;
+                    }
+                });
+                
+                // 处理烧损（可能存储为Loss或LOI）
+                compMap['烧损'] = compMap['烧损'] || compMap['Loss'] || compMap['LOI'] || compMap['烧失量'] || '';
+                
+                // 只使用XML中采集到的SUM值，不进行计算
+                // 如果XML中没有SUM值，则保持为空（不显示计算值）
+                if (!compMap['SUM']) {
+                    compMap['SUM'] = '';
+                }
+                
+                const date = item.meas_date || '';
+                const name = item.sample_name || '-';
+                const group = item.group_name || '-';
+                
+                html += `<tr>`;
+                html += `<td>${date}</td>`;
+                html += `<td>${name}</td>`;
+                html += `<td>${group}</td>`;
+                elementList.forEach(elem => {
+                    html += `<td>${compMap[elem] || '-'}</td>`;
+                });
+                html += `</tr>`;
+            });
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+            document.getElementById('dataCount').textContent = `数据统计: 共 ${allData.length} 条记录`;
+        }
+        
+        async function exportToCSV() {
+            if (allData.length === 0) {
+                alert('没有可导出的数据');
+                return;
+            }
+            
+            // 基础固定元素列表（按用户要求的顺序）
+            const baseElements = ['烧损', 'SiO2', 'Al2O3', 'CaO', 'MgO', 'Fe2O3', 'K2O', 'Na2O', 'TiO2', 'Cr2O3', 'ZrO2', 'P2O5'];
+            const specialElements = ['SUM']; // 特殊元素
+            
+            // 收集所有数据中出现的独特元素
+            const allUniqueElements = new Set();
+            allData.forEach(item => {
+                const components = allComponents[item.id] || [];
+                components.forEach(comp => {
+                    if (comp.comp_name) {
+                        const cleanName = comp.comp_name.trim();
+                        if (cleanName && !baseElements.includes(cleanName) && !specialElements.includes(cleanName) && cleanName !== 'ZnO') {
+                            allUniqueElements.add(cleanName);
+                        }
+                    }
+                });
+            });
+            
+            // 将新元素转换为数组并排序
+            const newElements = Array.from(allUniqueElements).sort();
+            
+            // 最终元素列表：基础元素 + SUM + 新元素（新元素显示在SUM后面）
+            const elementList = [...baseElements, ...specialElements, ...newElements];
+            
+            let htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+    table { border-collapse: collapse; width: 100%; font-family: 宋体; font-size: 9pt; }
+    th, td { border: 1px solid #000; padding: 5px 8px; text-align: center; font-family: 宋体; font-size: 9pt; }
+    th { background-color: #4CAF50; color: white; font-weight: bold; }
+</style>
+</head>
+<body>
+<table>
+<thead>
+<tr><th>日期</th><th>名称</th><th>组别</th>`;
+            
+            elementList.forEach(elem => {
+                htmlContent += `<th>${elem}</th>`;
+            });
+            htmlContent += `</tr>
+</thead>
+<tbody>`;
+            
+            allData.forEach(item => {
+                const components = allComponents[item.id] || [];
+                const compMap = {};
+                components.forEach(comp => {
+                    if (comp.comp_name && comp.conc) {
+                        const cleanName = comp.comp_name.trim();
+                        compMap[cleanName] = comp.conc;
+                    }
+                });
+                
+                compMap['烧损'] = compMap['烧损'] || compMap['Loss'] || compMap['LOI'] || compMap['烧失量'] || '';
+                
+                if (!compMap['SUM']) {
+                    compMap['SUM'] = '';
+                }
+                
+                const date = item.meas_date || '';
+                const name = item.sample_name || '';
+                const group = item.group_name || '';
+                
+                htmlContent += `<tr><td>${date}</td><td>${name}</td><td>${group}</td>`;
+                elementList.forEach(elem => {
+                    htmlContent += `<td>${compMap[elem] || ''}</td>`;
+                });
+                htmlContent += `</tr>`;
+            });
+            
+            htmlContent += `</tbody>
+</table>
+</body>
+</html>`;
+            
+            const blob = new Blob([htmlContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `PCXRF数据明细_${document.getElementById('queryDate').value}.xls`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        async function getAllData() {
+            updateServerUrl();
+            document.getElementById('connectionStatus').className = 'status status-disconnected';
+            document.getElementById('connectionStatus').textContent = '查询中...';
+            document.getElementById('dataContainer').innerHTML = '<div class="loading">正在获取全部数据...</div>';
+            
+            try {
+                const response = await fetch(`${serverUrl}/data`);
+                if (!response.ok) throw new Error('查询失败');
+                allData = await response.json();
+                
+                if (allData.length === 0) {
+                    document.getElementById('dataContainer').innerHTML = '<div class="no-data">数据库中暂无数据</div>';
+                    document.getElementById('dataCount').textContent = `数据统计: 共 0 条记录`;
+                    document.getElementById('connectionStatus').className = 'status status-connected';
+                    document.getElementById('connectionStatus').textContent = '已连接';
+                    return;
+                }
+                
+                await loadAllComponents();
+                displayData();
+                
+                document.getElementById('connectionStatus').className = 'status status-connected';
+                document.getElementById('connectionStatus').textContent = '已连接';
+            } catch (error) {
+                alert('获取数据失败: ' + error.message);
+                document.getElementById('connectionStatus').className = 'status status-disconnected';
+                document.getElementById('connectionStatus').textContent = '未连接';
+            }
+        }
+        
+        function connectLocalhost() {
+            document.getElementById('serverIp').value = '192.168.101.91';
+            connectServer();
+        }
+        
+        document.getElementById('connectBtn').addEventListener('click', connectServer);
+        document.getElementById('localBtn').addEventListener('click', connectLocalhost);
+        document.getElementById('queryBtn').addEventListener('click', queryData);
+        document.getElementById('getAllBtn').addEventListener('click', getAllData);
+        document.getElementById('exportBtn').addEventListener('click', exportToCSV);
+        
+        // 页面加载完成后自动连接并查询当日数据
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('serverIp').value = '192.168.101.91';
+            // 先连接服务器，然后查询当日数据
+            connectServer().then(() => {
+                // 连接成功后自动查询当日数据
+                if (isConnected) {
+                    queryData();
+                }
+            }).catch(() => {
+                console.log('连接失败，保持未连接状态');
+            });
+        });
+    </script>
+</body>
+</html>

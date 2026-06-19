@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>3D 集市 · 热闹街市</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#111; overflow:hidden; font-family:"PingFang SC","Microsoft YaHei",sans-serif; color:#fff; }
+  #app { position:fixed; inset:0; }
+  #hud {
+    position:fixed; top:12px; left:12px; z-index:10;
+    background:rgba(0,0,0,0.45); padding:10px 14px; border-radius:10px;
+    font-size:14px; line-height:1.6; backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,0.1);
+    max-width: 320px;
+  }
+  #hud b { color:#ffd27d; }
+  #title {
+    position:fixed; top:12px; right:12px; z-index:10;
+    background:rgba(0,0,0,0.45); padding:10px 16px; border-radius:10px;
+    font-size:18px; font-weight:700; letter-spacing:2px;
+    border:1px solid rgba(255,255,255,0.1);
+    color:#ffd27d;
+  }
+  #modal {
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.55); z-index:20;
+  }
+  #modal .card {
+    width:min(520px, 86vw); background:linear-gradient(180deg,#3a2212,#1f1209);
+    border:1px solid #c8985a; border-radius:14px; padding:22px 24px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.6);
+  }
+  #modal h2 { margin:0 0 6px; color:#ffd27d; letter-spacing:2px; }
+  #modal .subtitle { color:#c9a66b; font-size:13px; margin-bottom:12px; }
+  #modal .products { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0; }
+  #modal .product {
+    background:rgba(255,255,255,0.06); border:1px solid rgba(255,210,125,0.25);
+    border-radius:8px; padding:10px 12px;
+  }
+  #modal .product .name { color:#fff; font-weight:600; }
+  #modal .product .price { color:#ffd27d; font-size:14px; margin-top:4px; }
+  #modal .product .desc { color:#d9cbae; font-size:12px; margin-top:6px; line-height:1.5; }
+  #modal .close {
+    margin-top:14px; display:inline-block; background:#c8985a; color:#1f1209; border:0;
+    padding:8px 18px; border-radius:8px; cursor:pointer; font-weight:700; letter-spacing:1px;
+  }
+  #modal .investment { color:#ffd27d; line-height:1.8; font-size:14px; }
+  #modal .investment ul { padding-left:18px; }
+  #soundBtn {
+    position:fixed; bottom:16px; right:16px; z-index:10;
+    background:rgba(0,0,0,0.5); color:#fff; border:1px solid rgba(255,210,125,0.4);
+    padding:8px 14px; border-radius:20px; cursor:pointer; font-size:13px;
+  }
+  #tip {
+    position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+    z-index:10; background:rgba(0,0,0,0.45); padding:8px 14px; border-radius:20px;
+    font-size:12px; color:#ffd27d; border:1px solid rgba(255,255,255,0.1);
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="title">🏮 热闹集市 · MARKET 3D</div>
+<div id="hud">
+  <div>🖱 <b>左键拖动</b>：旋转视角</div>
+  <div>🖲 <b>滚轮</b>：缩放</div>
+  <div>🖱 <b>右键拖动</b>：平移</div>
+  <div>👆 <b>点击摊位</b>：查看在售商品</div>
+  <div>🔊 首次点击右下角按钮开启声音</div>
+</div>
+<div id="tip">提示：最左后方角落的红色摊位是 <b style="color:#ff6b6b;">招商中心</b></div>
+
+<button id="soundBtn">🔊 开启集市音效</button>
+
+<div id="modal">
+  <div class="card" id="modalCard"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ===================== 数据 =====================
+const STALL_DATA = [
+  { name:'老张鲜果铺',   hue:0.05, products:[
+    { name:'红富士苹果', price:'¥3.5/斤', desc:'清脆多汁，当日新鲜' },
+    { name:'新疆哈密瓜', price:'¥2.8/斤', desc:'甜糯爽口，冰镇更佳' },
+    { name:'砂糖橘',     price:'¥4.0/斤', desc:'皮薄易剥，清甜无籽' }
+  ]},
+  { name:'阿婆卤味档',   hue:0.08, products:[
+    { name:'卤大肠',   price:'¥58/斤', desc:'老卤慢炖，入口即化' },
+    { name:'酱鸭',     price:'¥38/只', desc:'酱香浓郁，色红味鲜' },
+    { name:'五香豆干', price:'¥8/斤',  desc:'下酒佳品，五香回味' }
+  ]},
+  { name:'老李家糕点',   hue:0.12, products:[
+    { name:'绿豆糕',   price:'¥18/盒', desc:'消暑解腻，入口绵密' },
+    { name:'桂花糕',   price:'¥15/盒', desc:'桂香四溢，甜而不腻' },
+    { name:'桃酥',     price:'¥22/斤', desc:'酥脆松香，老少皆宜' }
+  ]},
+  { name:'陈记汤圆',     hue:0.95, products:[
+    { name:'黑芝麻汤圆', price:'¥12/碗', desc:'现煮现卖，皮薄馅多' },
+    { name:'鲜肉汤圆',   price:'¥15/碗', desc:'手工包制，汤汁鲜美' },
+    { name:'酒酿圆子',   price:'¥10/碗', desc:'香甜软糯，暖胃驱寒' }
+  ]},
+  { name:'王师傅手擀面', hue:0.02, products:[
+    { name:'炸酱面',   price:'¥18/碗', desc:'手擀劲道，酱料浓郁' },
+    { name:'牛肉面',   price:'¥28/碗', desc:'红烧牛肉，汤头浓郁' },
+    { name:'阳春面',   price:'¥12/碗', desc:'清汤素雅，面条爽滑' }
+  ]},
+  { name:'胖哥烧烤',     hue:0.00, products:[
+    { name:'羊肉串',   price:'¥5/串',  desc:'炭火烤制，外焦里嫩' },
+    { name:'烤鸡腿',   price:'¥12/只', desc:'香辣入味，皮脆肉嫩' },
+    { name:'烤茄子',   price:'¥8/个',  desc:'蒜蓉粉丝，鲜香下饭' }
+  ]},
+  { name:'阿妹糖水铺',   hue:0.88, products:[
+    { name:'杨枝甘露', price:'¥16/杯', desc:'芒果西柚，清爽解腻' },
+    { name:'红豆沙',   price:'¥10/碗', desc:'慢火熬制，香甜细腻' },
+    { name:'仙草冻',   price:'¥12/杯', desc:'冰凉顺滑，夏日必备' }
+  ]},
+  { name:'老陈茶叶铺',   hue:0.30, products:[
+    { name:'西湖龙井', price:'¥280/斤', desc:'明前新茶，清香持久' },
+    { name:'云南普洱', price:'¥180/饼', desc:'陈香醇厚，回甘悠长' },
+    { name:'福建铁观音', price:'¥160/斤', desc:'七泡有余香，兰花香型' }
+  ]},
+  { name:'春花布艺',     hue:0.55, products:[
+    { name:'手工织布', price:'¥48/米', desc:'纯棉手织，花纹典雅' },
+    { name:'绣花荷包', price:'¥25/个', desc:'刺绣精美，可作香包' },
+    { name:'蓝染围巾', price:'¥68/条', desc:'植物染制，色彩温润' }
+  ]},
+  { name:'小明陶艺',     hue:0.60, products:[
+    { name:'手工茶杯', price:'¥38/只', desc:'柴窑烧制，每只不同' },
+    { name:'粗陶花瓶', price:'¥88/个', desc:'质朴自然，禅意十足' },
+    { name:'陶土小摆件', price:'¥18/个', desc:'可爱卡通，送礼首选' }
+  ]}
+];
+
+// ===================== 场景初始化 =====================
+const app = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87a5b8);
+scene.fog = new THREE.Fog(0x87a5b8, 40, 120);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 500);
+camera.position.set(28, 22, 30);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.47;
+controls.minDistance = 10;
+controls.maxDistance = 80;
+controls.target.set(0, 2, 0);
+
+// ===================== 灯光 =====================
+const hemi = new THREE.HemisphereLight(0xfff1d0, 0x3a3028, 0.8);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xffd27a, 1.1);
+sun.position.set(30, 40, 20);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -40;
+sun.shadow.camera.right = 40;
+sun.shadow.camera.top = 40;
+sun.shadow.camera.bottom = -40;
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 120;
+scene.add(sun);
+
+const fillLight = new THREE.DirectionalLight(0x88aaff, 0.25);
+fillLight.position.set(-20, 20, -10);
+scene.add(fillLight);
+
+// ===================== 地面 =====================
+const groundMat = new THREE.MeshStandardMaterial({ color:0xc9a66b, roughness:0.9, metalness:0.0 });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), groundMat);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// 广场石板纹理（重复方块）
+const stoneGroup = new THREE.Group();
+for (let i=-30;i<=30;i+=3) {
+  for (let j=-30;j<=30;j+=3) {
+    if ((i+j)%6===0) {
+      const s = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.8,2.8),
+        new THREE.MeshStandardMaterial({ color:0xb8955a, roughness:0.85 })
+      );
+      s.rotation.x = -Math.PI/2;
+      s.position.set(i, 0.01, j);
+      s.receiveShadow = true;
+      stoneGroup.add(s);
+    }
+  }
+}
+scene.add(stoneGroup);
+
+// 一条主路
+const road = new THREE.Mesh(
+  new THREE.PlaneGeometry(6, 60),
+  new THREE.MeshStandardMaterial({ color:0x8a6a3a, roughness:0.9 })
+);
+road.rotation.x = -Math.PI/2;
+road.position.set(0, 0.015, 0);
+road.receiveShadow = true;
+scene.add(road);
+
+// ===================== 构建摊位 =====================
+const interactiveStalls = []; // 可点击
+
+function makeCanopyTexture(text, baseColor) {
+  const cvs = document.createElement('canvas');
+  cvs.width = 512; cvs.height = 128;
+  const ctx = cvs.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,128);
+  grad.addColorStop(0, baseColor);
+  grad.addColorStop(1, '#5a2a10');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,512,128);
+  // 条纹
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  for (let x=0; x<512; x+=64) ctx.fillRect(x,0,32,128);
+  ctx.fillStyle = '#fff3d6';
+  ctx.font = 'bold 52px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 8;
+  ctx.fillText(text, 256, 64);
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeProductTexture(desc) {
+  const cvs = document.createElement('canvas');
+  cvs.width = 256; cvs.height = 256;
+  const ctx = cvs.getContext('2d');
+  const g = ctx.createRadialGradient(128,128,20,128,128,180);
+  g.addColorStop(0, '#fff7e0');
+  g.addColorStop(1, '#d8b06a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,256,256);
+  ctx.fillStyle = '#5a2a10';
+  ctx.font = 'bold 38px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = desc.split('\n');
+  lines.forEach((l,i)=> ctx.fillText(l, 128, 128 + (i-(lines.length-1)/2)*44));
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function buildStall(data, x, z, rot=0, isInvestment=false) {
+  const group = new THREE.Group();
+  group.position.set(x, 0, z);
+  group.rotation.y = rot;
+
+  const baseColor = new THREE.Color().setHSL(data.hue, 0.6, 0.55);
+  const hex = '#'+baseColor.getHexString();
+
+  // 摊位底座
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(4.5, 0.4, 3),
+    new THREE.MeshStandardMaterial({ color:0x6b4a24, roughness:0.8 })
+  );
+  base.position.y = 0.2;
+  base.castShadow = base.receiveShadow = true;
+  group.add(base);
+
+  // 木桌（柜台）
+  const table = new THREE.Mesh(
+    new THREE.BoxGeometry(4.2, 1.1, 2.6),
+    new THREE.MeshStandardMaterial({ color:0x8a5a2a, roughness:0.7 })
+  );
+  table.position.y = 0.95;
+  table.castShadow = table.receiveShadow = true;
+  group.add(table);
+
+  // 支柱
+  const postMat = new THREE.MeshStandardMaterial({ color:0x5a3a14, roughness:0.7 });
+  for (const dx of [-2.0, 2.0]) {
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,3.2), postMat);
+    p.position.set(dx, 2.8, -1.2);
+    p.castShadow = true;
+    group.add(p);
+  }
+
+  // 顶棚（招牌）
+  const canopyTex = makeCanopyTexture(data.name, hex);
+  const canopy = new THREE.Mesh(
+    new THREE.BoxGeometry(4.6, 0.4, 2.6),
+    new THREE.MeshStandardMaterial({ map:canopyTex, roughness:0.6 })
+  );
+  canopy.position.y = 4.2;
+  canopy.castShadow = true;
+  group.add(canopy);
+
+  // 顶棚斜顶（条纹布）
+  const roof = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.01, 0.01, 4.6, 3, 1, false),
+    new THREE.MeshStandardMaterial({ color:baseColor, roughness:0.7 })
+  );
+  // 改为使用斜面：用平面制作遮阳篷
+  const awning = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.6, 2.8),
+    new THREE.MeshStandardMaterial({ color:baseColor, side:THREE.DoubleSide, roughness:0.7 })
+  );
+  awning.rotation.x = -Math.PI * 0.28;
+  awning.position.set(0, 4.5, 1.1);
+  awning.castShadow = true;
+  group.add(awning);
+
+  // 条纹（装饰）
+  for (let i=-2; i<=2; i++) {
+    const stripe = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.6, 0.15),
+      new THREE.MeshStandardMaterial({ color:0xffffff, side:THREE.DoubleSide, transparent:true, opacity:0.85 })
+    );
+    stripe.rotation.x = -Math.PI * 0.28;
+    stripe.position.set(0, 4.5 - (i*0.35), 1.1 + (i*0.18));
+    group.add(stripe);
+  }
+
+  // 柜台前的产品展示板（点击区域）
+  const frontPanel = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.8, 1.8),
+    new THREE.MeshStandardMaterial({ map:makeProductTexture('点击查看\n在售商品'), side:THREE.DoubleSide })
+  );
+  frontPanel.position.set(0, 1.9, 1.32);
+  frontPanel.rotation.y = 0;
+  frontPanel.userData = { stall:data, isInvestment, interactive:true };
+  interactiveStalls.push(frontPanel);
+  group.add(frontPanel);
+
+  // 产品模型（随机几何形状模拟商品）
+  const products = [];
+  const colors = [0xff7a4a, 0x8fd36a, 0xffd166, 0xe066ff, 0x66b6ff];
+  for (let i=0; i<5; i++) {
+    const type = Math.floor(Math.random()*3);
+    let geom;
+    if (type===0) geom = new THREE.SphereGeometry(0.3, 16, 12);
+    else if (type===1) geom = new THREE.BoxGeometry(0.45, 0.45, 0.45);
+    else geom = new THREE.CylinderGeometry(0.25, 0.25, 0.5, 16);
+    const m = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color:colors[i%colors.length], roughness:0.5, metalness:0.1 }));
+    m.position.set(-1.5 + i*0.75, 1.65 + (Math.random()*0.1), 0);
+    m.castShadow = true;
+    products.push(m);
+    group.add(m);
+  }
+
+  // 小灯笼 ×2
+  for (const dx of [-2.0, 2.0]) {
+    const lantern = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28, 16, 12),
+      new THREE.MeshStandardMaterial({ color:0xff5a3a, emissive:0x551a0a, emissiveIntensity:0.6, roughness:0.5 })
+    );
+    lantern.position.set(dx, 3.6, 0.2);
+    lantern.castShadow = true;
+    group.add(lantern);
+    const light = new THREE.PointLight(0xffaa66, 0.5, 6);
+    light.position.copy(lantern.position);
+    group.add(light);
+  }
+
+  // 招商中心特殊标识
+  if (isInvestment) {
+    const sign = new THREE.Mesh(
+      new THREE.BoxGeometry(4.8, 0.6, 0.1),
+      new THREE.MeshStandardMaterial({ color:0xd03030, emissive:0x661515, emissiveIntensity:0.4 })
+    );
+    sign.position.set(0, 5.0, 0);
+    const signTex = makeCanopyTexture('★ 招商中心 ★', '#d03030');
+    sign.material = new THREE.MeshStandardMaterial({ map:signTex });
+    group.add(sign);
+    // 闪烁光
+    const blink = new THREE.PointLight(0xff4040, 0.8, 12);
+    blink.position.set(0, 5.0, 1.5);
+    blink.userData.blink = true;
+    group.add(blink);
+  }
+
+  scene.add(group);
+  return group;
+}
+
+// 两排，共10个摊位 + 1个招商中心
+const STALL_SPACING = 6;
+for (let i=0; i<5; i++) {
+  const data = STALL_DATA[i];
+  buildStall(data, -12 + i*STALL_SPACING, -4, 0, false);
+}
+for (let i=0; i<5; i++) {
+  const data = STALL_DATA[i+5];
+  buildStall(data, -12 + i*STALL_SPACING,  4, Math.PI, false);
+}
+// 最角落 - 招商中心（左后方角落）
+const inv = { name:'招商中心', hue:0.0, products:[
+  { name:'黄金铺面 A区', price:'月租 ¥3000', desc:'主入口位置，人流最旺，20㎡' },
+  { name:'餐饮专区 B档', price:'月租 ¥4500', desc:'带排烟/水电，40㎡' },
+  { name:'文创集市 C区', price:'月租 ¥1800', desc:'年轻客群聚集，15㎡' }
+]};
+buildStall(inv, -15, -18, Math.PI*0.25, true);
+
+// 装饰：远处树木
+function addTree(x, z) {
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.3, 0.4, 3, 8),
+    new THREE.MeshStandardMaterial({ color:0x5a3a18, roughness:0.9 })
+  );
+  trunk.position.set(x, 1.5, z);
+  trunk.castShadow = true;
+  scene.add(trunk);
+  const leaves = new THREE.Mesh(
+    new THREE.SphereGeometry(1.6, 14, 10),
+    new THREE.MeshStandardMaterial({ color:0x4a8a3a, roughness:0.85 })
+  );
+  leaves.position.set(x, 4, z);
+  leaves.castShadow = true;
+  scene.add(leaves);
+}
+for (let i=0;i<18;i++) {
+  const angle = Math.random()*Math.PI*2;
+  const r = 25 + Math.random()*15;
+  addTree(Math.cos(angle)*r, Math.sin(angle)*r);
+}
+
+// 远处建筑轮廓（简单盒子）
+for (let i=0;i<10;i++) {
+  const w = 4 + Math.random()*6;
+  const h = 4 + Math.random()*8;
+  const d = 4 + Math.random()*6;
+  const b = new THREE.Mesh(
+    new THREE.BoxGeometry(w,h,d),
+    new THREE.MeshStandardMaterial({ color:0x9a7a5a, roughness:0.9 })
+  );
+  const angle = Math.random()*Math.PI*2;
+  const r = 50 + Math.random()*20;
+  b.position.set(Math.cos(angle)*r, h/2, Math.sin(angle)*r);
+  b.castShadow = b.receiveShadow = true;
+  scene.add(b);
+}
+
+// 行人（简化：彩色胶囊）
+const walkers = [];
+for (let i=0;i<14;i++) {
+  const bodyColor = new THREE.Color().setHSL(Math.random(), 0.5, 0.5);
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.25, 0.7, 4, 8),
+    new THREE.MeshStandardMaterial({ color:bodyColor, roughness:0.7 })
+  );
+  body.position.y = 0.9;
+  body.castShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 12, 10),
+    new THREE.MeshStandardMaterial({ color:0xe8c49a, roughness:0.7 })
+  );
+  head.position.y = 1.7;
+  head.castShadow = true;
+  g.add(head);
+  g.position.set((Math.random()-0.5)*20, 0, (Math.random()-0.5)*10);
+  g.userData = {
+    dir: Math.random()*Math.PI*2,
+    speed: 0.8 + Math.random()*0.8,
+    wobble: Math.random()*Math.PI*2
+  };
+  scene.add(g);
+  walkers.push(g);
+}
+
+// ===================== 点击交互 =====================
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let pointerDown = { x:0, y:0, t:0 };
+const modal = document.getElementById('modal');
+const modalCard = document.getElementById('modalCard');
+
+function openStall(data, isInvestment) {
+  let html = `<h2>${data.name}</h2>`;
+  if (isInvestment) {
+    html += `<div class="subtitle">🏛 欢迎来到招商中心 · 投资合作洽谈</div>`;
+    html += `<div class="investment">
+      <div style="margin:8px 0;">本集市正在火热招商中，诚邀各位商户入驻：</div>
+      <ul>
+        <li>核心地段 · 人流稳定</li>
+        <li>统一管理 · 完善配套</li>
+        <li>新店入驻前 3 个月租金 8 折优惠</li>
+        <li>招商热线：400-888-8888</li>
+      </ul>
+      <div style="margin-top:10px;color:#ffd27d;font-weight:600;">当前可租铺面：</div>
+    </div>`;
+  } else {
+    html += `<div class="subtitle">📦 今日在售 · 新鲜出炉</div>`;
+  }
+  html += `<div class="products">`;
+  data.products.forEach(p=>{
+    html += `<div class="product">
+      <div class="name">${p.name}</div>
+      <div class="price">${p.price}</div>
+      <div class="desc">${p.desc}</div>
+    </div>`;
+  });
+  html += `</div>`;
+  if (isInvestment) {
+    html += `<div style="color:#ffd27d;margin-top:8px;">📞 咨询电话：400-888-8888　📧 market@demo.com</div>`;
+  }
+  html += `<button class="close" onclick="document.getElementById('modal').style.display='none'">关闭</button>`;
+  modalCard.innerHTML = html;
+  modal.style.display = 'flex';
+}
+
+renderer.domElement.addEventListener('pointerdown', e=>{
+  pointerDown = { x:e.clientX, y:e.clientY, t:performance.now() };
+});
+renderer.domElement.addEventListener('pointerup', e=>{
+  const dx = e.clientX - pointerDown.x;
+  const dy = e.clientY - pointerDown.y;
+  const dt = performance.now() - pointerDown.t;
+  if (Math.hypot(dx,dy) > 6 || dt > 400) return; // 拖动不触发
+  mouse.x = (e.clientX/innerWidth)*2 - 1;
+  mouse.y = -(e.clientY/innerHeight)*2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(interactiveStalls, false);
+  if (hits.length>0) {
+    const d = hits[0].object.userData;
+    openStall(d.stall, !!d.isInvestment);
+    playChime();
+  }
+});
+
+// 悬停反馈
+renderer.domElement.addEventListener('pointermove', e=>{
+  mouse.x = (e.clientX/innerWidth)*2 - 1;
+  mouse.y = -(e.clientY/innerHeight)*2 + 1;
+});
+
+// ===================== 集市音效（Web Speech API + 柔和底噪） =====================
+let audioCtx = null;
+let masterGain = null;
+let ambientOn = false;
+
+// 叫卖语料库 —— 真实集市商贩会喊的话
+const SHOUT_PHRASES = [
+  "新鲜的水果嘞，快来买啊！",
+  "便宜卖啦便宜卖，走过路过不要错过！",
+  "刚出锅的卤味，香得很嘞！",
+  "热乎的汤圆，现煮现卖咯！",
+  "来来来，看一看瞧一瞧，今天特价！",
+  "新鲜出炉的糕点，甜香软糯！",
+  "羊肉串嘞，烤得香飘十里！",
+  "清润糖水，夏日解暑不二之选！",
+  "明前龙井，新茶上市咯！",
+  "手工布艺，一针一线都是心意！",
+  "老板，来看看嘛，价格好商量！",
+  "早茶点心，现蒸现卖嘞！",
+  "今天特价，五块钱一斤，甜得很！",
+  "新鲜蔬菜，刚从地里摘的！",
+  "香喷喷的烧饼，一块钱一个嘞！"
+];
+
+// 低声闲聊短语（较弱音量）
+const MUMBLE_PHRASES = [
+  "今天天气真不错",
+  "这个多少钱一斤",
+  "给我称半斤",
+  "便宜点嘛",
+  "好嘞好嘞",
+  "新鲜得很",
+  "拿好慢走",
+  "再来看看啊"
+];
+
+// 挑选中文语音
+function pickChineseVoice() {
+  const voices = speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return null;
+  // 优先选中文语音
+  let v = voices.find(v => /zh|cmn|Chinese|普通话|中文/i.test(v.lang + v.name));
+  if (!v) v = voices.find(v => v.lang.startsWith('zh'));
+  if (!v) v = voices[0];
+  return v;
+}
+
+// 用语音合成"叫卖"
+function shout(phrase, opts={}) {
+  if (!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(phrase);
+  u.lang = 'zh-CN';
+  const v = pickChineseVoice();
+  if (v) u.voice = v;
+  u.rate = opts.rate || (0.85 + Math.random()*0.5);      // 0.85-1.35
+  u.pitch = opts.pitch || (0.6 + Math.random()*1.0);      // 0.6-1.6
+  u.volume = opts.volume != null ? opts.volume : (0.55 + Math.random()*0.35);
+  speechSynthesis.speak(u);
+}
+
+// 播放单个"吆喝"（带随机节奏停顿）
+function scheduleShout() {
+  if (!ambientOn) return;
+  const phrase = SHOUT_PHRASES[Math.floor(Math.random()*SHOUT_PHRASES.length)];
+  shout(phrase, {
+    rate: 0.8 + Math.random()*0.6,
+    pitch: 0.7 + Math.random()*1.1,
+    volume: 0.5 + Math.random()*0.35
+  });
+  // 有时连续喊两句，像真实商贩
+  if (Math.random() < 0.35) {
+    const p2 = SHOUT_PHRASES[Math.floor(Math.random()*SHOUT_PHRASES.length)];
+    setTimeout(()=>{ if (ambientOn) shout(p2, { rate: 0.9+Math.random()*0.4, pitch: 0.7+Math.random()*0.8, volume: 0.45+Math.random()*0.3 }); }, 900 + Math.random()*600);
+  }
+}
+
+// 低声闲聊 —— 更快速、更低音量
+function scheduleMumble() {
+  if (!ambientOn) return;
+  const phrase = MUMBLE_PHRASES[Math.floor(Math.random()*MUMBLE_PHRASES.length)];
+  shout(phrase, {
+    rate: 1.0 + Math.random()*0.8,
+    pitch: 0.5 + Math.random()*1.2,
+    volume: 0.15 + Math.random()*0.15
+  });
+}
+
+// 轻量级环境底噪（远处人群的轻微嗡嗡感，避免像风声）
+function buildAmbientNoise() {
+  // 低频层：很弱的棕噪音，像远处人群的气息感
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate*3, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  let last = 0;
+  for (let i=0;i<data.length;i++) {
+    const white = Math.random()*2-1;
+    last = (last + 0.02*white) / 1.02;
+    data[i] = last * 1.2;
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const f1 = audioCtx.createBiquadFilter();
+  f1.type='lowpass'; f1.frequency.value = 350; f1.Q.value = 0.7;
+  const f2 = audioCtx.createBiquadFilter();
+  f2.type='highpass'; f2.frequency.value = 150;
+  const g = audioCtx.createGain();
+  g.gain.value = 0.15; // 比之前的 0.35 大幅降低
+  src.connect(f1).connect(f2).connect(g).connect(masterGain);
+  src.start();
+
+  // 高频细碎层也降一点音量，让叫卖声成为主角
+  const buf2 = audioCtx.createBuffer(1, audioCtx.sampleRate*2, audioCtx.sampleRate);
+  const d2 = buf2.getChannelData(0);
+  for (let i=0;i<d2.length;i++) {
+    d2[i] = (Math.random()*2-1) * 0.06;
+  }
+  const src2 = audioCtx.createBufferSource();
+  src2.buffer = buf2;
+  src2.loop = true;
+  const f3 = audioCtx.createBiquadFilter();
+  f3.type='bandpass'; f3.frequency.value = 1800; f3.Q.value = 0.6;
+  const g2 = audioCtx.createGain();
+  g2.gain.value = 0.05; // 比之前的 0.12 大幅降低
+  src2.connect(f3).connect(g2).connect(masterGain);
+  src2.start();
+}
+
+// 偶发的"叮铃"（像集市车铃声）
+function playBell() {
+  if (!audioCtx || !ambientOn) return;
+  const now = audioCtx.currentTime;
+  [1568, 2093].forEach((f,i)=>{
+    const o = audioCtx.createOscillator();
+    o.type='sine';
+    const g = audioCtx.createGain();
+    g.gain.value=0;
+    o.connect(g).connect(masterGain);
+    o.start(now+i*0.15);
+    g.gain.setValueAtTime(0, now+i*0.15);
+    g.gain.linearRampToValueAtTime(0.12, now+i*0.15+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, now+i*0.15+0.6);
+    o.stop(now+i*0.15+0.65);
+  });
+}
+
+// 鸟鸣：短促的高频正弦滑音，模拟麻雀/小鸟啾啾声
+function playBirdChirp() {
+  if (!audioCtx || !ambientOn) return;
+  const now = audioCtx.currentTime;
+  const chirpCount = 1 + Math.floor(Math.random()*3); // 1~3 声连续
+  for (let c=0; c<chirpCount; c++) {
+    const t = now + c*0.12;
+    const baseF = 2200 + Math.random()*1800;
+    const o = audioCtx.createOscillator();
+    o.type='sine';
+    o.frequency.setValueAtTime(baseF, t);
+    o.frequency.exponentialRampToValueAtTime(baseF*1.6, t+0.05);
+    o.frequency.exponentialRampToValueAtTime(baseF*0.9, t+0.12);
+
+    // 加上一点颤音，更自然
+    const lfo = audioCtx.createOscillator();
+    lfo.frequency.value = 30 + Math.random()*20;
+    const lfoGain = audioCtx.createGain();
+    lfoGain.gain.value = 80;
+    lfo.connect(lfoGain).connect(o.frequency);
+
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.08, t+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t+0.13);
+
+    o.connect(g).connect(masterGain);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t+0.15);
+    lfo.stop(t+0.15);
+  }
+}
+
+// 远处车声：短促的低频隆隆声 + 偶尔的喇叭
+function playCarPass() {
+  if (!audioCtx || !ambientOn) return;
+  const now = audioCtx.currentTime;
+  const duration = 1.5 + Math.random()*1.5;
+
+  // 底层噪音 + 低通滤波，模拟引擎隆隆
+  const buf = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate*duration), audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<d.length;i++) {
+    d[i] = (Math.random()*2-1) * (1 - Math.abs(i/d.length - 0.5)*2); // 中间强两端弱，模拟"经过"
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+
+  const f = audioCtx.createBiquadFilter();
+  f.type='lowpass';
+  f.frequency.setValueAtTime(400, now);
+  f.frequency.linearRampToValueAtTime(250, now+duration); // 靠近再远去的 Doppler 感
+
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, now);
+  g.gain.linearRampToValueAtTime(0.1, now+duration*0.25);
+  g.gain.linearRampToValueAtTime(0.08, now+duration*0.7);
+  g.gain.linearRampToValueAtTime(0, now+duration);
+
+  src.connect(f).connect(g).connect(masterGain);
+  src.start(now);
+  src.stop(now+duration+0.05);
+
+  // 偶尔有喇叭声
+  if (Math.random() < 0.3) {
+    const hornT = now + duration*0.3;
+    const horn = audioCtx.createOscillator();
+    horn.type='square';
+    horn.frequency.value = 380;
+    const hg = audioCtx.createGain();
+    hg.gain.setValueAtTime(0, hornT);
+    hg.gain.linearRampToValueAtTime(0.08, hornT+0.02);
+    hg.gain.linearRampToValueAtTime(0.06, hornT+0.1);
+    hg.gain.exponentialRampToValueAtTime(0.001, hornT+0.35);
+    const hf = audioCtx.createBiquadFilter();
+    hf.type='lowpass'; hf.frequency.value = 1200;
+    horn.connect(hf).connect(hg).connect(masterGain);
+    horn.start(hornT);
+    horn.stop(hornT+0.4);
+  }
+}
+
+function startAmbient() {
+  if (ambientOn) return;
+
+  if ('speechSynthesis' in window) {
+    speechSynthesis.getVoices();
+    speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+  }
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0;
+  masterGain.gain.linearRampToValueAtTime(0.55, audioCtx.currentTime + 1.2);
+  masterGain.connect(audioCtx.destination);
+
+  buildAmbientNoise();
+
+  function shoutLoop() {
+    if (!ambientOn) return;
+    scheduleShout();
+    setTimeout(shoutLoop, 3500 + Math.random()*4500);
+  }
+  setTimeout(shoutLoop, 800);
+
+  function mumbleLoop() {
+    if (!ambientOn) return;
+    for (let i=0;i<2;i++) scheduleMumble();
+    setTimeout(mumbleLoop, 1200 + Math.random()*1800);
+  }
+  setTimeout(mumbleLoop, 1500);
+
+  function bellLoop() {
+    if (!ambientOn) return;
+    if (Math.random()<0.6) playBell();
+    setTimeout(bellLoop, 9000 + Math.random()*12000);
+  }
+  setTimeout(bellLoop, 7000);
+
+  // 鸟鸣：较频繁但音量小
+  function birdLoop() {
+    if (!ambientOn) return;
+    playBirdChirp();
+    setTimeout(birdLoop, 4000 + Math.random()*7000);
+  }
+  setTimeout(birdLoop, 2500);
+
+  // 车声：不太频繁，远处经过的感觉
+  function carLoop() {
+    if (!ambientOn) return;
+    playCarPass();
+    setTimeout(carLoop, 15000 + Math.random()*18000);
+  }
+  setTimeout(carLoop, 8000);
+
+  ambientOn = true;
+  try { localStorage.setItem('marketSound', 'on'); } catch(e) {}
+  document.getElementById('soundBtn').textContent = '🔊 集市音效：开（点此关闭）';
+}
+
+function stopAmbient() {
+  if (!ambientOn) return;
+  ambientOn = false;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  if (masterGain && audioCtx) {
+    masterGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.4);
+    setTimeout(()=>{ if (audioCtx) { audioCtx.close(); audioCtx=null; masterGain=null; } }, 600);
+  }
+  try { localStorage.setItem('marketSound', 'off'); } catch(e) {}
+  document.getElementById('soundBtn').textContent = '🔊 集市音效：关（点此开启）';
+}
+
+function playChime() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [880, 1320].forEach((f,i)=>{
+    const o = audioCtx.createOscillator();
+    o.type='sine'; o.frequency.value=f;
+    const g = audioCtx.createGain();
+    g.gain.value=0;
+    o.connect(g).connect(masterGain);
+    o.start(now+i*0.08);
+    g.gain.setValueAtTime(0, now+i*0.08);
+    g.gain.linearRampToValueAtTime(0.15, now+i*0.08+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, now+i*0.08+0.3);
+    o.stop(now+i*0.08+0.35);
+  });
+}
+
+document.getElementById('soundBtn').addEventListener('click', ()=>{
+  if (ambientOn) stopAmbient(); else startAmbient();
+});
+
+// ===== 无需点击即可自动播放（尽力尝试，利用浏览器允许的所有时机）=====
+// 注意：现代浏览器（Chrome/Safari/Firefox/Edge）默认禁止纯页面加载时播放音频，
+// 需要用户手势。此处用多种策略尽最大努力实现"无需点击自动播放"。
+let autoStarted = false;
+
+function attemptAutoStart() {
+  if (autoStarted) return;
+  let pref = 'on';
+  try { pref = localStorage.getItem('marketSound') || 'on'; } catch(e) {}
+  if (pref === 'off') return;
+  autoStarted = true;
+  setTimeout(startAmbient, 50);
+}
+
+// 策略 1：DOMContentLoaded 时立即尝试（部分配置宽松的浏览器会允许）
+document.addEventListener('DOMContentLoaded', ()=>{
+  attemptAutoStart();
+  // 继续尝试 window load
+  window.addEventListener('load', ()=>{
+    if (!autoStarted) setTimeout(attemptAutoStart, 300);
+  });
+});
+
+// 策略 2：监听所有可能的"用户手势"事件，浏览器会允许在这些事件内 resume audio
+// 这些事件会被浏览器视为"用户交互"，可直接启动音频
+['pointerdown','pointermove','click','mousedown','touchstart','keydown','wheel','focus','visibilitychange','blur'].forEach(ev=>{
+  window.addEventListener(ev, ()=>{ if (!autoStarted) attemptAutoStart(); }, { passive:true, once:false });
+});
+
+// 策略 3：定时兜底重试（万一前几次都被拦截了）
+let retryCount = 0;
+const retryTimer = setInterval(()=>{
+  if (autoStarted || retryCount > 20) {
+    clearInterval(retryTimer);
+    return;
+  }
+  retryCount++;
+  attemptAutoStart();
+}, 800);
+
+// 页面加载时根据偏好更新按钮提示文本
+(function initBtnHint(){
+  let pref = 'on';
+  try { pref = localStorage.getItem('marketSound') || 'on'; } catch(e) {}
+  document.getElementById('soundBtn').textContent =
+    pref === 'off' ? '🔊 集市音效：关（点此开启）' : '🔊 集市音效：自动开启中';
+})();
+
+// ===================== 动画 =====================
+const clock = new THREE.Clock();
+function animate() {
+  const t = clock.getElapsedTime();
+  const dt = clock.getDelta();
+
+  // 行人随机走动
+  walkers.forEach(w=>{
+    const d = w.userData;
+    d.dir += (Math.random()-0.5)*0.1;
+    w.position.x += Math.cos(d.dir) * d.speed * dt;
+    w.position.z += Math.sin(d.dir) * d.speed * dt;
+    // 边界
+    if (w.position.x<-25) d.dir = 0;
+    if (w.position.x> 25) d.dir = Math.PI;
+    if (w.position.z<-25) d.dir = Math.PI/2;
+    if (w.position.z> 25) d.dir = -Math.PI/2;
+    w.rotation.y = d.dir;
+    w.position.y = Math.abs(Math.sin(t*8 + d.wobble)) * 0.05;
+  });
+
+  // 悬停高亮
+  raycaster.setFromCamera(mouse, camera);
+  const hover = raycaster.intersectObjects(interactiveStalls, false);
+  interactiveStalls.forEach(p=>{ p.material.emissiveIntensity = 0; });
+  if (hover.length>0) {
+    hover[0].object.material.emissive = new THREE.Color(0xffaa33);
+    hover[0].object.material.emissiveIntensity = 0.4;
+    document.body.style.cursor = 'pointer';
+  } else {
+    document.body.style.cursor = 'default';
+  }
+
+  // 闪烁红灯
+  scene.traverse(o=>{
+    if (o.userData && o.userData.blink) {
+      o.intensity = 0.5 + Math.sin(t*4)*0.5;
+    }
+  });
+
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+animate();
+
+// ===================== 自适应 =====================
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

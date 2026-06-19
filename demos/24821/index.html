@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>️ 像素机甲对战</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Press Start 2P', monospace; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; border: 3px solid #333; border-radius: 4px; box-shadow: 0 0 40px rgba(233,69,96,0.3), 0 0 80px rgba(15,52,96,0.3); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ══════════════════════════════════════════════════════════
+//  ⚔️ 像素风机甲对战 - Pixel Mecha Battle
+// ═══════════════════════════════════════════════════════════
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const LOGIC_W = 800, LOGIC_H = 450;
+canvas.width = LOGIC_W; canvas.height = LOGIC_H;
+
+// ─ 常量 ──
+const GRAVITY = 0.5, JUMP_FORCE = -10, MOVE_SPEED = 3, GROUND_Y = 370;
+const ATTACK_RANGE = 50, ATTACK_DAMAGE = 10, ATTACK_COOLDOWN = 30;
+const ROUND_TIME = 60;
+
+// ── 颜色主题 ──
+const COLORS = {
+  bg: '#1a1a2e', bgDark: '#16213e', bgMid: '#0f3460',
+  p1: '#e94560', p1Light: '#ff6b81', p1Dark: '#c23152',
+  p2: '#00b4d8', p2Light: '#48cae4', p2Dark: '#0096c7',
+  gold: '#f5c542', white: '#fff', gray: '#666',
+  healthGreen: '#2ecc71', healthYellow: '#f1c40f', healthRed: '#e74c3c',
+  ground: '#2c3e50', groundTop: '#34495e',
+  sky1: '#1a1a2e', sky2: '#16213e',
+};
+
+// ─ 输入管理器 ──
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.code] = false; e.preventDefault(); });
+
+const INPUT_P1 = { left: 'KeyA', right: 'KeyD', jump: 'KeyW', attack: 'KeyJ', defend: 'KeyK' };
+const INPUT_P2 = { left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp', attack: 'Digit1', defend: 'Digit2' };
+
+// ── 音频管理器 (Web Audio API 8-bit 音效) ──
+let audioCtx;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+
+function playSound(type) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  const t = audioCtx.currentTime;
+  switch(type) {
+    case 'hit':
+      osc.type = 'square'; osc.frequency.setValueAtTime(200, t); osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+      gain.gain.setValueAtTime(0.3, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+      osc.start(t); osc.stop(t + 0.15); break;
+    case 'attack':
+      osc.type = 'sawtooth'; osc.frequency.setValueAtTime(400, t); osc.frequency.exponentialRampToValueAtTime(100, t + 0.1);
+      gain.gain.setValueAtTime(0.15, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+      osc.start(t); osc.stop(t + 0.1); break;
+    case 'block':
+      osc.type = 'triangle'; osc.frequency.setValueAtTime(600, t); osc.frequency.exponentialRampToValueAtTime(300, t + 0.08);
+      gain.gain.setValueAtTime(0.2, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.08);
+      osc.start(t); osc.stop(t + 0.08); break;
+    case 'win':
+      [523, 659, 784, 1047].forEach((f, i) => {
+        const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+        o.connect(g); g.connect(audioCtx.destination);
+        o.type = 'square'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.15, t + i * 0.15); g.gain.exponentialRampToValueAtTime(0.01, t + i * 0.15 + 0.3);
+        o.start(t + i * 0.15); o.stop(t + i * 0.15 + 0.3);
+      }); break;
+    case 'countdown':
+      osc.type = 'square'; osc.frequency.value = 440;
+      gain.gain.setValueAtTime(0.2, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+      osc.start(t); osc.stop(t + 0.1); break;
+    case 'go':
+      osc.type = 'square'; osc.frequency.setValueAtTime(440, t); osc.frequency.setValueAtTime(880, t + 0.08);
+      gain.gain.setValueAtTime(0.25, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+      osc.start(t); osc.stop(t + 0.2); break;
+  }
+}
+
+// ── 粒子系统 ──
+class Particle {
+  constructor(x, y, vx, vy, color, life, size) {
+    Object.assign(this, { x, y, vx, vy, color, life, maxLife: life, size: size || 3 });
+  }
+  update() { this.x += this.vx; this.y += this.vy; this.vy += 0.1; this.life--; }
+  draw(ctx) {
+    const a = this.life / this.maxLife;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(Math.round(this.x), Math.round(this.y), this.size, this.size);
+    ctx.globalAlpha = 1;
+  }
+}
+let particles = [];
+function spawnParticles(x, y, color, count, speed) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const s = Math.random() * speed + 1;
+    particles.push(new Particle(x, y, Math.cos(angle) * s, Math.sin(angle) * s - 1, color, 20 + Math.random() * 20, 2 + Math.random() * 3));
+  }
+}
+
+// ── 像素精灵生成器 ──
+function createMechaSprite(color, colorDark, colorLight, state, facing, frame) {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 40;
+  const g = c.getContext('2d');
+  const f = facing === 'left';
+
+  // 通用颜色映射
+  const cl = (v) => v === 1 ? color : v === 2 ? colorDark : v === 3 ? colorLight : v === 4 ? '#888' : v === 5 ? '#aaa' : v === 6 ? '#555' : v === 7 ? '#ffd700' : v === 8 ? '#333' : v === 9 ? '#fff' : 'transparent';
+
+  // 根据状态定义像素矩阵 (8x10)
+  const sprites = {
+    idle: [
+      [0,0,0,4,4,0,0,0],  // 天线
+      [0,0,4,7,7,4,0,0],  // 头部
+      [0,4,9,9,9,9,4,0],  // 面罩
+      [4,9,8,9,9,8,9,4],  // 眼睛
+      [0,4,4,4,4,4,4,0],  // 颈部
+      [0,2,2,2,2,2,2,0],  // 身体
+      [2,2,3,2,2,3,2,2],  // 身体细节
+      [0,2,2,2,2,2,2,0],  // 身体
+      [0,0,4,4,4,4,0,0],  // 腿部
+      [0,0,5,5,5,5,0,0],  // 脚
+    ],
+    walk: [
+      [0,0,0,4,4,0,0,0],
+      [0,0,4,7,7,4,0,0],
+      [0,4,9,9,9,9,4,0],
+      [4,9,8,9,9,8,9,4],
+      [0,4,4,4,4,4,4,0],
+      [0,2,2,2,2,2,2,0],
+      [2,2,3,2,2,3,2,2],
+      [0,2,2,2,2,2,2,0],
+      [0,4,0,0,0,4,0,0],  // 腿分开
+      [0,5,0,0,0,5,0,0],
+    ],
+    attack: [
+      [0,0,0,4,4,0,0,0],
+      [0,0,4,7,7,4,0,0],
+      [0,4,9,9,9,9,4,0],
+      [4,9,8,9,9,8,9,4],
+      [0,4,4,4,4,4,4,0],
+      [0,2,2,2,2,2,2,0],
+      [2,2,3,2,2,3,2,2],
+      [0,2,2,2,2,2,2,0],
+      [0,0,4,4,4,4,0,0],
+      [0,0,5,5,5,5,0,0],
+    ],
+    defend: [
+      [0,0,0,4,4,0,0,0],
+      [0,0,4,7,7,4,0,0],
+      [0,4,9,9,9,9,4,0],
+      [4,9,8,9,9,8,9,4],
+      [0,4,4,4,4,4,4,0],
+      [2,2,2,2,2,2,2,2],  // 身体变宽（举盾）
+      [2,2,7,2,2,7,2,2],
+      [2,2,2,2,2,2,2,2],
+      [0,0,4,4,4,4,0,0],
+      [0,0,5,5,5,5,0,0],
+    ],
+    hurt: [
+      [0,0,0,4,4,0,0,0],
+      [0,0,4,7,7,4,0,0],
+      [0,4,9,3,3,9,4,0],  // 受伤闪烁
+      [4,3,8,3,3,8,3,4],
+      [0,4,4,4,4,4,4,0],
+      [0,2,2,2,2,2,2,0],
+      [2,2,3,2,2,3,2,2],
+      [0,2,2,2,2,2,2,0],
+      [0,4,0,0,0,4,0,0],
+      [0,5,0,0,0,5,0,0],
+    ],
+  };
+
+  const sprite = sprites[state] || sprites.idle;
+  const scale = 4;
+
+  // 绘制像素
+  for (let r = 0; r < sprite.length; r++) {
+    for (let col = 0; col < sprite[r].length; col++) {
+      const px = f ? (7 - col) : col;
+      const colorVal = cl(sprite[r][px]);
+      if (colorVal !== 'transparent') {
+        g.fillStyle = colorVal;
+        g.fillRect(col * scale, r * scale, scale, scale);
+      }
+    }
+  }
+
+  // 攻击时添加武器效果
+  if (state === 'attack') {
+    g.fillStyle = '#ff0';
+    const armX = f ? -12 : 8;
+    g.fillRect(armX * scale, 6 * scale, 4 * scale, 2 * scale);
+  }
+
+  // 防御时添加盾牌
+  if (state === 'defend') {
+    g.fillStyle = '#ffd700';
+    const shieldX = f ? -12 : 8;
+    g.fillRect(shieldX * scale, 4 * scale, 3 * scale, 6 * scale);
+    g.fillStyle = '#ff0';
+    g.fillRect(shieldX * scale + scale, 5 * scale, scale, 4 * scale);
+  }
+
+  return c;
+}
+
+// ── 机甲实体 ──
+class Mecha {
+  constructor(x, color, colorDark, colorLight, name, facing) {
+    this.x = x; this.y = GROUND_Y; this.vx = 0; this.vy = 0;
+    this.hp = 100; this.maxHp = 100;
+    this.color = color; this.colorDark = colorDark; this.colorLight = colorLight;
+    this.name = name; this.facing = facing;
+    this.state = 'idle'; this.animFrame = 0; this.animTimer = 0;
+    this.attackCooldown = 0; this.isDefending = false; this.isGrounded = true;
+    this.hurtTimer = 0; this.attackTimer = 0; this.hasHit = false;
+    this.walkFrame = 0;
+    this.idleBob = 0; this.idleBobDir = 1;
+  }
+
+  update(input, opponent) {
+    this.animTimer++;
+    if (this.animTimer > 8) { this.animTimer = 0; this.animFrame = (this.animFrame + 1) % 4; }
+
+    // 受伤闪烁
+    if (this.hurtTimer > 0) { this.hurtTimer--; }
+
+    // 攻击冷却
+    if (this.attackCooldown > 0) this.attackCooldown--;
+
+    // 朝向：始终面向对手
+    this.facing = opponent.x > this.x ? 'right' : 'left';
+
+    // 输入处理
+    const moving = input.left || input.right;
+
+    if (input.defend) {
+      this.state = 'defend'; this.isDefending = true; this.vx = 0;
+    } else if (this.attackCooldown > 0 && this.attackTimer > 0) {
+      this.state = 'attack'; this.attackTimer--; this.vx = 0;
+    } else if (input.attack && this.attackCooldown <= 0 && this.attackTimer <= 0) {
+      this.state = 'attack'; this.attackTimer = 12; this.attackCooldown = ATTACK_COOLDOWN;
+      this.hasHit = false;
+      playSound('attack');
+    } else if (moving && this.isGrounded) {
+      this.state = 'walk'; this.walkFrame++;
+      this.vx = input.left ? -MOVE_SPEED : MOVE_SPEED;
+    } else {
+      this.state = 'idle'; this.vx = 0;
+      // 待机呼吸动画
+      this.idleBob += 0.05 * this.idleBobDir;
+      if (Math.abs(this.idleBob) > 1) this.idleBobDir *= -1;
+    }
+
+    if (input.jump && this.isGrounded) {
+      this.vy = JUMP_FORCE; this.isGrounded = false;
+    }
+
+    // 物理
+    this.vy += GRAVITY;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // 地面碰撞
+    if (this.y >= GROUND_Y) {
+      this.y = GROUND_Y; this.vy = 0; this.isGrounded = true;
+    }
+
+    // 边界
+    this.x = Math.max(20, Math.min(LOGIC_W - 20, this.x));
+
+    // 攻击判定
+    if (this.attackTimer > 0 && this.attackTimer <= 6 && !this.hasHit) {
+      const attackX = this.facing === 'right' ? this.x + 16 : this.x - 16;
+      const dist = Math.abs(opponent.x - attackX);
+      const yDist = Math.abs(this.y - opponent.y);
+      if (dist < ATTACK_RANGE && yDist < 40) {
+        this.hasHit = true;
+        let dmg = ATTACK_DAMAGE;
+        if (opponent.isDefending) {
+          dmg = Math.floor(dmg / 2);
+          playSound('block');
+          spawnParticles(opponent.x, opponent.y - 20, '#ffd700', 5, 3);
+        } else {
+          playSound('hit');
+          opponent.hurtTimer = 10;
+          spawnParticles(opponent.x, opponent.y - 20, opponent.color, 12, 5);
+        }
+        opponent.hp = Math.max(0, opponent.hp - dmg);
+        // 击退
+        opponent.vx = this.facing === 'right' ? 4 : -4;
+        opponent.x += opponent.vx;
+      }
+    }
+  }
+
+  draw(ctx, spriteCache) {
+    const drawY = this.y + (this.state === 'idle' ? this.idleBob : 0);
+    const isHurt = this.state === 'hurt';
+    const displayState = isHurt ? 'hurt' : this.state;
+    const cacheKey = `${displayState}_${this.facing}_${this.animFrame}`;
+
+    if (!spriteCache[cacheKey]) {
+      spriteCache[cacheKey] = createMechaSprite(this.color, this.colorDark, this.colorLight, displayState, this.facing, this.animFrame);
+    }
+
+    const spr = spriteCache[cacheKey];
+    const drawX = Math.round(this.x - 16);
+    const drawSpriteY = Math.round(drawY - 40);
+
+    // 受伤闪烁
+    if (this.hurtTimer > 0 && this.hurtTimer % 2 === 0) {
+      ctx.globalAlpha = 0.5;
+    }
+
+    ctx.drawImage(spr, drawX, drawSpriteY, 32, 40);
+
+    // 攻击火焰效果
+    if (this.state === 'attack' && this.attackTimer > 4) {
+      ctx.fillStyle = 'rgba(255,200,0,0.6)';
+      const fx = this.facing === 'right' ? drawX + 32 : drawX - 16;
+      ctx.fillRect(fx, drawSpriteY + 16, 16, 8);
+      ctx.fillStyle = 'rgba(255,100,0,0.4)';
+      ctx.fillRect(fx + (this.facing === 'right' ? 4 : 4), drawSpriteY + 14, 20, 12);
+    }
+
+    // 防御盾牌光效
+    if (this.state === 'defend') {
+      ctx.strokeStyle = 'rgba(255,215,0,0.6)';
+      ctx.lineWidth = 2;
+      const sx = this.facing === 'right' ? drawX + 28 : drawX - 12;
+      ctx.strokeRect(sx, drawSpriteY + 8, 16, 24);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.strokeRect(sx + 4, drawSpriteY + 12, 8, 16);
+    }
+
+    ctx.globalAlpha = 1;
+
+    // 名称标签
+    ctx.fillStyle = this.color;
+    ctx.font = '6px "Press Start 2P"';
+    ctx.textAlign = 'center';
+    ctx.fillText(this.name, this.x, drawSpriteY - 6);
+  }
+
+  getAttackBox() {
+    if (this.state !== 'attack' || this.attackTimer <= 0 || this.attackTimer > 6) return null;
+    return {
+      x: this.facing === 'right' ? this.x + 16 : this.x - 16 - ATTACK_RANGE,
+      y: this.y - 40,
+      w: ATTACK_RANGE,
+      h: 40
+    };
+  }
+}
+
+// ── 场景管理器 ──
+let scene = 'title'; // 'title', 'battle', 'result'
+let mechaP1, mechaP2;
+let timer = ROUND_TIME;
+let timerCounter = 0;
+let countdownTimer = 0;
+let countdownValue = 3;
+let winner = null;
+let resultTimer = 0;
+let spriteCache = {};
+let stars = [];
+let buildings = [];
+let titleAnim = 0;
+let resultParticles = [];
+
+// 初始化星空
+for (let i = 0; i < 80; i++) {
+  stars.push({ x: Math.random() * LOGIC_W, y: Math.random() * LOGIC_H * 0.6, s: Math.random() * 2 + 0.5, b: Math.random() });
+}
+
+// 初始化背景建筑
+for (let i = 0; i < 12; i++) {
+  const h = 30 + Math.random() * 80;
+  buildings.push({
+    x: i * 70 + Math.random() * 20 - 10,
+    w: 20 + Math.random() * 30,
+    h: h,
+    windows: Math.floor(h / 12),
+    color: `hsl(${220 + Math.random() * 20}, 30%, ${8 + Math.random() * 8}%)`
+  });
+}
+
+function resetGame() {
+  mechaP1 = new Mecha(180, COLORS.p1, COLORS.p1Dark, COLORS.p1Light, '烈焰', 'right');
+  mechaP2 = new Mecha(620, COLORS.p2, COLORS.p2Dark, COLORS.p2Light, '寒霜', 'left');
+  timer = ROUND_TIME; timerCounter = 0; particles = []; resultParticles = [];
+  spriteCache = {}; winner = null; resultTimer = 0;
+  countdownTimer = 0; countdownValue = 3;
+}
+
+function startGame() {
+  initAudio();
+  resetGame();
+  scene = 'battle';
+  countdownTimer = 180; // 3秒倒计时
+}
+
+// ── 背景渲染 ──
+function drawBackground(ctx) {
+  // 天空渐变
+  const grad = ctx.createLinearGradient(0, 0, 0, LOGIC_H);
+  grad.addColorStop(0, '#0a0a1a');
+  grad.addColorStop(0.5, '#16213e');
+  grad.addColorStop(1, '#1a1a2e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, LOGIC_W, LOGIC_H);
+
+  // 星空
+  stars.forEach(s => {
+    const twinkle = Math.sin(Date.now() * 0.003 + s.b * 10) * 0.5 + 0.5;
+    ctx.globalAlpha = twinkle * 0.8;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(Math.round(s.x), Math.round(s.y), s.s, s.s);
+  });
+  ctx.globalAlpha = 1;
+
+  // 月亮
+  ctx.fillStyle = '#f5c542';
+  ctx.beginPath();
+  ctx.arc(680, 60, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#1a1a2e';
+  ctx.beginPath();
+  ctx.arc(688, 55, 17, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 建筑
+  buildings.forEach(b => {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, GROUND_Y - b.h, b.w, b.h);
+    // 窗户
+    ctx.fillStyle = 'rgba(245,197,66,0.3)';
+    for (let wy = 0; wy < b.windows; wy++) {
+      for (let wx = 0; wx < 2; wx++) {
+        if (Math.random() > 0.3) {
+          ctx.fillRect(b.x + 4 + wx * 10, GROUND_Y - b.h + 6 + wy * 12, 4, 5);
+        }
+      }
+    }
+  });
+
+  // 地面
+  ctx.fillStyle = COLORS.ground;
+  ctx.fillRect(0, GROUND_Y, LOGIC_W, LOGIC_H - GROUND_Y);
+  ctx.fillStyle = COLORS.groundTop;
+  ctx.fillRect(0, GROUND_Y, LOGIC_W, 3);
+
+  // 地面像素细节
+  ctx.fillStyle = '#3d566e';
+  for (let i = 0; i < LOGIC_W; i += 8) {
+    ctx.fillRect(i, GROUND_Y + 8 + (i % 16 === 0 ? 0 : 4), 4, 2);
+  }
+}
+
+// ── 标题场景 ──
+function drawTitleScene(ctx) {
+  drawBackground(ctx);
+  titleAnim += 0.05;
+
+  // 标题文字
+  const glow = Math.sin(titleAnim * 2) * 0.3 + 0.7;
+  ctx.save();
+  ctx.shadowColor = COLORS.p1;
+  ctx.shadowBlur = 20 * glow;
+  ctx.fillStyle = COLORS.gold;
+  ctx.font = '24px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillText('机甲对战', LOGIC_W / 2, 100);
+  ctx.shadowColor = COLORS.p2;
+  ctx.font = '12px "Press Start 2P"';
+  ctx.fillStyle = COLORS.white;
+  ctx.fillText('MECHA BATTLE', LOGIC_W / 2, 130);
+  ctx.restore();
+
+  // VS 分隔
+  ctx.fillStyle = COLORS.gold;
+  ctx.font = '16px "Press Start 2P"';
+  ctx.fillText('⚔ VS ⚔', LOGIC_W / 2, 175);
+
+  // 操作说明
+  const panelW = 220, panelH = 140;
+  // P1 面板
+  ctx.fillStyle = 'rgba(233,69,96,0.15)';
+  ctx.strokeStyle = COLORS.p1;
+  ctx.lineWidth = 2;
+  ctx.fillRect(80, 195, panelW, panelH);
+  ctx.strokeRect(80, 195, panelW, panelH);
+  ctx.fillStyle = COLORS.p1;
+  ctx.font = '10px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillText('🔥 烈焰 (P1)', 190, 218);
+  ctx.fillStyle = '#ccc';
+  ctx.font = '7px "Press Start 2P"';
+  ctx.textAlign = 'left';
+  ctx.fillText('移动: W A S D', 95, 245);
+  ctx.fillText('攻击: J', 95, 263);
+  ctx.fillText('防御: K', 95, 281);
+  ctx.fillText('跳跃: W', 95, 299);
+
+  // P2 面板
+  ctx.fillStyle = 'rgba(0,180,216,0.15)';
+  ctx.strokeStyle = COLORS.p2;
+  ctx.fillRect(500, 195, panelW, panelH);
+  ctx.strokeRect(500, 195, panelW, panelH);
+  ctx.fillStyle = COLORS.p2;
+  ctx.font = '10px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillText('❄ 寒霜 (P2)', 610, 218);
+  ctx.fillStyle = '#ccc';
+  ctx.font = '7px "Press Start 2P"';
+  ctx.textAlign = 'left';
+  ctx.fillText('移动: ↑ ← ↓ →', 515, 245);
+  ctx.fillText('攻击: 1', 515, 263);
+  ctx.fillText('防御: 2', 515, 281);
+  ctx.fillText('跳跃: ↑', 515, 299);
+
+  // 开始按钮
+  const pulse = Math.sin(titleAnim * 4) * 0.3 + 0.7;
+  ctx.save();
+  ctx.shadowColor = COLORS.gold;
+  ctx.shadowBlur = 15 * pulse;
+  ctx.fillStyle = COLORS.gold;
+  ctx.font = '14px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillText('按 ENTER 开始', LOGIC_W / 2, 380);
+  ctx.restore();
+
+  // 像素装饰
+  for (let i = 0; i < 20; i++) {
+    const px = (Math.sin(titleAnim + i * 1.5) * 0.5 + 0.5) * LOGIC_W;
+    const py = (Math.cos(titleAnim * 0.7 + i * 2) * 0.5 + 0.5) * 300 + 50;
+    ctx.fillStyle = i % 2 === 0 ? COLORS.p1 : COLORS.p2;
+    ctx.globalAlpha = 0.3;
+    ctx.fillRect(Math.round(px), Math.round(py), 3, 3);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── 对战场景 HUD ──
+function drawHUD(ctx) {
+  // P1 血条
+  const barW = 200, barH = 16, barY = 15;
+  // P1
+  ctx.fillStyle = '#333';
+  ctx.fillRect(20, barY, barW, barH);
+  const p1Ratio = mechaP1.hp / mechaP1.maxHp;
+  const p1Color = p1Ratio > 0.6 ? COLORS.healthGreen : p1Ratio > 0.3 ? COLORS.healthYellow : COLORS.healthRed;
+  ctx.fillStyle = p1Color;
+  ctx.fillRect(22, barY + 2, (barW - 4) * p1Ratio, barH - 4);
+  ctx.strokeStyle = COLORS.p1;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, barY, barW, barH);
+  ctx.fillStyle = COLORS.white;
+  ctx.font = '8px "Press Start 2P"';
+  ctx.textAlign = 'left';
+  ctx.fillText(`P1 ${mechaP1.name}`, 25, barY + barH - 3);
+
+  // P2
+  const p2X = LOGIC_W - 20 - barW;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(p2X, barY, barW, barH);
+  const p2Ratio = mechaP2.hp / mechaP2.maxHp;
+  const p2Color = p2Ratio > 0.6 ? COLORS.healthGreen : p2Ratio > 0.3 ? COLORS.healthYellow : COLORS.healthRed;
+  ctx.fillStyle = p2Color;
+  ctx.fillRect(p2X + 2, barY + 2, (barW - 4) * p2Ratio, barH - 4);
+  ctx.strokeStyle = COLORS.p2;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(p2X, barY, barW, barH);
+  ctx.fillStyle = COLORS.white;
+  ctx.font = '8px "Press Start 2P"';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${mechaP2.name} P2`, p2X + barW - 3, barY + barH - 3);
+
+  // 计时器
+  ctx.fillStyle = '#333';
+  ctx.fillRect(LOGIC_W / 2 - 30, barY - 4, 60, barH + 8);
+  ctx.strokeStyle = COLORS.gold;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(LOGIC_W / 2 - 30, barY - 4, 60, barH + 8);
+  ctx.fillStyle = timer <= 10 ? COLORS.healthRed : COLORS.gold;
+  ctx.font = '14px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.ceil(timer).toString(), LOGIC_W / 2, barY + barH - 3);
+
+  // 倒计时
+  if (countdownTimer > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, LOGIC_W, LOGIC_H);
+    const scale = 1 + (countdownTimer % 60) / 60 * 0.5;
+    ctx.save();
+    ctx.translate(LOGIC_W / 2, LOGIC_H / 2);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = COLORS.gold;
+    ctx.font = '48px "Press Start 2P"';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(countdownValue > 0 ? countdownValue.toString() : 'GO!', 0, 0);
+    ctx.restore();
+  }
+}
+
+// ── 结算场景 ──
+function drawResultScene(ctx) {
+  drawBackground(ctx);
+  drawMecha(ctx);
+
+  resultTimer++;
+  if (resultTimer > 60) {
+    // 胜利粒子
+    if (resultTimer % 5 === 0) {
+      const cx = LOGIC_W / 2 + Math.random() * 100 - 50;
+      const cy = 100 + Math.random() * 50;
+      spawnParticles(cx, cy, ['#e94560', '#00b4d8', '#f5c542', '#2ecc71'][Math.floor(Math.random() * 4)], 3, 4);
+    }
+  }
+
+  // 结算面板
+  ctx.fillStyle = 'rgba(10,10,26,0.85)';
+  ctx.fillRect(LOGIC_W / 2 - 200, 50, 400, 200);
+  ctx.strokeStyle = COLORS.gold;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(LOGIC_W / 2 - 200, 50, 400, 200);
+
+  ctx.textAlign = 'center';
+  if (winner === 'draw') {
+    ctx.fillStyle = COLORS.gold;
+    ctx.font = '20px "Press Start 2P"';
+    ctx.fillText('平局!', LOGIC_W / 2, 110);
+  } else {
+    const winMecha = winner === 'p1' ? mechaP1 : mechaP2;
+    ctx.fillStyle = winMecha.color;
+    ctx.font = '16px "Press Start 2P"';
+    ctx.fillText('🏆 胜利! 🏆', LOGIC_W / 2, 100);
+    ctx.font = '12px "Press Start 2P"';
+    ctx.fillText(`${winMecha.name}`, LOGIC_W / 2, 130);
+    ctx.fillStyle = COLORS.white;
+    ctx.font = '10px "Press Start 2P"';
+    ctx.fillText('K.O.!', LOGIC_W / 2, 160);
+  }
+
+  // 血量对比
+  ctx.fillStyle = '#ccc';
+  ctx.font = '8px "Press Start 2P"';
+  ctx.fillText(`P1: ${mechaP1.hp} HP  |  P2: ${mechaP2.hp} HP`, LOGIC_W / 2, 195);
+
+  // 重新开始提示
+  if (resultTimer > 120) {
+    const blink = Math.sin(Date.now() * 0.005) > 0;
+    if (blink) {
+      ctx.fillStyle = COLORS.gold;
+      ctx.font = '10px "Press Start 2P"';
+      ctx.fillText('按 ENTER 重新开始', LOGIC_W / 2, 230);
+    }
+  }
+}
+
+function drawMecha(ctx) {
+  mechaP1.draw(ctx, spriteCache);
+  mechaP2.draw(ctx, spriteCache);
+}
+
+// ── 主循环 ──
+function update() {
+  switch (scene) {
+    case 'title':
+      if (keys['Enter'] || keys['Space']) { startGame(); keys['Enter'] = false; keys['Space'] = false; }
+      break;
+
+    case 'battle':
+      // 倒计时
+      if (countdownTimer > 0) {
+        countdownTimer--;
+        if (countdownTimer % 60 === 0 && countdownTimer > 0) {
+          countdownValue--;
+          playSound('countdown');
+        }
+        if (countdownTimer <= 0) { countdownValue = 0; playSound('go'); }
+        return;
+      }
+
+      // 计时器
+      timerCounter++;
+      if (timerCounter >= 60) {
+        timerCounter = 0;
+        timer--;
+        if (timer <= 0) {
+          timer = 0;
+          endBattle();
+          return;
+        }
+      }
+
+      // 玩家输入
+      mechaP1.update({
+        left: keys[INPUT_P1.left], right: keys[INPUT_P1.right],
+        jump: keys[INPUT_P1.jump], attack: keys[INPUT_P1.attack],
+        defend: keys[INPUT_P1.defend]
+      }, mechaP2);
+
+      mechaP2.update({
+        left: keys[INPUT_P2.left], right: keys[INPUT_P2.right],
+        jump: keys[INPUT_P2.jump], attack: keys[INPUT_P2.attack],
+        defend: keys[INPUT_P2.defend]
+      }, mechaP1);
+
+      // 检查胜负
+      if (mechaP1.hp <= 0 || mechaP2.hp <= 0) {
+        endBattle();
+      }
+
+      // 更新粒子
+      particles = particles.filter(p => p.life > 0);
+      particles.forEach(p => p.update());
+      break;
+
+    case 'result':
+      particles = particles.filter(p => p.life > 0);
+      particles.forEach(p => p.update());
+      if ((keys['Enter'] || keys['Space']) && resultTimer > 120) {
+        resetGame();
+        scene = 'title';
+        keys['Enter'] = false; keys['Space'] = false;
+      }
+      break;
+  }
+}
+
+function endBattle() {
+  scene = 'result'; resultTimer = 0;
+  if (mechaP1.hp <= 0 && mechaP2.hp <= 0) winner = 'draw';
+  else if (mechaP1.hp <= 0) winner = 'p2';
+  else if (mechaP2.hp <= 0) winner = 'p1';
+  else winner = mechaP1.hp > mechaP2.hp ? 'p1' : mechaP1.hp < mechaP2.hp ? 'p2' : 'draw';
+  playSound('win');
+}
+
+function render() {
+  ctx.clearRect(0, 0, LOGIC_W, LOGIC_H);
+  switch (scene) {
+    case 'title': drawTitleScene(ctx); break;
+    case 'battle':
+      drawBackground(ctx);
+      drawMecha(ctx);
+      particles.forEach(p => p.draw(ctx));
+      drawHUD(ctx);
+      break;
+    case 'result':
+      drawResultScene(ctx);
+      particles.forEach(p => p.draw(ctx));
+      break;
+  }
+}
+
+function gameLoop() {
+  update();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>

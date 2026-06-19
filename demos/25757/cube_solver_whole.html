@@ -1,0 +1,2310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>魔方求解器</title>
+<script>
+// 提供module/exports polyfill使CJS库能在浏览器运行
+window.module = {exports: {}};
+window.exports = window.module.exports;
+</script>
+<script src="https://unpkg.com/rubik-cube-solver@0.1.0/dist/rubik-cube-solver.cjs.production.min.js"></script>
+<script>
+window.Cube = window.module.exports.Cube;
+// 延迟初始化求解器（预计算移动表和剪枝表），避免阻塞页面加载
+window._kociembaReady = false;
+setTimeout(function(){
+  if (window.Cube && window.Cube.initSolver) {
+    try { 
+      window.Cube.initSolver(); 
+      window._kociembaReady = true;
+    } catch(e) { console.warn('Kociemba初始化失败:', e); }
+  }
+}, 100);
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+SC:wght@300;500;700;900&display=swap');
+
+  :root {
+    --bg: #0a0e17;
+    --bg2: #111827;
+    --card: #1a2236;
+    --border: #2a3550;
+    --fg: #e8ecf4;
+    --muted: #6b7a99;
+    --accent: #f59e0b;
+    --accent2: #ef4444;
+    --green: #10b981;
+    --cube-w: #f0f0f0;
+    --cube-y: #ffe000;
+    --cube-g: #00a030;
+    --cube-b: #0050d0;
+    --cube-o: #ff6800;
+    --cube-r: #d01018;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'Noto Sans SC', sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* 背景装饰 */
+  body::before {
+    content: '';
+    position: fixed;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background: radial-gradient(ellipse at 30% 20%, rgba(245,158,11,0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 80%, rgba(59,130,246,0.04) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* 顶部标题 */
+  .header {
+    text-align: center;
+    padding: 30px 0 20px;
+  }
+  .header h1 {
+    font-size: 2.4rem;
+    font-weight: 900;
+    background: linear-gradient(135deg, var(--accent), #fbbf24, var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 2px;
+  }
+  .header p {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-top: 6px;
+    font-weight: 300;
+  }
+
+  /* 主布局 */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 20px;
+  }
+
+  @media (max-width: 900px) {
+    .main-grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.5;
+  }
+  .panel-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  /* 面编辑区域 */
+  .faces-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+  }
+
+  .face-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    text-align: center;
+    transition: border-color 0.3s;
+  }
+  .face-card:hover {
+    border-color: var(--accent);
+  }
+  .face-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(245,158,11,0.2);
+  }
+  .face-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+  .face-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3px;
+  }
+  .face-cell {
+    width: 36px; height: 36px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 2px solid rgba(255,255,255,0.1);
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+  }
+  .face-cell:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 8px rgba(255,255,255,0.2);
+    z-index: 2;
+  }
+  .face-cell.center-cell {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  /* 颜色选择器 */
+  .color-palette {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: 10px;
+  }
+  .color-swatch {
+    width: 32px; height: 32px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 3px solid transparent;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .color-swatch:hover { transform: scale(1.15); }
+  .color-swatch.selected {
+    border-color: #fff;
+    box-shadow: 0 0 12px rgba(255,255,255,0.3);
+  }
+  .color-swatch .swatch-label {
+    position: absolute;
+    bottom: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.6rem;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+  }
+
+  /* 图片上传 */
+  .upload-section {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  .upload-box {
+    position: relative;
+    background: var(--bg);
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .upload-box:hover {
+    border-color: var(--accent);
+    background: rgba(245,158,11,0.05);
+  }
+  .upload-box.has-image {
+    border-style: solid;
+    border-color: var(--green);
+  }
+  .upload-box img {
+    max-width: 100%;
+    max-height: 60px;
+    border-radius: 4px;
+  }
+  .upload-box .upload-label {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .upload-box input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  /* 按钮 */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Noto Sans SC', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #d97706);
+    color: #000;
+    box-shadow: 0 4px 15px rgba(245,158,11,0.3);
+  }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(245,158,11,0.4);
+  }
+  .btn-secondary {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .btn-danger {
+    background: rgba(239,68,68,0.15);
+    color: var(--accent2);
+    border: 1px solid rgba(239,68,68,0.3);
+  }
+  .btn-danger:hover {
+    background: rgba(239,68,68,0.25);
+  }
+  .btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  .btn-sm {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  /* 3D 魔方画布 */
+  #cube-canvas {
+    display: block;
+    margin: 0 auto;
+    border-radius: 12px;
+  }
+
+  /* 展开图 */
+  .net-container {
+    margin-top: 16px;
+    display: flex;
+    justify-content: center;
+  }
+  #net-canvas {
+    border-radius: 8px;
+  }
+
+  /* 求解结果 */
+  .solution-area {
+    margin-top: 20px;
+  }
+  .solution-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .solution-header h3 {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .solution-tabs {
+    display: flex;
+    gap: 4px;
+  }
+  .solution-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    transition: all 0.2s;
+  }
+  .solution-tab:hover {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+  .solution-tab.active {
+    background: rgba(245,158,11,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .move-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--accent);
+    background: rgba(245,158,11,0.1);
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+
+  .moves-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .moves-grid::-webkit-scrollbar {
+    width: 4px;
+  }
+  .moves-grid::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+  }
+
+  .move-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 40px;
+    justify-content: center;
+  }
+  .move-chip:hover {
+    border-color: var(--accent);
+    background: rgba(245,158,11,0.08);
+  }
+  .move-chip.current {
+    border-color: var(--accent);
+    background: rgba(245,158,11,0.2);
+    color: var(--accent);
+    box-shadow: 0 0 8px rgba(245,158,11,0.2);
+  }
+  .move-chip.done {
+    border-color: var(--green);
+    color: var(--green);
+    opacity: 0.7;
+  }
+  .move-chip .move-icon {
+    font-size: 0.7rem;
+  }
+
+  /* 播放控制 */
+  .playback-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    justify-content: center;
+  }
+  .play-btn {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: rgba(245,158,11,0.1);
+    color: var(--accent);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    transition: all 0.2s;
+  }
+  .play-btn:hover {
+    background: rgba(245,158,11,0.25);
+    transform: scale(1.05);
+  }
+  .speed-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .speed-control input[type="range"] {
+    width: 80px;
+    accent-color: var(--accent);
+  }
+  .shortcut-hint {
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-align: center;
+    width: 100%;
+    margin-top: 8px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* 状态消息 */
+  .status-msg {
+    text-align: center;
+    padding: 8px;
+    font-size: 0.85rem;
+    color: var(--muted);
+    border-radius: 8px;
+    margin-top: 8px;
+  }
+  .status-msg.error {
+    color: var(--accent2);
+    background: rgba(239,68,68,0.1);
+  }
+  .status-msg.success {
+    color: var(--green);
+    background: rgba(16,185,129,0.1);
+  }
+
+  /* 预设按钮 */
+  .preset-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* 全宽面板 */
+  .full-panel {
+    grid-column: 1 / -1;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 12px 24px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    z-index: 1000;
+    opacity: 0;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* 动画 */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .panel { animation: fadeIn 0.5s ease-out; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>图解魔方</h1>
+    <p>RUBIK'S CUBE SOLVER — 手动编辑色块 / 上传图片识别 / 3D 还原动画演示</p>
+  </div>
+
+  <div class="main-grid">
+    <!-- 图片上传面板 -->
+    <div class="panel full-panel" style="animation-delay:0.1s">
+      <div class="panel-title"><span class="dot"></span>图片上传（可选）</div>
+      <p style="font-size:0.8rem;color:var(--muted);margin-bottom:12px;">
+        为每个面上传一张正面照片，系统将自动识别色块分布。识别后可在下方手动修正。
+      </p>
+      <div class="upload-section" id="uploadSection"></div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="recognizeAllImages()">识别所有图片</button>
+      </div>
+    </div>
+
+    <!-- 左侧：输入面板 -->
+    <div class="panel" style="animation-delay:0.2s">
+      <div class="panel-title"><span class="dot"></span>色块编辑</div>
+
+      <div class="preset-row">
+        <button class="btn btn-sm btn-danger" onclick="clearAll()">清空</button>
+        <button class="btn btn-sm btn-secondary" onclick="presetSolved()">已还原</button>
+        <button class="btn btn-sm btn-secondary" onclick="presetScramble()">随机打乱</button>
+      </div>
+
+      <div class="color-palette" id="colorPalette"></div>
+
+      <div class="faces-grid" id="facesGrid"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="resetCube()">重置</button>
+        <button class="btn btn-secondary" id="loadBtn" onclick="loadState()">加载</button>
+        <button class="btn btn-secondary" id="saveBtn" onclick="saveState()">保存</button>
+        <button class="btn btn-primary" onclick="solveCube()">求解</button>
+      </div>
+
+      <div class="status-msg" id="statusMsg"></div>
+    </div>
+
+    <!-- 右侧：3D展示面板 -->
+    <div class="panel" style="animation-delay:0.3s">
+      <div class="panel-title"><span class="dot"></span>3D 预览</div>
+      <canvas id="cube-canvas" width="400" height="400"></canvas>
+      <div class="net-container">
+        <canvas id="net-canvas" width="330" height="250"></canvas>
+      </div>
+    </div>
+
+    <!-- 求解结果面板 -->
+    <div class="panel full-panel" style="animation-delay:0.4s">
+      <div class="panel-title"><span class="dot"></span>求解步骤</div>
+      <div class="solution-area" id="solutionArea">
+        <div class="status-msg">请先编辑色块或上传图片，然后点击"求解"</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  魔方数据模型
+// ============================================================
+const FACES = ['U','D','F','B','L','R'];
+const FACE_NAMES = {U:'上(U)',D:'下(D)',F:'前(F)',B:'后(B)',L:'左(L)',R:'右(R)'};
+const COLORS = ['W','Y','G','B','O','R'];
+const COLOR_NAMES = {W:'白',Y:'黄',G:'绿',B:'蓝',O:'橙',R:'红'};
+const COLOR_HEX = {
+  W:'#f0f0f0', Y:'#ffe000', G:'#00a030',
+  B:'#0050d0', O:'#ff6800', R:'#d01018'
+};
+// 每个面的默认中心色
+const FACE_CENTER = {U:'Y',D:'W',F:'R',B:'O',L:'B',R:'G'};
+
+// 魔方状态: 6个面，每面9个格子 [0..8]
+let cubeState = {};
+function initCubeState() {
+  for (const f of FACES) {
+    cubeState[f] = Array(9).fill(FACE_CENTER[f]); // 每面填满该面中心色（还原状态）
+  }
+}
+initCubeState();
+
+let selectedColor = 'W';
+let solution = [];
+let currentStep = -1;
+let isPlaying = false;
+let playTimer = null;
+let playSpeed = 600; // ms per step
+let displayCube = {}; // 用于动画显示的魔方状态
+let kociembaSolution = []; // Kociemba最短步骤解法
+let layerSolution = []; // 层先法解法
+let activeSolution = 'layer'; // 当前显示的解法: 'layer' 或 'kociemba'
+
+// ============================================================
+//  魔方操作（与Flutter版本完全一致的逻辑）
+// ============================================================
+function cloneCube(c) {
+  const nc = {};
+  for (const f of FACES) nc[f] = [...c[f]];
+  return nc;
+}
+
+function rotateFaceCW(c, face) {
+  const f = c[face];
+  c[face] = [f[6],f[3],f[0], f[7],f[4],f[1], f[8],f[5],f[2]];
+}
+
+function rotateFaceCCW(c, face) {
+  const f = c[face];
+  c[face] = [f[2],f[5],f[8], f[1],f[4],f[7], f[0],f[3],f[6]];
+}
+
+function moveU(c) {
+  rotateFaceCW(c,'U');
+  const t = [c.F[0],c.F[1],c.F[2]];
+  c.F[0]=c.R[0]; c.F[1]=c.R[1]; c.F[2]=c.R[2];
+  c.R[0]=c.B[0]; c.R[1]=c.B[1]; c.R[2]=c.B[2];
+  c.B[0]=c.L[0]; c.B[1]=c.L[1]; c.B[2]=c.L[2];
+  c.L[0]=t[0]; c.L[1]=t[1]; c.L[2]=t[2];
+}
+function moveD(c) {
+  rotateFaceCW(c,'D');
+  const t = [c.F[6],c.F[7],c.F[8]];
+  c.F[6]=c.L[6]; c.F[7]=c.L[7]; c.F[8]=c.L[8];
+  c.L[6]=c.B[6]; c.L[7]=c.B[7]; c.L[8]=c.B[8];
+  c.B[6]=c.R[6]; c.B[7]=c.R[7]; c.B[8]=c.R[8];
+  c.R[6]=t[0]; c.R[7]=t[1]; c.R[8]=t[2];
+}
+function moveF(c) {
+  rotateFaceCW(c,'F');
+  const t = [c.U[6],c.U[7],c.U[8]];
+  c.U[6]=c.L[8]; c.U[7]=c.L[5]; c.U[8]=c.L[2];
+  c.L[2]=c.D[0]; c.L[5]=c.D[1]; c.L[8]=c.D[2];
+  c.D[0]=c.R[6]; c.D[1]=c.R[3]; c.D[2]=c.R[0];
+  c.R[0]=t[0]; c.R[3]=t[1]; c.R[6]=t[2];
+}
+function moveR(c) {
+  rotateFaceCW(c,'R');
+  const t = [c.U[2],c.U[5],c.U[8]];
+  c.U[2]=c.F[2]; c.U[5]=c.F[5]; c.U[8]=c.F[8];
+  c.F[2]=c.D[2]; c.F[5]=c.D[5]; c.F[8]=c.D[8];
+  c.D[2]=c.B[6]; c.D[5]=c.B[3]; c.D[8]=c.B[0];
+  c.B[0]=t[2]; c.B[3]=t[1]; c.B[6]=t[0];
+}
+function moveL(c) {
+  rotateFaceCW(c,'L');
+  const t = [c.U[0],c.U[3],c.U[6]];
+  c.U[0]=c.B[8]; c.U[3]=c.B[5]; c.U[6]=c.B[2];
+  c.B[2]=c.D[6]; c.B[5]=c.D[3]; c.B[8]=c.D[0];
+  c.D[0]=c.F[0]; c.D[3]=c.F[3]; c.D[6]=c.F[6];
+  c.F[0]=t[0]; c.F[3]=t[1]; c.F[6]=t[2];
+}
+function moveB(c) {
+  rotateFaceCW(c,'B');
+  const t = [c.U[0],c.U[1],c.U[2]];
+  c.U[0]=c.R[2]; c.U[1]=c.R[5]; c.U[2]=c.R[8];
+  c.R[2]=c.D[8]; c.R[5]=c.D[7]; c.R[8]=c.D[6];
+  c.D[6]=c.L[0]; c.D[7]=c.L[3]; c.D[8]=c.L[6];
+  c.L[0]=t[2]; c.L[3]=t[1]; c.L[6]=t[0];
+}
+
+function applyMove(c, move) {
+  const base = move.replace("'","");
+  const inv = move.includes("'");
+  switch(base) {
+    case 'U': inv ? (moveU(c),moveU(c),moveU(c)) : moveU(c); break;
+    case 'D': inv ? (moveD(c),moveD(c),moveD(c)) : moveD(c); break;
+    case 'F': inv ? (moveF(c),moveF(c),moveF(c)) : moveF(c); break;
+    case 'R': inv ? (moveR(c),moveR(c),moveR(c)) : moveR(c); break;
+    case 'L': inv ? (moveL(c),moveL(c),moveL(c)) : moveL(c); break;
+    case 'B': inv ? (moveB(c),moveB(c),moveB(c)) : moveB(c); break;
+  }
+}
+
+function isSolved(c) {
+  for (const f of FACES) {
+    const first = c[f][0];
+    if (!first) return false;
+    if (c[f].some(x => x !== first)) return false;
+  }
+  return true;
+}
+
+function isValidState(c) {
+  const cnt = {};
+  for (const f of FACES) {
+    for (const cl of c[f]) {
+      if (!cl) return false;
+      cnt[cl] = (cnt[cl]||0) + 1;
+    }
+  }
+  for (const v of Object.values(cnt)) {
+    if (v !== 9) return false;
+  }
+  return true;
+}
+
+// ============================================================
+//  层先法求解器（从Dart移植）
+// ============================================================
+const ALL_MOVES = ['U',"U'",'D',"D'",'F',"F'",'R',"R'",'L',"L'",'B',"B'"];
+
+function m(face) { return face; }
+function oppSide(f) {
+  return {F:'B',B:'F',L:'R',R:'L',U:'D',D:'U'}[f]||f;
+}
+function leftOf(f) {
+  return {F:'L',R:'F',B:'R',L:'B'}[f]||f;
+}
+function rightOf(f) {
+  return {F:'R',R:'B',B:'L',L:'F'}[f]||f;
+}
+function belowUp(pos) {
+  return {0:'L',2:'F',6:'B',8:'R'}[pos]||'F';
+}
+
+function cornerAdj(face, pos) {
+  const map = {
+    U:{0:['L',2,'B',0], 2:['B',0,'R',0], 6:['F',0,'L',0], 8:['R',0,'F',0]},
+    F:{0:['L',2,'U',8], 2:['U',6,'R',0], 6:['D',0,'L',8], 8:['R',6,'D',2]},
+    R:{0:['F',2,'U',8], 2:['U',6,'B',0], 6:['D',2,'F',8], 8:['B',6,'D',0]},
+    B:{0:['R',2,'U',8], 2:['U',6,'L',0], 6:['D',0,'R',8], 8:['L',6,'D',2]},
+    L:{0:['B',2,'U',8], 2:['U',6,'F',0], 6:['D',2,'B',8], 8:['F',6,'D',0]},
+  };
+  return map[face]?.[pos] || ['F',0,'L',2];
+}
+
+function edgeAdj(face, pos) {
+  const map = {
+    U:{1:['B',1], 3:['L',1], 5:['R',1], 7:['F',1]},
+    F:{1:['U',7], 3:['L',5], 5:['R',3], 7:['D',1]},
+    R:{1:['U',5], 3:['F',5], 5:['B',3], 7:['D',5]},
+    B:{1:['U',1], 3:['R',5], 5:['L',3], 7:['D',7]},
+    L:{1:['U',3], 3:['B',5], 5:['F',3], 7:['D',3]},
+    D:{1:['F',7], 3:['L',7], 5:['R',7], 7:['B',7]},
+  };
+  return map[face]?.[pos] || ['F',1];
+}
+
+function dIdx(sf) {
+  return {F:1,R:5,B:7,L:3}[sf]||1;
+}
+function sIdx(sf) {
+  return {F:7,R:3,B:1,L:5}[sf]||7;
+}
+
+function uRotToAlign(curSide, tgtSide) {
+  const order = ['F','R','B','L'];
+  const ci = order.indexOf(curSide), ti = order.indexOf(tgtSide);
+  if (ci<0||ti<0) return 0;
+  return (ti - ci + 4) % 4;
+}
+
+function applySeq(c, moves, seq) {
+  for (const s of seq) {
+    applyMove(c, s);
+    moves.push(s);
+  }
+}
+
+function findEdge(c, c1, c2) {
+  const allEdges = [
+    ['U',1,'B',1],['U',3,'L',1],['U',5,'R',1],['U',7,'F',1],
+    ['D',1,'F',7],['D',3,'L',7],['D',5,'R',7],['D',7,'B',7],
+    ['F',1,'U',7],['F',3,'L',5],['F',5,'R',3],['F',7,'D',1],
+    ['R',1,'U',5],['R',3,'F',5],['R',5,'B',3],['R',7,'D',5],
+    ['B',1,'U',1],['B',3,'R',5],['B',5,'L',3],['B',7,'D',7],
+    ['L',1,'U',3],['L',3,'B',5],['L',5,'F',3],['L',7,'D',3],
+  ];
+  for (const e of allEdges) {
+    const v1 = c[e[0]][e[1]], v2 = c[e[2]][e[3]];
+    if (v1===c1 && v2===c2) return {f1:e[0],i1:e[1],flip:false,f2:e[2],i2:e[3]};
+    if (v1===c2 && v2===c1) return {f1:e[0],i1:e[1],flip:true,f2:e[2],i2:e[3]};
+  }
+  return null;
+}
+
+function edgeAt(c, f1, i1, c1, f2, i2, c2) {
+  return c[f1][i1]===c1 && c[f2][i2]===c2;
+}
+
+function placeCrossEdge(c, loc, tgtD, tgtS, dc, sc) {
+  const mv = [];
+  const fm = m(tgtS);
+
+  if (loc.f1==='D' && loc.f2===tgtS) {
+    if (loc.flip) { applySeq(c, mv, [fm,fm]); }
+  } else if (loc.f1==='D') {
+    const lf = m(loc.f2);
+    applySeq(c, mv, [lf,lf]);
+    const nl = findEdge(c, dc, sc);
+    if (nl) mv.push(...placeCrossEdge(c, nl, tgtD, tgtS, dc, sc));
+  } else if (loc.f1==='U') {
+    const uf = m(loc.f2);
+    if (!loc.flip) {
+      const rot = uRotToAlign(loc.f2, tgtS);
+      for (let i=0;i<rot;i++) applySeq(c, mv, ['U']);
+      applySeq(c, mv, [fm,fm]);
+    } else {
+      const rot = uRotToAlign(loc.f2, oppSide(tgtS));
+      for (let i=0;i<rot;i++) applySeq(c, mv, ['U']);
+      const sm = m(tgtS);
+      applySeq(c, mv, [sm+"'",'U',sm,'U',"U'",sm+"'",'U',sm]);
+    }
+  } else {
+    const mf = m(loc.f1);
+    if (loc.i1===1||loc.i1===7) {
+      applySeq(c, mv, [mf,mf]);
+    } else {
+      const adj = leftOf(loc.f1);
+      const am = m(adj);
+      if (loc.i1===3) {
+        applySeq(c, mv, [am,am+"'",mf+"'",am,am+"'"]);
+      } else {
+        const ar = rightOf(loc.f1);
+        const arm = m(ar);
+        applySeq(c, mv, [arm+"'",arm,mf,arm+"'",arm]);
+      }
+    }
+    const nl = findEdge(c, dc, sc);
+    if (nl && !(nl.f1==='D' && nl.f2===tgtS && !nl.flip)) {
+      mv.push(...placeCrossEdge(c, nl, tgtD, tgtS, dc, sc));
+    }
+  }
+  return mv;
+}
+
+function solveCross(c) {
+  const moves = [];
+  const dc = c.D[4];
+  const targets = [['D','F'],['D','R'],['D','B'],['D','L']];
+  for (const [df,sf] of targets) {
+    const sc = c[sf][4];
+    const di = dIdx(sf), si = sIdx(sf);
+    if (edgeAt(c, df, di, dc, sf, si, sc)) continue;
+    const loc = findEdge(c, dc, sc);
+    if (!loc) { applySeq(c, moves, ['U']); continue; }
+    moves.push(...placeCrossEdge(c, loc, df, sf, dc, sc));
+  }
+  return moves;
+}
+
+function whiteDir(face, pos, c, dc) {
+  if (face==='U') return 'up';
+  if (c[face][pos]===dc) return (pos===0||pos===3||pos===6) ? 'left' : 'right';
+  const [a1,ap1] = cornerAdj(face, pos);
+  if (c[a1][ap1]===dc) return 'front';
+  return 'up';
+}
+
+function ufToSlot(face, pos, tgtFront) {
+  const map = {
+    'F,6':0,'F,8':1,'R,6':2,'R,8':3,'B,8':4,'B,6':5,'L,6':6,'L,8':7,
+    'F,0':2,'F,2':3,'R,0':4,'R,2':5,'B,2':6,'B,0':7,'L,0':0,'L,2':1,
+  };
+  const slotMap = ['F','R','B','L'];
+  const ci = map[face+','+pos]||0;
+  const ti = slotMap.indexOf(tgtFront);
+  if (ti<0) return 0;
+  return (ti - Math.floor(ci/2) + 4) % 4;
+}
+
+function findAndInsertCorner(c, moves, df, di, f1, p1, f2, p2, dc, fc, sc) {
+  for (const cf of ['F','R','B','L']) {
+    for (const cp of [0,2,6,8]) {
+      const cc = c[cf][cp];
+      if (cc!==dc) continue;
+      const [a1,ap1,a2,ap2] = cornerAdj(cf, cp);
+      const ac1 = c[a1][ap1], ac2 = c[a2][ap2];
+      if (!((ac1===fc||ac1===sc)||(ac2===fc||ac2===sc))) continue;
+
+      if (cf==='U') {
+        const below = belowUp(cp);
+        const bm = m(below);
+        applySeq(c, moves, [bm,'U',bm+"'",'U\'']);
+        return true;
+      }
+
+      const cm = m(cf);
+      const uRot = ufToSlot(cf, cp, f1);
+      for (let i=0;i<uRot;i++) applySeq(c, moves, ['U']);
+
+      const wd = whiteDir(cf, cp, c, dc);
+      switch(wd) {
+        case 'up':
+          applySeq(c, moves, [cm,'U',cm+"'",'U\'',cm,'U',cm+"'",'U\'']);
+          return true;
+        case 'right':
+          applySeq(c, moves, [cm+"'",'U\'',cm,'U',cm+"'",'U\'',cm]);
+          return true;
+        case 'left':
+          applySeq(c, moves, [cm,'U',cm+"'",'U\'',cm,'U',cm+"'",'U\'']);
+          return true;
+        case 'front':
+          applySeq(c, moves, [cm+"'",'U\'',cm,'U',cm+"'",'U\'',cm,'U']);
+          applySeq(c, moves, ['U\'']);
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+function solveFLCorners(c) {
+  const moves = [];
+  const dc = c.D[4];
+  const slots = [
+    ['D',0,'F',6,'L',8, dc,c.F[4],c.L[4]],
+    ['D',2,'F',8,'R',6, dc,c.F[4],c.R[4]],
+    ['D',8,'R',8,'B',6, dc,c.R[4],c.B[4]],
+    ['D',6,'B',8,'L',6, dc,c.B[4],c.L[4]],
+  ];
+  for (const [df,di,f1,p1,f2,p2,dc2,fc,sc] of slots) {
+    if (c[df][di]===dc && c[f1][p1]===fc && c[f2][p2]===sc) continue;
+    for (let attempt=0;attempt<16;attempt++) {
+      if (findAndInsertCorner(c, moves, df,di,f1,p1,f2,p2,dc,fc,sc)) break;
+      applySeq(c, moves, ['U']);
+    }
+  }
+  return moves;
+}
+
+function alignUForInsert(uf, tf) {
+  const o = ['F','R','B','L'];
+  return (o.indexOf(tf) - o.indexOf(uf) + 4) % 4;
+}
+
+function insertMidEdge(c, uf, up, ef, tf, ta, topMatchesFront) {
+  const r = [];
+  const um = m(uf), em = m(ef), tm = m(tf), tam = m(ta);
+  if (topMatchesFront) {
+    if (up===5) {
+      applySeq(c,r,[um,em+"'",um+"'",em,um+"'",tm,um,tm+"'",um+"'"]);
+    } else if (up===3) {
+      applySeq(c,r,[um+"'",em,um,em+"'",um,tam+"'",um+"'",tam,um]);
+    } else if (up===1) {
+      const n=alignUForInsert(uf,tf);
+      for(let i=0;i<n;i++) applySeq(c,r,['U']);
+      applySeq(c,r,['U',tm,'U\'',tm+'\'','U\'',tam+'\'','U',tam]);
+    } else {
+      const n=alignUForInsert(uf,tf);
+      for(let i=0;i<n;i++) applySeq(c,r,['U']);
+      applySeq(c,r,['U',tam+'\'','U',tam,'U',tm,'U\'',tm+'\'']);
+    }
+  } else {
+    if (up===3) {
+      applySeq(c,r,[um+"'",em,um,em+"'",um+"'",tm,um+"'",tm+'\'',um,tm]);
+    } else if (up===5) {
+      applySeq(c,r,[um,em+"'",um+"'",em,um,tam+"'",um+"'",tam,um+"'"]);
+    } else if (up===1) {
+      const n=alignUForInsert(uf,tf);
+      for(let i=0;i<n;i++) applySeq(c,r,['U']);
+      applySeq(c,r,['U',tam+'\'','U',tam,'U',tm,'U\'',tm+'\'']);
+    } else {
+      const n=alignUForInsert(uf,tf);
+      for(let i=0;i<n;i++) applySeq(c,r,['U']);
+      applySeq(c,r,['U',tm,'U\'',tm+'\'','U\'',tam+'\'','U',tam]);
+    }
+  }
+  return r;
+}
+
+function solveMiddleEdges(c) {
+  const moves = [];
+  const slots = [['F',5,'R',3],['R',5,'B',3],['B',5,'L',3],['L',5,'F',3]];
+  for (const [sf,si,af,ai] of slots) {
+    const sc = c[sf][4], ac = c[af][4];
+    if (c[sf][si]===sc && c[af][ai]===ac) continue;
+    let placed = false;
+    for (let ur=0;ur<4&&!placed;ur++) {
+      for (const uf of ['F','R','B','L']) {
+        for (const up of [1,3,5,7]) {
+          const uc = c[uf][up];
+          if (uc!==sc && uc!==ac) continue;
+          const [ef,ep] = edgeAdj(uf, up);
+          const ec = c[ef][ep];
+          if (!((uc===sc&&ec===ac)||(uc===ac&&ec===sc))) continue;
+          const alg = insertMidEdge(c, uf,up,ef,sf,af, uc===sc);
+          applySeq(c, moves, alg);
+          placed = true; break;
+        }
+        if (placed) break;
+      }
+      if (!placed && ur<3) applySeq(c, moves, ['U']);
+    }
+  }
+  return moves;
+}
+
+function solveOLLCross(c) {
+  const moves = [];
+  const tc = c.U[4];
+  for (let iter=0;iter<8;iter++) {
+    const e = [c.U[1],c.U[3],c.U[5],c.U[7]];
+    const count = e.filter(x=>x===tc).length;
+    if (count===4) break;
+    const h = e[0]===tc&&e[2]===tc;
+    const v = e[1]===tc&&e[3]===tc;
+    if (h&&!v) { applySeq(c,moves,['F','R','U','R\'','F\'']); }
+    else if (v&&!h) { applySeq(c,moves,['U']); applySeq(c,moves,['F','R','U','R\'','F\'']); }
+    else if (count===0) { applySeq(c,moves,['F','R','U\'','R\'','F\'']); }
+    else { applySeq(c,moves,['F','R','U\'','R\'','F\'']); }
+  }
+  return moves;
+}
+
+function solveOLLCorners(c) {
+  const moves = [];
+  const tc = c.U[4];
+  for (let iter=0;iter<20;iter++) {
+    let allOk = true;
+    for (const p of [0,2,6,8]) { if (c.U[p]!==tc) { allOk=false; break; } }
+    if (allOk) break;
+    // 简化：使用 Sune
+    applySeq(c, moves, ['R','U','R\'','U','R','U','U','R\'']);
+  }
+  return moves;
+}
+
+function solvePLL(c) {
+  const moves = [];
+  const tc = c.U[4];
+  for (let iter=0;iter<20;iter++) {
+    // 检查角块排列
+    let cornersOk = true;
+    const cSlots = [['U',0,'F',0],['U',2,'R',2],['U',8,'B',8],['U',6,'L',6]];
+    for (const [uf,ui,sf,si] of cSlots) {
+      if (c[uf][ui]===tc && c[sf][si]!==c[sf][4]) { cornersOk=false; break; }
+    }
+    // 检查棱块排列
+    let edgesOk = true;
+    const eSlots = [['U',1,'F'],['U',5,'R'],['U',7,'B'],['U',3,'L']];
+    for (const [uf,ui,sf] of eSlots) {
+      if (c[uf][ui]===tc && c[sf][1]!==c[sf][4]) { edgesOk=false; break; }
+    }
+    if (cornersOk && edgesOk) break;
+
+    if (!cornersOk) {
+      // A-perm
+      applySeq(c, moves, ['R','U\'','R','U','R','U','R\'','U\'','R\'','U\'','R\'']);
+    } else {
+      // Ua-perm
+      applySeq(c, moves, ['R','U\'','R','U','R','U','R\'','U\'','R\'','U','R','R']);
+    }
+    applySeq(c, moves, ['U']);
+  }
+  return moves;
+}
+
+function greedySolve(c) {
+  const sol = [];
+  for (let i=0;i<80;i++) {
+    if (isSolved(c)) break;
+    let bestMove = null, bestScore = evaluate(c);
+    for (const mv of ALL_MOVES) {
+      const nc = cloneCube(c);
+      applyMove(nc, mv);
+      const s = evaluate(nc);
+      if (s > bestScore) { bestScore = s; bestMove = mv; }
+    }
+    if (bestMove) { applyMove(c, bestMove); sol.push(bestMove); }
+    else break;
+  }
+  return sol;
+}
+
+function evaluate(c) {
+  let s = 0;
+  for (const f of FACES) {
+    const ctr = c[f][4];
+    for (let i=0;i<9;i++) if (c[f][i]===ctr) s++;
+  }
+  return s * 10;
+}
+
+function solveLayerByLayer(c) {
+  if (isSolved(c)) return [];
+  if (!isValidState(c)) return null;
+  const sol = [];
+  sol.push(...solveCross(c));
+  sol.push(...solveFLCorners(c));
+  sol.push(...solveMiddleEdges(c));
+  sol.push(...solveOLLCross(c));
+  sol.push(...solveOLLCorners(c));
+  sol.push(...solvePLL(c));
+  if (!isSolved(c)) sol.push(...greedySolve(c));
+  return sol;
+}
+
+// ============================================================
+//  Kociemba 最短步骤求解器（使用 rubik-cube-solver 库）
+// ============================================================
+
+// 将我们的面颜色映射到库的 URFDLB 面名
+// 库的约定: U=上面, R=右面, F=前面, D=下面, L=左面, B=后面
+// 我们的约定: U=Y(黄), D=W(白), F=R(红), B=O(橙), L=B(蓝), R=G(绿)
+// 所以: Y->U, W->D, R->F, O->B, B->L, G->R
+const COLOR_TO_FACE = {W:'D', Y:'U', G:'R', B:'L', O:'B', R:'F'};
+
+// 将 cubeState 转换为库所需的54字符字符串
+// 库的格式: U1..U9 R1..R9 F1..F9 D1..D9 L1..L9 B1..B9
+function cubeStateToKociembaStr(c) {
+  // 库的面的顺序: U R F D L B
+  const faceOrder = ['U','R','F','D','L','B'];
+  let str = '';
+  for (const f of faceOrder) {
+    for (let i=0;i<9;i++) {
+      const color = c[f][i];
+      str += COLOR_TO_FACE[color] || 'U';
+    }
+  }
+  return str;
+}
+
+function solveKociemba(c) {
+  try {
+    // 检查库是否可用且已初始化
+    if (typeof Cube === 'undefined' || !window._kociembaReady) return null;
+
+    const str = cubeStateToKociembaStr(c);
+    const cube = Cube.fromString(str);
+    const solutionStr = cube.solve();
+    if (!solutionStr) return null;
+
+    // 解析解法字符串，转换为我们的格式
+    // 库输出格式如: "U F B R L U2 B2 U L2 F' U' F2 U2 L2 D L2 F2 U' R2 U2 L2 U'"
+    const rawMoves = solutionStr.trim().split(/\s+/);
+    const moves = [];
+
+    for (const raw of rawMoves) {
+      if (!raw) continue;
+      // 库可能输出双字母面名如 U2, R', F2 等
+      if (raw.length === 1) {
+        moves.push(raw);
+      } else if (raw.length === 2) {
+        if (raw[1] === '2') {
+          // 双转: 拆成两步
+          moves.push(raw[0]);
+          moves.push(raw[0]);
+        } else if (raw[1] === "'") {
+          moves.push(raw);
+        }
+      } else if (raw.length === 3 && raw[1] === '2' && raw[2] === "'") {
+        // 极少见的2+逆: 等同于单步逆
+        moves.push(raw[0] + "'");
+      }
+    }
+
+    // 验证解法是否正确
+    const vc = cloneCube(c);
+    for (const mv of moves) applyMove(vc, mv);
+    if (!isSolved(vc)) return null; // 解法无效
+
+    return moves;
+  } catch (e) {
+    console.warn('Kociemba求解失败:', e);
+    return null;
+  }
+}
+
+// ============================================================
+//  UI 构建
+// ============================================================
+function buildColorPalette() {
+  const el = document.getElementById('colorPalette');
+  el.innerHTML = '';
+  for (const color of COLORS) {
+    const swatch = document.createElement('div');
+    swatch.className = 'color-swatch' + (color===selectedColor?' selected':'');
+    swatch.style.background = COLOR_HEX[color];
+    swatch.title = COLOR_NAMES[color];
+    swatch.innerHTML = `<span class="swatch-label">${COLOR_NAMES[color]}</span>`;
+    swatch.onclick = () => {
+      selectedColor = color;
+      document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      swatch.classList.add('selected');
+    };
+    el.appendChild(swatch);
+  }
+}
+
+function buildFacesGrid() {
+  const el = document.getElementById('facesGrid');
+  el.innerHTML = '';
+  for (const face of FACES) {
+    const card = document.createElement('div');
+    card.className = 'face-card';
+    card.id = 'face-card-' + face;
+
+    const label = document.createElement('div');
+    label.className = 'face-label';
+    label.textContent = FACE_NAMES[face];
+    card.appendChild(label);
+
+    const grid = document.createElement('div');
+    grid.className = 'face-grid';
+    for (let i=0;i<9;i++) {
+      const cell = document.createElement('div');
+      cell.className = 'face-cell' + (i===4?' center-cell':'');
+      cell.dataset.face = face;
+      cell.dataset.index = i;
+      updateCellColor(cell, cubeState[face][i]);
+      if (i !== 4) {
+        cell.onclick = () => {
+          cubeState[face][i] = selectedColor;
+          updateCellColor(cell, selectedColor);
+          renderAll();
+        };
+      }
+      grid.appendChild(cell);
+    }
+    card.appendChild(grid);
+    el.appendChild(card);
+  }
+}
+
+function updateCellColor(cell, color) {
+  if (color) {
+    cell.style.background = COLOR_HEX[color];
+  } else {
+    cell.style.background = 'rgba(255,255,255,0.05)';
+  }
+}
+
+function refreshFacesGrid() {
+  for (const face of FACES) {
+    const card = document.getElementById('face-card-' + face);
+    if (!card) continue;
+    const cells = card.querySelectorAll('.face-cell');
+    cells.forEach((cell, i) => {
+      updateCellColor(cell, cubeState[face][i]);
+    });
+  }
+}
+
+function buildUploadSection() {
+  const el = document.getElementById('uploadSection');
+  el.innerHTML = '';
+  for (const face of FACES) {
+    const box = document.createElement('div');
+    box.className = 'upload-box';
+    box.id = 'upload-' + face;
+    box.innerHTML = `
+      <span class="upload-label">${FACE_NAMES[face]}</span>
+      <input type="file" accept="image/*" onchange="handleImageUpload('${face}', this)">
+    `;
+    el.appendChild(box);
+  }
+}
+
+function handleImageUpload(face, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const box = document.getElementById('upload-' + face);
+    const img = box.querySelector('img');
+    if (img) {
+      img.src = e.target.result;
+    } else {
+      const newImg = document.createElement('img');
+      newImg.src = e.target.result;
+      newImg.dataset.face = face;
+      box.insertBefore(newImg, box.querySelector('input'));
+    }
+    box.classList.add('has-image');
+  };
+  reader.readAsDataURL(file);
+}
+
+// ============================================================
+//  图片颜色识别
+// ============================================================
+function recognizeAllImages() {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let recognized = 0;
+
+  for (const face of FACES) {
+    const box = document.getElementById('upload-' + face);
+    const img = box?.querySelector('img');
+    if (!img) continue;
+
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    ctx.drawImage(img, 0, 0);
+
+    // 采样3x3网格（避开边缘）
+    const w = canvas.width, h = canvas.height;
+    const margin = Math.min(w, h) * 0.15;
+    const cellW = (w - 2*margin) / 3;
+    const cellH = (h - 2*margin) / 3;
+
+    for (let row=0;row<3;row++) {
+      for (let col=0;col<3;col++) {
+        const idx = row*3+col;
+        if (idx===4) continue; // 中心格跳过
+        const cx = margin + (col+0.5)*cellW;
+        const cy = margin + (row+0.5)*cellH;
+        const sampleSize = Math.min(cellW, cellH) * 0.3;
+
+        // 采样多个点取中位数
+        const samples = [];
+        for (let sy=-1;sy<=1;sy++) {
+          for (let sx=-1;sx<=1;sx++) {
+            const px = Math.round(cx + sx*sampleSize*0.4);
+            const py = Math.round(cy + sy*sampleSize*0.4);
+            if (px>=0 && px<w && py>=0 && py<h) {
+              const d = ctx.getImageData(px, py, 1, 1).data;
+              samples.push([d[0], d[1], d[2]]);
+            }
+          }
+        }
+        if (samples.length > 0) {
+          const median = getMedianRgb(samples);
+          cubeState[face][idx] = classifyRgb(median[0], median[1], median[2]);
+        }
+      }
+    }
+    recognized++;
+  }
+
+  refreshFacesGrid();
+  renderAll();
+  if (recognized > 0) {
+    showToast(`已识别 ${recognized} 个面的色块，请检查并手动修正`);
+  } else {
+    showToast('未找到可识别的图片');
+  }
+}
+
+function getMedianRgb(samples) {
+  samples.sort((a,b) => (a[0]+a[1]+a[2]) - (b[0]+b[1]+b[2]));
+  return samples[Math.floor(samples.length/2)];
+}
+
+function classifyRgb(r, g, b) {
+  const brightness = (r+g+b)/3;
+  if (brightness > 195) {
+    const maxCh = Math.max(r,g,b), minCh = Math.min(r,g,b);
+    const sat = maxCh===0 ? 0 : (maxCh-minCh)/maxCh;
+    if (sat < 0.20) return 'W';
+  }
+  if (brightness < 45) return 'B';
+
+  const rf=r/255, gf=g/255, bf=b/255;
+  const maxV = Math.max(rf,gf,bf), minV = Math.min(rf,gf,bf);
+  const delta = maxV - minV;
+  const sat = maxV===0 ? 0 : delta/maxV;
+
+  if (sat < 0.12) return brightness > 140 ? 'W' : 'B';
+
+  let hue = 0;
+  if (delta > 0) {
+    if (maxV===rf) hue = 60*(((gf-bf)/delta)%6);
+    else if (maxV===gf) hue = 60*(((bf-rf)/delta)+2);
+    else hue = 60*(((rf-gf)/delta)+4);
+  }
+  if (hue<0) hue+=360;
+
+  if (hue>=345||hue<15) {
+    if (hue>=10&&hue<30&&sat<0.85) return 'O';
+    return 'R';
+  }
+  if (hue>=15&&hue<45) {
+    if (hue>=38&&r<g+15) return 'Y';
+    return 'O';
+  }
+  if (hue>=45&&hue<75) {
+    if (brightness>170&&sat<0.7) return 'Y';
+    if (hue>=65) return 'G';
+    return 'Y';
+  }
+  if (hue>=75&&hue<170) return 'G';
+  if (hue>=170&&hue<270) return 'B';
+
+  if (r>=g&&r>=b) return g>b+20?'O':'R';
+  if (g>=r&&g>=b) return r>b+25?'Y':'G';
+  return 'B';
+}
+
+// ============================================================
+//  3D 魔方渲染（等距投影，与Flutter版本一致）
+// ============================================================
+const COS30 = 0.866, SIN30 = 0.5;
+
+function project(x, y, z, cx, cy) {
+  return [cx + (x-z)*COS30, cy + y + (x+z)*SIN30];
+}
+
+function rotY(x,y,z,a) { const c=Math.cos(a),s=Math.sin(a); return [x*c+z*s, y, -x*s+z*c]; }
+function rotX(x,y,z,a) { const c=Math.cos(a),s=Math.sin(a); return [x, y*c-z*s, y*s+z*c]; }
+function rotZ(x,y,z,a) { const c=Math.cos(a),s=Math.sin(a); return [x*c-y*s, x*s+y*c, z]; }
+
+function rotateLayer(x,y,z,base,angle) {
+  switch(base) {
+    case 'U': return rotY(x,y,z,angle);
+    case 'D': return rotY(x,y,z,-angle);
+    case 'R': return rotX(x,y,z,-angle);
+    case 'L': return rotX(x,y,z,angle);
+    case 'F': return rotZ(x,y,z,-angle);
+    case 'B': return rotZ(x,y,z,angle);
+    default: return [x,y,z];
+  }
+}
+
+function inLayer(x,y,z,base,s) {
+  switch(base) {
+    case 'U': return y < -0.5*s;
+    case 'D': return y > 0.5*s;
+    case 'R': return x > 0.5*s;
+    case 'L': return x < -0.5*s;
+    case 'F': return z > 0.5*s;
+    case 'B': return z < -0.5*s;
+    default: return false;
+  }
+}
+
+function transform(x,y,z,animBase,animAngle,s) {
+  if (animBase && inLayer(x,y,z,animBase,s)) return rotateLayer(x,y,z,animBase,animAngle);
+  return [x,y,z];
+}
+
+function transformNormal(n,animBase,animAngle) {
+  if (animBase) return rotateLayer(n[0],n[1],n[2],animBase,animAngle);
+  return n;
+}
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return [r,g,b];
+}
+
+function adjustBrightness(rgb, factor) {
+  return rgb.map(c => Math.round(Math.min(255, c * factor)));
+}
+
+function render3DCube(canvas, cube, animBase, animAngle, currentMove) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const cx = W/2, cy = H/2 + 20;
+  const s = W/4.5;
+  const gap = s*0.05;
+
+  const stickers = [];
+  const visibleFaces = [
+    ['U', cube.U, [0,-1,0]],
+    ['F', cube.F, [0,0,1]],
+    ['R', cube.R, [1,0,0]],
+  ];
+
+  for (const [face, colors, normal] of visibleFaces) {
+    for (let row=0;row<3;row++) {
+      for (let col=0;col<3;col++) {
+        const color = colors[row*3+col];
+        const hex = color ? COLOR_HEX[color] : '#333333';
+        const rgb = hexToRgb(hex);
+
+        let verts, n;
+        switch(face) {
+          case 'U': {
+            const vx=(col-1.5)*s+gap, vy=(col-0.5)*s-gap;
+            const vz0=(row-1.5)*s+gap, vz1=(row-0.5)*s-gap;
+            const y0=-1.5*s;
+            verts=[[vx,y0,vz0],[vy,y0,vz0],[vy,y0,vz1],[vx,y0,vz1]];
+            n=[...normal]; break;
+          }
+          case 'F': {
+            const vx=(col-1.5)*s+gap, vy=(col-0.5)*s-gap;
+            const fy0=(row-1.5)*s+gap, fy1=(row-0.5)*s-gap;
+            const fz0=1.5*s;
+            verts=[[vx,fy0,fz0],[vy,fy0,fz0],[vy,fy1,fz0],[vx,fy1,fz0]];
+            n=[...normal]; break;
+          }
+          case 'R': {
+            const rz0=(col-1.5)*s+gap, rz1=(col-0.5)*s-gap;
+            const ry0=(row-1.5)*s+gap, ry1=(row-0.5)*s-gap;
+            const rx0=1.5*s;
+            verts=[[rx0,ry0,rz0],[rx0,ry0,rz1],[rx0,ry1,rz1],[rx0,ry1,rz0]];
+            n=[...normal]; break;
+          }
+        }
+
+        const inAnim = animBase && inLayer(verts[0][0],verts[0][1],verts[0][2],animBase,s);
+        const tv = verts.map(v => transform(v[0],v[1],v[2],animBase,animAngle,s));
+        const tn = transformNormal(n, animBase, animAngle);
+
+        stickers.push({tv, rgb, tn, inAnim, face});
+      }
+    }
+  }
+
+  // 深度排序
+  stickers.sort((a,b) => (a.tv[0][1]+a.tv[2][1]) - (b.tv[0][1]+b.tv[2][1]));
+
+  const hasAnim = animBase && animAngle > 0.05;
+
+  for (const st of stickers) {
+    const proj = st.tv.map(v => project(v[0],v[1],v[2],cx,cy));
+
+    let displayRgb = [...st.rgb];
+    if (hasAnim && !st.inAnim) {
+      displayRgb = displayRgb.map(c => Math.round(c*0.55 + 220*0.45));
+    }
+
+    // 光照
+    const lightDir = [0.3,-1.0,0.5];
+    const lLen = Math.sqrt(lightDir[0]**2+lightDir[1]**2+lightDir[2]**2);
+    const nLen = Math.sqrt(st.tn[0]**2+st.tn[1]**2+st.tn[2]**2);
+    let dot = (st.tn[0]*lightDir[0]+st.tn[1]*lightDir[1]+st.tn[2]*lightDir[2])/(nLen*lLen);
+    dot = Math.max(0, Math.min(1, dot));
+    const brightness = 0.40 + 0.60*dot;
+
+    const litRgb = displayRgb.map(c => Math.round(Math.min(255, c*brightness)));
+
+    // 绘制
+    ctx.beginPath();
+    ctx.moveTo(proj[0][0], proj[0][1]);
+    for (let i=1;i<proj.length;i++) ctx.lineTo(proj[i][0], proj[i][1]);
+    ctx.closePath();
+
+    ctx.fillStyle = `rgb(${litRgb[0]},${litRgb[1]},${litRgb[2]})`;
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+  }
+
+  // 网格线
+  const gridPaint = 'rgba(0,0,0,0.12)';
+  const lines = [
+    [[0,-1.5*s,-0.5*s],[0,-1.5*s,0.5*s]],
+    [[0,-1.5*s,-1.5*s],[0,-1.5*s,1.5*s]],
+    [[-0.5*s,-1.5*s,0],[0.5*s,-1.5*s,0]],
+    [[-1.5*s,-1.5*s,0],[1.5*s,-1.5*s,0]],
+    [[0,-0.5*s,1.5*s],[0,0.5*s,1.5*s]],
+    [[0,-1.5*s,1.5*s],[0,1.5*s,1.5*s]],
+    [[-0.5*s,0,1.5*s],[0.5*s,0,1.5*s]],
+    [[-1.5*s,0,1.5*s],[1.5*s,0,1.5*s]],
+    [[1.5*s,-0.5*s,0],[1.5*s,0.5*s,0]],
+    [[1.5*s,-1.5*s,0],[1.5*s,1.5*s,0]],
+    [[1.5*s,0,-0.5*s],[1.5*s,0,0.5*s]],
+    [[1.5*s,0,-1.5*s],[1.5*s,0,1.5*s]],
+  ];
+  ctx.strokeStyle = gridPaint;
+  ctx.lineWidth = 0.6;
+  for (const [a,b] of lines) {
+    const ta = transform(a[0],a[1],a[2],animBase,animAngle,s);
+    const tb = transform(b[0],b[1],b[2],animBase,animAngle,s);
+    const pa = project(ta[0],ta[1],ta[2],cx,cy);
+    const pb = project(tb[0],tb[1],tb[2],cx,cy);
+    ctx.beginPath();
+    ctx.moveTo(pa[0],pa[1]);
+    ctx.lineTo(pb[0],pb[1]);
+    ctx.stroke();
+  }
+
+  // 绘制旋转箭头
+  if (currentMove) {
+    drawRotationArrow(ctx, currentMove, cx, cy, s, cube);
+  }
+}
+
+// ============================================================
+//  旋转箭头绘制
+// ============================================================
+function drawRotationArrow(ctx, move, cx, cy, s, cube) {
+  const base = move.replace("'","");
+  const inverted = move.includes("'");
+
+  // 每个面的中心点（3D坐标）和法线方向
+  const faceInfo = {
+    U: { center: [0, -1.5*s, 0], normal: [0,-1,0], label: 'U' },
+    D: { center: [0,  1.5*s, 0], normal: [0, 1,0], label: 'D' },
+    F: { center: [0, 0, 1.5*s], normal: [0, 0,1], label: 'F' },
+    B: { center: [0, 0,-1.5*s], normal: [0, 0,-1], label: 'B' },
+    L: { center: [-1.5*s, 0, 0], normal: [-1,0,0], label: 'L' },
+    R: { center: [1.5*s, 0, 0], normal: [1, 0,0], label: 'R' },
+  };
+
+  const info = faceInfo[base];
+  if (!info) return;
+
+  // 获取该面中心色，用于箭头颜色
+  const centerColor = cube && cube[base] ? cube[base][4] : null;
+  const arrowHex = centerColor ? COLOR_HEX[centerColor] : '#f59e0b';
+  const arrowRgb = hexToRgb(arrowHex);
+  // 确保颜色足够亮（在深色背景上可见）
+  const brightness = (arrowRgb[0] + arrowRgb[1] + arrowRgb[2]) / 3;
+  const useFallback = !centerColor || brightness < 80;
+
+  // 生成带透明度的颜色
+  function arrowColor(alpha) {
+    if (useFallback) return `rgba(245, 158, 11, ${alpha})`;
+    return `rgba(${arrowRgb[0]}, ${arrowRgb[1]}, ${arrowRgb[2]}, ${alpha})`;
+  }
+
+  const [fcx, fcy, fcz] = info.center;
+  const [nx, ny, nz] = info.normal;
+
+  // 计算面的两个切线方向（在面上的两个正交向量）
+  let t1, t2;
+  if (Math.abs(ny) > 0.9) {
+    // U/D面：切线在XZ平面
+    t1 = [1, 0, 0]; t2 = [0, 0, 1];
+  } else if (Math.abs(nx) > 0.9) {
+    // L/R面：切线在YZ平面
+    t1 = [0, 0, 1]; t2 = [0, 1, 0];
+  } else {
+    // F/B面：切线在XY平面
+    t1 = [1, 0, 0]; t2 = [0, 1, 0];
+  }
+
+  const radius = s * 1.3;
+  const steps = 24;
+  const arcSpan = Math.PI * 1.6; // 约288度的弧
+
+  // 顺时针/逆时针（从法线方向看）
+  const dir = inverted ? -1 : 1;
+
+  // 生成弧线上的点
+  const arcPoints = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * arcSpan;
+    const angle = t * dir;
+    const px = fcx + radius * (Math.cos(angle) * t1[0] + Math.sin(angle) * t2[0]);
+    const py = fcy + radius * (Math.cos(angle) * t1[1] + Math.sin(angle) * t2[1]);
+    const pz = fcz + radius * (Math.cos(angle) * t1[2] + Math.sin(angle) * t2[2]);
+    const [sx, sy] = project(px, py, pz, cx, cy);
+    arcPoints.push([sx, sy]);
+  }
+
+  // 绘制弧线
+  ctx.beginPath();
+  ctx.moveTo(arcPoints[0][0], arcPoints[0][1]);
+  for (let i = 1; i < arcPoints.length; i++) {
+    ctx.lineTo(arcPoints[i][0], arcPoints[i][1]);
+  }
+  ctx.strokeStyle = arrowColor(0.9);
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // 绘制箭头头部
+  const last = arcPoints[arcPoints.length - 1];
+  const prev = arcPoints[arcPoints.length - 3]; // 取倒数第三个点做方向
+  const dx = last[0] - prev[0];
+  const dy = last[1] - prev[1];
+  const len = Math.sqrt(dx*dx + dy*dy);
+  if (len > 0) {
+    const ux = dx/len, uy = dy/len;
+    const arrowSize = 12;
+    // 两条箭头线
+    ctx.beginPath();
+    ctx.moveTo(last[0], last[1]);
+    ctx.lineTo(last[0] - arrowSize*ux + arrowSize*0.5*uy, last[1] - arrowSize*uy - arrowSize*0.5*ux);
+    ctx.moveTo(last[0], last[1]);
+    ctx.lineTo(last[0] - arrowSize*ux - arrowSize*0.5*uy, last[1] - arrowSize*uy + arrowSize*0.5*ux);
+    ctx.strokeStyle = arrowColor(0.9);
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
+  // 在弧线起点绘制小圆点
+  ctx.beginPath();
+  ctx.arc(arcPoints[0][0], arcPoints[0][1], 3, 0, Math.PI*2);
+  ctx.fillStyle = arrowColor(0.7);
+  ctx.fill();
+
+  // 在面中心绘制操作标签
+  const [labelX, labelY] = project(fcx, fcy, fcz, cx, cy);
+  ctx.font = 'bold 16px JetBrains Mono, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 标签背景
+  const labelText = move;
+  const metrics = ctx.measureText(labelText);
+  const pad = 4;
+  ctx.fillStyle = arrowColor(0.85);
+  ctx.beginPath();
+  ctx.roundRect(labelX - metrics.width/2 - pad, labelY - 10 - pad, metrics.width + pad*2, 20 + pad*2, 6);
+  ctx.fill();
+
+  ctx.fillStyle = '#000';
+  ctx.fillText(labelText, labelX, labelY);
+
+  // 在可见面上绘制半透明高亮覆盖
+  drawFaceHighlight(ctx, base, cx, cy, s, arrowColor);
+}
+
+function drawFaceHighlight(ctx, base, cx, cy, s, colorFn) {
+  // colorFn: (alpha) => string，如果未提供则用默认琥珀色
+  const c = colorFn || ((a) => `rgba(245, 158, 11, ${a})`);
+  // 获取该面所有格子的顶点并投影，绘制半透明覆盖
+  const faceVerts = {
+    U: () => {
+      const y0 = -1.5*s;
+      const g = s*0.05;
+      return [
+        [[-1.5*s+g, y0, -1.5*s+g], [-0.5*s-g, y0, -1.5*s+g], [-0.5*s-g, y0, -0.5*s-g], [-1.5*s+g, y0, -0.5*s-g]],
+        [[-0.5*s+g, y0, -1.5*s+g], [0.5*s-g, y0, -1.5*s+g], [0.5*s-g, y0, -0.5*s-g], [-0.5*s+g, y0, -0.5*s-g]],
+        [[0.5*s+g, y0, -1.5*s+g], [1.5*s-g, y0, -1.5*s+g], [1.5*s-g, y0, -0.5*s-g], [0.5*s+g, y0, -0.5*s-g]],
+        [[-1.5*s+g, y0, -0.5*s+g], [-0.5*s-g, y0, -0.5*s+g], [-0.5*s-g, y0, 0.5*s-g], [-1.5*s+g, y0, 0.5*s-g]],
+        [[-0.5*s+g, y0, -0.5*s+g], [0.5*s-g, y0, -0.5*s+g], [0.5*s-g, y0, 0.5*s-g], [-0.5*s+g, y0, 0.5*s-g]],
+        [[0.5*s+g, y0, -0.5*s+g], [1.5*s-g, y0, -0.5*s+g], [1.5*s-g, y0, 0.5*s-g], [0.5*s+g, y0, 0.5*s-g]],
+        [[-1.5*s+g, y0, 0.5*s+g], [-0.5*s-g, y0, 0.5*s+g], [-0.5*s-g, y0, 1.5*s-g], [-1.5*s+g, y0, 1.5*s-g]],
+        [[-0.5*s+g, y0, 0.5*s+g], [0.5*s-g, y0, 0.5*s+g], [0.5*s-g, y0, 1.5*s-g], [-0.5*s+g, y0, 1.5*s-g]],
+        [[0.5*s+g, y0, 0.5*s+g], [1.5*s-g, y0, 0.5*s+g], [1.5*s-g, y0, 1.5*s-g], [0.5*s+g, y0, 1.5*s-g]],
+      ];
+    },
+    F: () => {
+      const fz = 1.5*s; const g = s*0.05;
+      const cells = [];
+      for (let r=0;r<3;r++) for (let c=0;c<3;c++) {
+        const x0=(c-1.5)*s+g, x1=(c-0.5)*s-g;
+        const y0=(r-1.5)*s+g, y1=(r-0.5)*s-g;
+        cells.push([[x0,y0,fz],[x1,y0,fz],[x1,y1,fz],[x0,y1,fz]]);
+      }
+      return cells;
+    },
+    R: () => {
+      const rx = 1.5*s; const g = s*0.05;
+      const cells = [];
+      for (let r=0;r<3;r++) for (let c=0;c<3;c++) {
+        const z0=(c-1.5)*s+g, z1=(c-0.5)*s-g;
+        const y0=(r-1.5)*s+g, y1=(r-0.5)*s-g;
+        cells.push([[rx,y0,z0],[rx,y0,z1],[rx,y1,z1],[rx,y1,z0]]);
+      }
+      return cells;
+    },
+    D: () => {
+      const y0 = 1.5*s; const g = s*0.05;
+      const cells = [];
+      for (let r=0;r<3;r++) for (let c=0;c<3;c++) {
+        const x0=(c-1.5)*s+g, x1=(c-0.5)*s-g;
+        const z0=(r-1.5)*s+g, z1=(r-0.5)*s-g;
+        cells.push([[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]);
+      }
+      return cells;
+    },
+    B: () => {
+      const fz = -1.5*s; const g = s*0.05;
+      const cells = [];
+      for (let r=0;r<3;r++) for (let c=0;c<3;c++) {
+        const x1=(-(c-1.5))*s+g, x0=(-(c-0.5))*s-g;
+        const y0=(r-1.5)*s+g, y1=(r-0.5)*s-g;
+        cells.push([[x0,y0,fz],[x1,y0,fz],[x1,y1,fz],[x0,y1,fz]]);
+      }
+      return cells;
+    },
+    L: () => {
+      const rx = -1.5*s; const g = s*0.05;
+      const cells = [];
+      for (let r=0;r<3;r++) for (let c=0;c<3;c++) {
+        const z1=(-(c-1.5))*s+g, z0=(-(c-0.5))*s-g;
+        const y0=(r-1.5)*s+g, y1=(r-0.5)*s-g;
+        cells.push([[rx,y0,z0],[rx,y0,z1],[rx,y1,z1],[rx,y1,z0]]);
+      }
+      return cells;
+    },
+  };
+
+  const getVerts = faceVerts[base];
+  if (!getVerts) return;
+  const cells = getVerts();
+
+  ctx.fillStyle = c(0.18);
+    ctx.strokeStyle = c(0.6);
+  ctx.lineWidth = 2;
+
+  for (const verts of cells) {
+    const proj = verts.map(v => project(v[0],v[1],v[2],cx,cy));
+    ctx.beginPath();
+    ctx.moveTo(proj[0][0], proj[0][1]);
+    for (let i=1;i<proj.length;i++) ctx.lineTo(proj[i][0], proj[i][1]);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+// ============================================================
+//  展开图渲染
+// ============================================================
+function renderNet(canvas, cube, highlightFace) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const cellSize = 26;
+  const gap = 2;
+  const step = cellSize + gap;
+
+  // 十字形布局:
+  //       [U]
+  //  [L] [F] [R] [B]
+  //       [D]
+  const facePos = {
+    U: [3*step, 0],
+    L: [0, 3*step],
+    F: [3*step, 3*step],
+    R: [6*step, 3*step],
+    B: [9*step, 3*step],
+    D: [3*step, 6*step],
+  };
+
+  for (const face of FACES) {
+    const [ox, oy] = facePos[face];
+    const colors = cube[face];
+
+    // 面背景
+    if (face === highlightFace) {
+      ctx.fillStyle = 'rgba(245,158,11,0.2)';
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    }
+    ctx.beginPath();
+    ctx.roundRect(ox-1, oy-1, 3*cellSize+2, 3*cellSize+2, 3);
+    ctx.fill();
+
+    for (let row=0;row<3;row++) {
+      for (let col=0;col<3;col++) {
+        const x = ox + col*step;
+        const y = oy + row*step;
+        const color = colors[row*3+col];
+        const hex = color ? COLOR_HEX[color] : '#333333';
+
+        ctx.beginPath();
+        ctx.roundRect(x, y, cellSize, cellSize, 3);
+        ctx.fillStyle = hex;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    // 面标签
+    ctx.fillStyle = face===highlightFace ? '#f59e0b' : '#6b7a99';
+    ctx.font = 'bold 10px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(face, ox + 1.5*cellSize + gap, oy - 4);
+  }
+}
+
+// ============================================================
+//  求解与播放
+// ============================================================
+function solveCube() {
+  const statusEl = document.getElementById('statusMsg');
+  statusEl.className = 'status-msg';
+  statusEl.textContent = '求解中...';
+
+  setTimeout(() => {
+    if (!isValidState(cubeState)) {
+      statusEl.className = 'status-msg error';
+      statusEl.textContent = '状态无效：每种颜色必须恰好出现9次';
+      return;
+    }
+
+    if (isSolved(cubeState)) {
+      statusEl.className = 'status-msg success';
+      statusEl.textContent = '魔方已经是还原状态！';
+      return;
+    }
+
+    // 层先法求解
+    const c1 = cloneCube(cubeState);
+    layerSolution = solveLayerByLayer(c1) || [];
+
+    // Kociemba最短步骤求解
+    kociembaSolution = solveKociemba(cloneCube(cubeState)) || [];
+
+    // 默认选择步数更少的解法
+    if (kociembaSolution.length > 0 && kociembaSolution.length <= layerSolution.length) {
+      activeSolution = 'kociemba';
+      solution = kociembaSolution;
+    } else {
+      activeSolution = 'layer';
+      solution = layerSolution;
+    }
+
+    currentStep = -1;
+    displayCube = cloneCube(cubeState);
+    renderSolution();
+    renderAll();
+
+    const kociembaInfo = kociembaSolution.length > 0 ? ` | Kociemba: ${kociembaSolution.length}步` : ' | Kociemba: 不可用';
+    statusEl.className = 'status-msg success';
+    statusEl.textContent = `求解完成！层先法: ${layerSolution.length}步${kociembaInfo}`;
+  }, 50);
+}
+
+function renderSolution() {
+  const area = document.getElementById('solutionArea');
+  if (solution.length === 0) {
+    area.innerHTML = '<div class="status-msg">魔方已还原，无需步骤</div>';
+    return;
+  }
+
+  const hasKociemba = kociembaSolution.length > 0;
+  const layerLabel = `层先法 (${layerSolution.length}步)`;
+  const kociembaLabel = `Kociemba最优 (${kociembaSolution.length}步)`;
+
+  let html = `
+    <div class="solution-header">
+      <div class="solution-tabs">
+        <div class="solution-tab ${activeSolution==='layer'?'active':''}" onclick="switchSolution('layer')">${layerLabel}</div>
+        ${hasKociemba ? `<div class="solution-tab ${activeSolution==='kociemba'?'active':''}" onclick="switchSolution('kociemba')">${kociembaLabel}</div>` : ''}
+      </div>
+      <span class="move-count">${solution.length} 步</span>
+    </div>
+    <div class="moves-grid" id="movesGrid">
+  `;
+
+  for (let i=0;i<solution.length;i++) {
+    const move = solution[i];
+    const cls = i < currentStep ? 'done' : (i === currentStep ? 'current' : '');
+    const icon = move.includes("'") ? '↺' : (move.includes('2') ? '⇄' : '↻');
+    html += `<div class="move-chip ${cls}" onclick="goToStep(${i})" title="第${i+1}步: ${moveName(move)}">
+      <span class="move-icon">${icon}</span>${move}
+    </div>`;
+  }
+
+  html += `</div>
+    <div class="playback-controls">
+      <button class="play-btn" onclick="goToStep(Math.max(0,currentStep-1))" title="上一步">⏮</button>
+      <button class="play-btn" onclick="togglePlay()" id="playBtn" title="播放/暂停">${isPlaying ? pauseIcon() : playIcon()}</button>
+      <button class="play-btn" onclick="goToStep(Math.min(solution.length-1,currentStep+1))" title="下一步">⏭</button>
+      <button class="play-btn" onclick="stopAndReset()" title="停止并重置">⏹</button>
+      <div class="speed-control">
+        <span>速度</span>
+        <input type="range" min="100" max="1500" value="${playSpeed}" step="50" oninput="playSpeed=1600-this.value;document.getElementById('speedVal').textContent=this.value+'ms'">
+        <span id="speedVal">${playSpeed}ms</span>
+      </div>
+    </div>
+    <div class="shortcut-hint">快捷键: 空格 播放/暂停 | ← 后退 | → 前进</div>
+  `;
+
+  area.innerHTML = html;
+}
+
+function moveName(move) {
+  const base = move.replace("'","");
+  const names = {U:'上',D:'下',F:'前',B:'后',L:'左',R:'右'};
+  const dir = move.includes("'") ? ' 逆时针' : ' 顺时针';
+  return (names[base]||base) + dir;
+}
+
+function switchSolution(type) {
+  stopPlay();
+  activeSolution = type;
+  solution = type === 'kociemba' ? kociembaSolution : layerSolution;
+  currentStep = -1;
+  displayCube = cloneCube(cubeState);
+  renderSolution();
+  renderAll();
+}
+
+function goToStep(step) {
+  if (step < 0) {
+    currentStep = -1;
+    displayCube = cloneCube(cubeState);
+  } else {
+    currentStep = step;
+    displayCube = cloneCube(cubeState);
+    for (let i=0;i<=step;i++) {
+      applyMove(displayCube, solution[i]);
+    }
+  }
+  renderSolution();
+  renderAll();
+}
+
+function playIcon() {
+  return '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><polygon points="3,1 13,8 3,15"/></svg>';
+}
+function pauseIcon() {
+  return '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="1" width="4" height="14"/><rect x="10" y="1" width="4" height="14"/></svg>';
+}
+
+function togglePlay() {
+  if (isPlaying) {
+    stopPlay();
+  } else {
+    isPlaying = true;
+    const btn = document.getElementById('playBtn');
+    if (btn) btn.innerHTML = pauseIcon();
+    playNext();
+  }
+}
+
+function playNext() {
+  if (!isPlaying) return;
+  if (currentStep >= solution.length - 1) {
+    stopPlay();
+    return;
+  }
+  goToStep(currentStep + 1);
+  playTimer = setTimeout(playNext, playSpeed);
+}
+
+function stopPlay() {
+  isPlaying = false;
+  if (playTimer) clearTimeout(playTimer);
+  playTimer = null;
+  const btn = document.getElementById('playBtn');
+  if (btn) btn.innerHTML = playIcon();
+}
+
+function stopAndReset() {
+  stopPlay();
+  goToStep(-1);
+}
+
+// ============================================================
+//  预设
+// ============================================================
+function presetSolved() {
+  initCubeState();
+  refreshFacesGrid();
+  renderAll();
+  updateSaveBtn();
+  showToast('已设置为还原状态');
+}
+
+function presetScramble() {
+  initCubeState();
+  const c = cubeState;
+  const moves = [];
+  for (let i=0;i<20;i++) {
+    const mv = ALL_MOVES[Math.floor(Math.random()*ALL_MOVES.length)];
+    applyMove(c, mv);
+    moves.push(mv);
+  }
+  // 保持中心色不变
+  for (const f of FACES) c[f][4] = FACE_CENTER[f];
+  refreshFacesGrid();
+  renderAll();
+  updateSaveBtn();
+  showToast(`已随机打乱 (${moves.length} 步)`);
+}
+
+function clearAll() {
+  initCubeState();
+  for (const f of FACES) {
+    for (let i=0;i<9;i++) {
+      if (i!==4) cubeState[f][i] = null;
+    }
+  }
+  refreshFacesGrid();
+  renderAll();
+  updateSaveBtn();
+  showToast('已清空所有色块');
+}
+
+function resetCube() {
+  stopPlay();
+  solution = [];
+  kociembaSolution = [];
+  layerSolution = [];
+  activeSolution = 'layer';
+  currentStep = -1;
+  displayCube = cloneCube(cubeState);
+  document.getElementById('solutionArea').innerHTML =
+    '<div class="status-msg">请先编辑色块或上传图片，然后点击"求解"</div>';
+  document.getElementById('statusMsg').textContent = '';
+  document.getElementById('statusMsg').className = 'status-msg';
+  renderAll();
+  updateSaveBtn();
+}
+
+// ============================================================
+//  渲染调度
+// ============================================================
+function renderAll() {
+  const cube = displayCube && Object.keys(displayCube).length ? displayCube : cubeState;
+  const canvas3d = document.getElementById('cube-canvas');
+  const canvasNet = document.getElementById('net-canvas');
+
+  // 确定当前高亮面
+  let hlFace = null;
+  if (currentStep >= 0 && currentStep < solution.length) {
+    hlFace = solution[currentStep].replace("'","");
+  }
+
+  // 当前操作步骤（用于绘制箭头）
+  let curMove = null;
+  if (currentStep >= 0 && currentStep < solution.length) {
+    curMove = solution[currentStep];
+  }
+
+  render3DCube(canvas3d, cube, null, 0, curMove);
+  renderNet(canvasNet, cube, hlFace);
+}
+
+// ============================================================
+//  Toast
+// ============================================================
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ============================================================
+//  保存 / 加载状态（文件操作）
+// ============================================================
+function isStateSaveable() {
+  // 已还原或已清空状态不需要保存
+  if (isSolved(cubeState)) return false;
+  // 检查是否所有非中心格都为null（已清空）
+  let allNull = true;
+  for (const f of FACES) {
+    for (let i = 0; i < 9; i++) {
+      if (i !== 4 && cubeState[f][i] !== null) { allNull = false; break; }
+    }
+    if (!allNull) break;
+  }
+  return !allNull;
+}
+
+function updateSaveBtn() {
+  const btn = document.getElementById('saveBtn');
+  if (btn) btn.disabled = !isStateSaveable();
+}
+
+function saveState() {
+  if (!isStateSaveable()) {
+    showToast('当前状态无需保存');
+    return;
+  }
+  const data = {
+    cubeState: cubeState,
+    solution: solution,
+    kociembaSolution: kociembaSolution,
+    layerSolution: layerSolution,
+    activeSolution: activeSolution,
+    currentStep: currentStep,
+  };
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const now = new Date();
+  const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+  a.download = `rubik_cube_${ts}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('状态已保存为文件');
+}
+
+function loadState() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.cubeState) {
+          showToast('文件格式无效');
+          return;
+        }
+        stopPlay();
+        cubeState = data.cubeState;
+        if (data.solution) solution = data.solution;
+        else solution = [];
+        if (data.kociembaSolution) kociembaSolution = data.kociembaSolution;
+        else kociembaSolution = [];
+        if (data.layerSolution) layerSolution = data.layerSolution;
+        else layerSolution = [];
+        if (data.activeSolution) activeSolution = data.activeSolution;
+        else activeSolution = 'layer';
+        if (typeof data.currentStep === 'number') currentStep = data.currentStep;
+        else currentStep = -1;
+
+        refreshFacesGrid();
+        displayCube = cloneCube(cubeState);
+        if (solution.length > 0 && currentStep >= 0) {
+          displayCube = cloneCube(cubeState);
+          for (let i = 0; i <= currentStep; i++) applyMove(displayCube, solution[i]);
+          renderSolution();
+        } else if (solution.length > 0) {
+          renderSolution();
+        }
+        renderAll();
+        updateSaveBtn();
+        showToast('状态已从文件加载');
+      } catch(err) {
+        showToast('加载失败: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ============================================================
+//  键盘快捷键
+// ============================================================
+document.addEventListener('keydown', function(e) {
+  // 如果焦点在输入框中，不拦截
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (solution.length > 0) togglePlay();
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault();
+    if (solution.length > 0) {
+      stopPlay();
+      goToStep(Math.max(0, currentStep - 1));
+    }
+  } else if (e.code === 'ArrowRight') {
+    e.preventDefault();
+    if (solution.length > 0) {
+      stopPlay();
+      goToStep(Math.min(solution.length - 1, currentStep + 1));
+    }
+  }
+});
+
+// ============================================================
+//  初始化
+// ============================================================
+buildColorPalette();
+buildFacesGrid();
+buildUploadSection();
+displayCube = cloneCube(cubeState);
+renderAll();
+updateSaveBtn();
+</script>
+</body>
+</html>

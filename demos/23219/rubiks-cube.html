@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 魔方模拟器</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            overflow: hidden;
+            background: #1a1a2e;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            user-select: none;
+        }
+        canvas { display: block; }
+
+        #status-bar {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.85);
+            font-size: 14px;
+            background: rgba(255,255,255,0.08);
+            padding: 10px 28px;
+            border-radius: 24px;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.1);
+            z-index: 10;
+            white-space: nowrap;
+            transition: background 0.3s;
+        }
+        #status-bar.solved {
+            background: rgba(0,200,120,0.2);
+            border-color: rgba(0,200,120,0.3);
+        }
+
+        #move-log {
+            position: fixed;
+            top: 72px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.45);
+            font-size: 12px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            z-index: 10;
+            max-width: 80vw;
+            text-align: center;
+            word-break: break-all;
+            line-height: 1.8;
+        }
+
+        #ui-panel {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+            z-index: 10;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            color: white;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 100%);
+            pointer-events: none;
+        }
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+        }
+        .btn:active:not(:disabled) { transform: translateY(0); }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        .btn-scramble { background: linear-gradient(135deg, #e94560, #c23152); }
+        .btn-solve   { background: linear-gradient(135deg, #00b4d8, #0077b6); }
+        .btn-reset   { background: linear-gradient(135deg, #6c63ff, #4834d4); }
+
+        #hint {
+            position: fixed;
+            bottom: 84px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.25);
+            font-size: 11px;
+            z-index: 10;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+<div id="status-bar">就绪 · 拖拽旋转视角</div>
+<div id="move-log"></div>
+<div id="hint">键盘: U D R L F B (+Shift反向) | S 打乱 | 空格 还原</div>
+<div id="ui-panel">
+    <button class="btn btn-scramble" id="scrambleBtn">打乱</button>
+    <button class="btn btn-solve" id="solveBtn">还原</button>
+    <button class="btn btn-reset" id="resetBtn">重置</button>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ==================== 场景初始化 ==================== */
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(5, 4, 6);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+// 灯光
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+fillLight.position.set(-5, -2, -5);
+scene.add(fillLight);
+
+// 轨道控制
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.enablePan = false;
+controls.minDistance = 5;
+controls.maxDistance = 15;
+controls.target.set(0, 0, 0);
+
+/* ==================== 魔方参数 ==================== */
+
+const GAP = 1.02;           // cubie 中心间距
+const CUBIE_SIZE = 0.94;    // cubie 几何尺寸
+const INNER_COLOR = 0x111111;
+
+// 标准配色（白顶黄底，绿前蓝后，红右橙左）
+const FACE_COLORS = {
+    px: 0xB71234,  // +X 红 (R)
+    nx: 0xFF5800,  // -X 橙 (L)
+    py: 0xFFFFFF,  // +Y 白 (U)
+    ny: 0xFFD500,  // -Y 黄 (D)
+    pz: 0x009B48,  // +Z 绿 (F)
+    nz: 0x0046AD,  // -Z 蓝 (B)
+};
+
+/* ==================== 创建魔方 ==================== */
+
+let cubies = [];
+const cubeGroup = new THREE.Group();
+scene.add(cubeGroup);
+
+function createCube() {
+    // 清除旧 cubies
+    while (cubeGroup.children.length) cubeGroup.remove(cubeGroup.children[0]);
+    cubies = [];
+
+    // 黑色内核（透过缝隙可见）
+    const core = new THREE.Mesh(
+        new THREE.BoxGeometry(1.6, 1.6, 1.6),
+        new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1 })
+    );
+    cubeGroup.add(core);
+
+    for (let x = -1; x <= 1; x++) {
+        for (let y = -1; y <= 1; y++) {
+            for (let z = -1; z <= 1; z++) {
+                const materials = [
+                    makeMat(x ===  1 ? FACE_COLORS.px : INNER_COLOR),
+                    makeMat(x === -1 ? FACE_COLORS.nx : INNER_COLOR),
+                    makeMat(y ===  1 ? FACE_COLORS.py : INNER_COLOR),
+                    makeMat(y === -1 ? FACE_COLORS.ny : INNER_COLOR),
+                    makeMat(z ===  1 ? FACE_COLORS.pz : INNER_COLOR),
+                    makeMat(z === -1 ? FACE_COLORS.nz : INNER_COLOR),
+                ];
+                const mesh = new THREE.Mesh(
+                    new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE),
+                    materials
+                );
+                mesh.position.set(x * GAP, y * GAP, z * GAP);
+                cubeGroup.add(mesh);
+                cubies.push(mesh);
+            }
+        }
+    }
+}
+
+function makeMat(color) {
+    return new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.0 });
+}
+
+createCube();
+
+/* ==================== 旋转定义 ==================== */
+
+// angle: 正值 = 右手螺旋正方向（从轴正方向看逆时针）
+// 标准魔方记号：U 从上方看顺时针 = 绕 Y 轴负方向旋转
+const MOVES = {
+    'U' : { axis: 'y', layer:  1, angle: -Math.PI / 2 },
+    "U'": { axis: 'y', layer:  1, angle:  Math.PI / 2 },
+    'D' : { axis: 'y', layer: -1, angle:  Math.PI / 2 },
+    "D'": { axis: 'y', layer: -1, angle: -Math.PI / 2 },
+    'R' : { axis: 'x', layer:  1, angle: -Math.PI / 2 },
+    "R'": { axis: 'x', layer:  1, angle:  Math.PI / 2 },
+    'L' : { axis: 'x', layer: -1, angle:  Math.PI / 2 },
+    "L'": { axis: 'x', layer: -1, angle: -Math.PI / 2 },
+    'F' : { axis: 'z', layer:  1, angle: -Math.PI / 2 },
+    "F'": { axis: 'z', layer:  1, angle:  Math.PI / 2 },
+    'B' : { axis: 'z', layer: -1, angle:  Math.PI / 2 },
+    "B'": { axis: 'z', layer: -1, angle: -Math.PI / 2 },
+};
+
+const MOVE_NAMES = Object.keys(MOVES);
+
+function invertMove(name) {
+    return name.endsWith("'") ? name.slice(0, -1) : name + "'";
+}
+
+/* ==================== 旋转动画 ==================== */
+
+let isAnimating = false;
+
+function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function snapCubie(cubie) {
+    // 修正位置浮点误差
+    cubie.position.x = Math.round(cubie.position.x / GAP) * GAP;
+    cubie.position.y = Math.round(cubie.position.y / GAP) * GAP;
+    cubie.position.z = Math.round(cubie.position.z / GAP) * GAP;
+    // 修正旋转矩阵浮点误差（有效旋转矩阵元素必为 -1/0/1）
+    cubie.updateMatrix();
+    const m = new THREE.Matrix4().copy(cubie.matrix);
+    const e = m.elements;
+    for (let col = 0; col < 3; col++)
+        for (let row = 0; row < 3; row++)
+            e[col * 4 + row] = Math.round(e[col * 4 + row]);
+    cubie.rotation.setFromRotationMatrix(m);
+}
+
+function rotateFace(axis, layer, angle, duration, callback) {
+    const faceCubies = cubies.filter(c => Math.round(c.position[axis] / GAP) === layer);
+    if (faceCubies.length === 0) { callback?.(); return; }
+
+    const pivot = new THREE.Object3D();
+    cubeGroup.add(pivot);
+    faceCubies.forEach(c => pivot.attach(c));
+
+    isAnimating = true;
+    const t0 = performance.now();
+
+    function tick() {
+        const t = Math.min((performance.now() - t0) / duration, 1);
+        pivot.rotation[axis] = angle * easeInOutCubic(t);
+        if (t < 1) {
+            requestAnimationFrame(tick);
+        } else {
+            pivot.rotation[axis] = angle;
+            pivot.updateMatrixWorld();
+            faceCubies.forEach(c => {
+                cubeGroup.attach(c);
+                snapCubie(c);
+            });
+            cubeGroup.remove(pivot);
+            isAnimating = false;
+            callback?.();
+        }
+    }
+    requestAnimationFrame(tick);
+}
+
+/* ==================== 动作队列 ==================== */
+
+let moveQueue = [];
+let moveHistory = [];
+let currentSpeed = 200; // ms per move
+
+function processQueue() {
+    if (isAnimating || moveQueue.length === 0) return;
+    const { name, speed } = moveQueue.shift();
+    const move = MOVES[name];
+    if (!move) { processQueue(); return; }
+    currentSpeed = speed || 200;
+    rotateFace(move.axis, move.layer, move.angle, currentSpeed, () => processQueue());
+}
+
+function enqueue(moves, speed = 200, record = false) {
+    moves.forEach(name => {
+        moveQueue.push({ name, speed });
+        if (record) moveHistory.push(name);
+    });
+    processQueue();
+}
+
+function isBusy() {
+    return isAnimating || moveQueue.length > 0;
+}
+
+/* ==================== 操作：打乱 / 还原 / 重置 ==================== */
+
+const statusBar   = document.getElementById('status-bar');
+const moveLog     = document.getElementById('move-log');
+const scrambleBtn = document.getElementById('scrambleBtn');
+const solveBtn    = document.getElementById('solveBtn');
+const resetBtn    = document.getElementById('resetBtn');
+
+function setStatus(text, solved = false) {
+    statusBar.textContent = text;
+    statusBar.classList.toggle('solved', solved);
+}
+
+function setButtons(enabled) {
+    scrambleBtn.disabled = !enabled;
+    solveBtn.disabled   = !enabled;
+    resetBtn.disabled   = !enabled;
+}
+
+function scramble(numMoves = 20) {
+    moveHistory = [];
+    moveQueue = [];
+    const moves = [];
+    let lastAxis = '';
+    for (let i = 0; i < numMoves; i++) {
+        let name, move;
+        do {
+            name = MOVE_NAMES[Math.floor(Math.random() * MOVE_NAMES.length)];
+            move = MOVES[name];
+        } while (move.axis === lastAxis && moves.length > 0);
+        lastAxis = move.axis;
+        moves.push(name);
+    }
+    moveLog.textContent = '打乱: ' + moves.join('  ');
+    setStatus('打乱中…');
+    setButtons(false);
+    enqueue(moves, 150, true);
+
+    const check = setInterval(() => {
+        if (!isBusy()) {
+            clearInterval(check);
+            setStatus('已打乱 · 点击还原');
+            setButtons(true);
+        }
+    }, 80);
+}
+
+function solve() {
+    if (moveHistory.length === 0) {
+        setStatus('已处于还原状态');
+        return;
+    }
+    const solveMoves = moveHistory.slice().reverse().map(invertMove);
+    moveQueue = [];
+    moveLog.textContent = '还原: ' + solveMoves.join('  ');
+    setStatus('还原中…');
+    setButtons(false);
+    enqueue(solveMoves, 200, false);
+
+    const check = setInterval(() => {
+        if (!isBusy()) {
+            clearInterval(check);
+            moveHistory = [];
+            setStatus('还原完成 ✓', true);
+            setButtons(true);
+        }
+    }, 80);
+}
+
+function resetCube() {
+    moveQueue = [];
+    moveHistory = [];
+    isAnimating = false;
+    createCube();
+    moveLog.textContent = '';
+    setStatus('就绪 · 拖拽旋转视角');
+    setButtons(true);
+}
+
+/* ==================== 事件绑定 ==================== */
+
+scrambleBtn.addEventListener('click', () => { if (!isBusy()) scramble(); });
+solveBtn.addEventListener('click',   () => { if (!isBusy()) solve(); });
+resetBtn.addEventListener('click',   resetCube);
+
+// 键盘快捷键
+document.addEventListener('keydown', (e) => {
+    if (isBusy()) return;
+    const key = e.key.toUpperCase();
+    const shift = e.shiftKey;
+
+    // 单步操作
+    const faceKeys = ['U', 'D', 'R', 'L', 'F', 'B'];
+    if (faceKeys.includes(key)) {
+        const name = shift ? key + "'" : key;
+        moveHistory.push(name);
+        moveLog.textContent = '手动: ' + moveHistory.join('  ');
+        setStatus('手动操作 · ' + name);
+        enqueue([name], 250, false);
+        return;
+    }
+    if (key === 'S') { scramble(); return; }
+    if (e.code === 'Space') { e.preventDefault(); solve(); return; }
+});
+
+/* ==================== 渲染循环 ==================== */
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+animate();
+
+/* ==================== 窗口自适应 ==================== */
+
+window.addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+});
+
+</script>
+</body>
+</html>

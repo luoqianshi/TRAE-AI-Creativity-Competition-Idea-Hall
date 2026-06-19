@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkillSpector - 扫描历史</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .severity-low { @apply text-green-600; }
+        .severity-medium { @apply text-yellow-600; }
+        .severity-high { @apply text-orange-600; }
+        .severity-critical { @apply text-red-600; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-gray-100">
+    <nav class="bg-white shadow">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-gray-900">🛡️ SkillSpector</h1>
+            <a href="/" class="text-blue-600 hover:text-blue-800 font-medium">返回扫描</a>
+        </div>
+    </nav>
+
+    <main class="max-w-6xl mx-auto px-6 py-12">
+        <div class="bg-white rounded-lg shadow-lg p-8">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">扫描历史</h2>
+
+            <!-- Filters -->
+            <div class="grid grid-cols-4 gap-4 mb-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">搜索文件名</label>
+                    <input id="searchInput" type="text" placeholder="输入文件名搜索..." class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">按严重级别过滤</label>
+                    <select id="severityFilter" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">全部</option>
+                        <option value="LOW">Low</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="HIGH">High</option>
+                        <option value="CRITICAL">Critical</option>
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <button onclick="applyFilters()" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition font-medium">
+                        搜索
+                    </button>
+                </div>
+                <div class="flex items-end">
+                    <button onclick="copyAllTableFindings()" class="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition font-medium">
+                        📋 复制全部
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results Table -->
+            <div id="loadingMessage" class="text-center py-8">
+                <p class="text-gray-600">加载中...</p>
+            </div>
+
+            <div id="tableContainer" class="hidden overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="border-b-2 border-gray-300">
+                            <th class="text-left py-3 px-4 font-semibold text-gray-700">文件名</th>
+                            <th class="text-left py-3 px-4 font-semibold text-gray-700">扫描时间</th>
+                            <th class="text-center py-3 px-4 font-semibold text-gray-700">风险评分</th>
+                            <th class="text-center py-3 px-4 font-semibold text-gray-700">严重级别</th>
+                            <th class="text-center py-3 px-4 font-semibold text-gray-700">发现数</th>
+                            <th class="text-center py-3 px-4 font-semibold text-gray-700">操作</th>
+                            <th class="text-center py-3 px-4 font-semibold text-gray-700">删除</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody">
+                        <!-- Rows will be inserted here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="emptyMessage" class="hidden text-center py-8">
+                <p class="text-gray-600">暂无扫描历史</p>
+            </div>
+
+            <!-- Pagination -->
+            <div id="pagination" class="hidden mt-6 flex justify-center gap-2">
+                <button onclick="previousPage()" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">上一页</button>
+                <span id="pageInfo" class="px-4 py-2 text-gray-700"></span>
+                <button onclick="nextPage()" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">下一页</button>
+            </div>
+        </div>
+
+        <!-- Detail Modal (Large Size) -->
+        <div id="detailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[85vh] overflow-y-auto p-8">
+                <div class="flex justify-between items-start mb-6">
+                    <h3 id="detailTitle" class="text-2xl font-bold text-gray-800"></h3>
+                    <button onclick="closeDetail()" class="text-gray-500 hover:text-gray-700 text-3xl">&times;</button>
+                </div>
+                <div id="detailContent" class="space-y-6">
+                    <!-- Content will be inserted here -->
+                </div>
+                <div class="mt-6 flex gap-4 border-t pt-6">
+                    <button onclick="copyDetailFindings()" class="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition font-medium flex items-center justify-center gap-2">
+                        📋 复制全部问题
+                    </button>
+                    <button onclick="closeDetail()" class="flex-1 bg-gray-600 text-white py-3 rounded-lg hover:bg-gray-700 transition font-medium">
+                        关闭
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let currentPage = 0;
+        const pageSize = 20;
+        let totalScans = 0;
+        let currentDetailFindings = [];
+        let allTableScans = [];
+
+        async function applyFilters() {
+            currentPage = 0;
+            await loadHistory();
+        }
+
+        async function loadHistory() {
+            try {
+                const searchQuery = document.getElementById('searchInput').value || null;
+                const severityFilter = document.getElementById('severityFilter').value || null;
+
+                const params = new URLSearchParams({
+                    limit: pageSize,
+                    offset: currentPage * pageSize,
+                });
+                if (searchQuery) params.append('search', searchQuery);
+                if (severityFilter) params.append('severity', severityFilter);
+
+                const response = await fetch(`/api/history?${params}`);
+                if (!response.ok) throw new Error('Failed to fetch history');
+
+                const data = await response.json();
+                totalScans = data.total;
+                allTableScans = data.scans;
+
+                document.getElementById('loadingMessage').classList.add('hidden');
+
+                if (data.scans.length === 0) {
+                    document.getElementById('tableContainer').classList.add('hidden');
+                    document.getElementById('pagination').classList.add('hidden');
+                    document.getElementById('emptyMessage').classList.remove('hidden');
+                    return;
+                }
+
+                document.getElementById('tableContainer').classList.remove('hidden');
+                document.getElementById('emptyMessage').classList.add('hidden');
+                renderTable(data.scans);
+
+                // Update pagination
+                const totalPages = Math.ceil(totalScans / pageSize);
+                if (totalPages > 1) {
+                    document.getElementById('pagination').classList.remove('hidden');
+                    document.getElementById('pageInfo').textContent = `第 ${currentPage + 1} / ${totalPages} 页`;
+                } else {
+                    document.getElementById('pagination').classList.add('hidden');
+                }
+            } catch (error) {
+                console.error('Error loading history:', error);
+                document.getElementById('loadingMessage').innerHTML = '<p class="text-red-600">加载失败</p>';
+            }
+        }
+
+        function renderTable(scans) {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = scans.map(scan => {
+                const date = new Date(scan.scanned_at).toLocaleString('zh-CN');
+                const severityClass = getSeverityClass(scan.risk_severity);
+                return `
+                    <tr class="border-b border-gray-200 hover:bg-gray-50">
+                        <td class="py-3 px-4 text-gray-900">${escapeHtml(scan.filename)}</td>
+                        <td class="py-3 px-4 text-gray-700 text-sm">${date}</td>
+                        <td class="py-3 px-4 text-center">
+                            <span class="inline-block w-12 h-12 flex items-center justify-center font-bold rounded-full ${getRiskScoreBg(scan.risk_score)}">
+                                ${scan.risk_score}
+                            </span>
+                        </td>
+                        <td class="py-3 px-4 text-center">
+                            <span class="font-semibold ${severityClass}">${scan.risk_severity}</span>
+                        </td>
+                        <td class="py-3 px-4 text-center text-gray-700">${scan.findings_count}</td>
+                        <td class="py-3 px-4 text-center">
+                            <button onclick="viewDetail(${scan.id})" class="text-blue-600 hover:text-blue-800 font-medium">查看</button>
+                        </td>
+                        <td class="py-3 px-4 text-center">
+                            <button onclick="deleteScan(${scan.id}, '${escapeHtml(scan.filename)}')" class="text-red-600 hover:text-red-800 font-medium">删除</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function getSeverityClass(severity) {
+            switch(severity) {
+                case 'CRITICAL': return 'severity-critical';
+                case 'HIGH': return 'severity-high';
+                case 'MEDIUM': return 'severity-medium';
+                case 'LOW': return 'severity-low';
+                default: return 'text-gray-600';
+            }
+        }
+
+        function getRiskScoreBg(score) {
+            if (score >= 81) return 'bg-red-100 text-red-700';
+            if (score >= 51) return 'bg-orange-100 text-orange-700';
+            if (score >= 21) return 'bg-yellow-100 text-yellow-700';
+            return 'bg-green-100 text-green-700';
+        }
+
+        async function viewDetail(scanId) {
+            try {
+                const response = await fetch(`/api/scan/${scanId}`);
+                if (!response.ok) throw new Error('Failed to fetch scan details');
+
+                const scan = await response.json();
+                const findings = scan.findings || [];
+                currentDetailFindings = findings;
+
+                document.getElementById('detailTitle').textContent = escapeHtml(scan.filename);
+
+                const severityClass = getSeverityClass(scan.risk_severity);
+                let detailHTML = `
+                    <div class="grid grid-cols-4 gap-4">
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <p class="text-sm text-gray-600">扫描时间</p>
+                            <p class="font-medium text-gray-900 text-sm mt-1">${new Date(scan.scanned_at).toLocaleString('zh-CN')}</p>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <p class="text-sm text-gray-600">风险评分</p>
+                            <p class="font-bold text-2xl mt-1">${scan.risk_score}/100</p>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <p class="text-sm text-gray-600">严重级别</p>
+                            <p class="font-bold text-lg mt-1 ${severityClass}">${scan.risk_severity}</p>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <p class="text-sm text-gray-600">发现问题数</p>
+                            <p class="font-bold text-2xl mt-1">${findings.length}</p>
+                        </div>
+                    </div>
+                `;
+
+                if (findings.length > 0) {
+                    detailHTML += `
+                        <div>
+                            <h4 class="font-semibold text-gray-800 mb-4">发现的问题</h4>
+                            <div class="space-y-3">
+                                ${findings.map((f, idx) => `
+                                    <div class="finding-item border-l-4 border-${getSeverityColorClass(f.severity)} p-4 bg-gray-50 rounded hover:bg-gray-100 transition">
+                                        <div class="flex justify-between items-start gap-4">
+                                            <div class="flex-1 min-w-0">
+                                                <p class="font-semibold text-gray-900">${escapeHtml(f.id || 'Unknown')}</p>
+                                                <p class="text-sm text-gray-700 mt-1 break-words">${escapeHtml(f.explanation || f.message || '')}</p>
+                                                ${f.severity ? `<p class="text-xs text-gray-500 mt-2">严重级别: ${f.severity}</p>` : ''}
+                                            </div>
+                                            <button onclick="copySingleFinding(${idx})" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs font-medium transition whitespace-nowrap">
+                                                复制
+                                            </button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    detailHTML += '<p class="text-green-700 text-lg font-semibold">✓ 未发现安全问题</p>';
+                }
+
+                document.getElementById('detailContent').innerHTML = detailHTML;
+                document.getElementById('detailModal').classList.remove('hidden');
+            } catch (error) {
+                console.error('Error loading detail:', error);
+                alert('加载详情失败');
+            }
+        }
+
+        function getSeverityColorClass(severity) {
+            switch(severity) {
+                case 'CRITICAL': return 'red-600';
+                case 'HIGH': return 'orange-600';
+                case 'MEDIUM': return 'yellow-600';
+                case 'LOW': return 'green-600';
+                default: return 'gray-600';
+            }
+        }
+
+        function formatFindingForCopy(finding) {
+            let text = `[${finding.severity || 'UNKNOWN'}] ${finding.id || 'Unknown'}\n`;
+            if (finding.explanation || finding.message) {
+                text += `描述: ${finding.explanation || finding.message}\n`;
+            }
+            return text;
+        }
+
+        function copySingleFinding(index) {
+            const finding = currentDetailFindings[index];
+            const text = formatFindingForCopy(finding);
+
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('已复制问题信息');
+            }).catch(() => {
+                alert('复制失败');
+            });
+        }
+
+        function copyDetailFindings() {
+            if (currentDetailFindings.length === 0) {
+                showToast('没有问题可复制');
+                return;
+            }
+
+            let text = `SkillSpector 扫描结果\n`;
+            text += `发现问题数: ${currentDetailFindings.length}\n`;
+            text += `${'='.repeat(50)}\n\n`;
+
+            currentDetailFindings.forEach((f, idx) => {
+                text += formatFindingForCopy(f);
+                if (idx < currentDetailFindings.length - 1) text += '\n';
+            });
+
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('已复制全部问题');
+            }).catch(() => {
+                alert('复制失败');
+            });
+        }
+
+        function closeDetail() {
+            document.getElementById('detailModal').classList.add('hidden');
+        }
+
+        function previousPage() {
+            if (currentPage > 0) {
+                currentPage--;
+                loadHistory();
+            }
+        }
+
+        function nextPage() {
+            if ((currentPage + 1) * pageSize < totalScans) {
+                currentPage++;
+                loadHistory();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function copyAllTableFindings() {
+            if (allTableScans.length === 0) {
+                showToast('暂无扫描记录');
+                return;
+            }
+
+            try {
+                let text = `SkillSpector 扫描历史\n`;
+                text += `扫描总数: ${allTableScans.length}\n`;
+                text += `${'='.repeat(60)}\n\n`;
+
+                for (const scan of allTableScans) {
+                    text += `【${scan.filename}】\n`;
+                    text += `  风险评分: ${scan.risk_score}/100\n`;
+                    text += `  严重级别: ${scan.risk_severity}\n`;
+                    text += `  发现问题: ${scan.findings_count}\n`;
+                    text += `  扫描时间: ${new Date(scan.scanned_at).toLocaleString('zh-CN')}\n`;
+
+                    // 获取该扫描的详细信息
+                    try {
+                        const response = await fetch(`/api/scan/${scan.id}`);
+                        if (response.ok) {
+                            const detail = await response.json();
+                            const findings = detail.findings || [];
+                            if (findings.length > 0) {
+                                text += `  问题详情:\n`;
+                                findings.forEach((f, idx) => {
+                                    text += `    ${idx + 1}. [${f.severity}] ${f.id || 'Unknown'}\n`;
+                                    if (f.explanation || f.message) {
+                                        text += `       ${f.explanation || f.message}\n`;
+                                    }
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to fetch finding details:', e);
+                    }
+
+                    text += '\n';
+                }
+
+                await navigator.clipboard.writeText(text);
+                showToast(`已复制 ${allTableScans.length} 条扫描记录`);
+            } catch (error) {
+                console.error('Copy failed:', error);
+                showToast('复制失败，请重试');
+            }
+        }
+
+        async function deleteScan(scanId, filename) {
+            if (!confirm(`确定要删除扫描记录 "${filename}" 吗？\n此操作无法撤销。`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/scan/${scanId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    throw new Error('删除失败');
+                }
+
+                showToast('扫描记录已删除');
+                await loadHistory();
+            } catch (error) {
+                console.error('Delete failed:', error);
+                showToast('删除失败，请重试');
+            }
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-4 right-4 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
+
+        // Load history on page load
+        document.addEventListener('DOMContentLoaded', loadHistory);
+    </script>
+</body>
+</html>

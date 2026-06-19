@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NovaGraph AI - Cinematic Storytelling scroller</title>
+  <!-- Google Fonts & Tailwind CDN -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&family=Space+Grotesk:wght@400;500;700&family=Syne:wght@700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 引入 Three.js 与 GSAP CDN 用于极致动效 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+            title: ['Syne', 'sans-serif'],
+            display: ['Space Grotesk', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            quantum: {
+              black: '#000000',
+              gray: '#080710',
+              silver: '#a1a1aa',
+              blue: '#00f0ff',
+              purple: '#6b21a8',
+              white: '#f8fafc',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      overflow-x: hidden;
+      background-color: #000000;
+      color: #f8fafc;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    #webgl-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* 冰川冷调玻璃卡片 */
+    .glacial-card {
+      background: rgba(8, 7, 18, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: 0 40px 100px -30px rgba(0, 0, 0, 0.95);
+      backdrop-filter: blur(25px);
+    }
+
+    /* 滚动轨道刻度进度条 */
+    #scroll-progress-axis {
+      position: fixed;
+      right: 40px;
+      top: 30%;
+      height: 40%;
+      width: 2px;
+      background: rgba(255, 255, 255, 0.05);
+      z-index: 50;
+      pointer-events: none;
+    }
+    #scroll-progress-bar {
+      width: 100%;
+      height: 0%;
+      background: #00f0ff;
+      box-shadow: 0 0 10px #00f0ff;
+      transition: height 0.1s ease-out;
+    }
+
+    /* 故事幕幅固定叠加定位（叠加于 WebGL 空间之上） */
+    .narrative-section {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: start;
+    }
+
+    /* 自定义美化轨道滚动条 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(8, 7, 18, 0.2);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(0, 240, 255, 0.15);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 240, 255, 0.4);
+    }
+  </style>
+</head>
+<body class="overflow-x-hidden select-none">
+
+  <!-- Three.js 3D 渲染画布 -->
+  <div id="webgl-canvas"></div>
+
+  <!-- 全局左侧暗部渐变遮罩 (确保左侧浮动文字可读性，消除卡片边界感) -->
+  <div class="fixed inset-0 pointer-events-none z-1 bg-gradient-to-r from-black/85 via-black/45 to-transparent"></div>
+
+  <!-- 3D 动态交互标签容器 -->
+  <div id="interactive-labels-container" class="absolute inset-0 pointer-events-none z-30 overflow-hidden"></div>
+
+  <!-- 滚动刻度轴 -->
+  <div id="scroll-progress-axis" class="hidden md:block">
+    <div id="scroll-progress-bar"></div>
+  </div>
+
+  <!-- ==========================================
+       量子系统状态栏 (常驻)
+       ========================================== -->
+  <header class="fixed top-0 inset-x-0 h-16 flex items-center justify-between px-10 border-b border-white/[0.03] z-40 pointer-events-none">
+    <div class="flex items-center gap-4">
+      <div class="w-2 h-2 rounded-full bg-quantum-blue animate-ping"></div>
+      <span class="text-[10px] font-mono tracking-[0.25em] text-quantum-blue uppercase">GALAXY_OS : ACTIVE</span>
+    </div>
+    <div class="flex items-center gap-10 text-[10px] font-mono tracking-widest text-zinc-400">
+      <span id="system-slide-indicator">ACT_00 // HERO_CONCEPT</span>
+      <span>RENDER_ENGINE: Custom_Shaders</span>
+    </div>
+  </header>
+
+  <!-- ==========================================
+       故事叙事卷轴容器 (Scroll Content)
+       ========================================== -->
+  <div class="narrative-wrapper w-full h-full fixed inset-0 z-10 pointer-events-none">
+    <!-- 首幕 (Hero) -->
+    <section id="section-0" class="narrative-section min-h-screen w-full flex items-center justify-start px-10 md:px-24" style="opacity: 1; pointer-events: auto;">
+      <div class="max-w-4xl py-24">
+        <div class="inline-flex items-center gap-2 text-[9px] font-mono text-quantum-blue uppercase tracking-[0.2em] mb-4 bg-quantum-blue/10 px-2.5 py-1 rounded-full border border-quantum-blue/20">// Trae AI 创造力大赛参赛项目</div>
+        <h1 class="text-6xl md:text-9xl font-extrabold text-transparent bg-clip-text bg-gradient-to-b from-white via-zinc-200 to-zinc-500 font-title tracking-tight leading-none uppercase" style="filter: drop-shadow(0 2px 15px rgba(0,0,0,0.9));">
+          NOVAGRAPH
+        </h1>
+        <h2 class="text-transparent bg-clip-text bg-gradient-to-r from-quantum-blue via-teal-300 to-emerald-400 font-display font-bold text-3xl md:text-5xl mt-4 tracking-wide normal-case" style="filter: drop-shadow(0 2px 10px rgba(0,0,0,0.9));">
+          AI Galaxy Explorer
+        </h2>
+        <p class="text-sky-200/90 font-medium text-sm md:text-lg max-w-2xl mt-8 leading-relaxed" style="text-shadow: 0 1px 4px #000, 0 2px 12px rgba(0,0,0,0.95);">
+          <strong>个人知识库的 3D 星系图谱探索器</strong><br>
+          这是一款将零散的个人笔记、收藏网页，一键编译成动态 3D “知识引力星系”的探索工具。我们利用 AI 提炼概念逻辑，将文件夹与双链的繁重维护完全自动化，带给用户探索宇宙般的学习与复盘体验。
+        </p>
+        <div class="flex items-center gap-2 text-[10px] font-mono text-quantum-blue/80 mt-12 uppercase tracking-widest">
+          <span class="animate-bounce">↓</span> 向下滚动，查看创意与设计案卷
+        </div>
+      </div>
+    </section>
+
+    <!-- 第一幕 (Pain) -->
+    <section id="section-1" class="narrative-section min-h-screen w-full flex items-center justify-start px-10 md:px-24">
+      <div class="max-w-3xl py-24">
+        <div class="inline-flex items-center gap-2 text-[9px] font-mono text-rose-500 uppercase tracking-[0.2em] mb-4 bg-rose-500/10 px-2.5 py-1 rounded-full border border-rose-500/20">// Act 01: Core Pain Points / 核心痛点</div>
+        <h2 class="text-5xl md:text-8xl font-extrabold font-title tracking-tight leading-none uppercase space-y-2" style="filter: drop-shadow(0 2px 15px rgba(0,0,0,0.9));">
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-zinc-400 via-zinc-200 to-zinc-500 text-3xl md:text-5xl font-display font-medium normal-case tracking-wider mb-2">KNOWLEDGE GRAVEYARD</span>
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-rose-400 via-red-500 to-orange-600">知识坟墓</span>
+        </h2>
+        <div class="text-orange-200/90 font-medium text-sm md:text-lg max-w-2xl mt-8 leading-relaxed space-y-4" style="text-shadow: 0 1px 4px #000, 0 2px 12px rgba(0,0,0,0.95);">
+          <p>我们每天在互联网上收藏大量文章、写下碎片笔记，但它们都像孤岛一样封存在分类文件夹中。时间一长，这些碎片就丧失了相互碰撞的活性，最终冷凝为无法被检索的“认知暗物质”。</p>
+          <ul class="list-disc pl-5 space-y-2 text-xs md:text-sm text-rose-300/95">
+            <li><strong>高昂的整理成本</strong>：传统的双链笔记工具（如 Obsidian）需要用户大量手动建链，维护成本极高，容易半途而废。</li>
+            <li><strong>扁平的信息盲区</strong>：成百上千的平面文件夹使得隐藏在不同领域、笔记之间的灵感线索无法被肉眼发觉。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 第二幕 (Core) -->
+    <section id="section-2" class="narrative-section min-h-screen w-full flex items-center justify-start px-10 md:px-24">
+      <div class="max-w-3xl py-24">
+        <div class="inline-flex items-center gap-2 text-[9px] font-mono text-quantum-blue uppercase tracking-[0.2em] mb-4 bg-quantum-blue/10 px-2.5 py-1 rounded-full border border-quantum-blue/20">// Act 02: Creative Concept / 创意介绍</div>
+        <h2 class="text-5xl md:text-8xl font-extrabold font-title tracking-tight leading-none uppercase space-y-2" style="filter: drop-shadow(0 2px 15px rgba(0,0,0,0.9));">
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-zinc-400 via-zinc-200 to-zinc-500 text-3xl md:text-5xl font-display font-medium normal-case tracking-wider mb-2">GRAVITY ENGINE</span>
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-500">AI 拓扑引擎</span>
+        </h2>
+        <div class="text-cyan-200/90 font-medium text-sm md:text-lg max-w-2xl mt-8 leading-relaxed space-y-4" style="text-shadow: 0 1px 4px #000, 0 2px 12px rgba(0,0,0,0.95);">
+          <p>我们用 AI 彻底解放人工整理的繁杂步骤，把个人的笔记世界抽象为一个具备引力法则的自组织星盘系统：</p>
+          <ul class="list-disc pl-5 space-y-2 text-xs md:text-sm text-sky-300/95">
+            <li><strong>AI 语义与关系提取</strong>：集成大模型命名实体提取（NER）能力，在后台自动识别笔记文本中的核心概念，并计算概念之间的关联强度（引力系数）。</li>
+            <li><strong>3D 动力学物理拓扑</strong>：在 WebGL 空间中将名词映射为有质量的天体，关系映射为引力轨道。天体之间会产生库仑排斥，关联天体间产生弹簧拉力，编织出富有呼吸张力的自组织知识网络。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 第三幕 (Users) -->
+    <section id="section-3" class="narrative-section min-h-screen w-full flex items-center justify-start px-10 md:px-24">
+      <div class="max-w-3xl py-24">
+        <div class="inline-flex items-center gap-2 text-[9px] font-mono text-purple-400 uppercase tracking-[0.2em] mb-4 bg-purple-400/10 px-2.5 py-1 rounded-full border border-purple-400/20">// Act 03: Target Users / 目标用户</div>
+        <h2 class="text-5xl md:text-8xl font-extrabold font-title tracking-tight leading-none uppercase space-y-2" style="filter: drop-shadow(0 2px 15px rgba(0,0,0,0.9));">
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-zinc-400 via-zinc-200 to-zinc-500 text-3xl md:text-5xl font-display font-medium normal-case tracking-wider mb-2">TARGET AUDIENCE</span>
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 via-purple-400 to-pink-500">知识求索者</span>
+        </h2>
+        <div class="text-purple-200/90 font-medium text-sm md:text-lg max-w-2xl mt-8 leading-relaxed space-y-4" style="text-shadow: 0 1px 4px #000, 0 2px 12px rgba(0,0,0,0.95);">
+          <p>NovaGraph AI 专为饱受海量碎片信息轰炸、渴望沉淀系统认知框架的专业人群设计：</p>
+          <ul class="list-disc pl-5 space-y-2 text-xs md:text-sm text-fuchsia-300/95">
+            <li><strong>科研人员与学者</strong>：在阅读大量文献时，自动梳理学术流派的逻辑传承，拉近视角微观审视研究脉络。</li>
+            <li><strong>技术开发者与架构师</strong>：在繁杂的技术架构、系统依赖和项目设计笔记中，理清清晰的拓扑依赖关联。</li>
+            <li><strong>创作者与终身学习者</strong>：将日常收集的网页书签、稍后阅读零散拼合，在星海穿梭中发现跨领域的交叉灵感。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 第四幕 (Value) -->
+    <section id="section-4" class="narrative-section min-h-screen w-full flex items-center justify-start px-10 md:px-24">
+      <div class="max-w-3xl py-24">
+        <div class="inline-flex items-center gap-2 text-[9px] font-mono text-emerald-400 uppercase tracking-[0.2em] mb-4 bg-emerald-400/10 px-2.5 py-1 rounded-full border border-emerald-400/20">// Act 04: Value & Significance / 价值意义</div>
+        <h2 class="text-5xl md:text-8xl font-extrabold font-title tracking-tight leading-none uppercase space-y-2" style="filter: drop-shadow(0 2px 15px rgba(0,0,0,0.9));">
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-zinc-400 via-zinc-200 to-zinc-500 text-3xl md:text-5xl font-display font-medium normal-case tracking-wider mb-2">COGNITIVE EVOLUTION</span>
+          <span class="block text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-yellow-200">效率与安全</span>
+        </h2>
+        <div class="text-emerald-200/90 font-medium text-sm md:text-lg max-w-2xl mt-8 leading-relaxed space-y-4" style="text-shadow: 0 1px 4px #000, 0 2px 12px rgba(0,0,0,0.95);">
+          <p>超越传统笔记的局限性，实现个人认知效率与安全性的跃迁：</p>
+          <ul class="list-disc pl-5 space-y-2 text-xs md:text-sm text-teal-300/95">
+            <li><strong>灵感的“显性涌现”</strong>：打破线性的文件夹存储，通过 3D 关联的可视化呈现，让用户一眼洞察之前未曾察觉的隐性知识联系。</li>
+            <li><strong>100% 隐私守恒</strong>：全单机本地沙盒化运行，数据完全保存在浏览器本地（LocalStorage/IndexedDB）中。数据不出本地，保障绝对安全。</li>
+            <li><strong>电影级交互美学</strong>：革新传统大模型展示，首创长故事卷轴与 3D 动力网无缝融合的交互体验，展示出 AI 工具的高级审美与未来感。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 最终幕 (Live Compiler - 交互编译物理舱) -->
+    <section id="section-5" class="narrative-section min-h-screen w-full relative">
+      <div id="interactive-panel" class="absolute right-6 md:right-16 top-1/2 -translate-y-1/2 w-full max-w-[440px] p-8 rounded-lg glacial-card border border-white/5 opacity-0 translate-x-[50px] transition-all duration-1000 pointer-events-none z-30">
+        <div class="text-[9px] font-mono tracking-[0.25em] text-quantum-blue uppercase mb-2">// COGNITIVE_COMPILER : ACTIVE</div>
+        <h3 class="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-quantum-blue to-teal-200 tracking-tight leading-none mb-4 font-title">实时星河编译体验舱</h3>
+        <p class="text-xs text-zinc-200 leading-relaxed mb-6 font-light">
+          <strong>亲自体验 AI 编织引力的魅力</strong>：在下方框中粘贴您的任意一段笔记或概念说明。AI 将动态提取其关键词，并作为具有物理质量和弹性轨道的 3D 星体，实时坠入前方的星系引力网中！
+        </p>
+        <textarea id="compiler-input" placeholder="例如：量子力学与相对论的结合产生了量子引力理论，而超弦理论与圈量子引力则是两种潜在的候选理论..." class="w-full h-32 bg-white/5 border border-white/10 rounded p-3 text-xs text-white placeholder-white/30 focus:outline-none focus:border-quantum-blue/40 font-light resize-none mb-4 transition-all focus:ring-1 focus:ring-quantum-blue/30"></textarea>
+        
+        <div class="flex gap-2">
+          <button id="btn-compile" class="flex-1 py-3 bg-gradient-to-r from-quantum-blue/10 to-teal-500/10 hover:from-quantum-blue/20 hover:to-teal-500/20 text-quantum-blue hover:text-white font-mono text-[9px] tracking-[0.25em] font-bold rounded border border-quantum-blue/30 hover:border-quantum-blue/60 transition-all uppercase shadow-[0_0_15px_rgba(0,240,255,0.05)]">
+            [ COMPILE TO GALAXY ]
+          </button>
+          <button id="btn-reset-nodes" class="px-4 py-3 bg-white/5 hover:bg-white/10 text-quantum-silver hover:text-white font-mono text-[9px] tracking-[0.2em] rounded border border-white/10 transition-all uppercase">
+            [ RESET ]
+          </button>
+        </div>
+
+        <div class="mt-8 border-t border-white/5 pt-4 flex items-center justify-between">
+          <span class="text-[9px] font-mono text-quantum-silver/35 uppercase">Editor Mode: Standalone_Physics_v1.0</span>
+          <a href="http://localhost:5173/" class="text-[9px] font-mono text-quantum-blue hover:underline tracking-widest uppercase">Launch React App →</a>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 滚动占位层 (提供滚动高度) -->
+  <div class="scroll-container w-full h-[600vh] relative z-0 pointer-events-none"></div>
+
+  <!-- ==========================================
+       THREE.JS 3D 动效渲染引擎
+       ========================================== -->
+  <script>
+    // 注册 GSAP 滚动插件
+    gsap.registerPlugin(ScrollTrigger);
+
+    // ==========================================
+    // A. 2D 分形布朗运动噪声算法 (Procedural Planet Canvas Textures)
+    // ==========================================
+    function noise2D(x, y) {
+      const X = Math.floor(x);
+      const Y = Math.floor(y);
+      const fx = x - X;
+      const fy = y - Y;
+      
+      const hash = (u, v) => {
+        const val = Math.sin(u * 12.9898 + v * 78.233) * 43758.5453123;
+        return val - Math.floor(val);
+      };
+      
+      const a = hash(X, Y);
+      const b = hash(X + 1, Y);
+      const c = hash(X, Y + 1);
+      const d = hash(X + 1, Y + 1);
+      
+      const ux = fx * fx * (3.0 - 2.0 * fx);
+      const uy = fy * fy * (3.0 - 2.0 * fy);
+      
+      return (1.0 - ux) * (1.0 - uy) * a +
+             ux * (1.0 - uy) * b +
+             (1.0 - ux) * uy * c +
+             ux * uy * d;
+    }
+
+    function fbm(x, y, octaves = 5) {
+      let value = 0.0;
+      let amplitude = 0.5;
+      let frequency = 1.0;
+      for (let i = 0; i < octaves; i++) {
+        value += amplitude * noise2D(x * frequency, y * frequency);
+        frequency *= 2.0;
+        amplitude *= 0.5;
+      }
+      return value;
+    }
+
+    // ==========================================
+    // B. 菲涅尔大气发光着色器 (Fresnel Atmosphere Shaders)
+    // ==========================================
+    const atmosVertexShader = `
+      varying vec3 vNormal;
+      varying vec3 vPositionNormal;
+      void main() {
+        vNormal = normalize(normalMatrix * normal);
+        vPositionNormal = normalize((modelViewMatrix * vec4(position, 1.0)).xyz);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const atmosFragmentShader = `
+      varying vec3 vNormal;
+      varying vec3 vPositionNormal;
+      uniform vec3 uGlowColor;
+      void main() {
+        // 菲涅尔公式近似边缘发光
+        float intensity = pow(0.65 - dot(vNormal, normalize(-vPositionNormal)), 2.8);
+        gl_FragColor = vec4(uGlowColor, intensity * 0.95);
+      }
+    `;
+
+    function createAtmosphere(parentMesh, size, colorHex) {
+      const geo = new THREE.SphereGeometry(size * 1.15, 32, 32);
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: atmosVertexShader,
+        fragmentShader: atmosFragmentShader,
+        uniforms: {
+          uGlowColor: { value: new THREE.Color(colorHex) }
+        },
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide,
+        transparent: true,
+        depthWrite: false
+      });
+      const atmosMesh = new THREE.Mesh(geo, mat);
+      parentMesh.add(atmosMesh);
+      return atmosMesh;
+    }
+
+    // ==========================================
+    // C. 写实行星纹理生成器
+    // ==========================================
+    function createLavaTexture() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 512;
+      const ctx = c.getContext('2d');
+      const imgData = ctx.createImageData(512, 512);
+      const data = imgData.data;
+
+      for (let y = 0; y < 512; y++) {
+        for (let x = 0; x < 512; x++) {
+          const nx = x / 30.0;
+          const ny = y / 30.0;
+          const val = fbm(nx, ny, 4);
+          let r, g, b;
+          if (val > 0.52) {
+            const t = (val - 0.52) / 0.48;
+            r = Math.floor(15 + t * 25);
+            g = Math.floor(12 + t * 15);
+            b = Math.floor(12 + t * 15);
+          } else {
+            const t = val / 0.52;
+            r = 255;
+            g = Math.floor(Math.pow(t, 2.5) * 165 + t * 35);
+            b = Math.floor(Math.pow(t, 6.0) * 80);
+          }
+          const idx = (y * 512 + x) * 4;
+          data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      return new THREE.CanvasTexture(c);
+    }
+
+    function createGasTexture() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 512;
+      const ctx = c.getContext('2d');
+      const imgData = ctx.createImageData(512, 512);
+      const data = imgData.data;
+
+      for (let y = 0; y < 512; y++) {
+        for (let x = 0; x < 512; x++) {
+          const nx = x / 28.0;
+          const ny = y / 20.0;
+          const dy = fbm(nx, ny, 3) * 18.0;
+          const waveY = (y + dy) % 512;
+          
+          const bandVal = Math.sin(waveY * 0.08) * 0.5 + 0.5;
+          const noiseVal = fbm(x / 50.0, y / 12.0, 2) * 0.28;
+          const finalVal = Math.min(1.0, Math.max(0.0, bandVal + noiseVal));
+          
+          let r = Math.floor(5 + finalVal * 45);
+          let g = Math.floor(70 + finalVal * 150);
+          let b = Math.floor(110 + finalVal * 145);
+          
+          const dx = x - 320;
+          const dy2 = y - 260;
+          const distToStorm = Math.sqrt(dx*dx + dy2*dy2 * 2.8);
+          if (distToStorm < 40) {
+            const stormFactor = 1.0 - distToStorm / 40;
+            r = Math.floor(r * (1.0 - stormFactor));
+            g = Math.floor(g * (1.0 - stormFactor) + 235 * stormFactor);
+            b = Math.floor(b * (1.0 - stormFactor) + 255 * stormFactor);
+          }
+          const idx = (y * 512 + x) * 4;
+          data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      return new THREE.CanvasTexture(c);
+    }
+
+    function createIceTexture() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 512;
+      const ctx = c.getContext('2d');
+      const imgData = ctx.createImageData(512, 512);
+      const data = imgData.data;
+
+      for (let y = 0; y < 512; y++) {
+        for (let x = 0; x < 512; x++) {
+          const lat = Math.abs(y - 256) / 256.0;
+          const nx = x / 38.0;
+          const ny = y / 38.0;
+          const landNoise = fbm(nx, ny, 4);
+          
+          let r, g, b;
+          if (lat > 0.76) {
+            const melt = (1.0 - lat) / 0.24;
+            const ns = fbm(nx * 2.0, ny * 2.0, 2) * 0.15;
+            if (landNoise + ns > 0.15 * melt) {
+              r = g = b = 255;
+            } else {
+              r = 12; g = 74; b = 110;
+            }
+          } else if (landNoise > 0.45) {
+            const t = (landNoise - 0.45) / 0.55;
+            r = Math.floor(180 + t * 75);
+            g = Math.floor(225 + t * 30);
+            b = Math.floor(245 + t * 10);
+          } else {
+            const crackVal = 1.0 - Math.abs(noise2D(x / 14.0, y / 14.0) - 0.5) * 2.0;
+            const hasCrack = crackVal > 0.86 && landNoise > 0.22;
+            if (hasCrack) {
+              r = 56; g = 189; b = 248;
+            } else {
+              const t = landNoise / 0.45;
+              r = Math.floor(6 + t * 18);
+              g = Math.floor(35 + t * 35);
+              b = Math.floor(70 + t * 45);
+            }
+          }
+          const idx = (y * 512 + x) * 4;
+          data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      return new THREE.CanvasTexture(c);
+    }
+
+    function createTitaniumTexture() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 512;
+      const ctx = c.getContext('2d');
+      const imgData = ctx.createImageData(512, 512);
+      const data = imgData.data;
+
+      for (let y = 0; y < 512; y++) {
+        for (let x = 0; x < 512; x++) {
+          const metalVal = fbm(x / 24.0, y / 130.0, 3) * 0.35 + 0.35;
+          let r = Math.floor(metalVal * 115);
+          let g = Math.floor(metalVal * 125);
+          let b = Math.floor(metalVal * 145);
+          
+          const gridX = x % 64;
+          const gridY = y % 64;
+          if (gridX < 2 || gridY < 2) {
+            r = Math.floor(r * 0.35); g = Math.floor(g * 0.35); b = Math.floor(b * 0.35);
+          }
+          
+          const circuitX = x % 16;
+          const circuitY = y % 16;
+          const traceNoise = noise2D(Math.floor(x/16) * 1.5, Math.floor(y/16) * 1.5);
+          if (traceNoise > 0.70) {
+            if (circuitX === 0 || circuitY === 0) {
+              r = 16; g = 185; b = 129;
+            }
+          }
+          const idx = (y * 512 + x) * 4;
+          data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      return new THREE.CanvasTexture(c);
+    }
+
+    // ==========================================
+    // D. 3D 星系 / 拓扑图 Morphing 着色器与粒子背景
+    // ==========================================
+    const galaxyVertexShader = `
+      uniform float uTransition; // 0.0 (星系) -> 1.0 (拓扑网)
+      uniform float uExplode;    // 0.0 -> 1.0 (痛点爆开扩散)
+      uniform float uTime;
+      uniform vec3 uMouse3D;
+      
+      attribute vec3 posGraph;   // 拓扑图状态下的坐标
+      attribute vec3 color;
+      
+      varying vec3 vColor;
+      varying float vDistance;
+
+      void main() {
+        vColor = color;
+        
+        // 双状态插值混成
+        vec3 finalPos = mix(position, posGraph, uTransition);
+        
+        // 痛点阶段的扩展爆炸
+        vec3 norm = normalize(finalPos);
+        if (length(finalPos) < 0.1) norm = vec3(0.0, 1.0, 0.0);
+        finalPos += norm * uExplode * 600.0;
+
+        // 鼠标涟漪波动 (在非爆炸状态下产生效果)
+        if (uExplode < 0.01) {
+          float dist = distance(finalPos, uMouse3D);
+          float maxDist = 180.0;
+          if (dist < maxDist) {
+            float factor = pow(1.0 - (dist / maxDist), 2.0);
+            float wave = sin(dist * 0.14 - uTime * 6.0) * factor * 16.0;
+            finalPos.y += wave;
+            finalPos.x += cos(dist * 0.06 + uTime) * factor * 6.0;
+            finalPos.z += sin(dist * 0.06 + uTime) * factor * 6.0;
+          }
+        }
+
+        vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+
+        // 尺寸透视衰减
+        gl_PointSize = (4.5 / -mvPosition.z) * 360.0;
+        
+        // 亮核中心放大
+        float r = length(position.xz);
+        gl_PointSize *= (1.0 + 1.8 * (1.0 - smoothstep(0.0, 420.0, r)));
+      }
+    `;
+
+    const galaxyFragmentShader = `
+      uniform float uOpacity; // 整体不透明度控制
+      varying vec3 vColor;
+      
+      void main() {
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        float dist = length(coord);
+        if (dist > 0.5) discard;
+        
+        float alpha = smoothstep(0.5, 0.0, dist);
+        gl_FragColor = vec4(vColor, alpha * uOpacity);
+      }
+    `;
+
+    // 弥散星云着色器
+    const nebulaVertexShader = `
+      attribute vec3 color;
+      varying vec3 vColor;
+      void main() {
+        vColor = color;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = (140.0 / -mvPosition.z) * 450.0;
+      }
+    `;
+
+    const nebulaFragmentShader = `
+      uniform float uOpacity;
+      varying vec3 vColor;
+      void main() {
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        float dist = length(coord);
+        if (dist > 0.5) discard;
+        float alpha = pow(smoothstep(0.5, 0.0, dist), 3.0);
+        gl_FragColor = vec4(vColor, alpha * 0.22 * uOpacity);
+      }
+    `;
+
+    // ==========================================
+    // E. 引擎初始化与全局变量
+    // ==========================================
+    const container = document.getElementById('webgl-canvas');
+    let scene, camera, renderer;
+    let galaxySystem, nebulaSystem;
+    let clock = new THREE.Clock();
+
+    const mouse2D = new THREE.Vector2();
+    const raycaster = new THREE.Raycaster();
+    const galaxyNormal = new THREE.Vector3(0, 1, 0).applyAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 12);
+    const mousePlane = new THREE.Plane(galaxyNormal, 0);
+    const mouse3D = new THREE.Vector3(9999, 9999, 9999);
+
+    // 动画状态管理
+    const animState = {
+      transition: 0.0, // Morphing 状态 (0:星系, 1:神经网络)
+      explode: 0.0,    // 痛点爆炸扩散
+      opacity: 1.0     // 粒子不透明度
+    };
+
+    // 交互物理引擎数据 ( Act 5 )
+    let interactiveModeActive = false;
+    let interactiveNodes = [];
+    let interactiveLinks = [];
+    let linkLinesMesh = null;
+    let tempV = new THREE.Vector3();
+
+    // 物理参数
+    const K_REP = 1200; // 排斥力
+    const K_ATT = 0.06;  // 弹簧拉力
+    const D_REST = 80;  // 弹簧静止距离
+    const K_CTR = 0.012; // 向心重力
+
+    // ==========================================
+    // F. 生成写实葵花星系与神经网络 Morphing 粒子
+    // ==========================================
+    function createMorphingGalaxy() {
+      const particleCount = 30000;
+      const geometry = new THREE.BufferGeometry();
+      
+      const positionsGalaxy = new Float32Array(particleCount * 3);
+      const positionsGraph = new Float32Array(particleCount * 3);
+      const colors = new Float32Array(particleCount * 3);
+      
+      const colorCore = new THREE.Color('#fff9dd');
+      const colorStar = new THREE.Color('#fffbf0');
+      const colorDust = new THREE.Color('#603f22');
+      const colorOuter = new THREE.Color('#211242');
+      const colorOuter2 = new THREE.Color('#0a1b42');
+
+      // --- 预生成神经网络图谱的 75 个大骨架节点 ---
+      const numGraphNodes = 75;
+      const graphNodes = [];
+      for (let i = 0; i < numGraphNodes; i++) {
+        // 分布在一个椭球体空间中
+        graphNodes.push(new THREE.Vector3(
+          (Math.random() - 0.5) * 580,
+          (Math.random() - 0.5) * 260,
+          (Math.random() - 0.5) * 580
+        ));
+      }
+      
+      // 生成节点间的相互连接
+      const graphLinks = [];
+      for (let i = 0; i < numGraphNodes; i++) {
+        const cur = graphNodes[i];
+        const dists = graphNodes.map((n, idx) => ({ idx, dist: cur.distanceTo(n) }))
+                            .filter(d => d.idx !== i)
+                            .sort((a, b) => a.dist - b.dist);
+        // 连接最近的 3 个邻居
+        graphLinks.push({ from: cur, to: graphNodes[dists[0].idx] });
+        graphLinks.push({ from: cur, to: graphNodes[dists[1].idx] });
+        graphLinks.push({ from: cur, to: graphNodes[dists[2].idx] });
+      }
+
+      // --- 填充 30,000 个粒子坐标 ---
+      for (let i = 0; i < particleCount; i++) {
+        // A. 状态 1：写实葵花星系螺旋位置
+        const r = Math.pow(Math.random(), 2.8) * 550;
+        const numArms = 8;
+        const armIndex = i % numArms;
+        
+        const spinAngle = r * 0.015;
+        const baseAngle = (armIndex * Math.PI * 2) / numArms;
+        
+        const angleDisp = (Math.random() - 0.5) * (0.6 + 150.0 / (r + 40.0));
+        const finalAngle = baseAngle + spinAngle + angleDisp;
+        
+        const spreadX = (Math.random() - 0.5) * (r * 0.08 + 6.0);
+        const spreadY = (Math.random() - 0.5) * (r * 0.025 + (1.0 - r / 550) * 16.0);
+        const spreadZ = (Math.random() - 0.5) * (r * 0.08 + 6.0);
+        
+        const gX = Math.cos(finalAngle) * r + spreadX;
+        const gY = spreadY;
+        const gZ = Math.sin(finalAngle) * r + spreadZ;
+        
+        positionsGalaxy[i * 3] = gX;
+        positionsGalaxy[i * 3 + 1] = gY;
+        positionsGalaxy[i * 3 + 2] = gZ;
+
+        // B. 状态 2：神经网络连接图谱位置
+        let grX, grY, grZ;
+        const isCluster = Math.random() < 0.22; // 22% 粒子作为节点聚类
+        
+        if (isCluster) {
+          // 聚集在随机神经网络节点周围
+          const targetNode = graphNodes[Math.floor(Math.random() * numGraphNodes)];
+          const spread = 8 + Math.random() * 25;
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.acos((Math.random() * 2) - 1);
+          
+          grX = targetNode.x + spread * Math.sin(phi) * Math.cos(theta);
+          grY = targetNode.y + spread * Math.sin(phi) * Math.sin(theta);
+          grZ = targetNode.z + spread * Math.cos(phi);
+        } else {
+          // 分布在连线纤维束上 (80% 粒子)
+          const targetLink = graphLinks[Math.floor(Math.random() * graphLinks.length)];
+          const t = Math.random();
+          
+          // 连线线性插值
+          const lx = targetLink.from.x * (1.0 - t) + targetLink.to.x * t;
+          const ly = targetLink.from.y * (1.0 - t) + targetLink.to.y * t;
+          const lz = targetLink.from.z * (1.0 - t) + targetLink.to.z * t;
+          
+          // 纤维气雾粗糙度
+          const fiberNoise = 4.0 + Math.random() * 12.0;
+          grX = lx + (Math.random() - 0.5) * fiberNoise;
+          grY = ly + (Math.random() - 0.5) * fiberNoise;
+          grZ = lz + (Math.random() - 0.5) * fiberNoise;
+        }
+        
+        positionsGraph[i * 3] = grX;
+        positionsGraph[i * 3 + 1] = grY;
+        positionsGraph[i * 3 + 2] = grZ;
+
+        // C. 配色方案 (提亮型)
+        let mixedColor;
+        if (r < 50) {
+          mixedColor = colorCore.clone().lerp(colorStar, r / 50);
+          mixedColor.multiplyScalar(1.3);
+        } else if (r < 300) {
+          const isDust = Math.random() < 0.38;
+          if (isDust) {
+            mixedColor = colorDust.clone().multiplyScalar(0.8 + Math.random() * 0.5);
+          } else {
+            if (Math.random() < 0.12) {
+              mixedColor = new THREE.Color('#e0f2fe'); // 冰蓝
+            } else {
+              mixedColor = colorStar.clone().lerp(new THREE.Color('#ffffff'), Math.random() * 0.5);
+            }
+            mixedColor.multiplyScalar(1.25);
+          }
+        } else {
+          const t = (r - 300) / 250;
+          const targetOuter = Math.random() > 0.5 ? colorOuter : colorOuter2;
+          mixedColor = colorStar.clone().lerp(targetOuter, t);
+          if (Math.random() < 0.45) {
+            mixedColor.multiplyScalar(0.4);
+          } else {
+            mixedColor.multiplyScalar(1.2);
+          }
+        }
+        
+        colors[i * 3] = mixedColor.r;
+        colors[i * 3 + 1] = mixedColor.g;
+        colors[i * 3 + 2] = mixedColor.b;
+      }
+      
+      geometry.setAttribute('position', new THREE.BufferAttribute(positionsGalaxy, 3));
+      geometry.setAttribute('posGraph', new THREE.BufferAttribute(positionsGraph, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      
+      const galaxyMaterial = new THREE.ShaderMaterial({
+        vertexShader: galaxyVertexShader,
+        fragmentShader: galaxyFragmentShader,
+        uniforms: {
+          uTransition: { value: 0.0 },
+          uExplode: { value: 0.0 },
+          uOpacity: { value: 1.0 },
+          uTime: { value: 0.0 },
+          uMouse3D: { value: new THREE.Vector3(9999, 9999, 9999) }
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      
+      const galaxy = new THREE.Points(geometry, galaxyMaterial);
+      return galaxy;
+    }
+
+    function createSpaceNebula() {
+      const count = 550;
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+
+      const nebulaColors = [
+        new THREE.Color('#3b0764'), new THREE.Color('#1e1b4b'),
+        new THREE.Color('#0369a1'), new THREE.Color('#4c1d95'),
+        new THREE.Color('#083344'), new THREE.Color('#2e1065')
+      ];
+
+      for (let i = 0; i < count; i++) {
+        const radius = Math.random() * 680;
+        const angle = Math.random() * Math.PI * 2;
+        
+        const x = Math.cos(angle) * radius;
+        const y = (Math.random() - 0.5) * 80;
+        const z = Math.sin(angle) * radius;
+
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = z;
+
+        const baseColor = nebulaColors[Math.floor(Math.random() * nebulaColors.length)];
+        const mixed = baseColor.clone().multiplyScalar(0.75 + Math.random() * 0.6);
+
+        colors[i * 3] = mixed.r;
+        colors[i * 3 + 1] = mixed.g;
+        colors[i * 3 + 2] = mixed.b;
+      }
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: nebulaVertexShader,
+        fragmentShader: nebulaFragmentShader,
+        uniforms: {
+          uOpacity: { value: 1.0 }
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+
+      return new THREE.Points(geometry, mat);
+    }
+
+    // ==========================================
+    // G. 交互式物理引擎初始化 (用于 Act 5 演示舱)
+    // ==========================================
+    function initInteractiveGraph() {
+      const nodeData = [
+        { label: "NovaGraph AI", size: 14, color: "#00f0ff" },
+        { label: "Topological Engine", size: 10, color: "#ff4511" },
+        { label: "Data Privacy", size: 9, color: "#10b981" },
+        { label: "Vector DB", size: 9, color: "#38bdf8" },
+        { label: "Gemini 1.5 Pro", size: 12, color: "#a855f7" },
+        { label: "Knowledge Graph", size: 11, color: "#eab308" },
+        { label: "Procedural 3D", size: 9, color: "#ec4899" },
+        { label: "Cognitive Decay", size: 9, color: "#ef4444" },
+        { label: "Mass Conservation", size: 10, color: "#10b981" }
+      ];
+
+      nodeData.forEach((data, idx) => {
+        const geo = new THREE.SphereGeometry(data.size, 32, 32);
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(data.color),
+          roughness: 0.6,
+          metalness: 0.35,
+          emissive: new THREE.Color(data.color).multiplyScalar(0.12)
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        
+        // 大气菲涅尔光晕
+        createAtmosphere(mesh, data.size, data.color);
+        
+        // 随机在中心散布
+        mesh.position.set(
+          (Math.random() - 0.5) * 160,
+          (Math.random() - 0.5) * 80,
+          (Math.random() - 0.5) * 160
+        );
+        mesh.visible = false;
+        scene.add(mesh);
+
+        interactiveNodes.push({
+          mesh: mesh,
+          vel: new THREE.Vector3(0, 0, 0),
+          force: new THREE.Vector3(0, 0, 0),
+          mass: 1.0,
+          label: data.label,
+          size: data.size,
+          color: data.color
+        });
+      });
+
+      // 拓扑连线
+      for (let i = 1; i < interactiveNodes.length; i++) {
+        interactiveLinks.push({
+          source: interactiveNodes[0],
+          target: interactiveNodes[i]
+        });
+      }
+      interactiveLinks.push({ source: interactiveNodes[1], target: interactiveNodes[4] });
+      interactiveLinks.push({ source: interactiveNodes[2], target: interactiveNodes[8] });
+      interactiveLinks.push({ source: interactiveNodes[3], target: interactiveNodes[5] });
+
+      // 线段几何体
+      const lineGeo = new THREE.BufferGeometry();
+      const linePositions = new Float32Array(600 * 3 * 2); // 限制最多 600 条线
+      lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+      const lineMat = new THREE.LineBasicMaterial({
+        color: 0x00f0ff,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending
+      });
+      linkLinesMesh = new THREE.LineSegments(lineGeo, lineMat);
+      linkLinesMesh.visible = false;
+      scene.add(linkLinesMesh);
+    }
+
+    // ==========================================
+    // H. 物理引擎更新循环 ( Act 5 动力学 )
+    // ==========================================
+    function updatePhysics() {
+      // 1. 清空受力并添加中心引力
+      interactiveNodes.forEach(n => {
+        n.force.set(0, 0, 0);
+        n.force.addScaledVector(n.mesh.position, -K_CTR);
+      });
+
+      // 2. 节点间的相互库仑排斥力
+      for (let i = 0; i < interactiveNodes.length; i++) {
+        for (let j = i + 1; j < interactiveNodes.length; j++) {
+          const n1 = interactiveNodes[i];
+          const n2 = interactiveNodes[j];
+          
+          const dir = new THREE.Vector3().subVectors(n2.mesh.position, n1.mesh.position);
+          const dist = dir.length();
+          if (dist < 0.1) continue;
+          
+          dir.normalize();
+          const forceMag = K_REP / (dist * dist);
+          n1.force.addScaledVector(dir, -forceMag);
+          n2.force.addScaledVector(dir, forceMag);
+        }
+      }
+
+      // 3. 关联节点间的弹簧引力
+      interactiveLinks.forEach(link => {
+        const n1 = link.source;
+        const n2 = link.target;
+        
+        const dir = new THREE.Vector3().subVectors(n2.mesh.position, n1.mesh.position);
+        const dist = dir.length();
+        if (dist < 0.1) return;
+        
+        dir.normalize();
+        const forceMag = K_ATT * (dist - D_REST);
+        n1.force.addScaledVector(dir, forceMag);
+        n2.force.addScaledVector(dir, -forceMag);
+      });
+
+      // 4. 更新速度与位置
+      interactiveNodes.forEach(n => {
+        const accel = n.force.clone().multiplyScalar(1.0 / n.mass);
+        n.vel.add(accel);
+        n.vel.multiplyScalar(0.85); // 摩阻衰减
+        n.mesh.position.add(n.vel);
+        
+        // 缓慢自转
+        n.mesh.rotation.y += 0.008;
+      });
+
+      // 5. 更新连线几何体
+      if (linkLinesMesh) {
+        const posAttr = linkLinesMesh.geometry.attributes.position;
+        let pIdx = 0;
+        interactiveLinks.forEach(link => {
+          posAttr.setXYZ(pIdx++, link.source.mesh.position.x, link.source.mesh.position.y, link.source.mesh.position.z);
+          posAttr.setXYZ(pIdx++, link.target.mesh.position.x, link.target.mesh.position.y, link.target.mesh.position.z);
+        });
+        // 重设后面的点使其重叠避免垃圾渲染
+        for (let i = pIdx; i < 600 * 2; i++) {
+          posAttr.setXYZ(i, 0, 0, 0);
+        }
+        posAttr.needsUpdate = true;
+      }
+    }
+
+    // ==========================================
+    // I. THREE.JS 核心初始化
+    // ==========================================
+    function init3D() {
+      scene = new THREE.Scene();
+      
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 3000);
+      camera.position.set(0, 320, 520);
+      camera.lookAt(0, 0, 0);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.06);
+      scene.add(ambientLight);
+
+      const sunLight = new THREE.PointLight(0xffffff, 1.8, 2000);
+      sunLight.position.set(0, 0, 0);
+      scene.add(sunLight);
+
+      const dirLight = new THREE.DirectionalLight(0x00f0ff, 0.65);
+      dirLight.position.set(200, 300, 100);
+      scene.add(dirLight);
+
+      // 载入双状态 Morphing 星系
+      galaxySystem = createMorphingGalaxy();
+      galaxySystem.rotation.x = Math.PI / 12;
+      scene.add(galaxySystem);
+
+      // 载入太空星云气云
+      nebulaSystem = createSpaceNebula();
+      nebulaSystem.rotation.x = Math.PI / 12;
+      scene.add(nebulaSystem);
+
+      // 初始化交互力学星图
+      initInteractiveGraph();
+
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('mousemove', onMouseMove);
+    }
+
+    // ==========================================
+    // J. 渲染与动画循环
+    // ==========================================
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const elapsed = clock.getElapsedTime();
+
+      // 星盘与星云极其缓慢的漂移自转
+      if (galaxySystem) {
+        galaxySystem.rotation.y += 0.0004;
+      }
+      if (nebulaSystem) {
+        nebulaSystem.rotation.y += 0.0002;
+      }
+
+      // 更新着色器 Uniforms
+      if (galaxySystem && galaxySystem.material && galaxySystem.material.uniforms) {
+        galaxySystem.material.uniforms.uTime.value = elapsed;
+        galaxySystem.material.uniforms.uTransition.value = animState.transition;
+        galaxySystem.material.uniforms.uExplode.value = animState.explode;
+        galaxySystem.material.uniforms.uOpacity.value = animState.opacity;
+        
+        // 将鼠标 3D 投影传入着色器
+        if (!interactiveModeActive) {
+          raycaster.setFromCamera(mouse2D, camera);
+          raycaster.ray.intersectPlane(mousePlane, mouse3D);
+        } else {
+          mouse3D.set(9999, 9999, 9999);
+        }
+        const localMouse = new THREE.Vector3().copy(mouse3D);
+        galaxySystem.worldToLocal(localMouse);
+        galaxySystem.material.uniforms.uMouse3D.value.copy(localMouse);
+      }
+
+      if (nebulaSystem && nebulaSystem.material && nebulaSystem.material.uniforms) {
+        nebulaSystem.material.uniforms.uOpacity.value = animState.opacity;
+      }
+
+      // 如果进入了 Act 5 动力学体验舱模式，运行力学物理模拟
+      if (interactiveModeActive) {
+        updatePhysics();
+      }
+
+      // 将交互力导向节点的 3D 坐标映射到 HTML 悬浮标签上
+      interactiveNodes.forEach((node, idx) => {
+        let labelEl = document.getElementById(`interactive-label-${idx}`);
+        if (!labelEl) {
+          labelEl = document.createElement('div');
+          labelEl.id = `interactive-label-${idx}`;
+          labelEl.className = 'absolute px-2 py-1 bg-black/80 border border-quantum-blue/30 text-[9px] font-mono text-quantum-blue rounded pointer-events-none select-none transition-opacity duration-300 shadow-[0_0_10px_rgba(0,240,255,0.1)]';
+          labelEl.style.transform = 'translate(-50%, -100%)';
+          document.getElementById('interactive-labels-container').appendChild(labelEl);
+        }
+        
+        labelEl.innerText = node.label;
+
+        if (interactiveModeActive) {
+          tempV.copy(node.mesh.position);
+          tempV.y += node.size + 8; // 稍微偏移在星球头顶
+          tempV.project(camera);
+          
+          if (tempV.z > 1.0) {
+            labelEl.style.opacity = '0';
+          } else {
+            const x = (tempV.x * 0.5 + 0.5) * window.innerWidth;
+            const y = (-(tempV.y * 0.5) + 0.5) * window.innerHeight;
+            labelEl.style.left = `${x}px`;
+            labelEl.style.top = `${y}px`;
+            labelEl.style.opacity = '0.85';
+          }
+        } else {
+          labelEl.style.opacity = '0';
+        }
+      });
+
+      renderer.render(scene, camera);
+    }
+
+    // ==========================================
+    // K. GSAP 滚动时间轴绑定 (苹果级流畅运镜与状态插值)
+    // ==========================================
+    let currentSlide = 0;
+    let isTransitioning = false;
+    const totalSlides = 6;
+
+    const cameraTargets = [
+      { x: 0, y: 320, z: 520 },    // Slide 0: Hero
+      { x: 80, y: 360, z: 420 },   // Slide 1: Pain
+      { x: -150, y: 180, z: 380 }, // Slide 2: Core
+      { x: 0, y: 150, z: 400 },    // Slide 3: Users
+      { x: 180, y: 60, z: -150 },  // Slide 4: Value
+      { x: -120, y: 160, z: 340 }  // Slide 5: Live Compiler
+    ];
+
+    const animTargets = [
+      { explode: 0.0, transition: 0.0, opacity: 1.0 }, // Slide 0: Hero
+      { explode: 0.85, transition: 0.0, opacity: 0.25 }, // Slide 1: Pain
+      { explode: 0.0, transition: 1.0, opacity: 0.9 },   // Slide 2: Core
+      { explode: 0.0, transition: 1.0, opacity: 0.95 },  // Slide 3: Users
+      { explode: 0.0, transition: 1.0, opacity: 1.0 },   // Slide 4: Value
+      { explode: 0.0, transition: 1.0, opacity: 0.25 }   // Slide 5: Live Compiler
+    ];
+
+    const indicatorTexts = [
+      "ACT_00 // HERO_CONCEPT",
+      "ACT_01 // PAIN_POINTS",
+      "ACT_02 // CREATIVE_INTRO",
+      "ACT_03 // TARGET_USERS",
+      "ACT_04 // VALUE_SIGNIFICANCE",
+      "ACT_05 // LIVE_COMPILER"
+    ];
+
+    function initScrollAnimations() {
+      // 初始化各 Section Opacity, y 轴偏移与 pointer-events
+      gsap.set(".narrative-section", { opacity: 0, y: 80, pointerEvents: "none" });
+      gsap.set("#section-0", { opacity: 1, y: 0, pointerEvents: "auto" });
+
+      const tl = gsap.timeline({
+        scrollTrigger: {
+          trigger: ".scroll-container",
+          start: "top top",
+          end: "bottom bottom",
+          scrub: 0.8, // 启用平滑滚动侦听
+          snap: {
+            snapTo: 1 / 5,
+            duration: { min: 0.25, max: 0.75 },
+            delay: 0.05,
+            ease: "power2.inOut"
+          },
+          onUpdate: (self) => {
+            const progress = self.progress;
+            const slideIndex = Math.min(Math.round(progress * 5), 5);
+            
+            if (currentSlide !== slideIndex) {
+              const prevSlide = currentSlide;
+              currentSlide = slideIndex;
+
+              // 退出/进入最终幕交互模式
+              if (prevSlide === 5) {
+                exitInteractiveMode();
+              }
+              if (currentSlide === 5) {
+                enterInteractiveMode();
+              }
+
+              document.getElementById('system-slide-indicator').innerText = indicatorTexts[currentSlide];
+            }
+            document.getElementById('scroll-progress-bar').style.height = `${progress * 100}%`;
+          }
+        }
+      });
+
+      // 建立时间轴动画，映射 5 个阶段 (0->1, 1->2, 2->3, 3->4, 4->5)
+      for (let i = 0; i < 5; i++) {
+        const next = i + 1;
+        
+        // 摄像机运镜平滑过渡
+        tl.to(camera.position, {
+          x: cameraTargets[next].x,
+          y: cameraTargets[next].y,
+          z: cameraTargets[next].z,
+          ease: "power2.inOut",
+          duration: 1
+        }, i);
+
+        // 3D 粒子系统状态过渡
+        tl.to(animState, {
+          explode: animTargets[next].explode,
+          transition: animTargets[next].transition,
+          opacity: animTargets[next].opacity,
+          ease: "power2.inOut",
+          duration: 1
+        }, i);
+
+        // 当前文字淡出并向上移出
+        tl.to(`#section-${i}`, {
+          opacity: 0,
+          y: -80,
+          pointerEvents: "none",
+          ease: "power2.inOut",
+          duration: 1
+        }, i);
+
+        // 下一幕文字淡入并从下方移入原位
+        tl.to(`#section-${next}`, {
+          opacity: 1,
+          y: 0,
+          pointerEvents: "auto",
+          ease: "power2.inOut",
+          duration: 1
+        }, i);
+      }
+
+      // 防止最终幕控制面板的滚动行为干扰整页滚动
+      const panel = document.getElementById('interactive-panel');
+      if (panel) {
+        panel.addEventListener('wheel', (e) => {
+          e.stopPropagation();
+        }, { passive: false });
+      }
+    }
+
+    // ==========================================
+    // L. 最终幕 - 交互控制功能
+    // ==========================================
+    function enterInteractiveMode() {
+      interactiveModeActive = true;
+      
+      // 显示物理天体
+      interactiveNodes.forEach(n => {
+        n.mesh.visible = true;
+      });
+      if (linkLinesMesh) linkLinesMesh.visible = true;
+
+      // 滑入操作面板
+      const panel = document.getElementById('interactive-panel');
+      panel.classList.remove('opacity-0', 'translate-x-[50px]', 'pointer-events-none');
+      panel.classList.add('opacity-100', 'translate-x-0', 'pointer-events-auto');
+    }
+
+    function exitInteractiveMode() {
+      interactiveModeActive = false;
+      
+      // 隐去物理天体
+      interactiveNodes.forEach(n => {
+        n.mesh.visible = false;
+      });
+      if (linkLinesMesh) linkLinesMesh.visible = false;
+
+      // 滑出操作面板
+      const panel = document.getElementById('interactive-panel');
+      panel.classList.remove('opacity-100', 'translate-x-0', 'pointer-events-auto');
+      panel.classList.add('opacity-0', 'translate-x-[50px]', 'pointer-events-none');
+    }
+
+    // ==========================================
+    // M. 动态星河编译算法 (在当前展示页实时注入新行星)
+    // ==========================================
+    document.getElementById('btn-compile').addEventListener('click', () => {
+      const inputEl = document.getElementById('compiler-input');
+      const text = inputEl.value.trim();
+      if (!text) return;
+
+      // 1. 简单的本地关键词/名词快速提取
+      const keywords = ["Quantum", "Relativity", "String Theory", "Brain Science", "Neural", "Vector DB", "Localforage", "Vite", "React", "Three.js", "GSAP"];
+      let found = [];
+      keywords.forEach(k => {
+        if (text.toLowerCase().includes(k.toLowerCase())) {
+          found.push(k);
+        }
+      });
+      
+      if (found.length === 0) {
+        const words = text.split(/[\s,，.。!！?？]/).filter(w => w.length > 2);
+        if (words.length > 0) {
+          found.push(words[0].substring(0, 12));
+          if (words.length > 1) found.push(words[1].substring(0, 12));
+        } else {
+          found.push("Concept " + (interactiveNodes.length - 8));
+        }
+      }
+
+      // 去重
+      found = [...new Set(found)];
+
+      // 2. 将提取的概念作为天体编译注入物理世界
+      found.forEach(word => {
+        // 检查是否已存在
+        if (interactiveNodes.some(n => n.label.toLowerCase() === word.toLowerCase())) return;
+
+        // 随机属性
+        const size = 7 + Math.random() * 5;
+        const colors = ["#ff3b30", "#30b0c7", "#34c759", "#af52de", "#ff9500", "#5856d6"];
+        const randColor = colors[Math.floor(Math.random() * colors.length)];
+
+        // 创建 Mesh
+        const geo = new THREE.SphereGeometry(size, 32, 32);
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(randColor),
+          roughness: 0.55,
+          metalness: 0.3
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        
+        // 大气光晕
+        createAtmosphere(mesh, size, randColor);
+        
+        // 偏置出生位置（在相机附近，产生冲入星网的视觉震撼感）
+        mesh.position.set(
+          camera.position.x + (Math.random() - 0.5) * 50,
+          camera.position.y - 40,
+          camera.position.z - 120
+        );
+        scene.add(mesh);
+
+        const newNode = {
+          mesh: mesh,
+          vel: new THREE.Vector3(0, 0, 0),
+          force: new THREE.Vector3(0, 0, 0),
+          mass: 1.0,
+          label: word,
+          size: size,
+          color: randColor
+        };
+
+        interactiveNodes.push(newNode);
+
+        // 3. 产生引力连线关系 (连接到中心节点和随机邻居)
+        interactiveLinks.push({
+          source: interactiveNodes[0], // 连接中心
+          target: newNode
+        });
+
+        // 随机连接一到两个最近的邻居
+        const otherNodes = interactiveNodes.filter(n => n !== newNode);
+        if (otherNodes.length > 0) {
+          const nearest = otherNodes.sort((a,b) => newNode.mesh.position.distanceTo(a.mesh.position) - newNode.mesh.position.distanceTo(b.mesh.position))[0];
+          interactiveLinks.push({
+            source: nearest,
+            target: newNode
+          });
+        }
+      });
+
+      // 清空输入框并提供科技震荡反馈
+      inputEl.value = "";
+      const panel = document.getElementById('interactive-panel');
+      panel.style.borderColor = '#00f0ff';
+      setTimeout(() => { panel.style.borderColor = 'rgba(255,255,255,0.05)'; }, 200);
+    });
+
+    // 重置图谱
+    document.getElementById('btn-reset-nodes').addEventListener('click', () => {
+      // 保留前 9 个初始节点，删除用户生成的节点
+      const initialCount = 9;
+      if (interactiveNodes.length > initialCount) {
+        for (let i = initialCount; i < interactiveNodes.length; i++) {
+          scene.remove(interactiveNodes[i].mesh);
+          // 删除生成的 HTML 标签
+          const labelEl = document.getElementById(`interactive-label-${i}`);
+          if (labelEl) labelEl.remove();
+        }
+        interactiveNodes = interactiveNodes.slice(0, initialCount);
+        
+        // 过滤链接
+        interactiveLinks = interactiveLinks.filter(link => {
+          const sIdx = interactiveNodes.indexOf(link.source);
+          const tIdx = interactiveNodes.indexOf(link.target);
+          return sIdx >= 0 && tIdx >= 0;
+        });
+      }
+    });
+
+    // ==========================================
+    // N. 辅助事件监听
+    // ==========================================
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onMouseMove(e) {
+      mouse2D.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse2D.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    }
+
+    // 初始化运行
+    init3D();
+    initScrollAnimations();
+    animate();
+  </script>
+</body>
+</html>

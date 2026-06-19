@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>桌面鱼缸演示 - Desktop Fish Tank</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body { overflow: hidden; background: #0a192f; font-family: 'Segoe UI', sans-serif; cursor: default; }
+        
+        /* 鱼缸背景 */
+        #tank {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: linear-gradient(to bottom, #0f2027, #203a43, #2c5364);
+            z-index: 1;
+        }
+
+        /* 气泡效果 (纯CSS装饰) */
+        .bubble {
+            position: absolute; background: rgba(255,255,255,0.1); border-radius: 50%;
+            animation: rise linear infinite;
+        }
+        @keyframes rise {
+            0% { transform: translateY(0) scale(1); opacity: 0.6; }
+            100% { transform: translateY(-100vh) scale(1.5); opacity: 0; }
+        }
+
+        /* 鱼的样式 */
+        .fish {
+            position: absolute; z-index: 10; cursor: pointer;
+            transition: transform 0.1s linear;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 40px; /* 图标大小 */
+            filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
+        }
+        .fish:hover { filter: drop-shadow(0 0 10px rgba(255,255,255,0.8)); transform: scale(1.1); }
+        
+        /* 右键菜单 */
+        #context-menu {
+            position: fixed; display: none; background: rgba(20, 30, 40, 0.95);
+            border: 1px solid rgba(255,255,255,0.2); border-radius: 8px;
+            padding: 5px 0; min-width: 150px; z-index: 100;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); backdrop-filter: blur(10px);
+        }
+        .menu-item {
+            padding: 8px 15px; color: #eee; font-size: 14px; cursor: pointer;
+        }
+        .menu-item:hover { background: rgba(255,255,255,0.1); }
+
+        /* 操作提示 */
+        #hud {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: rgba(255,255,255,0.6); font-size: 12px; z-index: 50;
+            background: rgba(0,0,0,0.3); padding: 8px 15px; border-radius: 20px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="tank"></div>
+
+<!-- 右键菜单 -->
+<div id="context-menu">
+    <div class="menu-item" onclick="changeFishStyle('🐟', event)">样式：蓝鱼</div>
+    <div class="menu-item" onclick="changeFishStyle('🐠', event)">样式：热带鱼</div>
+    <div class="menu-item" onclick="changeFishStyle('🐡', event)">样式：河豚</div>
+    <div class="menu-item" onclick="changeFishStyle('📁', event)">还原：文件夹</div>
+    <div class="menu-item" onclick="removeSelectedFish(event)" style="color:#ff6b6b;">删除此鱼</div>
+</div>
+
+<!-- 操作提示 -->
+<div id="hud">
+    按 <b>+</b> 增加鱼 | 按 <b>-</b> 减少鱼 | <b>双击</b> 打开 | <b>右键</b> 换装 | <b>ESC</b> 退出演示
+</div>
+
+<script>
+    // --- 配置 ---
+    const ICONS = ['📁', '📄', '🖼️', '🎵', '📊', '⚙️', '🗑️', '💻'];
+    const FISH_STYLES = ['🐟', '🐠', '🐡', '🦐', '🦑'];
+    let fishes = [];
+    let selectedFishId = null;
+
+    // --- 初始化气泡 ---
+    function createBubbles() {
+        const tank = document.getElementById('tank');
+        for(let i=0; i<15; i++) {
+            const b = document.createElement('div');
+            b.className = 'bubble';
+            const size = Math.random() * 20 + 5;
+            b.style.width = size + 'px';
+            b.style.height = size + 'px';
+            b.style.left = Math.random() * 100 + '%';
+            b.style.bottom = '-50px';
+            b.style.animationDuration = (Math.random() * 10 + 10) + 's';
+            b.style.animationDelay = (Math.random() * 10) + 's';
+            tank.appendChild(b);
+        }
+    }
+
+    // --- 鱼对象类 ---
+    class Fish {
+        constructor(icon) {
+            this.id = Date.now() + Math.random();
+            this.icon = icon;
+            this.x = Math.random() * (window.innerWidth - 50);
+            this.y = Math.random() * (window.innerHeight - 50);
+            this.vx = (Math.random() - 0.5) * 4;
+            this.vy = (Math.random() - 0.5) * 4;
+            this.angle = 0;
+            
+            // 创建DOM
+            this.el = document.createElement('div');
+            this.el.className = 'fish';
+            this.el.innerHTML = this.icon;
+            this.el.dataset.id = this.id;
+            
+            // 事件绑定
+            this.el.addEventListener('dblclick', (e) => this.openFile(e));
+            this.el.addEventListener('contextmenu', (e) => this.showMenu(e));
+            this.el.addEventListener('mousedown', () => selectedFishId = this.id);
+            
+            document.getElementById('tank').appendChild(this.el);
+        }
+
+        update() {
+            // 1. 移动
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // 2. 边界反弹
+            if (this.x < 0 || this.x > window.innerWidth - 40) {
+                this.vx *= -1;
+                this.x = Math.max(0, Math.min(this.x, window.innerWidth - 40));
+            }
+            if (this.y < 0 || this.y > window.innerHeight - 40) {
+                this.vy *= -1;
+                this.y = Math.max(0, Math.min(this.y, window.innerHeight - 40));
+            }
+
+            // 3. 随机微调方向 (模拟自然游动)
+            if (Math.random() < 0.02) {
+                this.vx += (Math.random() - 0.5) * 0.5;
+                this.vy += (Math.random() - 0.5) * 0.5;
+            }
+
+            // 限制最大速度
+            const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+            if (speed > 3) {
+                this.vx = (this.vx / speed) * 3;
+                this.vy = (this.vy / speed) * 3;
+            }
+
+            // 4. 计算朝向角度
+            this.angle = Math.atan2(this.vy, this.vx) * (180 / Math.PI);
+            
+            // 5. 更新DOM
+            this.el.style.left = this.x + 'px';
+            this.el.style.top = this.y + 'px';
+            // 翻转鱼的方向，使其头朝前进方向
+            const scaleX = (this.vx < 0) ? -1 : 1;
+            this.el.style.transform = `rotate(${this.angle}deg) scaleX(${scaleX})`;
+        }
+
+        openFile(e) {
+            e.stopPropagation();
+            alert(`🚀 正在打开: ${this.icon}\n(演示模式：实际将执行 shell.open)`);
+        }
+
+        showMenu(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectedFishId = this.id;
+            const menu = document.getElementById('context-menu');
+            menu.style.display = 'block';
+            menu.style.left = e.clientX + 'px';
+            menu.style.top = e.clientY + 'px';
+        }
+
+        setIcon(newIcon) {
+            this.icon = newIcon;
+            this.el.innerHTML = newIcon;
+        }
+    }
+
+    // --- 核心逻辑 ---
+
+    // 1. 初始化：模拟读取桌面图标
+    function initDesktopIcons() {
+        // 模拟：随机生成5-8个桌面图标
+        const count = 5 + Math.floor(Math.random() * 4);
+        for(let i=0; i<count; i++) {
+            const icon = ICONS[Math.floor(Math.random() * ICONS.length)];
+            fishes.push(new Fish(icon));
+        }
+    }
+
+    // 2. 动画循环
+    function animate() {
+        fishes.forEach(f => f.update());
+        requestAnimationFrame(animate);
+    }
+
+    // 3. 键盘控制 (模拟文件系统变化)
+    window.addEventListener('keydown', (e) => {
+        if(e.key === 'Escape') {
+            if(confirm('退出鱼缸演示？')) location.reload();
+        }
+        if(e.key === '+' || e.key === '=') {
+            // 模拟：桌面新增图标
+            const icon = ICONS[Math.floor(Math.random() * ICONS.length)];
+            fishes.push(new Fish(icon));
+        }
+        if(e.key === '-') {
+            // 模拟：桌面删除图标
+            if(fishes.length > 0) {
+                const f = fishes.pop();
+                f.el.remove();
+            }
+        }
+    });
+
+    // 4. 右键菜单逻辑
+    window.changeFishStyle = function(style, e) {
+        e.stopPropagation();
+        const fish = fishes.find(f => f.id === selectedFishId);
+        if(fish) fish.setIcon(style);
+        document.getElementById('context-menu').style.display = 'none';
+    };
+
+    window.removeSelectedFish = function(e) {
+        e.stopPropagation();
+        const idx = fishes.findIndex(f => f.id === selectedFishId);
+        if(idx > -1) {
+            fishes[idx].el.remove();
+            fishes.splice(idx, 1);
+        }
+        document.getElementById('context-menu').style.display = 'none';
+    };
+
+    // 点击空白处关闭菜单
+    window.addEventListener('click', () => {
+        document.getElementById('context-menu').style.display = 'none';
+    });
+
+    // 启动
+    createBubbles();
+    initDesktopIcons();
+    animate();
+
+</script>
+</body>
+</html>
