@@ -310,7 +310,7 @@ class DemoHallCrawler:
                         dest = Path(self.config["demos_dir"]) / str(topic_id) / demo_info["attachment_filename"]
                         self.client.download_file(demo_info["attachment_url"], dest)
                         record["demo_file"] = str(dest)
-                        record["demo_url"] = f"/demos/{topic_id}/{demo_info['attachment_filename']}"
+                        record["demo_url"] = f"demos/{topic_id}/{demo_info['attachment_filename']}"
                         print(f"    Downloaded: {dest}")
                     except Exception as e:
                         print(f"    ERROR downloading attachment: {e}")
