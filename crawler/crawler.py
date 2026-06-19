@@ -266,12 +266,17 @@ class DemoHallCrawler:
         self.extractor = DemoExtractor(self.config)
         self.data_mgr = DataManager(self.config)
 
-    def crawl(self):
-        """Run the full crawl cycle."""
-        print(f"[{datetime.now()}] Starting crawl...")
+    def crawl(self, force=False):
+        """Run the full crawl cycle.
+
+        Args:
+            force: If True, re-process all topics even if already in data.
+        """
+        print(f"[{datetime.now()}] Starting crawl... (force={force})")
         new_count = 0
         updated_count = 0
         all_topic_ids = set()
+        existing_ids = self.data_mgr.get_existing_ids()
 
         # Fetch all topics from the category
         page = 0
@@ -286,11 +291,13 @@ class DemoHallCrawler:
                 topic_id = topic["id"]
                 all_topic_ids.add(topic_id)
 
-                # Skip already processed topics (incremental)
-                if topic_id in self.data_mgr.get_existing_ids():
+                # Skip already processed topics (incremental) unless force mode
+                is_existing = topic_id in existing_ids
+                if is_existing and not force:
                     continue
 
-                print(f"  Processing topic {topic_id}: {topic['title'][:50]}...")
+                action = "Re-processing" if is_existing else "Processing"
+                print(f"  {action} topic {topic_id}: {topic['title'][:50]}...")
 
                 try:
                     detail = self.client.get_topic_detail(topic_id)
@@ -317,7 +324,10 @@ class DemoHallCrawler:
                         record["has_demo"] = False
 
                 self.data_mgr.add_or_update(record)
-                new_count += 1
+                if is_existing:
+                    updated_count += 1
+                else:
+                    new_count += 1
 
             # Check if more pages exist
             more_url = resp.get("topic_list", {}).get("more_topics_url")
@@ -333,7 +343,7 @@ class DemoHallCrawler:
         self.data_mgr.save()
 
         print(f"[{datetime.now()}] Crawl complete. New: {new_count}, Updated: {updated_count}")
-        return new_count
+        return new_count + updated_count
 
     def _build_record(self, topic, detail, demo_info):
         """Build a demo record from topic and detail data."""
@@ -385,16 +395,21 @@ class DemoHallCrawler:
 
 
 def main():
+    import argparse
     import subprocess
 
+    parser = argparse.ArgumentParser(description="TRAE Demo Hall Crawler")
+    parser.add_argument("--force", action="store_true", help="Re-process all topics even if already in data")
+    args = parser.parse_args()
+
     crawler = DemoHallCrawler()
-    new_count = crawler.crawl()
+    total_count = crawler.crawl(force=args.force)
     crawler.render()
 
     # Auto git commit and push
-    if new_count > 0:
+    if total_count > 0:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        commit_msg = f"auto-update: {date_str} +{new_count} new demos"
+        commit_msg = f"auto-update: {date_str} +{total_count} demos"
 
         try:
             subprocess.run(["git", "add", "demos/", "data/demos.json", "index.html"],
@@ -406,7 +421,7 @@ def main():
                               check=True, capture_output=True)
                 subprocess.run(["git", "push", "origin", "main"],
                               check=True, capture_output=True)
-                print(f"Pushed {new_count} new demos to GitHub.")
+                print(f"Pushed {total_count} demos to GitHub.")
             else:
                 print("No changes to commit.")
         except subprocess.CalledProcessError as e:
