@@ -131,13 +131,19 @@
   const tagPills = document.querySelectorAll('.tag-pill');
   const searchInput = document.getElementById('search-input');
   const sortSelect = document.getElementById('sort-select');
+  const approvedOnlyCheckbox = document.getElementById('approved-only');
 
   let activeTag = 'all';
   let searchQuery = '';
   let sortBy = 'newest';
+  let approvedOnly = true;
 
   function filterAndSort() {
     let visible = cards.filter(card => {
+      // Approval filter
+      if (approvedOnly) {
+        if (card.dataset.approved !== 'true') return false;
+      }
       // Tag filter
       if (activeTag !== 'all') {
         const cardTags = (card.dataset.tags || '').split(',').map(t => t.trim());
@@ -201,4 +207,15 @@
       filterAndSort();
     });
   }
+
+  // Approval toggle
+  if (approvedOnlyCheckbox) {
+    approvedOnlyCheckbox.addEventListener('change', (e) => {
+      approvedOnly = e.target.checked;
+      filterAndSort();
+    });
+  }
+
+  // Initial filter
+  filterAndSort();
 })();
