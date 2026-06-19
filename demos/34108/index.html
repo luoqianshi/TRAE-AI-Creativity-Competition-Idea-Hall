@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>会议吵架检测器 | Meeting Conflict Detector</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg: '#0F172A',
+            danger: '#EF4444',
+            warn: '#F59E0B',
+            safe: '#10B981',
+            panel: '#1E293B',
+          },
+          fontFamily: {
+            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['"Noto Sans SC"', 'sans-serif'],
+          },
+          animation: {
+            'scan': 'scan 4s linear infinite',
+            'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'blink': 'blink 1.2s step-end infinite',
+            'glitch': 'glitch 2.5s infinite',
+          },
+          keyframes: {
+            scan: {
+              '0%': { transform: 'translateY(-100%)' },
+              '100%': { transform: 'translateY(100vh)' },
+            },
+            blink: {
+              '0%, 100%': { opacity: '1' },
+              '50%': { opacity: '0.3' },
+            },
+            glitch: {
+              '0%, 90%, 100%': { transform: 'translate(0)' },
+              '92%': { transform: 'translate(-2px, 1px)' },
+              '94%': { transform: 'translate(2px, -1px)' },
+              '96%': { transform: 'translate(-1px, 2px)' },
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #0F172A;
+      color: #F8FAFC;
+      font-family: 'Noto Sans SC', sans-serif;
+      overflow-x: hidden;
+    }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    .scan-line {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 120px;
+      background: linear-gradient(180deg,
+        transparent 0%,
+        rgba(239, 68, 68, 0.08) 40%,
+        rgba(239, 68, 68, 0.15) 50%,
+        rgba(239, 68, 68, 0.08) 60%,
+        transparent 100%);
+      pointer-events: none;
+      z-index: 40;
+      animation: scan 5s linear infinite;
+    }
+    .glass-panel {
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .gauge-circle {
+      transition: stroke-dashoffset 1s ease-out;
+    }
+    .timeline-line {
+      background: linear-gradient(90deg, #EF4444 0%, #F59E0B 50%, #10B981 100%);
+    }
+    .tag-interrupt { background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .tag-blame { background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .tag-credit { background: rgba(249, 115, 22, 0.15); color: #FB923C; border: 1px solid rgba(249, 115, 22, 0.3); }
+    .hover-lift {
+      transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    }
+    .hover-lift:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+    }
+    .radar-sweep {
+      background: conic-gradient(from 0deg, transparent 0deg, rgba(239, 68, 68, 0.15) 60deg, transparent 120deg);
+      animation: radar 4s linear infinite;
+    }
+    @keyframes radar {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .crt-overlay {
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.08),
+        rgba(0, 0, 0, 0.08) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body class="relative min-h-screen">
+  <!-- Background effects -->
+  <div class="fixed inset-0 grid-bg -z-20"></div>
+  <div class="fixed inset-0 bg-gradient-to-b from-bg via-bg/95 to-bg -z-10"></div>
+  <div class="scan-line"></div>
+  <div class="fixed inset-0 crt-overlay -z-5"></div>
+
+  <!-- Top status bar -->
+  <div class="w-full border-b border-slate-700/30 bg-slate-900/50 backdrop-blur-sm">
+    <div class="max-w-6xl mx-auto px-4 py-2 flex justify-between items-center text-xs font-mono text-slate-400">
+      <div class="flex items-center gap-4">
+        <span class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-danger animate-pulse"></span>
+          SYSTEM.ONLINE
+        </span>
+        <span class="hidden sm:inline">MODEL: CONFLICT-V3.7</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <span class="hidden sm:inline">ENCRYPTION: AES-256</span>
+        <span id="live-clock">00:00:00</span>
+      </div>
+    </div>
+  </div>
+
+  <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+
+    <!-- HERO -->
+    <section class="relative pt-16 pb-20 sm:pt-24 sm:pb-28">
+      <div class="absolute top-10 right-0 sm:top-6">
+        <button id="scan-btn" class="group relative overflow-hidden rounded-lg bg-danger px-5 py-2.5 font-mono text-sm font-bold text-white shadow-lg shadow-danger/25 transition-all hover:scale-105 hover:shadow-danger/40 active:scale-95">
+          <span class="relative z-10 flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            开始扫描
+          </span>
+          <div class="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full"></div>
+        </button>
+      </div>
+
+      <div class="relative z-10">
+        <div class="inline-flex items-center gap-2 rounded-full border border-danger/30 bg-danger/10 px-4 py-1.5 text-xs font-mono text-danger mb-6">
+          <span class="animate-blink">●</span>
+          检测到 3 处会议冲突信号
+        </div>
+        <h1 class="text-4xl sm:text-6xl lg:text-7xl font-black tracking-tight text-white mb-6">
+          会议吵架检测器
+        </h1>
+        <p class="text-lg sm:text-xl text-slate-300 max-w-2xl leading-relaxed">
+          上传会议转写，AI 30 秒告诉你：<br class="hidden sm:block">
+          <span class="text-danger font-semibold">谁在打断</span>、<span class="text-warn font-semibold">谁在甩锅</span>、<span class="text-safe font-semibold">谁在抢功</span>
+        </p>
+        <div class="mt-8 flex flex-wrap gap-4 text-sm font-mono text-slate-400">
+          <span class="flex items-center gap-2"><span class="text-danger">></span> TRANSCRIPT_ANALYZE</span>
+          <span class="flex items-center gap-2"><span class="text-warn">></span> BEHAVIOR_PATTERN_MATCH</span>
+          <span class="flex items-center gap-2"><span class="text-safe">></span> CONFLICT_REPORT_GEN</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- GAUGE DASHBOARD -->
+    <section class="pb-20">
+      <div class="flex items-center gap-3 mb-8">
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+        <h2 class="text-sm font-mono uppercase tracking-widest text-slate-400">实时风险仪表盘</h2>
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <!-- Temp -->
+        <div class="glass-panel rounded-2xl p-6 text-center hover-lift">
+          <div class="relative w-36 h-36 mx-auto mb-4">
+            <svg class="w-full h-full -rotate-90" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#334155" stroke-width="8" />
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#10B981" stroke-width="8" stroke-linecap="round"
+                stroke-dasharray="264" stroke-dashoffset="58" class="gauge-circle" />
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span class="text-3xl font-black font-mono text-white">78°</span>
+              <span class="text-[10px] font-mono text-slate-400">CELSIUS</span>
+            </div>
+          </div>
+          <div class="text-2xl mb-1">🟢</div>
+          <h3 class="text-lg font-bold text-white">会议温度</h3>
+          <p class="text-safe font-mono text-sm font-semibold">78°C（偏高）</p>
+        </div>
+
+        <!-- Interrupts -->
+        <div class="glass-panel rounded-2xl p-6 text-center hover-lift">
+          <div class="relative w-36 h-36 mx-auto mb-4">
+            <svg class="w-full h-full -rotate-90" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#334155" stroke-width="8" />
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#F59E0B" stroke-width="8" stroke-linecap="round"
+                stroke-dasharray="264" stroke-dashoffset="176" class="gauge-circle" />
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span class="text-3xl font-black font-mono text-white">12</span>
+              <span class="text-[10px] font-mono text-slate-400">TIMES</span>
+            </div>
+          </div>
+          <div class="text-2xl mb-1">🟡</div>
+          <h3 class="text-lg font-bold text-white">打断次数</h3>
+          <p class="text-warn font-mono text-sm font-semibold">12 次</p>
+        </div>
+
+        <!-- Blame -->
+        <div class="glass-panel rounded-2xl p-6 text-center hover-lift">
+          <div class="relative w-36 h-36 mx-auto mb-4">
+            <svg class="w-full h-full -rotate-90" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#334155" stroke-width="8" />
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#EF4444" stroke-width="8" stroke-linecap="round"
+                stroke-dasharray="264" stroke-dashoffset="180" class="gauge-circle" />
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span class="text-3xl font-black font-mono text-white">32%</span>
+              <span class="text-[10px] font-mono text-slate-400">INDEX</span>
+            </div>
+          </div>
+          <div class="text-2xl mb-1">🔴</div>
+          <h3 class="text-lg font-bold text-white">甩锅指数</h3>
+          <p class="text-danger font-mono text-sm font-semibold">32%</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TIMELINE -->
+    <section class="pb-20">
+      <div class="flex items-center gap-3 mb-10">
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+        <h2 class="text-sm font-mono uppercase tracking-widest text-slate-400">冲突时间轴 // CONFLICT_TIMELINE</h2>
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+      </div>
+
+      <div class="relative">
+        <!-- horizontal line -->
+        <div class="hidden md:block absolute top-[26px] left-0 right-0 h-1 timeline-line rounded-full opacity-60"></div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <!-- Node 1 -->
+          <div class="relative group">
+            <div class="hidden md:flex absolute -top-1 left-1/2 -translate-x-1/2 w-14 h-14 rounded-full bg-slate-900 border-2 border-danger items-center justify-center z-10 shadow-lg shadow-danger/20 group-hover:scale-110 transition-transform">
+              <span class="text-danger font-mono font-bold text-sm">10:02</span>
+            </div>
+            <div class="md:mt-20 glass-panel rounded-xl p-5 hover-lift border-t-4 border-t-danger">
+              <div class="flex items-center justify-between mb-3 md:hidden">
+                <span class="text-danger font-mono font-bold">10:02</span>
+                <span class="tag-interrupt px-2.5 py-0.5 rounded text-xs font-bold">打断</span>
+              </div>
+              <div class="hidden md:flex justify-end mb-3">
+                <span class="tag-interrupt px-2.5 py-0.5 rounded text-xs font-bold">打断</span>
+              </div>
+              <p class="text-slate-200 text-sm leading-relaxed">
+                张经理在李工阐述技术方案时连续插话，将其发言切割为 3 段。
+              </p>
+              <div class="mt-4 pt-4 border-t border-slate-700/50">
+                <p class="text-xs text-slate-400 font-mono">
+                  <span class="text-safe">SUGGESTION:</span> 建议设定"发言保护期"，避免关键论述被打断。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Node 2 -->
+          <div class="relative group">
+            <div class="hidden md:flex absolute -top-1 left-1/2 -translate-x-1/2 w-14 h-14 rounded-full bg-slate-900 border-2 border-warn items-center justify-center z-10 shadow-lg shadow-warn/20 group-hover:scale-110 transition-transform">
+              <span class="text-warn font-mono font-bold text-sm">10:15</span>
+            </div>
+            <div class="md:mt-20 glass-panel rounded-xl p-5 hover-lift border-t-4 border-t-warn">
+              <div class="flex items-center justify-between mb-3 md:hidden">
+                <span class="text-warn font-mono font-bold">10:15</span>
+                <span class="tag-blame px-2.5 py-0.5 rounded text-xs font-bold">甩锅</span>
+              </div>
+              <div class="hidden md:flex justify-end mb-3">
+                <span class="tag-blame px-2.5 py-0.5 rounded text-xs font-bold">甩锅</span>
+              </div>
+              <p class="text-slate-200 text-sm leading-relaxed">
+                王姐将项目延期归因于"技术不给力"，但未提及需求变更 4 次的背景。
+              </p>
+              <div class="mt-4 pt-4 border-t border-slate-700/50">
+                <p class="text-xs text-slate-400 font-mono">
+                  <span class="text-safe">SUGGESTION:</span> 引导使用"我们"视角复盘，区分事实与归因。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Node 3 -->
+          <div class="relative group">
+            <div class="hidden md:flex absolute -top-1 left-1/2 -translate-x-1/2 w-14 h-14 rounded-full bg-slate-900 border-2 border-orange-400 items-center justify-center z-10 shadow-lg shadow-orange-400/20 group-hover:scale-110 transition-transform">
+              <span class="text-orange-400 font-mono font-bold text-sm">10:28</span>
+            </div>
+            <div class="md:mt-20 glass-panel rounded-xl p-5 hover-lift border-t-4 border-t-orange-400">
+              <div class="flex items-center justify-between mb-3 md:hidden">
+                <span class="text-orange-400 font-mono font-bold">10:28</span>
+                <span class="tag-credit px-2.5 py-0.5 rounded text-xs font-bold">抢功</span>
+              </div>
+              <div class="hidden md:flex justify-end mb-3">
+                <span class="tag-credit px-2.5 py-0.5 rounded text-xs font-bold">抢功</span>
+              </div>
+              <p class="text-slate-200 text-sm leading-relaxed">
+                陈总在汇报中把下属提出的方案包装为"我的想法"，原创者未被点名。
+              </p>
+              <div class="mt-4 pt-4 border-t border-slate-700/50">
+                <p class="text-xs text-slate-400 font-mono">
+                  <span class="text-safe">SUGGESTION:</span> 建立贡献可视化记录，防止功劳被无形转移。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURE CARDS -->
+    <section class="pb-20">
+      <div class="flex items-center gap-3 mb-10">
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+        <h2 class="text-sm font-mono uppercase tracking-widest text-slate-400">核心检测模块</h2>
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="glass-panel rounded-2xl p-7 hover-lift group relative overflow-hidden">
+          <div class="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-danger/10 group-hover:bg-danger/20 transition-colors"></div>
+          <div class="text-5xl mb-5">🔪</div>
+          <h3 class="text-xl font-bold text-white mb-2">打断检测</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">
+            基于语音重叠率与句式完整性，识别高频打断者与被压制发言者。
+          </p>
+          <div class="mt-5 font-mono text-xs text-danger">ACCURACY: 94.2%</div>
+        </div>
+
+        <div class="glass-panel rounded-2xl p-7 hover-lift group relative overflow-hidden">
+          <div class="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-warn/10 group-hover:bg-warn/20 transition-colors"></div>
+          <div class="text-5xl mb-5">🧯</div>
+          <h3 class="text-xl font-bold text-white mb-2">甩锅识别</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">
+            语义模型扫描"因为 XX 没做好"等归因句式，定位责任外推模式。
+          </p>
+          <div class="mt-5 font-mono text-xs text-warn">ACCURACY: 89.7%</div>
+        </div>
+
+        <div class="glass-panel rounded-2xl p-7 hover-lift group relative overflow-hidden">
+          <div class="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-orange-400/10 group-hover:bg-orange-400/20 transition-colors"></div>
+          <div class="text-5xl mb-5">🏆</div>
+          <h3 class="text-xl font-bold text-white mb-2">抢功预警</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">
+            对比议题贡献链条，检测"我的方案"与原始提出者之间的不一致。
+          </p>
+          <div class="mt-5 font-mono text-xs text-orange-400">ACCURACY: 86.5%</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TARGET USERS -->
+    <section class="pb-20">
+      <div class="glass-panel rounded-2xl p-8 sm:p-10">
+        <div class="flex items-center gap-3 mb-8">
+          <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+          <h2 class="text-sm font-mono uppercase tracking-widest text-slate-400">目标用户与痛点</h2>
+          <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+          <div>
+            <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <span class="text-danger">//</span> 目标用户
+            </h3>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="rounded-lg bg-slate-800/50 p-4 text-center border border-slate-700/50 hover:border-danger/40 transition-colors">
+                <div class="text-2xl mb-1">🧑‍💼</div>
+                <div class="text-sm font-semibold">产品经理</div>
+              </div>
+              <div class="rounded-lg bg-slate-800/50 p-4 text-center border border-slate-700/50 hover:border-danger/40 transition-colors">
+                <div class="text-2xl mb-1">🛡️</div>
+                <div class="text-sm font-semibold">Team Leader</div>
+              </div>
+              <div class="rounded-lg bg-slate-800/50 p-4 text-center border border-slate-700/50 hover:border-danger/40 transition-colors">
+                <div class="text-2xl mb-1">🤝</div>
+                <div class="text-sm font-semibold">HR</div>
+              </div>
+              <div class="rounded-lg bg-slate-800/50 p-4 text-center border border-slate-700/50 hover:border-danger/40 transition-colors">
+                <div class="text-2xl mb-1">🚀</div>
+                <div class="text-sm font-semibold">初创公司创始人</div>
+              </div>
+            </div>
+
+            <h3 class="text-lg font-bold text-white mt-8 mb-4 flex items-center gap-2">
+              <span class="text-warn">//</span> 适用场景
+            </h3>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-3 py-1.5 rounded-full bg-slate-800/70 border border-slate-700 text-xs text-slate-300">周会</span>
+              <span class="px-3 py-1.5 rounded-full bg-slate-800/70 border border-slate-700 text-xs text-slate-300">跨部门评审</span>
+              <span class="px-3 py-1.5 rounded-full bg-slate-800/70 border border-slate-700 text-xs text-slate-300">复盘会</span>
+              <span class="px-3 py-1.5 rounded-full bg-slate-800/70 border border-slate-700 text-xs text-slate-300">客户投诉会</span>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <span class="text-safe">//</span> 真实痛点
+            </h3>
+            <ul class="space-y-4">
+              <li class="flex gap-3">
+                <span class="flex-shrink-0 w-6 h-6 rounded bg-danger/10 text-danger flex items-center justify-center text-xs font-bold">01</span>
+                <p class="text-slate-300 text-sm">复盘时大家都说"挺好挺好"，真正的问题被和稀泥掩盖。</p>
+              </li>
+              <li class="flex gap-3">
+                <span class="flex-shrink-0 w-6 h-6 rounded bg-warn/10 text-warn flex items-center justify-center text-xs font-bold">02</span>
+                <p class="text-slate-300 text-sm">管理者感知到团队氛围不对，却拿不出具体数据说服对方。</p>
+              </li>
+              <li class="flex gap-3">
+                <span class="flex-shrink-0 w-6 h-6 rounded bg-orange-400/10 text-orange-400 flex items-center justify-center text-xs font-bold">03</span>
+                <p class="text-slate-300 text-sm">想改进团队文化，但不知道从哪里入手、谁需要被干预。</p>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VALUE -->
+    <section class="pb-20">
+      <div class="flex items-center gap-3 mb-10">
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+        <h2 class="text-sm font-mono uppercase tracking-widest text-slate-400">价值与意义</h2>
+        <div class="h-px flex-1 bg-gradient-to-r from-transparent via-slate-600 to-transparent"></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="relative rounded-2xl overflow-hidden border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-7 hover-lift">
+          <div class="absolute top-0 right-0 w-20 h-20 bg-safe/10 rounded-bl-full"></div>
+          <div class="text-4xl mb-4">⚡</div>
+          <h3 class="text-lg font-bold text-white mb-2">效率提升</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">
+            复盘会议从 1 小时压缩到 15 分钟，问题一目了然，减少重复扯皮。
+          </p>
+        </div>
+
+        <div class="relative rounded-2xl overflow-hidden border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-7 hover-lift">
+          <div class="absolute top-0 right-0 w-20 h-20 bg-danger/10 rounded-bl-full"></div>
+          <div class="text-4xl mb-4">🌍</div>
+          <h3 class="text-lg font-bold text-white mb-2">社会价值</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">
+            让不健康的会议文化被看见、被量化，减少职场 PUA 与隐性压迫。
+          </p>
+        </div>
+
+        <div class="relative rounded-2xl overflow-hidden border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-7 hover-lift">
+          <div class="absolute top-0 right-0 w-20 h-20 bg-warn/10 rounded-bl-full"></div>
+          <div class="text-4xl mb-4">💰</div>
+          <h3 class="text-lg font-bold text-white mb-2">商业潜力</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">
+            可做 SaaS 订阅，打包卖给企业 HR、OKR 平台及团队协作工具。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="pb-24">
+      <div class="relative rounded-3xl overflow-hidden bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700/50 p-8 sm:p-14 text-center">
+        <div class="absolute inset-0 radar-sweep opacity-30"></div>
+        <div class="relative z-10">
+          <h2 class="text-2xl sm:text-3xl font-black text-white mb-3">加入内测，先做第一个清醒的人</h2>
+          <p class="text-slate-400 text-sm sm:text-base mb-8 max-w-lg mx-auto">
+            我们将在 48 小时内发送内测邀请。你的会议，从此有数据撑腰。
+          </p>
+          <form class="flex flex-col sm:flex-row gap-3 max-w-md mx-auto" onsubmit="event.preventDefault(); alert('申请已记录，请留意邮箱。');">
+            <input
+              type="email"
+              placeholder="you@company.com"
+              required
+              class="flex-1 rounded-lg bg-slate-950/70 border border-slate-600 px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-danger focus:outline-none focus:ring-1 focus:ring-danger transition-colors"
+            />
+            <button
+              type="submit"
+              class="rounded-lg bg-danger px-6 py-3 text-sm font-bold text-white shadow-lg shadow-danger/25 hover:bg-red-600 hover:scale-105 active:scale-95 transition-all whitespace-nowrap"
+            >
+              申请内测
+            </button>
+          </form>
+          <p class="mt-4 text-xs text-slate-500 font-mono">SECURE_FORM // NO_TRANSCRIPT_STORED_LOCALLY</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/50 bg-slate-900/30 py-8">
+    <div class="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500 font-mono">
+      <div>© 2026 MEETING CONFLICT DETECTOR. ALL SIGNALS LOGGED.</div>
+      <div class="flex gap-4">
+        <span>STATUS: OPERATIONAL</span>
+        <span>LATENCY: 24ms</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Live clock
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('live-clock').textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Scan button interaction
+    const scanBtn = document.getElementById('scan-btn');
+    scanBtn.addEventListener('click', () => {
+      scanBtn.innerHTML = '<span class="relative z-10 flex items-center gap-2 animate-pulse">SCANNING...</span>';
+      setTimeout(() => {
+        scanBtn.innerHTML = '<span class="relative z-10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>开始扫描</span><div class="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full"></div>';
+      }, 2000);
+    });
+
+    // Animate gauges on scroll
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.strokeDashoffset = entry.target.dataset.offset;
+        }
+      });
+    }, { threshold: 0.5 });
+
+    document.querySelectorAll('.gauge-circle').forEach(circle => {
+      circle.dataset.offset = circle.getAttribute('stroke-dashoffset');
+      circle.style.strokeDashoffset = '264';
+      observer.observe(circle);
+    });
+  </script>
+</body>
+</html>
