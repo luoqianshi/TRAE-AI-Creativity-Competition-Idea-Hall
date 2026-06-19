@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clipboard Ball · 桌面悬浮球剪贴板</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(circle at 20% 20%, #667eea 0%, transparent 40%),
+      radial-gradient(circle at 80% 70%, #f093fb 0%, transparent 45%),
+      radial-gradient(circle at 50% 90%, #4facfe 0%, transparent 50%),
+      linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ------ 页面引导层（桌面背景提示） ------ */
+  .hint {
+    position: fixed;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 14px 28px;
+    background: rgba(255,255,255,0.08);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.85);
+    max-width: 520px;
+    text-align: center;
+    z-index: 10;
+    animation: fadeIn 0.8s ease;
+  }
+  .hint strong { color: #f093fb; }
+  .hint kbd {
+    display: inline-block;
+    padding: 2px 8px;
+    margin: 0 2px;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: "SF Mono", Monaco, monospace;
+  }
+
+  /* ------ 悬浮球 ------ */
+  .ball {
+    position: fixed;
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 30% 30%, #ffffff 0%, #f093fb 30%, #667eea 70%, #1a1a2e 100%);
+    box-shadow:
+      0 0 0 2px rgba(255,255,255,0.15),
+      0 10px 40px rgba(102,126,234,0.5),
+      0 0 80px rgba(240,147,251,0.3),
+      inset 0 -8px 20px rgba(0,0,0,0.3),
+      inset 0 8px 20px rgba(255,255,255,0.3);
+    cursor: grab;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease, box-shadow 0.3s ease;
+    animation: breathe 3s ease-in-out infinite;
+    right: 40px;
+    bottom: 40px;
+  }
+  .ball:hover {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 0 2px rgba(255,255,255,0.25),
+      0 15px 50px rgba(102,126,234,0.7),
+      0 0 100px rgba(240,147,251,0.5),
+      inset 0 -8px 20px rgba(0,0,0,0.3),
+      inset 0 8px 20px rgba(255,255,255,0.4);
+  }
+  .ball.dragging {
+    cursor: grabbing;
+    transition: none;
+    transform: scale(1.1);
+    animation: none;
+  }
+  .ball.expanded {
+    animation: none;
+    transform: scale(0.6);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .ball-icon {
+    font-size: 28px;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+    pointer-events: none;
+  }
+  .ball-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    background: #ff4757;
+    border: 2px solid #1a1a2e;
+    border-radius: 11px;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(255,71,87,0.6);
+  }
+
+  /* ------ 展开面板 ------ */
+  .panel {
+    position: fixed;
+    width: 380px;
+    max-width: calc(100vw - 40px);
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 20px;
+    box-shadow:
+      0 20px 60px rgba(0,0,0,0.4),
+      0 0 100px rgba(240,147,251,0.2);
+    z-index: 99;
+    opacity: 0;
+    transform: scale(0.8);
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel.active {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: auto;
+  }
+  .panel-header {
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title .dot {
+    width: 8px;
+    height: 8px;
+    background: #2ed573;
+    border-radius: 50%;
+    box-shadow: 0 0 10px #2ed573;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .panel-count {
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+    background: rgba(255,255,255,0.08);
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+  .close-btn {
+    width: 26px;
+    height: 26px;
+    border: none;
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.7);
+    border-radius: 50%;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+  .close-btn:hover {
+    background: rgba(255,71,87,0.25);
+    color: #ff6b7a;
+    transform: rotate(90deg);
+  }
+  .panel-body {
+    max-height: 360px;
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .panel-body::-webkit-scrollbar { width: 6px; }
+  .panel-body::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+    border-radius: 3px;
+  }
+  .panel-body::-webkit-scrollbar-track { background: transparent; }
+
+  /* ------ 剪贴板条目 ------ */
+  .clip-item {
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+  }
+  .clip-item:last-child { margin-bottom: 0; }
+  .clip-item:hover {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.25);
+    transform: translateX(4px);
+  }
+  .clip-item.selected {
+    background: linear-gradient(135deg, rgba(102,126,234,0.35), rgba(240,147,251,0.25));
+    border-color: rgba(240,147,251,0.5);
+    box-shadow: 0 0 0 2px rgba(240,147,251,0.25), 0 8px 24px rgba(102,126,234,0.3);
+  }
+  .clip-item.selected::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 10%;
+    width: 3px;
+    height: 80%;
+    background: linear-gradient(180deg, #f093fb, #667eea);
+    border-radius: 2px;
+  }
+  .clip-text {
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(255,255,255,0.92);
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .clip-item.expanded-item .clip-text {
+    -webkit-line-clamp: unset;
+    display: block;
+  }
+  .clip-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+  }
+  .clip-time { display: flex; align-items: center; gap: 4px; }
+  .clip-index {
+    background: rgba(255,255,255,0.1);
+    padding: 2px 7px;
+    border-radius: 8px;
+    font-family: "SF Mono", Monaco, monospace;
+    color: rgba(255,255,255,0.75);
+  }
+  .clip-item.selected .clip-index {
+    background: rgba(240,147,251,0.3);
+    color: #fff;
+  }
+
+  /* ------ 空状态 ------ */
+  .empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: rgba(255,255,255,0.5);
+    font-size: 13px;
+    line-height: 1.8;
+  }
+  .empty-icon {
+    font-size: 40px;
+    margin-bottom: 12px;
+    opacity: 0.5;
+  }
+
+  /* ------ 底部操作栏 ------ */
+  .panel-footer {
+    padding: 12px 16px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    display: flex;
+    gap: 8px;
+  }
+  .btn {
+    flex: 1;
+    padding: 10px 12px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: rgba(255,255,255,0.85);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .btn:hover {
+    background: rgba(255,255,255,0.15);
+    border-color: rgba(255,255,255,0.3);
+  }
+  .btn.primary {
+    background: linear-gradient(135deg, #667eea, #f093fb);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(102,126,234,0.4);
+  }
+  .btn.primary:hover {
+    box-shadow: 0 6px 24px rgba(102,126,234,0.6);
+    transform: translateY(-1px);
+  }
+  .btn.danger:hover {
+    background: rgba(255,71,87,0.2);
+    border-color: rgba(255,71,87,0.4);
+    color: #ff6b7a;
+  }
+
+  /* ------ Toast 提示 ------ */
+  .toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    padding: 12px 24px;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 30px;
+    color: #fff;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.3s ease;
+    z-index: 999;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* ------ 页面内确认框 ------ */
+  .confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    animation: fadeIn 0.2s ease;
+  }
+  .confirm-overlay.active {
+    display: flex;
+  }
+  .confirm-box {
+    background: linear-gradient(135deg, rgba(40,40,70,0.95), rgba(60,40,80,0.95));
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 16px;
+    padding: 24px 28px;
+    min-width: 280px;
+    max-width: 90vw;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    text-align: center;
+    animation: popIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .confirm-title {
+    font-size: 14px;
+    color: rgba(255,255,255,0.9);
+    margin-bottom: 18px;
+    line-height: 1.6;
+  }
+  .confirm-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+  .confirm-btn {
+    padding: 8px 22px;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+  }
+  .confirm-btn.cancel {
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.7);
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .confirm-btn.cancel:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+  }
+  .confirm-btn.ok {
+    background: linear-gradient(135deg, #ff6b7a, #ff4757);
+    color: #fff;
+    box-shadow: 0 4px 14px rgba(255,71,87,0.4);
+  }
+  .confirm-btn.ok:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(255,71,87,0.5);
+  }
+  @keyframes popIn {
+    from { transform: scale(0.8); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  /* ------ 动画 ------ */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.15), 0 10px 40px rgba(102,126,234,0.5), 0 0 80px rgba(240,147,251,0.3), inset 0 -8px 20px rgba(0,0,0,0.3), inset 0 8px 20px rgba(255,255,255,0.3); }
+    50% { box-shadow: 0 0 0 2px rgba(255,255,255,0.25), 0 10px 40px rgba(102,126,234,0.7), 0 0 120px rgba(240,147,251,0.5), inset 0 -8px 20px rgba(0,0,0,0.3), inset 0 8px 20px rgba(255,255,255,0.35); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.2); }
+  }
+
+  /* ------ 小屏适配 ------ */
+  @media (max-width: 480px) {
+    .panel { width: calc(100vw - 40px); }
+    .hint { font-size: 12px; padding: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hint">
+  🖱️ <strong>拖动</strong>悬浮球到任意位置 &nbsp;·&nbsp;
+  👆 <strong>点击</strong>展开剪贴板 &nbsp;·&nbsp;
+  ⬆️⬇️ 上下键选择 &nbsp;·&nbsp;
+  <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴当前选中内容
+</div>
+
+<!-- 悬浮球 -->
+<div class="ball" id="ball">
+  <span class="ball-icon">📋</span>
+  <span class="ball-badge" id="badge" style="display:none">0</span>
+</div>
+
+<!-- 展开面板 -->
+<div class="panel" id="panel">
+  <div class="panel-header">
+    <div class="panel-title">
+      <span class="dot"></span>
+      最近复制
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div class="panel-count" id="count">0 条</div>
+      <button class="close-btn" id="btn-close-panel" title="关闭">✕</button>
+    </div>
+  </div>
+
+  <div class="panel-body" id="list">
+    <div class="empty">
+      <div class="empty-icon">✨</div>
+      还没有复制记录<br>
+      点击下方"手动添加"或在页面任意位置<br>
+      复制的内容会自动出现在这里
+    </div>
+  </div>
+
+  <div class="panel-footer">
+    <button class="btn primary" id="btn-paste">📥 粘贴选中</button>
+    <button class="btn" id="btn-read">🔍 读取剪贴板</button>
+    <button class="btn" id="btn-add">➕ 手动添加</button>
+    <button class="btn danger" id="btn-clear">🗑️ 清空</button>
+  </div>
+</div>
+
+<!-- 粘贴演示区 -->
+<div style="position:fixed; left:30px; bottom:30px; padding:16px 20px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:14px; font-size:12px; color:rgba(255,255,255,0.7); backdrop-filter:blur(20px); z-index:10;">
+  💡 在下方输入框中按 <kbd style="padding:1px 6px; background:rgba(255,255,255,0.15); border-radius:4px;">Ctrl+V</kbd> 可粘贴当前选中的剪贴板内容<br>
+  <textarea id="demo-input" placeholder="在这里按 Ctrl+V 粘贴..." style="margin-top:8px; width:280px; height:60px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:8px; color:#fff; font-size:12px; resize:none; outline:none; font-family:inherit;"></textarea>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 页面内确认框（替代原生 confirm） -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <div class="confirm-title" id="confirm-title">确认操作</div>
+    <div class="confirm-actions">
+      <button class="confirm-btn cancel" id="confirm-cancel">取消</button>
+      <button class="confirm-btn ok" id="confirm-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const ball = document.getElementById("ball");
+  const panel = document.getElementById("panel");
+  const list = document.getElementById("list");
+  const count = document.getElementById("count");
+  const badge = document.getElementById("badge");
+  const toast = document.getElementById("toast");
+  const demoInput = document.getElementById("demo-input");
+
+  let clips = [];           // 剪贴板记录 [{id, text, time}]
+  let selectedIndex = -1;   // 当前选中索引
+  let isPanelOpen = false;
+  let isDragging = false;
+  let hasMoved = false;
+  let dragStartX = 0, dragStartY = 0;
+  let ballStartX = 0, ballStartY = 0;
+  let panelX = 0, panelY = 0;
+
+  const STORAGE_KEY = "clipboard_ball_items_v1";
+  const MAX_ITEMS = 50;
+
+  // ========== 初始化 ==========
+  function init() {
+    loadClips();
+    updateBadge();
+    render();
+    bindEvents();
+    positionPanelNearBall();
+  }
+
+  // ========== 存储 ==========
+  function loadClips() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) clips = JSON.parse(raw);
+    } catch(e) { clips = []; }
+  }
+  function saveClips() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(clips));
+    } catch(e) {}
+  }
+
+  // ========== 添加记录 ==========
+  function addClip(text) {
+    if (!text || !text.trim()) return;
+    const trimmed = text.trim();
+    // 去重：如果和第一条相同，不添加
+    if (clips.length > 0 && clips[0].text === trimmed) return;
+    // 移除已有的相同内容
+    clips = clips.filter(c => c.text !== trimmed);
+    clips.unshift({
+      id: Date.now() + "_" + Math.random().toString(36).slice(2,6),
+      text: trimmed,
+      time: Date.now()
+    });
+    if (clips.length > MAX_ITEMS) clips = clips.slice(0, MAX_ITEMS);
+    selectedIndex = 0;
+    saveClips();
+    updateBadge();
+    render();
+    showToast("已添加到剪贴板");
+  }
+
+  // ========== 渲染 ==========
+  function render() {
+    count.textContent = clips.length + " 条";
+    if (clips.length === 0) {
+      list.innerHTML = '<div class="empty"><div class="empty-icon">✨</div>还没有复制记录<br>点击"读取剪贴板"或"手动添加"</div>';
+      return;
+    }
+    list.innerHTML = clips.map((c, i) => `
+      <div class="clip-item ${i === selectedIndex ? "selected" : ""}" data-index="${i}">
+        <div class="clip-text">${escapeHtml(c.text)}</div>
+        <div class="clip-meta">
+          <span class="clip-time">🕐 ${formatTime(c.time)}</span>
+          <span class="clip-index">#${i + 1}</span>
+        </div>
+      </div>
+    `).join("");
+
+    // 选中项滚动到可视区
+    if (selectedIndex >= 0) {
+      const el = list.querySelector(`.clip-item[data-index="${selectedIndex}"]`);
+      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+
+  function updateBadge() {
+    if (clips.length > 0) {
+      badge.style.display = "flex";
+      badge.textContent = clips.length > 99 ? "99+" : clips.length;
+    } else {
+      badge.style.display = "none";
+    }
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  function formatTime(ts) {
+    const diff = (Date.now() - ts) / 1000;
+    if (diff < 60) return "刚刚";
+    if (diff < 3600) return Math.floor(diff/60) + "分钟前";
+    if (diff < 86400) return Math.floor(diff/3600) + "小时前";
+    const d = new Date(ts);
+    return `${d.getMonth()+1}月${d.getDate()}日 ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  }
+
+  // ========== 面板开关 ==========
+  function openPanel() {
+    positionPanelNearBall();
+    panel.classList.add("active");
+    ball.classList.add("expanded");
+    isPanelOpen = true;
+    if (clips.length > 0 && selectedIndex < 0) selectedIndex = 0;
+    render();
+  }
+  function closePanel() {
+    panel.classList.remove("active");
+    ball.classList.remove("expanded");
+    isPanelOpen = false;
+  }
+  function togglePanel() {
+    isPanelOpen ? closePanel() : openPanel();
+  }
+
+  function positionPanelNearBall() {
+    const rect = ball.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const panelW = Math.min(380, vw - 40);
+    const panelH = 500;
+
+    // 默认在球的左上方展开
+    let left = rect.left + rect.width/2 - panelW/2;
+    let top = rect.top - panelH - 10;
+
+    // 如果上方空间不够，改在下方
+    if (top < 20) top = rect.bottom + 10;
+    // 左右边界
+    if (left < 20) left = 20;
+    if (left + panelW > vw - 20) left = vw - panelW - 20;
+    // 下边界
+    if (top + panelH > vh - 20) top = Math.max(20, vh - panelH - 20);
+
+    panel.style.left = left + "px";
+    panel.style.top = top + "px";
+    panel.style.width = panelW + "px";
+  }
+
+  // ========== 拖动逻辑 ==========
+  function bindEvents() {
+    // 悬浮球：按下
+    ball.addEventListener("mousedown", onDragStart);
+    ball.addEventListener("touchstart", onDragStart, { passive: false });
+
+    // 点击条目
+    list.addEventListener("click", (e) => {
+      const item = e.target.closest(".clip-item");
+      if (!item) return;
+      const idx = parseInt(item.dataset.index, 10);
+      selectedIndex = idx;
+      render();
+      pasteSelected();
+    });
+
+    // 关闭按钮
+    const closeBtn = document.getElementById("btn-close-panel");
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closePanel();
+    });
+    closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+
+    // 通用：阻止面板内按钮的 mousedown 冒泡，避免和"点击空白关闭"冲突
+    panel.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) e.stopPropagation();
+    });
+
+    // 粘贴按钮
+    document.getElementById("btn-paste").addEventListener("click", (e) => {
+      e.stopPropagation();
+      pasteSelected();
+    });
+
+    // 读取剪贴板按钮
+    document.getElementById("btn-read").addEventListener("click", (e) => {
+      e.stopPropagation();
+      readClipboard();
+    });
+
+    // 手动添加按钮
+    document.getElementById("btn-add").addEventListener("click", (e) => {
+      e.stopPropagation();
+      const text = prompt("请输入要添加到剪贴板的内容：");
+      if (text && text.trim()) addClip(text.trim());
+    });
+
+    // 清空按钮（使用页面内确认，避免原生 confirm 导致的事件冲突）
+    document.getElementById("btn-clear").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (clips.length === 0) { showToast("没有内容可清空"); return; }
+      // 显示页面内确认
+      showConfirm("确定要清空所有剪贴板记录吗？", (yes) => {
+        if (yes) {
+          try {
+            clips = [];
+            selectedIndex = -1;
+            saveClips();
+            updateBadge();
+            render();
+            showToast("已清空 ✅");
+          } catch (err) {
+            showToast("清空失败：" + (err.message || "未知错误"));
+          }
+        }
+      });
+    });
+
+    // 点击空白处关闭面板
+    document.addEventListener("mousedown", (e) => {
+      if (!isPanelOpen) return;
+      if (panel.contains(e.target) || ball.contains(e.target)) return;
+      if (e.target.closest(".hint") || e.target.closest("#demo-input")) return;
+      if (e.target.closest(".confirm-overlay")) return;
+      closePanel();
+    });
+
+    // 键盘
+    document.addEventListener("keydown", onKeyDown);
+
+    // 监听页面内的复制事件
+    document.addEventListener("copy", () => {
+      setTimeout(() => {
+        const sel = window.getSelection();
+        if (sel && sel.toString().trim()) addClip(sel.toString());
+      }, 50);
+    });
+
+    // 窗口大小改变时重新定位
+    window.addEventListener("resize", () => {
+      if (isPanelOpen) positionPanelNearBall();
+      else clampBallPosition();
+    });
+  }
+
+  function onDragStart(e) {
+    e.preventDefault();
+    const pt = getPoint(e);
+    isDragging = true;
+    hasMoved = false;
+    dragStartX = pt.x;
+    dragStartY = pt.y;
+    const rect = ball.getBoundingClientRect();
+    ballStartX = rect.left;
+    ballStartY = rect.top;
+    ball.classList.add("dragging");
+
+    document.addEventListener("mousemove", onDragMove);
+    document.addEventListener("mouseup", onDragEnd);
+    document.addEventListener("touchmove", onDragMove, { passive: false });
+    document.addEventListener("touchend", onDragEnd);
+  }
+
+  function onDragMove(e) {
+    if (!isDragging) return;
+    e.preventDefault();
+    const pt = getPoint(e);
+    const dx = pt.x - dragStartX;
+    const dy = pt.y - dragStartY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) hasMoved = true;
+
+    let newX = ballStartX + dx;
+    let newY = ballStartY + dy;
+    const rect = ball.getBoundingClientRect();
+    newX = Math.max(10, Math.min(window.innerWidth - rect.width - 10, newX));
+    newY = Math.max(10, Math.min(window.innerHeight - rect.height - 10, newY));
+
+    ball.style.left = newX + "px";
+    ball.style.top = newY + "px";
+    ball.style.right = "auto";
+    ball.style.bottom = "auto";
+  }
+
+  function onDragEnd(e) {
+    if (!isDragging) return;
+    isDragging = false;
+    ball.classList.remove("dragging");
+
+    document.removeEventListener("mousemove", onDragMove);
+    document.removeEventListener("mouseup", onDragEnd);
+    document.removeEventListener("touchmove", onDragMove);
+    document.removeEventListener("touchend", onDragEnd);
+
+    if (!hasMoved) {
+      togglePanel();
+    } else {
+      clampBallPosition();
+    }
+  }
+
+  function clampBallPosition() {
+    const rect = ball.getBoundingClientRect();
+    let x = rect.left, y = rect.top;
+    x = Math.max(10, Math.min(window.innerWidth - rect.width - 10, x));
+    y = Math.max(10, Math.min(window.innerHeight - rect.height - 10, y));
+    ball.style.left = x + "px";
+    ball.style.top = y + "px";
+  }
+
+  function getPoint(e) {
+    if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  // ========== 键盘 ==========
+  function onKeyDown(e) {
+    // 如果确认框打开，让它处理按键，面板不响应
+    const overlay = document.getElementById("confirm-overlay");
+    if (overlay && overlay.classList.contains("active")) return;
+
+    // Ctrl+V: 粘贴当前选中内容到活动输入框
+    if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+      // 如果面板打开且有选中项，拦截并用选中内容
+      if (selectedIndex >= 0 && clips[selectedIndex]) {
+        const activeEl = document.activeElement;
+        const isEditable = activeEl && (
+          activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.isContentEditable
+        );
+        if (isEditable && isPanelOpen) {
+          e.preventDefault();
+          const text = clips[selectedIndex].text;
+          insertText(activeEl, text);
+          showToast(`已粘贴: #${selectedIndex + 1}`);
+          return;
+        }
+      }
+    }
+
+    // 如果面板没开，不响应上下键
+    if (!isPanelOpen) {
+      // 但允许 Ctrl+Shift+V 呼出面板
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        togglePanel();
+      }
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (clips.length === 0) return;
+      selectedIndex = Math.min(clips.length - 1, selectedIndex + 1);
+      render();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (clips.length === 0) return;
+      selectedIndex = Math.max(0, selectedIndex - 1);
+      render();
+    } else if (e.key === "Enter") {
+      if (selectedIndex >= 0) {
+        e.preventDefault();
+        pasteSelected();
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closePanel();
+    }
+  }
+
+  function insertText(el, text) {
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? el.value.length;
+      el.value = el.value.slice(0, start) + text + el.value.slice(end);
+      el.selectionStart = el.selectionEnd = start + text.length;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    } else if (el.isContentEditable) {
+      document.execCommand("insertText", false, text);
+    }
+  }
+
+  // ========== 粘贴选中到演示输入框 ==========
+  function pasteSelected() {
+    if (selectedIndex < 0 || !clips[selectedIndex]) {
+      showToast("请先选择一条内容");
+      return;
+    }
+    const text = clips[selectedIndex].text;
+    demoInput.focus();
+    insertText(demoInput, text);
+    showToast(`已粘贴 #${selectedIndex + 1} 到输入框`);
+
+    // 同时尝试写入系统剪贴板
+    tryCopyToSystem(text);
+  }
+
+  function tryCopyToSystem(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  }
+
+  // ========== 读取系统剪贴板 ==========
+  async function readClipboard() {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      showToast("浏览器不支持读取剪贴板，请用手动添加");
+      return;
+    }
+    try {
+      showToast("正在读取...");
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        addClip(text.trim());
+      } else {
+        showToast("剪贴板为空");
+      }
+    } catch (err) {
+      showToast("无法读取：请用「手动添加」或粘贴到输入框");
+    }
+  }
+
+  // ========== Toast ==========
+  let toastTimer = null;
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
+  }
+
+  // 页面内确认框（替代原生 confirm，避免事件冲突和权限问题）
+  let confirmCallback = null;
+  function showConfirm(message, callback) {
+    const overlay = document.getElementById("confirm-overlay");
+    const title = document.getElementById("confirm-title");
+    const okBtn = document.getElementById("confirm-ok");
+    const cancelBtn = document.getElementById("confirm-cancel");
+    title.textContent = message;
+    overlay.classList.add("active");
+    confirmCallback = callback;
+
+    const onKey = (e) => {
+      if (e.key === "Escape") finish(false);
+      else if (e.key === "Enter") finish(true);
+    };
+    document.addEventListener("keydown", onKey);
+
+    function finish(yes) {
+      overlay.classList.remove("active");
+      okBtn.removeEventListener("click", okHandler);
+      cancelBtn.removeEventListener("click", cancelHandler);
+      document.removeEventListener("keydown", onKey);
+      if (confirmCallback) {
+        const cb = confirmCallback;
+        confirmCallback = null;
+        setTimeout(() => cb(yes), 0);
+      }
+    }
+    function okHandler(e) { e.stopPropagation(); finish(true); }
+    function cancelHandler(e) { e.stopPropagation(); finish(false); }
+    okBtn.addEventListener("click", okHandler);
+    cancelBtn.addEventListener("click", cancelHandler);
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>

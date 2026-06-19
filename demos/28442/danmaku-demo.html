@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>弹幕叠加层 Demo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#0a0a0f;color:#fff;height:100vh;overflow:hidden;}
+#app{display:flex;height:100vh;}
+#screen{flex:1;position:relative;background:#111;overflow:hidden;}
+#bg-canvas,#danmaku-canvas{position:absolute;top:0;left:0;width:100%;height:100%;}
+#danmaku-canvas{pointer-events:none;}
+
+/* SC 抽屉 */
+#sc-drawer{position:absolute;right:16px;top:50%;transform:translateY(-50%);z-index:100;display:flex;flex-direction:column;gap:10px;pointer-events:none;}
+.sc-card{background:rgba(20,20,30,0.94);border-radius:10px;border-left:4px solid #ff5252;padding:12px 14px;width:280px;animation:scIn .4s cubic-bezier(.16,1,.3,1);pointer-events:auto;box-shadow:0 4px 24px rgba(0,0,0,.5);}
+.sc-card.removing{animation:scOut .35s ease-in forwards;}
+@keyframes scIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes scOut{from{transform:translateX(0);opacity:1}to{transform:translateX(120%);opacity:0}}
+.sc-card .sc-price{font-size:28px;font-weight:800;background:linear-gradient(135deg,#ff5252,#ff8a80);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.sc-card .sc-price::before{content:'¥';font-size:18px;}
+.sc-card .sc-user{font-size:14px;font-weight:600;color:#ffe0e0;margin-bottom:2px;}
+.sc-card .sc-user .av{font-size:20px;margin-right:4px;vertical-align:middle;}
+.sc-card .sc-msg{font-size:15px;color:#fff;line-height:1.4;word-break:break-all;}
+.sc-card .sc-bar{position:absolute;bottom:0;left:0;height:3px;background:#ff5252;border-radius:0 0 0 10px;}
+
+/* 消息面板 */
+#msg-panel{position:absolute;top:12px;right:12px;z-index:99;width:250px;max-height:50vh;background:rgba(10,10,18,.85);border:1px solid rgba(255,255,255,.08);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;}
+.panel-head{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.06);font-size:11px;color:rgba(255,255,255,.5);}
+.panel-head .cnt{color:#0d6;font-weight:600;}
+.panel-head button{background:none;border:none;color:rgba(255,255,255,.35);cursor:pointer;font-size:13px;}
+.panel-head button:hover{color:#fff;}
+.panel-body{flex:1;overflow-y:auto;padding:4px 0;max-height:calc(50vh - 30px);}
+.panel-body::-webkit-scrollbar{width:3px;}
+.panel-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px;}
+.msg-row{display:flex;align-items:flex-start;gap:5px;padding:3px 10px;font-size:11px;color:rgba(255,255,255,.7);animation:rowIn .2s;}
+@keyframes rowIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+.msg-row .icon{flex-shrink:0;width:16px;}
+.msg-row .info{flex:1;min-width:0;word-break:break-all;}
+.msg-row .uname{font-weight:600;color:#0be;}
+.msg-row.gift .uname{color:#ffe600;}
+.msg-row.sc{background:linear-gradient(135deg,rgba(255,82,82,.12),transparent);border-left:3px solid #ff5252;border-radius:0 6px 6px 0;padding:5px 10px;margin:2px 6px;}
+.msg-row.sc .uname{color:#ff8a80;font-size:12px;}
+.msg-row.join{color:rgba(255,255,255,.35);font-size:10px;}
+.msg-row .time{font-size:9px;color:rgba(255,255,255,.15);flex-shrink:0;}
+
+/* 顶部栏 */
+#topbar{position:absolute;top:0;left:0;right:0;padding:8px 14px;background:linear-gradient(180deg,rgba(0,0,0,.5),transparent);z-index:50;display:flex;justify-content:space-between;font-size:13px;}
+#screen-label{position:absolute;bottom:16px;left:16px;font-size:12px;color:rgba(255,255,255,.3);}
+
+/* 右侧控制面板 */
+#ctrl{width:320px;background:#111;display:flex;flex-direction:column;border-left:1px solid #2a2a38;overflow-y:auto;}
+#ctrl::-webkit-scrollbar{width:4px;}
+#ctrl::-webkit-scrollbar-thumb{background:#333;border-radius:2px;}
+.sec{padding:12px 14px;border-bottom:1px solid #2a2a38;}
+.sec h3{font-size:13px;margin-bottom:8px;color:#888;}
+.btn{padding:7px 14px;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600;}
+.btn-red{background:#ff5252;color:#fff}.btn-red:hover{opacity:.85}
+.btn-blue{background:#00b5e5;color:#fff}.btn-blue:hover{opacity:.85}
+.btn-sm{padding:5px 10px;font-size:11px;background:#2a2a2e;color:#aaa;border:1px solid #3a3a3e;border-radius:4px;cursor:pointer}
+.btn-sm:hover{background:#3a3a3e;color:#fff}
+.btns{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.sg{display:flex;border-radius:4px;overflow:hidden;border:1px solid #3a3a3e}
+.sg button{padding:4px 12px;border:none;background:#1a1a25;color:#888;font-size:11px;cursor:pointer;border-right:1px solid #3a3a3e}
+.sg button:last-child{border-right:none}
+.sg button.on{background:#00b5e5;color:#fff}
+.set-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.set-row label{font-size:11px;color:#888;min-width:44px}
+.set-row input[type=range]{flex:1;accent-color:#00b5e5}
+.set-row input[type=text],.set-row input[type=password]{flex:1;padding:5px 8px;background:#1a1a25;border:1px solid #3a3a3e;border-radius:4px;color:#fff;font-size:11px;outline:none}
+.set-row input:focus{border-color:#00b5e5}
+.set-row span{font-size:10px;color:#00b5e5;min-width:20px}
+.stats{display:flex;gap:16px;font-size:12px;color:#888}
+.stats b{color:#fff}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="screen">
+    <canvas id="bg-canvas"></canvas>
+    <canvas id="danmaku-canvas"></canvas>
+    <div id="topbar"><span>😎 主播小明</span><span>👁️ <b id="viewers">1,234</b></span></div>
+    <div id="screen-label">模拟直播画面</div>
+    <div id="sc-drawer"></div>
+    <div id="msg-panel">
+        <div class="panel-head"><span>消息 · <span class="cnt" id="msg-total">0</span></span><div><button id="btn-pin">📌</button><button id="btn-fold">─</button></div></div>
+        <div class="panel-body" id="msg-body"></div>
+    </div>
+</div>
+<div id="ctrl">
+    <div class="sec"><h3>📊 统计</h3><div class="stats"><span>弹幕: <b id="stat-d">0</b></span><span>礼物: <b id="stat-g">0</b></span><span>SC: <b id="stat-s">0</b></span></div></div>
+    <div class="sec"><h3>⚙️ 弹幕</h3><div class="set-row"><label>密度</label><div class="sg" id="dens"><button data-v="low">低</button><button data-v="medium" class="on">中</button><button data-v="high">高</button></div></div><div class="set-row"><label>速度 <span id="sv">7</span></label><input type="range" id="spd" min="3" max="18" value="7"></div><div class="set-row"><label>透明 <span id="ov">85</span></label><input type="range" id="op" min="30" max="100" value="85"></div></div>
+    <div class="sec"><h3>🎭 操作</h3><div class="btns"><button class="btn-sm" data-a="join">👤进场</button><button class="btn-sm" data-a="gift">🎁送礼</button><button class="btn-sm" data-a="follow">⭐关注</button><button class="btn-red btn-sm" data-a="sc">💛SC</button></div><div class="set-row" style="margin-top:6px"><input type="text" id="cmsg" placeholder="自定义弹幕..."><button class="btn-sm" id="send">发</button></div></div>
+    <div class="sec"><h3>🤖 AI</h3><div class="set-row"><label>Key</label><input type="password" id="aik" placeholder="sk-..."></div><button class="btn-blue" id="aibtn" style="width:100%">开启 AI</button><div id="ailog" style="font-size:10px;color:#555;margin-top:4px"></div></div>
+</div>
+</div>
+
+<script>
+// ======== 弹幕引擎 (简化验证版) ========
+const c=document.getElementById('danmaku-canvas'),ctx=c.getContext('2d');
+const bgc=document.getElementById('bg-canvas'),bgctx=bgc.getContext('2d');
+let pool=[],tracks={},spd=7,dens='medium',op=0.85;
+let W,H,lastSpawn=0,rowH=28,maxTr;
+let totalD=0,totalG=0,totalS=0;
+
+const colors=['#fff','#ffe600','#00ff88','#00bfff','#ff69b4','#ff4444','#b366ff'];
+
+function resizeAll(){
+    const dpr=window.devicePixelRatio||1;
+    const r=c.parentElement.getBoundingClientRect();
+    W=Math.max(100,r.width); H=Math.max(100,r.height);
+    c.width=W*dpr; c.height=H*dpr; c.style.width=W+'px'; c.style.height=H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    bgc.width=W*dpr; bgc.height=H*dpr; bgc.style.width=W+'px'; bgc.style.height=H+'px';
+    maxTr=Math.floor(H*0.65/rowH)||8;
+    console.log('[Resize] W='+W+' H='+H+' maxTr='+maxTr);
+}
+resizeAll();
+window.addEventListener('resize',resizeAll);
+
+function pushDanmaku(text,color,mode,size){
+    mode=mode||'scroll';size=size||20;color=color||colors[Math.floor(Math.random()*colors.length)];
+    const now=performance.now();
+    let y;
+    if(mode==='scroll'){
+        let b=0,bt=Infinity;
+        for(let i=0;i<maxTr;i++){if(!tracks[i]||tracks[i]<now){b=i;break;}if(tracks[i]<bt){bt=tracks[i];b=i;}}
+        tracks[b]=now+3000;y=40+b*rowH;
+    }else if(mode==='top'){y=40+Math.random()*120;}
+    else{y=H-80-Math.random()*120;}
+    pool.push({text,color,mode,size,x:W+100,y,start:now});
+    totalD++;document.getElementById('stat-d').textContent=totalD;
+}
+
+// 定时弹幕
+const lib=['哈哈哈','666666','来了来了','太强了吧','23333','笑死我了','有操作的','支持支持','打卡','名场面','学到了','弹幕护体','前方高能','厉害了','确实','芜湖~','好家伙','什么神仙操作','已关注','笑不活了','绷不住了','大佬666'];
+function spawn(){
+    const now=performance.now(),cfg={low:[1.5,6],medium:[0.6,12],high:[0.25,22]}[dens];
+    if(now-lastSpawn<cfg[0]*1000)return;
+    const n=pool.filter(d=>d.mode==='scroll').length;
+    if(n>=cfg[1])return;
+    for(let i=0,c=1+Math.floor(Math.random()*3);i<c;i++){
+        pushDanmaku(lib[Math.floor(Math.random()*lib.length)],colors[Math.floor(Math.random()*colors.length)],Math.random()<0.85?'scroll':'top',18+Math.floor(Math.random()*5));
+    }
+    lastSpawn=now;
+    console.log('[Spawn] pool size='+pool.length+' totalD='+totalD);
+}
+
+function tick(){
+    for(let i=pool.length-1;i>=0;i--){
+        const d=pool[i];
+        if(d.mode==='scroll'){d.x-=spd;if(d.x<-400)pool.splice(i,1);}
+        else if(performance.now()-d.start>3500)pool.splice(i,1);
+    }
+}
+
+function drawDanmaku(){
+    ctx.clearRect(0,0,W,H);
+    // 红色边框验证canvas正在渲染
+    ctx.strokeStyle='#f00';ctx.lineWidth=4;ctx.strokeRect(2,2,W-4,H-4);
+    ctx.globalAlpha=op;
+    for(const d of pool){
+        ctx.font='bold '+d.size+'px "PingFang SC","Microsoft YaHei",sans-serif';
+        ctx.fillStyle=d.color;ctx.textBaseline='middle';
+        if(d.mode==='scroll')ctx.fillText(d.text,d.x,d.y);
+        else{ctx.textAlign='center';ctx.fillText(d.text,W/2,d.y);ctx.textAlign='start';}
+    }
+    ctx.globalAlpha=1;
+}
+
+// 背景
+let hue=0;
+function drawBg(){
+    bgctx.fillStyle=`hsl(${hue},50%,12%)`;bgctx.fillRect(0,0,bgc.width,bgc.height);
+    hue=(hue+0.1)%360;
+}
+
+// ======== 消息面板 ========
+const mb=document.getElementById('msg-body'),mt=document.getElementById('msg-total');let mc=0;
+function addMsg(icon,user,text,cls){
+    const r=document.createElement('div');r.className='msg-row'+(cls?' '+cls:'');
+    r.innerHTML='<span class="icon">'+icon+'</span><span class="info"><span class="uname">'+(user||'')+'</span> '+(user?' ':'')+text+'</span><span class="time">'+new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})+'</span>';
+    mb.appendChild(r);mb.scrollTop=mb.scrollHeight;mc++;mt.textContent=mc;
+    while(mb.children.length>100)mb.firstChild.remove();
+}
+
+// ======== SC 卡片 ========
+const sd=document.getElementById('sc-drawer');
+function showSC(user,money,msg){
+    const av=['🐱','🐶','🐰','🦊','🐼','🐨','🐯','🦁'];
+    const card=document.createElement('div');card.className='sc-card';
+    card.innerHTML='<div class="sc-user"><span class="av">'+av[Math.floor(Math.random()*av.length)]+'</span> '+user+'</div><div class="sc-price">'+money+'</div><div class="sc-msg">'+msg+'</div><div class="sc-bar"></div>';
+    sd.appendChild(card);totalS++;document.getElementById('stat-s').textContent=totalS;
+    addMsg('💛',user,'¥'+money+' : '+msg,'sc');
+    const bar=card.querySelector('.sc-bar'),dur=8000,st=performance.now();
+    function upb(){const e=performance.now()-st,p=Math.max(0,100-e/dur*100);bar.style.width=p+'%';if(p>0)requestAnimationFrame(upb)}
+    requestAnimationFrame(upb);
+    setTimeout(()=>{card.classList.add('removing');setTimeout(()=>card.remove(),400)},dur);
+    if(sd.children.length>3)sd.firstChild.remove();
+}
+
+// ======== 礼物 ========
+function genGift(){
+    const gs=[{n:'小心心',e:'❤️'},{n:'荧光棒',e:'🌈'},{n:'B坷垃',e:'🪙'},{n:'小电视',e:'📺'},{n:'舰长',e:'🚀'}];
+    const u=['小明','小红','阿强','大白','花花','奶茶','咖啡','闪电侠'][Math.floor(Math.random()*8)]+Math.floor(Math.random()*99);
+    const g=gs[Math.floor(Math.random()*gs.length)],n=Math.floor(Math.random()*5)+1;
+    pushDanmaku(u+' 送出 '+g.e+' '+g.n+(n>1?' x'+n:''),'#ffe600','top',20);
+    addMsg('🎁',u,'送出 '+g.e+' '+g.n+(n>1?' x'+n:''),'gift');
+    totalG++;document.getElementById('stat-g').textContent=totalG;
+}
+function genSC(){
+    const u=['小明','小红','阿强','大白','花花','奶茶','咖啡','闪电侠'][Math.floor(Math.random()*8)]+Math.floor(Math.random()*99);
+    const money=Math.floor(Math.random()*900)+30,msgs=['主播太强了！','每日打卡','终于开播了','这操作服了','好喜欢这里','大佬带带我'];
+    showSC(u,money,msgs[Math.floor(Math.random()*msgs.length)]);
+}
+
+// 定时礼物/SC
+let lastGift=0,lastSC=0;
+function autoEvents(){
+    const now=performance.now();
+    if(now-lastGift>8000+Math.random()*12000){genGift();lastGift=now;}
+    if(now-lastSC>12000+Math.random()*20000){genSC();lastSC=now;}
+}
+
+// ======== 主循环 ========
+function loop(){
+    spawn();tick();drawBg();drawDanmaku();autoEvents();
+    requestAnimationFrame(loop);
+}
+// ======== 启动 ========
+requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+        resizeAll();
+        console.log('[Boot] W='+W+' H='+H+' pool='+pool.length);
+        loop();
+    });
+});
+
+// ======== 控制面板 ========
+document.querySelectorAll('#dens button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#dens button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');dens=b.dataset.v;
+});
+document.getElementById('spd').oninput=function(){spd=+this.value;document.getElementById('sv').textContent=this.value};
+document.getElementById('op').oninput=function(){op=+this.value/100;document.getElementById('ov').textContent=this.value};
+document.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.a,u=['小明','小红','阿强','大白','花花'][Math.floor(Math.random()*5)]+Math.floor(Math.random()*99);
+    if(a==='join'){addMsg('👤',u,'进入直播间','join');pushDanmaku(u+' 进入直播间','#ffaa00','top',18)}
+    else if(a==='gift')genGift();
+    else if(a==='follow'){addMsg('⭐',u,'关注了主播','join');pushDanmaku(u+' 关注了主播','#ffaa00','top',18)}
+    else if(a==='sc')genSC();
+});
+document.getElementById('send').onclick=()=>{
+    const t=document.getElementById('cmsg').value.trim();
+    if(!t)return;
+    pushDanmaku(t,'#fff','scroll',20);addMsg('💬','我',t);
+    document.getElementById('cmsg').value='';
+};
+let pinned=false,folded=false;
+document.getElementById('btn-pin').onclick=function(){pinned=!pinned;this.textContent=pinned?'📍':'📌'};
+document.getElementById('btn-fold').onclick=function(){folded=!folded;mb.style.display=folded?'none':'';this.textContent=folded?'＋':'─'};
+// 观众数
+let v=1234;setInterval(()=>{v+=Math.floor(Math.random()*6)-3;v=Math.max(30,Math.min(9999,v));document.getElementById('viewers').textContent=v},2000);
+// AI 模拟
+setInterval(()=>{
+    const ms=['AI觉得不错~','666','画面好看','哈哈哈有意思','学到了','支持一下'];
+    const t=ms[Math.floor(Math.random()*ms.length)];
+    pushDanmaku(t,colors[Math.floor(Math.random()*colors.length)],'scroll',18);
+    addMsg('🤖','AI',t);
+},8000+Math.random()*10000);
+
+console.log('Demo loaded - watching canvas size. Open console to see [Spawn] logs.');
+</script>
+</body>
+</html>

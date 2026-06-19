@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最终版PDF转换器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f5f5f5; }
+        .container { background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+        h1 { color: #333; }
+        .drop-area { border: 3px dashed #ccc; border-radius: 10px; padding: 40px; margin: 20px 0; cursor: pointer; transition: all 0.3s; }
+        .drop-area:hover { border-color: #2196F3; background-color: #f0f8ff; }
+        .drop-area.highlight { border-color: #4CAF50; background-color: #e8f5e9; }
+        #file-input { display: none; }
+        #result { margin-top: 30px; display: none; }
+        #download-btn { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 10px; cursor: pointer; border: none; font-size: 16px; }
+        .progress { margin-top: 20px; color: #666; }
+        #filename-input { padding: 10px; width: 80%; max-width: 300px; margin: 20px auto; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; text-align: center; }
+        .compression-options { margin: 20px 0; }
+        .compression-options p { margin-bottom: 10px; font-weight: bold; }
+        .options-group { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
+        .options-group label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+        .options-group input[type="radio"] { margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 最终版PDF转换器</h1>
+        <p>多页支持/极致锐利/红章保留</p>
+
+        <div id="drop-area" class="drop-area">
+            <p>点击选择文件或拖拽文件到这里</p>
+            <p><small>(支持 JPG, PNG, PDF)</small></p>
+            <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.pdf" />
+        </div>
+
+        <input type="text" id="filename-input" placeholder="请输入转换后的文件名 (例如: 我的文档)" value="">
+
+        <div class="compression-options">
+            <p>选择二值化程度：</p>
+            <div class="options-group">
+                <label><input type="radio" name="compression" value="108"> 极致压缩 (108)</label>
+                <label><input type="radio" name="compression" value="128" checked> 默认压缩 (128)</label>
+                <label><input type="radio" name="compression" value="148"> 安全压缩 (148)</label>
+            </div>
+            <button id="compress-btn" type="button" style="margin-top: 20px; padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">确认压缩</button>
+        </div>
+
+        <div class="progress-container" style="margin-top: 20px; display: none;">
+            <div class="progress-bar" style="width: 0%; height: 20px; background-color: #4CAF50; border-radius: 10px; transition: width 0.3s ease;"></div>
+        </div>
+
+        <div id="result">
+            <h3>✅ 转换完成！</h3>
+            <p>输入名字后，点击保存按钮下载文件。</p>
+            <!-- 按钮依然保留作为备用 -->
+            <button id="download-btn" type="button">⬇️ 点击保存</button>
+        </div>
+
+        <div class="progress" id="progress">就绪</div>
+    </div>
+
+    <script type="text/javascript">
+        // 配置
+        const DPI = 150; 
+        let BINARY_THRESHOLD = 128; // 默认值设为默认压缩
+
+        // 获取当前选择的二值化阈值
+        function getBinaryThreshold() {
+            const selectedOption = document.querySelector('input[name="compression"]:checked');
+            return parseInt(selectedOption.value);
+        }
+
+        // 监听二值化选项变化
+        document.querySelectorAll('input[name="compression"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                BINARY_THRESHOLD = getBinaryThreshold();
+            });
+        });
+
+        // 初始化库
+        window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        const { jsPDF } = window.jspdf;
+
+        // DOM
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('file-input');
+        const resultArea = document.getElementById('result');
+        const downloadBtn = document.getElementById('download-btn');
+        const progressText = document.getElementById('progress');
+        const filenameInput = document.getElementById('filename-input');
+        const compressBtn = document.getElementById('compress-btn');
+        const progressContainer = document.querySelector('.progress-container');
+        const progressBar = document.querySelector('.progress-bar');
+
+        let currentBlob = null;
+        let selectedFile = null;
+
+        // --- 事件监听 ---
+        dropArea.addEventListener('click', () => fileInput.click());
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (eventName === 'dragenter' || eventName === 'dragover') {
+                    dropArea.classList.add('highlight');
+                } else {
+                    dropArea.classList.remove('highlight');
+                }
+            });
+        });
+        dropArea.addEventListener('drop', handleDrop, false);
+        fileInput.addEventListener('change', handleChange, false);
+        
+        compressBtn.addEventListener('click', handleCompress);
+        downloadBtn.addEventListener('click', triggerDownload);
+
+        function handleDrop(e) { const files = e.dataTransfer.files; selectFile(files); }
+        function handleChange(e) { const files = e.target.files; selectFile(files); }
+
+        function selectFile(files) {
+            if (files.length === 0) return;
+            selectedFile = files[0];
+            progressText.textContent = '已选择文件：' + selectedFile.name;
+            resultArea.style.display = 'none';
+            
+            // 自动填充文件名输入框，添加前缀"1_"
+            const fileNameWithoutExt = selectedFile.name.replace(/\.[^/.]+$/, "");
+            filenameInput.value = "1_" + fileNameWithoutExt;
+        }
+
+        function handleCompress() {
+            if (!selectedFile) {
+                alert('请先选择文件！');
+                return;
+            }
+            
+            // 更新二值化阈值
+            BINARY_THRESHOLD = getBinaryThreshold();
+            
+            // 显示进度条
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = '正在处理...';
+            
+            // 禁用所有选项和上传功能
+            disableUI();
+            
+            // 开始处理文件
+            handleFiles(selectedFile);
+        }
+
+        function disableUI() {
+            // 禁用上传区域
+            dropArea.style.pointerEvents = 'none';
+            dropArea.style.opacity = '0.5';
+            
+            // 禁用二值化选项
+            document.querySelectorAll('input[name="compression"]').forEach(radio => {
+                radio.disabled = true;
+            });
+            
+            // 禁用确认压缩按钮
+            compressBtn.disabled = true;
+            compressBtn.style.opacity = '0.5';
+            
+            // 禁用文件名输入框
+            filenameInput.disabled = true;
+            filenameInput.style.opacity = '0.5';
+        }
+
+        function enableUI() {
+            // 启用上传区域
+            dropArea.style.pointerEvents = 'auto';
+            dropArea.style.opacity = '1';
+            
+            // 启用二值化选项
+            document.querySelectorAll('input[name="compression"]').forEach(radio => {
+                radio.disabled = false;
+            });
+            
+            // 启用确认压缩按钮
+            compressBtn.disabled = false;
+            compressBtn.style.opacity = '1';
+            
+            // 启用文件名输入框
+            filenameInput.disabled = false;
+            filenameInput.style.opacity = '1';
+        }
+
+        async function handleFiles(file) {
+            if (!file) return;
+            resultArea.style.display = 'none';
+            progressText.textContent = '正在处理...';
+
+            try {
+                let pdfBlob;
+                if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+                    pdfBlob = await processPDF(file);
+                } else {
+                    pdfBlob = await processImage(file);
+                }
+                currentBlob = pdfBlob;
+                resultArea.style.display = 'block';
+                progressText.textContent = '处理完成！请在输入框输入名字后点击保存按钮。';
+                // 隐藏进度条
+                progressContainer.style.display = 'none';
+                // 重新启用UI
+                enableUI();
+            } catch (err) {
+                progressText.textContent = '错误: ' + err.message;
+                console.error(err);
+                // 隐藏进度条
+                progressContainer.style.display = 'none';
+                // 重新启用UI
+                enableUI();
+            }
+        }
+
+        // --- 核心: 触发下载 ---
+        function triggerDownload() {
+            // 防止在未转换时触发
+            if (!currentBlob) {
+                // 如果是点击按钮触发的，给个提示
+                if (event && event.type === 'click') {
+                    alert('请先上传并转换文件！');
+                }
+                return;
+            }
+
+            // 获取输入框的当前值
+            let fileName = filenameInput.value.trim();
+            if (!fileName) fileName = '黑白文档';
+            if (!fileName.toLowerCase().endsWith('.pdf')) {
+                fileName += '.pdf';
+            }
+
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(currentBlob);
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // --- 处理图片 ---
+        function processImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        const mmToInches = 0.0393701;
+                        const a4WidthPx = Math.floor(210 * mmToInches * DPI);
+                        const a4HeightPx = Math.floor(297 * mmToInches * DPI);
+                        let width = a4WidthPx;
+                        let height = (img.height / img.width) * width;
+                        if (height > a4HeightPx) {
+                            height = a4HeightPx;
+                            width = (img.width / img.height) * height;
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        const imageData = ctx.getImageData(0, 0, width, height);
+                        const data = imageData.data;
+                        const newData = new Uint8ClampedArray(data.length);
+
+                        for (let i = 0; i < data.length; i += 4) {
+                            const r = data[i];
+                            const g = data[i + 1];
+                            const b = data[i + 2];
+                            if (r > 100 && r > g + 30 && r > b + 30) {
+                                newData[i] = r; newData[i+1] = g; newData[i+2] = b; newData[i+3] = data[i+3];
+                            } else {
+                                const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                                const bw = gray > BINARY_THRESHOLD ? 255 : 0;
+                                newData[i] = bw; newData[i+1] = bw; newData[i+2] = bw; newData[i+3] = data[i+3];
+                            }
+                        }
+
+                        const newImageData = new ImageData(newData, width, height);
+                        ctx.putImageData(newImageData, 0, 0);
+
+                        const imgData = canvas.toDataURL('image/png');
+                        const pdf = new jsPDF({
+                            orientation: width > height ? 'landscape' : 'portrait',
+                            unit: 'px',
+                            format: [width, height],
+                            compress: true
+                        });
+                        pdf.addImage(imgData, 'PNG', 0, 0, width, height);
+                        const blob = pdf.output('blob');
+                        resolve(blob);
+                    };
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // --- 处理多页PDF ---
+        async function processPDF(file) {
+            return new Promise(async (resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    const typedArray = new Uint8Array(e.target.result);
+                    try {
+                        const loadingTask = pdfjsLib.getDocument(typedArray);
+                        const pdf = await loadingTask.promise;
+                        const totalPages = pdf.numPages;
+                        progressText.textContent = `正在处理PDF，共 ${totalPages} 页...`;
+
+                        const finalPdf = new jsPDF({ orientation: 'p', unit: 'px', format: 'a4', compress: true });
+                        finalPdf.deletePage(1);
+
+                        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+                            progressText.textContent = `正在处理第 ${pageNum} 页 / 共 ${totalPages} 页...`;
+                            // 更新进度条
+                            const progress = (pageNum / totalPages) * 100;
+                            progressBar.style.width = `${progress}%`;
+                            
+                            const page = await pdf.getPage(pageNum);
+                            const scale = DPI / 72;
+                            const viewport = page.getViewport({ scale });
+                            const canvas = document.createElement('canvas');
+                            const ctx = canvas.getContext('2d');
+                            canvas.width = viewport.width;
+                            canvas.height = viewport.height;
+                            await page.render({ canvasContext: ctx, viewport }).promise;
+
+                            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            const data = imageData.data;
+                            const newData = new Uint8ClampedArray(data.length);
+
+                            for (let i = 0; i < data.length; i += 4) {
+                                const r = data[i];
+                                const g = data[i + 1];
+                                const b = data[i + 2];
+                                if (r > 100 && r > g + 30 && r > b + 30) {
+                                    newData[i] = r; newData[i+1] = g; newData[i+2] = b; newData[i+3] = data[i+3];
+                                } else {
+                                    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                                    const bw = gray > BINARY_THRESHOLD ? 255 : 0;
+                                    newData[i] = bw; newData[i+1] = bw; newData[i+2] = bw; newData[i+3] = data[i+3];
+                                }
+                            }
+
+                            const newImageData = new ImageData(newData, canvas.width, canvas.height);
+                            ctx.putImageData(newImageData, 0, 0);
+
+                            const imgWidth = canvas.width / (DPI / 25.4);
+                            const imgHeight = canvas.height / (DPI / 25.4);
+                            finalPdf.addPage([imgWidth, imgHeight], imgWidth > imgHeight ? 'l' : 'p');
+                            finalPdf.addImage(ctx.canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
+                        }
+
+                        const blob = finalPdf.output('blob');
+                        resolve(blob);
+                    } catch (err) { reject(err); }
+                };
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        window.addEventListener('beforeunload', () => {
+            if (currentBlob) URL.revokeObjectURL(currentBlob);
+        });
+    </script>
+</body>
+</html>

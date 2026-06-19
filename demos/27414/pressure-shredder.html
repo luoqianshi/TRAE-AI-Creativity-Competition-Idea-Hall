@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>压力粉碎机</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #0a0a0f;
+    overflow: hidden;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    touch-action: none;
+}
+#canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: crosshair;
+}
+#ui {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    color: rgba(255,255,255,0.8);
+    pointer-events: none;
+    z-index: 10;
+}
+#ui h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #ff6b6b, #feca57, #48dbfb);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+#ui p {
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 4px;
+}
+#controls {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    gap: 12px;
+    z-index: 10;
+}
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: rgba(255,255,255,0.1);
+    color: white;
+    backdrop-filter: blur(10px);
+}
+.btn:hover {
+    background: rgba(255,255,255,0.2);
+    transform: translateY(-2px);
+}
+.btn:active {
+    transform: translateY(0);
+}
+.btn-primary {
+    background: linear-gradient(135deg, #ff6b6b, #feca57);
+    color: #0a0a0f;
+}
+#counter {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    color: rgba(255,255,255,0.6);
+    font-size: 0.85rem;
+    z-index: 10;
+}
+#hint {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: rgba(255,255,255,0.3);
+    font-size: 1.2rem;
+    pointer-events: none;
+    z-index: 5;
+    animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.6; }
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+    <h1>压力粉碎机</h1>
+    <p>点击 / 拖拽 释放压力</p>
+</div>
+<div id="hint">点击屏幕开始粉碎</div>
+<div id="counter">粉碎次数: <span id="score">0</span></div>
+<div id="controls">
+    <button class="btn" id="soundBtn">🔊 音效</button>
+    <button class="btn" id="clearBtn">清空</button>
+    <button class="btn btn-primary" id="explodeBtn">爆炸模式</button>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const hintEl = document.getElementById('hint');
+
+let particles = [];
+let score = 0;
+let isMouseDown = false;
+let mouseX = 0;
+let mouseY = 0;
+let explodeMode = false;
+let soundEnabled = true;
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function playCrushSound(intensity = 1) {
+    if (!soundEnabled || !audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    const filter = audioCtx.createBiquadFilter();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(100 + Math.random() * 200, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(20 + Math.random() * 30, audioCtx.currentTime + 0.15);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(800 + Math.random() * 400, audioCtx.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.15);
+
+    gainNode.gain.setValueAtTime(0.15 * intensity, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+
+    osc.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+}
+
+function playExplosionSound() {
+    if (!soundEnabled || !audioCtx) return;
+
+    const now = audioCtx.currentTime;
+    const duration = 0.4;
+
+    for (let i = 0; i < 8; i++) {
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(50 + Math.random() * 300, now);
+        osc.frequency.exponentialRampToValueAtTime(20, now + duration);
+
+        gainNode.gain.setValueAtTime(0.1 + Math.random() * 0.1, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        osc.start(now + i * 0.02);
+        osc.stop(now + duration);
+    }
+
+    const noiseBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate * duration, audioCtx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < noiseBuffer.length; i++) {
+        output[i] = Math.random() * 2 - 1;
+    }
+
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.setValueAtTime(500, now);
+    noiseFilter.Q.setValueAtTime(0.5, now);
+
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.setValueAtTime(0.2, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(audioCtx.destination);
+
+    noise.start(now);
+}
+
+function playClickSound() {
+    if (!soundEnabled || !audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(800 + Math.random() * 200, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.05);
+
+    gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+}
+
+function playClearSound() {
+    if (!soundEnabled || !audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+    osc.frequency.linearRampToValueAtTime(600, audioCtx.currentTime + 0.2);
+
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+}
+
+const colors = [
+    '#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3',
+    '#54a0ff', '#5f27cd', '#00d2d3', '#1dd1a1',
+    '#ff9f43', '#ee5a24', '#c23616', '#8c7ae6'
+];
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+
+class Particle {
+    constructor(x, y, color, size, vx, vy) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = size;
+        this.vx = vx || (Math.random() - 0.5) * 10;
+        this.vy = vy || (Math.random() - 0.5) * 10;
+        this.life = 1;
+        this.decay = Math.random() * 0.01 + 0.005;
+        this.gravity = 0.2;
+    }
+
+    update() {
+        this.vx *= 0.98;
+        this.vy *= 0.98;
+        this.vy += this.gravity;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life -= this.decay;
+        this.size *= 0.99;
+    }
+
+    draw() {
+        if (this.life <= 0) return;
+        ctx.globalAlpha = this.life;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+}
+
+class Block {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.width = Math.random() * 40 + 30;
+        this.height = Math.random() * 40 + 30;
+        this.color = colors[Math.floor(Math.random() * colors.length)];
+        this.angle = Math.random() * Math.PI * 2;
+        this.vx = (Math.random() - 0.5) * 5;
+        this.vy = (Math.random() - 0.5) * 5;
+        this.rotationSpeed = (Math.random() - 0.5) * 0.1;
+        this.gravity = 0.15;
+        this.life = 1;
+        this.decay = Math.random() * 0.008 + 0.002;
+    }
+
+    update() {
+        this.vx *= 0.98;
+        this.vy *= 0.98;
+        this.vy += this.gravity;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.angle += this.rotationSpeed;
+        this.life -= this.decay;
+    }
+
+    draw() {
+        if (this.life <= 0) return;
+        ctx.globalAlpha = this.life;
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        ctx.fillStyle = this.color;
+        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-this.width/2, -this.height/2, this.width, this.height);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+    }
+
+    explode() {
+        for (let i = 0; i < 15; i++) {
+            const angle = (i / 15) * Math.PI * 2;
+            const speed = Math.random() * 8 + 3;
+            particles.push(new Particle(
+                this.x, this.y,
+                this.color,
+                Math.random() * 6 + 2,
+                Math.cos(angle) * speed,
+                Math.sin(angle) * speed
+            ));
+        }
+        this.life = 0;
+    }
+}
+
+function createExplosion(x, y, intensity = 1) {
+    hintEl.style.display = 'none';
+    score++;
+    scoreEl.textContent = score;
+
+    initAudio();
+    if (explodeMode) {
+        playExplosionSound();
+    } else {
+        playCrushSound(intensity);
+    }
+
+    const particleCount = Math.floor(30 * intensity);
+    for (let i = 0; i < particleCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 15 * intensity + 5;
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        particles.push(new Particle(
+            x, y, color,
+            Math.random() * 8 + 3,
+            Math.cos(angle) * speed,
+            Math.sin(angle) * speed
+        ));
+    }
+
+    if (Math.random() > 0.7) {
+        for (let i = 0; i < 3; i++) {
+            particles.push(new Block(x + (Math.random() - 0.5) * 50, y + (Math.random() - 0.5) * 50));
+        }
+    }
+}
+
+function update() {
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.15)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    particles = particles.filter(p => p.life > 0);
+    particles.forEach(p => {
+        p.update();
+        p.draw();
+    });
+
+    if (isMouseDown && Math.random() > 0.7) {
+        createExplosion(mouseX, mouseY, explodeMode ? 2 : 1);
+    }
+
+    requestAnimationFrame(update);
+}
+
+function handleMouseDown(e) {
+    isMouseDown = true;
+    updateMouse(e);
+    createExplosion(mouseX, mouseY, explodeMode ? 2 : 1);
+}
+
+function handleMouseMove(e) {
+    updateMouse(e);
+}
+
+function handleMouseUp() {
+    isMouseDown = false;
+}
+
+function updateMouse(e) {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+}
+
+function handleTouchStart(e) {
+    e.preventDefault();
+    isMouseDown = true;
+    const touch = e.touches[0];
+    mouseX = touch.clientX;
+    mouseY = touch.clientY;
+    createExplosion(mouseX, mouseY, explodeMode ? 2 : 1);
+}
+
+function handleTouchMove(e) {
+    e.preventDefault();
+    const touch = e.touches[0];
+    mouseX = touch.clientX;
+    mouseY = touch.clientY;
+}
+
+function handleTouchEnd() {
+    isMouseDown = false;
+}
+
+document.getElementById('soundBtn').addEventListener('click', () => {
+    initAudio();
+    soundEnabled = !soundEnabled;
+    const btn = document.getElementById('soundBtn');
+    if (soundEnabled) {
+        btn.textContent = '🔊 音效';
+        btn.style.background = 'rgba(255,255,255,0.1)';
+        playClickSound();
+    } else {
+        btn.textContent = '🔇 静音';
+        btn.style.background = 'rgba(255,255,255,0.05)';
+    }
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+    initAudio();
+    playClearSound();
+    particles = [];
+    score = 0;
+    scoreEl.textContent = score;
+});
+
+document.getElementById('explodeBtn').addEventListener('click', () => {
+    initAudio();
+    playClickSound();
+    explodeMode = !explodeMode;
+    const btn = document.getElementById('explodeBtn');
+    if (explodeMode) {
+        btn.style.background = 'linear-gradient(135deg, #ff4757, #ff6b81)';
+        btn.textContent = '爆炸模式 ON';
+    } else {
+        btn.style.background = 'linear-gradient(135deg, #ff6b6b, #feca57)';
+        btn.textContent = '爆炸模式';
+    }
+});
+
+canvas.addEventListener('mousedown', handleMouseDown);
+canvas.addEventListener('mousemove', handleMouseMove);
+canvas.addEventListener('mouseup', handleMouseUp);
+canvas.addEventListener('mouseleave', handleMouseUp);
+
+canvas.addEventListener('touchstart', handleTouchStart);
+canvas.addEventListener('touchmove', handleTouchMove);
+canvas.addEventListener('touchend', handleTouchEnd);
+
+window.addEventListener('resize', resize);
+
+resize();
+update();
+</script>
+</body>
+</html>

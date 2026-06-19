@@ -1,0 +1,1737 @@
+# 题库刷题小程序 - 完整源码
+支持题库上传（TXT/PDF/图片）、激励广告门槛、刷题、错题本、断点续做、小票计数
+
+## 一、项目结构
+miniprogram/
+├── app.js                    # 全局逻辑（激励广告检查）
+├── app.json                  # 页面配置
+├── app.wxss                  # 全局样式
+├── project.config.json       # 项目配置
+├── pages/
+│   ├── index/                # 首页（激励广告门槛）
+│   │   ├── index.js
+│   │   ├── index.wxml
+│   │   └── index.wxss
+│   ├── home/                 # 主页（题库列表+计数入口）
+│   │   ├── home.js
+│   │   ├── home.wxml
+│   │   └── home.wxss
+│   ├── upload/               # 题库上传页
+│   │   ├── upload.js
+│   │   ├── upload.wxml
+│   │   └── upload.wxss
+│   ├── practice/             # 刷题页
+│   │   ├── practice.js
+│   │   ├── practice.wxml
+│   │   └── practice.wxss
+│   ├── result/               # 答题结果页
+│   │   ├── result.js
+│   │   ├── result.wxml
+│   │   └── result.wxss
+│   ├── wrong/                # 错题本
+│   │   ├── wrong.js
+│   │   ├── wrong.wxml
+│   │   └── wrong.wxss
+│   ├── counter/              # 小票计数页
+│   │   ├── counter.js
+│   │   ├── counter.wxml
+│   │   └── counter.wxss
+│   └── all-exams/            # 所有题库页
+│       ├── all-exams.js
+│       ├── all-exams.wxml
+│       └── all-exams.wxss
+├── components/
+│   └── ad-banner/            # 广告轮播组件
+│       ├── ad-banner.js
+│       ├── ad-banner.wxml
+│       └── ad-banner.wxss
+└── utils/
+    └── util.js               # 工具函数
+cloudfunctions/
+├── recognize/                # OCR识别云函数
+│   ├── index.js
+│   └── package.json
+├── parseQuestion/            # 题库解析云函数
+│   ├── index.js
+│   └── package.json
+└── httpRequest/              # HTTP请求辅助
+    ├── index.js
+    └── package.json
+
+## 二、基础配置
+### 2.1 app.json
+{
+  "pages": [
+    "pages/index/index",
+    "pages/home/home",
+    "pages/upload/upload",
+    "pages/practice/practice",
+    "pages/result/result",
+    "pages/wrong/wrong",
+    "pages/counter/counter",
+    "pages/all-exams/all-exams"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#07C160",
+    "navigationBarTitleText": "智能刷题",
+    "navigationBarTextStyle": "white"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#07C160",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/home/home",
+        "text": "首页",
+        "iconPath": "images/home.png",
+        "selectedIconPath": "images/home-active.png"
+      },
+      {
+        "pagePath": "pages/all-exams/all-exams",
+        "text": "题库",
+        "iconPath": "images/exam.png",
+        "selectedIconPath": "images/exam-active.png"
+      },
+      {
+        "pagePath": "pages/wrong/wrong",
+        "text": "错题本",
+        "iconPath": "images/wrong.png",
+        "selectedIconPath": "images/wrong-active.png"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json"
+}
+
+### 2.2 app.js
+// app.js
+App({
+  globalData: {
+    userInfo: null,
+    hasWatchedAd: false,      // 是否已看激励广告
+    adWatchedTime: 0,         // 上次看广告时间
+    currentExam: null,        // 当前正在做的题库
+    practiceProgress: {},     // 各题库做题进度 { examId: { currentIndex, answers } }
+    identifyCount: 0          // 识别次数（用于广告触发）
+  },
+  onLaunch() {
+    // 初始化云开发
+    wx.cloud.init({
+      env: 'your-env-id',
+      traceUser: true
+    });
+    // 检查广告观看状态（30分钟内有效）
+    this.checkAdStatus();
+    // 加载保存的进度
+    this.loadProgress();
+  },
+  // 检查广告观看状态
+  checkAdStatus() {
+    const lastWatch = wx.getStorageSync('lastAdWatchTime') || 0;
+    const now = Date.now();
+    const expireTime = 30 * 60 * 1000; // 30分钟有效期
+    if (now - lastWatch < expireTime) {
+      this.globalData.hasWatchedAd = true;
+      this.globalData.adWatchedTime = lastWatch;
+    } else {
+      this.globalData.hasWatchedAd = false;
+    }
+  },
+  // 标记已看广告
+  markAdWatched() {
+    const now = Date.now();
+    this.globalData.hasWatchedAd = true;
+    this.globalData.adWatchedTime = now;
+    wx.setStorageSync('lastAdWatchTime', now);
+  },
+  // 加载做题进度
+  loadProgress() {
+    const progress = wx.getStorageSync('practiceProgress') || {};
+    this.globalData.practiceProgress = progress;
+  },
+  // 保存做题进度
+  saveProgress(examId, currentIndex, answers) {
+    this.globalData.practiceProgress[examId] = {
+      currentIndex,
+      answers,
+      lastTime: Date.now()
+    };
+    wx.setStorageSync('practiceProgress', this.globalData.practiceProgress);
+  },
+  // 清除做题进度
+  clearProgress(examId) {
+    delete this.globalData.practiceProgress[examId];
+    wx.setStorageSync('practiceProgress', this.globalData.practiceProgress);
+  }
+});
+
+### 2.3 app.wxss
+/* app.wxss */
+page {
+  background-color: #f5f6fa;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.container {
+  padding: 20rpx;
+}
+.btn-primary {
+  background: linear-gradient(135deg, #07C160, #05a050);
+  color: white;
+  border-radius: 16rpx;
+  font-size: 32rpx;
+  font-weight: 600;
+}
+.btn-primary:active {
+  opacity: 0.9;
+}
+.card {
+  background: white;
+  border-radius: 20rpx;
+  padding: 30rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 4rpx 20rpx rgba(0,0,0,0.06);
+}
+.ad-banner {
+  background: linear-gradient(135deg, #FFE4B5, #FFDAB9);
+  border-radius: 16rpx;
+  height: 120rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 20rpx;
+  font-size: 26rpx;
+  color: #8B4513;
+}
+.ad-banner.bottom-ad {
+  background: linear-gradient(135deg, #E3F2FD, #BBDEFB);
+  color: #1565C0;
+}
+
+## 三、激励广告门槛页
+### 3.1 pages/index/index.wxml
+<!-- 激励广告门槛页 -->
+<view class="ad-gate-page">
+  <view class="gate-content">
+    <view class="logo-area">
+      <text class="logo-icon">📚</text>
+      <text class="logo-title">智能刷题</text>
+      <text class="logo-subtitle">拍照上传题库 · 智能刷题练习</text>
+    </view>
+    <view class="feature-list">
+      <view class="feature-item">
+        <text class="feature-icon">📤</text>
+        <text class="feature-text">支持TXT/PDF/图片上传</text>
+      </view>
+      <view class="feature-item">
+        <text class="feature-icon">📝</text>
+        <text class="feature-text">智能解析答案</text>
+      </view>
+      <view class="feature-item">
+        <text class="feature-icon">📊</text>
+        <text class="feature-text">错题本自动记录</text>
+      </view>
+      <view class="feature-item">
+        <text class="feature-icon">🧾</text>
+        <text class="feature-text">小票计数功能</text>
+      </view>
+    </view>
+    <view class="gate-notice">
+      <text class="notice-text">观看15秒视频广告即可使用全部功能</text>
+      <text class="notice-sub">广告收益用于服务器维护</text>
+    </view>
+    <button class="watch-ad-btn" bindtap="watchRewardedAd">
+      <text class="btn-icon">▶️</text>
+      <text class="btn-text">观看广告开始使用</text>
+    </button>
+    <view class="gate-footer">
+      <text>每次进入需重新观看 · 30分钟内有效</text>
+    </view>
+  </view>
+  <!-- 底部广告位 -->
+  <view class="ad-banner bottom-ad">
+    <text>📢 底部广告位 - 有效曝光</text>
+  </view>
+</view>
+
+### 3.2 pages/index/index.wxss
+/* pages/index/index.wxss */
+.ad-gate-page {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f5f6fa 0%, #ffffff 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.gate-content {
+  flex: 1;
+  padding: 60rpx 40rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.logo-area {
+  text-align: center;
+  margin-bottom: 60rpx;
+}
+.logo-icon {
+  font-size: 120rpx;
+  display: block;
+  margin-bottom: 20rpx;
+}
+.logo-title {
+  font-size: 56rpx;
+  font-weight: 700;
+  color: #333;
+  display: block;
+}
+.logo-subtitle {
+  font-size: 28rpx;
+  color: #666;
+  margin-top: 16rpx;
+  display: block;
+}
+.feature-list {
+  width: 100%;
+  margin-bottom: 60rpx;
+}
+.feature-item {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 30rpx;
+  background: white;
+  border-radius: 16rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 4rpx 16rpx rgba(0,0,0,0.04);
+}
+.feature-icon {
+  font-size: 40rpx;
+  margin-right: 20rpx;
+}
+.feature-text {
+  font-size: 30rpx;
+  color: #333;
+}
+.gate-notice {
+  text-align: center;
+  margin-bottom: 40rpx;
+}
+.notice-text {
+  font-size: 32rpx;
+  color: #07C160;
+  font-weight: 600;
+  display: block;
+}
+.notice-sub {
+  font-size: 24rpx;
+  color: #999;
+  margin-top: 12rpx;
+  display: block;
+}
+.watch-ad-btn {
+  width: 80%;
+  height: 100rpx;
+  background: linear-gradient(135deg, #FF6B6B, #FA5151);
+  border-radius: 50rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  box-shadow: 0 8rpx 30rpx rgba(250,81,81,0.3);
+}
+.watch-ad-btn::after {
+  border: none;
+}
+.btn-icon {
+  font-size: 36rpx;
+  margin-right: 16rpx;
+}
+.btn-text {
+  font-size: 34rpx;
+  color: white;
+  font-weight: 600;
+}
+.gate-footer {
+  margin-top: 40rpx;
+  text-align: center;
+}
+.gate-footer text {
+  font-size: 24rpx;
+  color: #999;
+}
+
+### 3.3 pages/index/index.js
+// pages/index/index.js
+const app = getApp();
+Page({
+  data: {
+    loading: false
+  },
+  onLoad() {
+    // 检查是否已看广告
+    if (app.globalData.hasWatchedAd) {
+      wx.switchTab({ url: '/pages/home/home' });
+    }
+  },
+  onShow() {
+    // 每次显示都检查
+    if (app.globalData.hasWatchedAd) {
+      wx.switchTab({ url: '/pages/home/home' });
+    }
+  },
+  // 观看激励广告
+  watchRewardedAd() {
+    if (this.data.loading) return;
+    this.setData({ loading: true });
+    // 创建激励视频广告
+    const rewardedVideoAd = wx.createRewardedVideoAd({
+      adUnitId: 'adunit-xxx' // 替换为你的激励视频广告ID
+    });
+    rewardedVideoAd.onLoad(() => {
+      console.log('激励视频广告加载成功');
+    });
+    rewardedVideoAd.onError((err) => {
+      console.error('激励视频广告加载失败', err);
+      // 加载失败也放行（避免用户卡住）
+      this.enterApp();
+    });
+    rewardedVideoAd.onClose((res) => {
+      if (res && res.isEnded) {
+        // 完整观看
+        console.log('完整观看激励视频');
+        app.markAdWatched();
+        this.enterApp();
+      } else {
+        // 未完整观看
+        wx.showToast({
+          title: '请完整观看广告',
+          icon: 'none'
+        });
+        this.setData({ loading: false });
+      }
+    });
+    // 显示广告
+    rewardedVideoAd.show().catch(() => {
+      // 失败则加载后重试
+      rewardedVideoAd.load().then(() => rewardedVideoAd.show());
+    });
+  },
+  // 进入应用
+  enterApp() {
+    wx.switchTab({
+      url: '/pages/home/home',
+      success: () => {
+        this.setData({ loading: false });
+      }
+    });
+  }
+});
+
+## 四、主页（题库列表+计数入口）
+### 4.1 pages/home/home.wxml
+<!-- 主页 -->
+<view class="home-page">
+  <!-- 顶部广告 -->
+  <view class="ad-banner">
+    <text>🎯 顶部Banner广告 - 有效曝光</text>
+  </view>
+  <!-- 快捷入口 -->
+  <view class="quick-entry">
+    <view class="entry-item upload" bindtap="goUpload">
+      <text class="entry-icon">📤</text>
+      <text class="entry-title">上传题库</text>
+      <text class="entry-desc">支持TXT/PDF/图片</text>
+    </view>
+    <view class="entry-item counter" bindtap="goCounter">
+      <text class="entry-icon">🧾</text>
+      <text class="entry-title">小票计数</text>
+      <text class="entry-desc">拍照数行数</text>
+    </view>
+  </view>
+  <!-- 最近题库 -->
+  <view class="section-title">
+    <text>📚 最近题库</text>
+    <text class="more" bindtap="goAllExams">全部 ></text>
+  </view>
+  <view class="exam-list">
+    <block wx:if="{{recentExams.length > 0}}">
+      <view class="exam-card" wx:for="{{recentExams}}" wx:key="_id" bindtap="continuePractice" data-exam="{{item}}">
+        <view class="exam-info">
+          <text class="exam-name">{{item.name}}</text>
+          <text class="exam-count">共 {{item.questionCount}} 题</text>
+        </view>
+        <view class="exam-progress" wx:if="{{item.progress}}">
+          <text class="progress-text">已做 {{item.progress.currentIndex}}/{{item.questionCount}}</text>
+          <view class="progress-bar">
+            <view class="progress-fill" style="width: {{(item.progress.currentIndex / item.questionCount) * 100}}%"></view>
+          </view>
+        </view>
+        <view class="exam-status" wx:else>
+          <text class="status-new">未开始</text>
+        </view>
+        <text class="exam-arrow">></text>
+      </view>
+    </block>
+    <view class="empty-tip" wx:else>
+      <text>暂无题库，点击上方上传</text>
+    </view>
+  </view>
+  <!-- 统计卡片 -->
+  <view class="stats-card">
+    <view class="stat-item">
+      <text class="stat-num">{{totalExams}}</text>
+      <text class="stat-label">题库总数</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-num">{{totalQuestions}}</text>
+      <text class="stat-label">题目总数</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-num">{{totalWrong}}</text>
+      <text class="stat-label">错题数量</text>
+    </view>
+  </view>
+  <!-- 底部广告位 -->
+  <view class="ad-banner bottom-ad">
+    <text>📢 底部Banner广告 - 持续曝光</text>
+  </view>
+</view>
+
+### 4.2 pages/home/home.wxss
+/* pages/home/home.wxss */
+.home-page {
+  padding-bottom: 40rpx;
+}
+.quick-entry {
+  display: flex;
+  padding: 20rpx;
+  gap: 20rpx;
+}
+.entry-item {
+  flex: 1;
+  background: white;
+  border-radius: 20rpx;
+  padding: 30rpx;
+  text-align: center;
+  box-shadow: 0 4rpx 20rpx rgba(0,0,0,0.06);
+}
+.entry-item.upload {
+  background: linear-gradient(135deg, #E8F5E9, #C8E6C9);
+}
+.entry-item.counter {
+  background: linear-gradient(135deg, #FFF3E0, #FFE0B2);
+}
+.entry-icon {
+  font-size: 60rpx;
+  display: block;
+  margin-bottom: 16rpx;
+}
+.entry-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333;
+  display: block;
+}
+.entry-desc {
+  font-size: 24rpx;
+  color: #666;
+  margin-top: 8rpx;
+  display: block;
+}
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 30rpx 30rpx 20rpx;
+}
+.section-title text:first-child {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #333;
+}
+.section-title .more {
+  font-size: 26rpx;
+  color: #576B95;
+}
+.exam-list {
+  padding: 0 20rpx;
+}
+.exam-card {
+  background: white;
+  border-radius: 16rpx;
+  padding: 30rpx;
+  margin-bottom: 20rpx;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 4rpx 16rpx rgba(0,0,0,0.04);
+}
+.exam-info {
+  flex: 1;
+}
+.exam-name {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+  display: block;
+}
+.exam-count {
+  font-size: 24rpx;
+  color: #999;
+  margin-top: 8rpx;
+  display: block;
+}
+.exam-progress {
+  width: 200rpx;
+  margin-right: 20rpx;
+}
+.progress-text {
+  font-size: 22rpx;
+  color: #07C160;
+  display: block;
+  text-align: right;
+  margin-bottom: 8rpx;
+}
+.progress-bar {
+  height: 8rpx;
+  background: #eee;
+  border-radius: 4rpx;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: #07C160;
+  border-radius: 4rpx;
+  transition: width 0.3s;
+}
+.exam-status {
+  margin-right: 20rpx;
+}
+.status-new {
+  font-size: 24rpx;
+  color: #999;
+  background: #f5f5f5;
+  padding: 8rpx 20rpx;
+  border-radius: 20rpx;
+}
+.exam-arrow {
+  font-size: 32rpx;
+  color: #ccc;
+}
+.empty-tip {
+  text-align: center;
+  padding: 60rpx;
+  color: #999;
+  font-size: 28rpx;
+}
+.stats-card {
+  display: flex;
+  justify-content: space-around;
+  background: white;
+  margin: 20rpx;
+  border-radius: 20rpx;
+  padding: 30rpx;
+  box-shadow: 0 4rpx 20rpx rgba(0,0,0,0.06);
+}
+.stat-item {
+  text-align: center;
+}
+.stat-num {
+  font-size: 48rpx;
+  font-weight: 700;
+  color: #07C160;
+  display: block;
+}
+.stat-label {
+  font-size: 24rpx;
+  color: #666;
+  margin-top: 8rpx;
+  display: block;
+}
+
+### 4.3 pages/home/home.js
+// pages/home/home.js
+const app = getApp();
+const db = wx.cloud.database();
+Page({
+  data: {
+    recentExams: [],
+    totalExams: 0,
+    totalQuestions: 0,
+    totalWrong: 0
+  },
+  onLoad() {
+    this.loadData();
+  },
+  onShow() {
+    this.loadData();
+    // 检查广告状态
+    if (!app.globalData.hasWatchedAd) {
+      wx.reLaunch({ url: '/pages/index/index' });
+    }
+  },
+  // 加载数据
+  async loadData() {
+    try {
+      // 加载最近题库（最近5个）
+      const examRes = await db.collection('exams')
+        .orderBy('createTime', 'desc')
+        .limit(5)
+        .get();
+      const exams = examRes.data;
+      const progress = app.globalData.practiceProgress;
+      // 合并进度信息
+      exams.forEach(exam => {
+        if (progress[exam._id]) {
+          exam.progress = progress[exam._id];
+        }
+      });
+      this.setData({ recentExams: exams });
+      // 加载统计
+      const totalRes = await db.collection('exams').count();
+      this.setData({ totalExams: totalRes.total });
+      // 统计题目总数
+      let totalQ = 0;
+      exams.forEach(e => totalQ += e.questionCount || 0);
+      this.setData({ totalQuestions: totalQ });
+      // 统计错题数
+      const wrongRes = await db.collection('wrong_questions').count();
+      this.setData({ totalWrong: wrongRes.total });
+    } catch (err) {
+      console.error('加载数据失败', err);
+    }
+  },
+  // 去上传页
+  goUpload() {
+    wx.navigateTo({ url: '/pages/upload/upload' });
+  },
+  // 去计数页
+  goCounter() {
+    wx.navigateTo({ url: '/pages/counter/counter' });
+  },
+  // 继续做题
+  continuePractice(e) {
+    const exam = e.currentTarget.dataset.exam;
+    app.globalData.currentExam = exam;
+    wx.navigateTo({
+      url: `/pages/practice/practice?examId=${exam._id}&name=${exam.name}`
+    });
+  },
+  // 去全部题库
+  goAllExams() {
+    wx.switchTab({ url: '/pages/all-exams/all-exams' });
+  }
+});
+
+## 五、题库上传页
+### 5.1 pages/upload/upload.wxml
+<!-- 题库上传页 -->
+<view class="upload-page">
+  <view class="upload-card">
+    <view class="upload-title">📤 上传题库</view>
+    <view class="upload-type">
+      <view class="type-item {{uploadType === 'file' ? 'active' : ''}}" bindtap="switchType" data-type="file">
+        <text>📄 文件</text>
+      </view>
+      <view class="type-item {{uploadType === 'image' ? 'active' : ''}}" bindtap="switchType" data-type="image">
+        <text>📷 图片</text>
+      </view>
+    </view>
+    <!-- 文件上传 -->
+    <block wx:if="{{uploadType === 'file'}}">
+      <view class="upload-area" bindtap="chooseFile">
+        <text class="upload-icon">📁</text>
+        <text class="upload-text">点击选择TXT或PDF文件</text>
+        <text class="upload-hint">支持 .txt .pdf 格式</text>
+      </view>
+    </block>
+    <!-- 图片上传 -->
+    <block wx:if="{{uploadType === 'image'}}">
+      <view class="upload-area" bindtap="chooseImage">
+        <text class="upload-icon">📷</text>
+        <text class="upload-text">点击拍照或从相册选择</text>
+        <text class="upload-hint">支持 JPG PNG 格式</text>
+      </view>
+    </block>
+    <!-- 已选文件 -->
+    <view class="selected-file" wx:if="{{selectedFile}}">
+      <text class="file-icon">📄</text>
+      <text class="file-name">{{selectedFile.name}}</text>
+      <text class="file-size">{{selectedFile.size}}</text>
+    </view>
+    <!-- 题库名称 -->
+    <view class="input-group">
+      <text class="input-label">题库名称</text>
+      <input class="input-field" placeholder="请输入题库名称" value="{{examName}}" bindinput="onNameInput" />
+    </view>
+    <!-- 题目数量 -->
+    <view class="input-group">
+      <text class="input-label">题目数量（选填，用于校验）</text>
+      <input class="input-field" type="number" placeholder="预计多少道题" value="{{questionCount}}" bindinput="onCountInput" />
+    </view>
+    <!-- 上传按钮 -->
+    <button class="upload-btn {{canUpload ? '' : 'disabled'}}" bindtap="startUpload" disabled="{{!canUpload || uploading}}">
+      {{uploading ? '上传解析中...' : '开始上传解析'}}
+    </button>
+    <!-- 格式说明 -->
+    <view class="format-tips">
+      <view class="tips-title">📋 格式说明</view>
+      <text class="tips-item">1. 每道题占一行或多行</text>
+      <text class="tips-item">2. 答案紧跟题目，格式如：答案：B 或 【答案】C</text>
+      <text class="tips-item">3. 支持单选、多选、判断题</text>
+      <text class="tips-item">4. 图片需清晰，文字可辨认</text>
+    </view>
+  </view>
+  <!-- 底部广告 -->
+  <view class="ad-banner bottom-ad">
+    <text>📢 底部广告位</text>
+  </view>
+</view>
+
+### 5.2 pages/upload/upload.js
+// pages/upload/upload.js
+const app = getApp();
+Page({
+  data: {
+    uploadType: 'file',  // file 或 image
+    selectedFile: null,
+    examName: '',
+    questionCount: '',
+    uploading: false,
+    canUpload: false
+  },
+  onLoad() {
+    // 检查广告
+    if (!app.globalData.hasWatchedAd) {
+      wx.reLaunch({ url: '/pages/index/index' });
+    }
+  },
+  // 切换上传类型
+  switchType(e) {
+    this.setData({
+      uploadType: e.currentTarget.dataset.type,
+      selectedFile: null
+    });
+    this.checkCanUpload();
+  },
+  // 选择文件
+  chooseFile() {
+    wx.chooseMessageFile({
+      count: 1,
+      type: 'file',
+      extension: ['txt', 'pdf'],
+      success: (res) => {
+        const file = res.tempFiles[0];
+        this.setData({
+          selectedFile: {
+            name: file.name,
+            size: this.formatSize(file.size),
+            path: file.path,
+            type: file.name.endsWith('.pdf') ? 'pdf' : 'txt'
+          }
+        });
+        this.checkCanUpload();
+      }
+    });
+  },
+  // 选择图片
+  chooseImage() {
+    wx.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['album', 'camera'],
+      success: (res) => {
+        const file = res.tempFiles[0];
+        this.setData({
+          selectedFile: {
+            name: '图片_' + Date.now() + '.jpg',
+            size: this.formatSize(file.size),
+            path: file.tempFilePath,
+            type: 'image'
+          }
+        });
+        this.checkCanUpload();
+      }
+    });
+  },
+  // 格式化文件大小
+  formatSize(bytes) {
+    if (bytes < 1024) return bytes + 'B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
+    return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+  },
+  // 输入题库名称
+  onNameInput(e) {
+    this.setData({ examName: e.detail.value });
+    this.checkCanUpload();
+  },
+  // 输入题目数量
+  onCountInput(e) {
+    this.setData({ questionCount: e.detail.value });
+  },
+  // 检查是否可以上传
+  checkCanUpload() {
+    const { selectedFile, examName } = this.data;
+    this.setData({
+      canUpload: selectedFile && examName.trim()
+    });
+  },
+  // 开始上传
+  async startUpload() {
+    if (!this.data.canUpload || this.data.uploading) return;
+    this.setData({ uploading: true });
+    try {
+      // 1. 上传文件到云存储
+      const cloudPath = `exams/${Date.now()}_${this.data.selectedFile.name}`;
+      const uploadRes = await wx.cloud.uploadFile({
+        cloudPath,
+        filePath: this.data.selectedFile.path
+      });
+      // 2. 调用云函数解析
+      const parseRes = await wx.cloud.callFunction({
+        name: 'parseQuestion',
+        data: {
+          fileID: uploadRes.fileID,
+          fileType: this.data.selectedFile.type,
+          examName: this.data.examName,
+          expectCount: parseInt(this.data.questionCount) || 0
+        }
+      });
+      if (parseRes.result.success) {
+        wx.showToast({
+          title: `解析成功，共${parseRes.result.count}题`,
+          icon: 'success'
+        });
+        setTimeout(() => {
+          wx.navigateBack();
+        }, 1500);
+      } else {
+        throw new Error(parseRes.result.error || '解析失败');
+      }
+    } catch (err) {
+      console.error('上传失败', err);
+      wx.showToast({
+        title: err.message || '上传失败',
+        icon: 'none'
+      });
+    } finally {
+      this.setData({ uploading: false });
+    }
+  }
+});
+
+## 六、题库解析云函数
+### 6.1 cloudfunctions/parseQuestion/package.json
+{
+  "name": "parseQuestion",
+  "version": "1.0.0",
+  "description": "题库解析云函数",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}
+
+### 6.2 cloudfunctions/parseQuestion/index.js
+// cloudfunctions/parseQuestion/index.js
+/**
+ * 题库解析云函数
+ * 支持：TXT文件、PDF文件、图片（OCR）
+ * 解析规则：每道题包含题目+答案，答案格式支持多种
+ */
+const cloud = require('wx-server-sdk');
+cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
+const db = cloud.database();
+const https = require('https');
+const http = require('http');
+// 飞桨OCR配置
+const PADDLE_OCR = {
+  apiUrl: 'https://v4k5c0k7c1u6abn3.aistudio-app.com/ocr',
+  token: '0d15ff6e9e8667fb8c56b45e825dabb9bb0d117a'
+};
+exports.main = async (event, context) => {
+  const { fileID, fileType, examName, expectCount } = event;
+  try {
+    let text = '';
+    // 1. 根据文件类型获取文本内容
+    if (fileType === 'image') {
+      // 图片：调用OCR
+      text = await ocrImage(fileID);
+    } else {
+      // TXT/PDF：下载后解析
+      text = await downloadAndParse(fileID, fileType);
+    }
+    // 2. 解析题目
+    const questions = parseQuestions(text);
+    // 3. 保存到数据库
+    const examData = {
+      name: examName,
+      questionCount: questions.length,
+      questions: questions,
+      createTime: db.serverDate(),
+      updateTime: db.serverDate()
+    };
+    const res = await db.collection('exams').add({ data: examData });
+    return {
+      success: true,
+      examId: res._id,
+      count: questions.length
+    };
+  } catch (error) {
+    console.error('解析失败', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+// OCR识别图片
+async function ocrImage(fileID) {
+  // 下载图片
+  const fileRes = await cloud.downloadFile({ fileID });
+  const imageBuffer = fileRes.fileContent;
+  // 转base64
+  const fileData = imageBuffer.toString('base64');
+  // 调用飞桨OCR
+  const response = await httpRequest(PADDLE_OCR.apiUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `token ${PADDLE_OCR.token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      file: fileData,
+      fileType: 1
+    })
+  });
+  if (!response || !response.result || !response.result.ocrResults) {
+    throw new Error('OCR识别失败');
+  }
+  // 合并所有识别结果
+  const lines = response.result.ocrResults.map(r => r.prunedResult);
+  return lines.join('\n');
+}
+// 下载并解析文件
+async function downloadAndParse(fileID, fileType) {
+  const fileRes = await cloud.downloadFile({ fileID });
+  const buffer = fileRes.fileContent;
+  if (fileType === 'txt') {
+    // TXT直接转字符串
+    return buffer.toString('utf-8');
+  } else if (fileType === 'pdf') {
+    // PDF需要额外处理，这里简化处理
+    // 实际项目中可以使用pdf-parse库
+    // 由于云函数限制，建议PDF先转为图片再OCR
+    throw new Error('PDF暂不支持，请先转为图片或TXT');
+  }
+  return '';
+}
+// 解析题目
+function parseQuestions(text) {
+  const questions = [];
+  const lines = text.split('\n').filter(l => l.trim());
+  // 答案匹配模式
+  const answerPatterns = [
+    /答案[:：]\s*([A-D]+)/i,           // 答案：B 或 答案：AB
+    /【答案】\s*([A-D]+)/i,            // 【答案】C
+    /\(([A-D])\)/,                      // (B)
+    /^([A-D])[\.\、]/,                  // B.
+    /正确答案[:：]\s*([A-D]+)/i,        // 正确答案：A
+    /答案为[:：]\s*([A-D]+)/i           // 答案为：D
+  ];
+  let currentQuestion = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    // 跳过空行和过短行
+    if (line.length < 3) continue;
+    // 检查是否是答案行
+    let answer = null;
+    for (const pattern of answerPatterns) {
+      const match = line.match(pattern);
+      if (match) {
+        answer = match[1].toUpperCase();
+        break;
+      }
+    }
+    if (answer && currentQuestion) {
+      // 找到答案，保存当前题目
+      currentQuestion.answer = answer;
+      currentQuestion.answerLine = line;
+      questions.push(currentQuestion);
+      currentQuestion = null;
+    } else if (!answer) {
+      // 不是答案行，可能是新题目
+      // 检查是否包含题号或问号
+      const isQuestion = /^\d+[\.\、]/.test(line) || line.includes('?') || line.includes('？');
+      if (isQuestion || !currentQuestion) {
+        // 如果有未完成的题目，先保存（无答案）
+        if (currentQuestion) {
+          currentQuestion.answer = '';
+          questions.push(currentQuestion);
+        }
+        // 开始新题目
+        currentQuestion = {
+          id: questions.length + 1,
+          content: line,
+          options: [],
+          answer: ''
+        };
+      } else {
+        // 继续当前题目（可能是选项）
+        currentQuestion.content += '\n' + line;
+        // 尝试提取选项
+        const optionMatch = line.match(/^([A-D])[\.\、\s]+(.+)/);
+        if (optionMatch) {
+          currentQuestion.options.push({
+            key: optionMatch[1],
+            text: optionMatch[2].trim()
+          });
+        }
+      }
+    }
+  }
+  // 处理最后一个题目
+  if (currentQuestion) {
+    currentQuestion.answer = currentQuestion.answer || '';
+    questions.push(currentQuestion);
+  }
+  return questions;
+}
+// HTTP请求工具
+function httpRequest(url, options) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const client = urlObj.protocol === 'https:' ? https : http;
+    const req = client.request({
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: options.method || 'POST',
+      headers: options.headers || {}
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+## 七、刷题页
+### 7.1 pages/practice/practice.wxml
+<!-- 刷题页 -->
+<view class="practice-page">
+  <!-- 顶部进度 -->
+  <view class="progress-header">
+    <text class="progress-text">{{currentIndex + 1}} / {{totalCount}}</text>
+    <view class="progress-bar">
+      <view class="progress-fill" style="width: {{((currentIndex + 1) / totalCount) * 100}}%"></view>
+    </view>
+    <text class="timer" wx:if="{{showTimer}}">{{formatTime}}</text>
+  </view>
+  <!-- 题目区域 -->
+  <view class="question-card">
+    <view class="question-type">{{currentQuestion.type || '单选题'}}</view>
+    <view class="question-content">{{currentQuestion.content}}</view>
+    <!-- 选项 -->
+    <view class="options-list">
+      <view class="option-item {{selectedAnswer === item.key ? 'selected' : ''}} {{showResult && currentQuestion.answer === item.key ? 'correct' : ''}} {{showResult && selectedAnswer === item.key && selectedAnswer !== currentQuestion.answer ? 'wrong' : ''}}"
+            wx:for="{{currentQuestion.options}}" wx:key="key"
+            bindtap="selectOption" data-key="{{item.key}}">
+        <text class="option-key">{{item.key}}</text>
+        <text class="option-text">{{item.text}}</text>
+      </view>
+    </view>
+    <!-- 答案解析 -->
+    <view class="answer-section" wx:if="{{showResult}}">
+      <view class="answer-row">
+        <text class="answer-label">正确答案：</text>
+        <text class="answer-value correct">{{currentQuestion.answer}}</text>
+      </view>
+      <view class="answer-row" wx:if="{{selectedAnswer !== currentQuestion.answer}}">
+        <text class="answer-label">你的答案：</text>
+        <text class="answer-value wrong">{{selectedAnswer || '未作答'}}</text>
+      </view>
+    </view>
+  </view>
+  <!-- 底部操作 -->
+  <view class="action-bar">
+    <button class="btn-prev {{currentIndex === 0 ? 'disabled' : ''}}" bindtap="prevQuestion" disabled="{{currentIndex === 0}}">上一题</button>
+    <button class="btn-submit {{selectedAnswer && !showResult ? '' : 'disabled'}}" bindtap="submitAnswer" disabled="{{!selectedAnswer || showResult}}">提交答案</button>
+    <button class="btn-next {{showResult ? '' : 'disabled'}}" bindtap="nextQuestion" disabled="{{!showResult}}">
+      {{currentIndex === totalCount - 1 ? '查看结果' : '下一题'}}
+    </button>
+  </view>
+  <!-- 底部广告 -->
+  <view class="ad-banner bottom-ad">
+    <text>📢 底部广告位 - 持续曝光</text>
+  </view>
+</view>
+
+### 7.2 pages/practice/practice.js
+// pages/practice/practice.js
+const app = getApp();
+const db = wx.cloud.database();
+Page({
+  data: {
+    examId: '',
+    examName: '',
+    questions: [],
+    currentIndex: 0,
+    currentQuestion: {},
+    totalCount: 0,
+    selectedAnswer: '',
+    showResult: false,
+    answers: [],  // 所有答案记录
+    showTimer: false,
+    seconds: 0
+  },
+  timer: null,
+  onLoad(options) {
+    // 检查广告
+    if (!app.globalData.hasWatchedAd) {
+      wx.reLaunch({ url: '/pages/index/index' });
+      return;
+    }
+    this.setData({
+      examId: options.examId,
+      examName: options.name
+    });
+    this.loadQuestions();
+    this.startTimer();
+  },
+  onUnload() {
+    // 保存进度
+    this.saveProgress();
+    this.stopTimer();
+  },
+  // 加载题目
+  async loadQuestions() {
+    try {
+      // 检查是否有进度
+      const progress = app.globalData.practiceProgress[this.data.examId];
+      const res = await db.collection('exams').doc(this.data.examId).get();
+      const questions = res.data.questions;
+      this.setData({
+        questions: questions,
+        totalCount: questions.length,
+        currentIndex: progress ? progress.currentIndex : 0,
+        answers: progress ? progress.answers : new Array(questions.length).fill(''),
+        currentQuestion: questions[progress ? progress.currentIndex : 0]
+      });
+    } catch (err) {
+      console.error('加载题目失败', err);
+      wx.showToast({ title: '加载失败', icon: 'none' });
+    }
+  },
+  // 选择选项
+  selectOption(e) {
+    if (this.data.showResult) return;
+    const key = e.currentTarget.dataset.key;
+    this.setData({ selectedAnswer: key });
+  },
+  // 提交答案
+  submitAnswer() {
+    if (!this.data.selectedAnswer || this.data.showResult) return;
+    const isCorrect = this.data.selectedAnswer === this.data.currentQuestion.answer;
+    // 记录答案
+    const answers = this.data.answers;
+    answers[this.data.currentIndex] = {
+      selected: this.data.selectedAnswer,
+      correct: this.data.currentQuestion.answer,
+      isCorrect: isCorrect
+    };
+    this.setData({
+      showResult: true,
+      answers: answers
+    });
+    // 如果答错，加入错题本
+    if (!isCorrect) {
+      this.addToWrongBook();
+    }
+    // 保存进度
+    this.saveProgress();
+  },
+  // 下一题
+  nextQuestion() {
+    if (this.data.currentIndex === this.data.totalCount - 1) {
+      // 最后一题，查看结果
+      this.showFinalResult();
+      return;
+    }
+    const nextIndex = this.data.currentIndex + 1;
+    this.setData({
+      currentIndex: nextIndex,
+      currentQuestion: this.data.questions[nextIndex],
+      selectedAnswer: this.data.answers[nextIndex] ? this.data.answers[nextIndex].selected : '',
+      showResult: !!this.data.answers[nextIndex]
+    });
+    this.saveProgress();
+  },
+  // 上一题
+  prevQuestion() {
+    if (this.data.currentIndex === 0) return;
+    const prevIndex = this.data.currentIndex - 1;
+    this.setData({
+      currentIndex: prevIndex,
+      currentQuestion: this.data.questions[prevIndex],
+      selectedAnswer: this.data.answers[prevIndex] ? this.data.answers[prevIndex].selected : '',
+      showResult: !!this.data.answers[prevIndex]
+    });
+    this.saveProgress();
+  },
+  // 保存进度
+  saveProgress() {
+    app.saveProgress(
+      this.data.examId,
+      this.data.currentIndex,
+      this.data.answers
+    );
+  },
+  // 加入错题本
+  async addToWrongBook() {
+    try {
+      await db.collection('wrong_questions').add({
+        data: {
+          examId: this.data.examId,
+          examName: this.data.examName,
+          question: this.data.currentQuestion,
+          wrongAnswer: this.data.selectedAnswer,
+          createTime: db.serverDate()
+        }
+      });
+    } catch (err) {
+      console.error('加入错题本失败', err);
+    }
+  },
+  // 显示最终结果
+  showFinalResult() {
+    const correctCount = this.data.answers.filter(a => a && a.isCorrect).length;
+    const wrongCount = this.data.totalCount - correctCount;
+    // 清除进度（已完成）
+    app.clearProgress(this.data.examId);
+    wx.navigateTo({
+      url: `/pages/result/result?correct=${correctCount}&wrong=${wrongCount}&total=${this.data.totalCount}&examId=${this.data.examId}`
+    });
+  },
+  // 计时器
+  startTimer() {
+    this.timer = setInterval(() => {
+      this.setData({ seconds: this.data.seconds + 1 });
+    }, 1000);
+  },
+  stopTimer() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  },
+  // 格式化时间
+  formatTime() {
+    const m = Math.floor(this.data.seconds / 60);
+    const s = this.data.seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
+});
+
+## 八、小票计数页
+### 8.1 pages/counter/counter.wxml
+<!-- 小票计数页 -->
+<view class="counter-page">
+  <!-- 顶部广告 -->
+  <view class="ad-banner">
+    <text>🎯 顶部Banner广告</text>
+  </view>
+  <!-- 上传区域 -->
+  <view class="upload-section">
+    <view class="section-title">🧾 小票/清单计数</view>
+    <view class="upload-desc">拍照或上传小票，自动统计有多少行项目</view>
+    <view class="upload-buttons">
+      <view class="upload-btn camera" bindtap="takePhoto">
+        <text class="btn-icon">📷</text>
+        <text class="btn-text">拍照</text>
+      </view>
+      <view class="upload-btn album" bindtap="chooseImage">
+        <text class="btn-icon">🖼️</text>
+        <text class="btn-text">相册</text>
+      </view>
+    </view>
+  </view>
+  <!-- 预览图 -->
+  <view class="preview-section" wx:if="{{previewImage}}">
+    <image class="preview-image" src="{{previewImage}}" mode="aspectFit" />
+    <view class="reupload-btn" bindtap="clearImage">重新选择</view>
+  </view>
+  <!-- 识别按钮 -->
+  <button class="recognize-btn {{previewImage && !recognizing ? '' : 'disabled'}}" 
+          bindtap="startRecognize" 
+          disabled="{{!previewImage || recognizing}}">
+    {{recognizing ? '识别中...' : '开始识别'}}
+  </button>
+  <!-- 识别结果 -->
+  <view class="result-section" wx:if="{{showResult}}">
+    <view class="result-count">
+      <text class="count-number">{{lineCount}}</text>
+      <text class="count-unit">行项目</text>
+    </view>
+    <view class="result-detail" wx:if="{{lineItems.length > 0}}">
+      <view class="detail-title">识别到的项目</view>
+      <view class="detail-list">
+        <view class="detail-item" wx:for="{{lineItems}}" wx:key="index">
+          <text class="item-index">{{index + 1}}</text>
+          <text class="item-name">{{item.name}}</text>
+          <text class="item-price">{{item.price}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+  <!-- 历史记录 -->
+  <view class="history-section" wx:if="{{history.length > 0}}">
+    <view class="history-title">最近识别记录</view>
+    <view class="history-item" wx:for="{{history}}" wx:key="time">
+      <text class="history-count">{{item.count}}行</text>
+      <text class="history-time">{{item.time}}</text>
+    </view>
+  </view>
+  <!-- 底部广告 -->
+  <view class="ad-banner bottom-ad">
+    <text>📢 底部广告位 - 持续曝光</text>
+  </view>
+</view>
+
+### 8.2 pages/counter/counter.js
+// pages/counter/counter.js
+const app = getApp();
+Page({
+  data: {
+    previewImage: '',
+    fileID: '',
+    recognizing: false,
+    showResult: false,
+    lineCount: 0,
+    lineItems: [],
+    history: []
+  },
+  onLoad() {
+    // 检查广告
+    if (!app.globalData.hasWatchedAd) {
+      wx.reLaunch({ url: '/pages/index/index' });
+      return;
+    }
+    this.loadHistory();
+  },
+  // 拍照
+  takePhoto() {
+    wx.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['camera'],
+      success: (res) => {
+        this.setData({ previewImage: res.tempFiles[0].tempFilePath });
+      }
+    });
+  },
+  // 选择图片
+  chooseImage() {
+    wx.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['album'],
+      success: (res) => {
+        this.setData({ previewImage: res.tempFiles[0].tempFilePath });
+      }
+    });
+  },
+  // 清除图片
+  clearImage() {
+    this.setData({
+      previewImage: '',
+      showResult: false,
+      lineCount: 0,
+      lineItems: []
+    });
+  },
+  // 开始识别
+  async startRecognize() {
+    if (!this.data.previewImage || this.data.recognizing) return;
+    this.setData({ recognizing: true });
+    try {
+      // 1. 上传图片
+      const uploadRes = await wx.cloud.uploadFile({
+        cloudPath: `counter/${Date.now()}.jpg`,
+        filePath: this.data.previewImage
+      });
+      // 2. 调用识别云函数
+      const recognizeRes = await wx.cloud.callFunction({
+        name: 'recognize',
+        data: { fileID: uploadRes.fileID }
+      });
+      if (recognizeRes.result.success) {
+        const data = recognizeRes.result.data;
+        this.setData({
+          showResult: true,
+          lineCount: data.count,
+          lineItems: data.items
+        });
+        // 保存历史
+        this.saveHistory(data.count);
+        // 触发激励视频（每5次）
+        app.globalData.identifyCount++;
+        if (app.globalData.identifyCount % 5 === 0) {
+          this.showRewardedAd();
+        }
+      } else {
+        throw new Error(recognizeRes.result.error);
+      }
+    } catch (err) {
+      console.error('识别失败', err);
+      wx.showToast({ title: '识别失败', icon: 'none' });
+    } finally {
+      this.setData({ recognizing: false });
+    }
+  },
+  // 保存历史
+  saveHistory(count) {
+    const history = wx.getStorageSync('counterHistory') || [];
+    history.unshift({
+      count: count,
+      time: new Date().toLocaleString()
+    });
+    // 只保留最近10条
+    if (history.length > 10) history.pop();
+    wx.setStorageSync('counterHistory', history);
+    this.setData({ history: history });
+  },
+  // 加载历史
+  loadHistory() {
+    const history = wx.getStorageSync('counterHistory') || [];
+    this.setData({ history: history });
+  },
+  // 显示激励广告
+  showRewardedAd() {
+    const rewardedVideoAd = wx.createRewardedVideoAd({
+      adUnitId: 'adunit-xxx'
+    });
+    rewardedVideoAd.show().catch(() => {
+      rewardedVideoAd.load().then(() => rewardedVideoAd.show());
+    });
+  }
+});
+
+## 九、OCR识别云函数（小票计数用）
+### 9.1 cloudfunctions/recognize/index.js
+// cloudfunctions/recognize/index.js
+/**
+ * OCR识别 + 行计数 云函数（小票/清单计数专用）
+ */
+const cloud = require('wx-server-sdk');
+cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
+const https = require('https');
+const http = require('http');
+// 飞桨OCR配置
+const PADDLE_OCR = {
+  apiUrl: 'https://v4k5c0k7c1u6abn3.aistudio-app.com/ocr',
+  token: '0d15ff6e9e8667fb8c56b45e825dabb9bb0d117a'
+};
+exports.main = async (event, context) => {
+  const { fileID } = event;
+  try {
+    // 1. 下载图片
+    const fileRes = await cloud.downloadFile({ fileID });
+    const imageBuffer = fileRes.fileContent;
+    // 2. OCR识别
+    const lines = await recognizeImage(imageBuffer);
+    // 3. 行计数
+    const result = countValidLines(lines);
+    return {
+      success: true,
+      data: result
+    };
+  } catch (error) {
+    console.error('[识别失败]', error);
+    return {
+      success: false,
+      error: error.message || '识别失败'
+    };
+  }
+};
+// OCR识别
+async function recognizeImage(imageBuffer) {
+  const fileData = imageBuffer.toString('base64');
+  const response = await httpRequest(PADDLE_OCR.apiUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `token ${PADDLE_OCR.token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      file: fileData,
+      fileType: 1
+    })
+  });
+  if (!response || !response.result || !response.result.ocrResults) {
+    throw new Error('OCR识别失败');
+  }
+  const lines = [];
+  for (const item of response.result.ocrResults) {
+    const text = item.prunedResult;
+    if (text && text.trim()) {
+      lines.push({ text: text.trim() });
+    }
+  }
+  return lines;
+}
+// 行计数核心逻辑
+function countValidLines(lines) {
+  if (!lines || lines.length === 0) {
+    return { count: 0, items: [] };
+  }
+  // 排除关键词
+  const excludeKeywords = [
+    '合计', '总计', '总金额', '合计金额', '小计',
+    '收费项目', '项目名称', '数量', '金额', '单价',
+    '执行科室', '医保类型', '自费', '统筹支付',
+    '个人账户', '个人支付', '其他支付', '医保账户',
+    '支付方式', '费用明细', '药品清单',
+    '西药费', '中成药费', '中草药费',
+    '项目', '规格', '备注'
+  ];
+  const validItems = [];
+  for (const line of lines) {
+    const text = line.text.trim();
+    // 跳过空行
+    if (!text || text.length < 3) continue;
+    // 跳过排除关键词
+    let isExcluded = false;
+    for (const keyword of excludeKeywords) {
+      if (text.includes(keyword)) {
+        isExcluded = true;
+        break;
+      }
+    }
+    if (isExcluded) continue;
+    // 核心判断：有项目名 + 有金额
+    const priceRegex = /[¥￥]?\d[\d,]*\.\d{1,2}/;
+    const hasPrice = priceRegex.test(text);
+    const textWithoutPrice = text.replace(/[¥￥]?\d[\d,]*\.\d{1,2}/g, '').trim();
+    const hasItemName = textWithoutPrice.length >= 2;
+    if (hasItemName && hasPrice) {
+      const priceMatch = text.match(/[¥￥]?\d[\d,]*\.\d{1,2}/);
+      const price = priceMatch ? priceMatch[0] : '';
+      const name = textWithoutPrice.replace(/[\s\d.,，、:：]/g, '').trim();
+      if (name && !/^\d+$/.test(name)) {
+        validItems.push({
+          name: name,
+          price: price,
+          originalText: text
+        });
+      }
+    }
+  }
+  return {
+    count: validItems.length,
+    items: validItems
+  };
+}
+// HTTP请求工具
+function httpRequest(url, options) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const client = urlObj.protocol === 'https:' ? https : http;
+    const req = client.request({
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: options.method || 'POST',
+      headers: options.headers || {}
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+## 十、数据库设计
+### 10.1 集合结构
+// exams - 题库集合
+{
+  "_id": "xxx",
+  "name": "医学考试题库",
+  "questionCount": 100,
+  "questions": [
+    {
+      "id": 1,
+      "content": "1+1=?\nA. 1\nB. 2\nC. 3",
+      "options": [
+        { "key": "A", "text": "1" },
+        { "key": "B", "text": "2" },
+        { "key": "C", "text": "3" }
+      ],
+      "answer": "B",
+      "type": "单选题"
+    }
+  ],
+  "createTime": ISODate(),
+  "updateTime": ISODate()
+}
+// wrong_questions - 错题本集合
+{
+  "_id": "xxx",
+  "examId": "xxx",
+  "examName": "医学考试题库",
+  "question": { /* 题目完整数据 */ },
+  "wrongAnswer": "A",
+  "createTime": ISODate(),
+  "_openid": "用户openid"
+}
+
+### 10.2 权限规则
+{
+  "exams": {
+    "read": true,
+    "write": false
+  },
+  "wrong_questions": {
+    "read": "doc._openid == auth.openid",
+    "write": "doc._openid == auth.openid"
+  }
+}
+
+## 十一、部署步骤
+1. 创建小程序项目
+   微信开发者工具 -> 新建项目 -> 填入AppID -> 开通云开发
+2. 替换广告单元ID
+   - pages/index/index.js (激励视频)
+   - pages/counter/counter.js (激励视频)
+   - 各页面的 ad-banner 组件
+   申请路径：小程序后台 -> 流量主 -> 广告管理
+3. 部署云函数
+   - 右键 cloudfunctions/parseQuestion -> 上传并部署
+   - 右键 cloudfunctions/recognize -> 上传并部署
+4. 创建数据库集合
+   - exams (题库)
+   - wrong_questions (错题本)
+   设置权限规则
+5. 测试
+   - 编译运行
+   - 观看激励广告进入
+   - 上传题库测试
+   - 刷题测试
+   - 小票计数测试
+6. 上线
+   - 上传代码
+   - 提交审核
+   - 发布
+
+## 十二、核心功能总结
+功能：激励广告门槛、题库上传、刷题、错题本、断点续做、小票OCR计数、广告曝光
+架构：纯微信云开发，无服务器、无后端，直接上线
