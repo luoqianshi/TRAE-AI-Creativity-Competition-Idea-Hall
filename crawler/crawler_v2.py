@@ -616,7 +616,7 @@ class DemoHallCrawler:
         return 0
 
     def render(self):
-        """Render the static HTML page."""
+        """Render the static HTML page and generate frontend data file."""
         env = Environment(loader=FileSystemLoader("."))
         template = env.get_template(self.config["template_file"])
 
@@ -633,8 +633,8 @@ class DemoHallCrawler:
         for tag_name in self.config["track_tags"].values():
             stats[tag_name] = sum(1 for d in demos if tag_name in d.get("tags", []))
 
+        # Render skeleton HTML (no demos data)
         html = template.render(
-            demos=demos,
             stats=stats,
             last_updated=self.data_mgr.data.get("last_updated", ""),
             track_tags=self.config["track_tags"]
@@ -643,7 +643,32 @@ class DemoHallCrawler:
         with open(self.config["output_file"], "w", encoding="utf-8") as f:
             f.write(html)
 
+        # Generate frontend data file (minified JS with only needed fields)
+        frontend_demos = []
+        for d in demos:
+            frontend_demos.append({
+                "topic_id": d["topic_id"],
+                "title": d["title"],
+                "excerpt": d.get("excerpt", ""),
+                "tags": d.get("tags", []),
+                "views": d.get("views", 0),
+                "like_count": d.get("like_count", 0),
+                "author": d.get("author", "unknown"),
+                "created_at": d.get("created_at", ""),
+                "demo_url": d.get("demo_url"),
+                "external_url": d.get("external_url"),
+                "has_demo": d.get("has_demo", False),
+                "approved": d.get("approved", False),
+            })
+
+        data_js_path = Path(self.config["data_dir"]) / "demos.min.js"
+        with open(data_js_path, "w", encoding="utf-8") as f:
+            f.write("window.DEMOS_DATA = ")
+            json.dump(frontend_demos, f, ensure_ascii=False, separators=(',', ':'))
+            f.write(";\n")
+
         print(f"Rendered {self.config['output_file']} with {len(demos)} demos")
+        print(f"Generated {data_js_path} ({len(frontend_demos)} records, ~{data_js_path.stat().st_size / 1024:.0f}KB)")
 
 
 def main():
