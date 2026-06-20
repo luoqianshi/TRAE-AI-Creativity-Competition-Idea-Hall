@@ -14,9 +14,9 @@
 
 | 维度 | 数量 |
 |---|---|
-| 总报名帖 | **10,098** |
-| 含 HTML Demo | **7,709** |
-| 暂无 Demo | **2,389** |
+| 总报名帖 | **10,071** |
+| 含 HTML Demo | **8,251** |
+| 暂无 Demo | **1,820** |
 | 生活娱乐 | 3,234 |
 | 学习工作 | 4,302 |
 | 社会服务 | 1,725 |
@@ -33,8 +33,9 @@
 
 - 通过 **Discourse API** 获取大赛报名专区（Category ID: 39）的所有帖子
 - **双数据源策略（v2）**：以飞书多维表格审批名单为主数据源，Discourse API 为补充，确保已审核项目优先收录
-- **三层 Demo 提取策略**：HTML 附件 > Onebox 外部链接 > 关键词上下文兜底
+- **四层 Demo 提取策略**：HTML 附件 > ZIP 附件（解压提取）> Onebox 外部链接 > 关键词上下文兜底
 - **增量更新**：只处理新增帖子，已有帖子跳过（支持 `--force` 全量重建）
+- **重新检查**：`--recheck` 模式仅对当前无 Demo 的帖子重新爬取，发现遗漏的 ZIP 等附件
 - 无 Demo 的帖子同样记录在册，卡片按钮置灰显示「暂无 Demo」
 - 每 100 条记录自动保存检查点，防止中断丢失数据
 
@@ -72,7 +73,7 @@ TRAE 定时任务（每日 10:00 北京时间）
 Python 爬虫（双数据源）
     ├── Step 1: 加载飞书多维表格审批名单（data/approved_projects.json）
     ├── Step 2: 逐个处理审批项目，通过 Discourse API 补充元数据
-    │           ├── 提取 Demo 附件/链接（三层策略）
+    │           ├── 提取 Demo 附件/链接（四层策略，含 ZIP 解压）
     │           ├── 下载 HTML 文件到 demos/{topic_id}/
     │           └── 标记 approved: True
     ├── Step 3: 爬取 Discourse API 获取未审批的新帖子
@@ -106,15 +107,16 @@ Git push → GitHub Actions → GitHub Pages
 - 核心方法：
   - `get_category_topics(page)` — 分页获取分类帖子列表
   - `get_topic_detail(topic_id)` — 获取帖子详情（含 cooked HTML 正文）
-  - `download_file(url, dest_path)` — 流式下载，实时校验大小（上限 5MB）
+  - `download_file(url, dest_path, max_size_mb)` — 流式下载，支持自定义大小限制（HTML 5MB / ZIP 10MB）
 
 #### DemoExtractor — Demo 资源提取器
 
-从 Discourse 帖子的 `cooked` HTML 中提取 Demo，采用**三层优先级策略**：
+从 Discourse 帖子的 `cooked` HTML 中提取 Demo，采用**四层优先级策略**：
 
 | 优先级 | 策略 | 实现方式 | 说明 |
 |---|---|---|---|
 | 1 | HTML 附件 | 解析 `<a class="attachment">` | 提取 `.html/.htm` 后缀的附件链接 |
+| 1b | ZIP 附件 | 解析 `<a class="attachment">` | 提取 `.zip` 后缀附件，下载后解压并查找 HTML 文件 |
 | 2 | Onebox 链接 | 解析 `<aside class="onebox">` | 提取 Discourse 自动生成的外部链接预览卡片 |
 | 3 | 关键词兜底 | 遍历 `<a>` 标签 + 父元素文本匹配 | 查找父元素包含 demo/体验/预览/产物/在线 的外部链接 |
 
@@ -125,7 +127,7 @@ URL 校验规则：
 
 #### DataManager — 数据管理器
 
-管理 `data/demos.json` 的读写，核心特性：
+管理 `demos.json` 的读写，核心特性：
 - **增量更新**：通过 `get_existing_ids()` 返回已有 topic_id 集合，跳过已处理帖子
 - **合并写入**：`add_or_update()` 采用合并模式，新数据只覆盖非 None 字段，保留已有字段不被覆盖
 - **自动统计**：`save()` 时自动计算 `total_count`、`approved_count`、`unapproved_count`
@@ -143,14 +145,20 @@ URL 校验规则：
 3. 再爬 Discourse API 获取不在审批列表中的额外帖子（捕获尚未审批的新帖）
 4. 降级方案：审批名单不存在时回退到纯 Discourse 模式
 
+**新增方法**：
+- `_download_and_process_attachment(demo_info, topic_id, record)` — 统一处理 HTML 和 ZIP 附件下载
+  - ZIP 类型：下载 ZIP → 解压到 `demos/{topic_id}/` → 删除 ZIP 文件 → 查找 HTML 文件（优先 `index.html`）
+  - HTML 类型：直接下载到 `demos/{topic_id}/`
+- `recheck_no_demo()` — 仅重新检查 `has_demo: false` 的帖子，用于发现遗漏的 ZIP 附件等
+
 ### 2. 数据结构（data/demos.json）
 
 ```json
 {
-  "last_updated": "2026-06-19T20:04:54.245239+00:00",
+  "last_updated": "2026-06-20T10:59:55.139655+00:00",
   "total_count": 10071,
-  "approved_count": 7709,
-  "unapproved_count": 2362,
+  "approved_count": 8251,
+  "unapproved_count": 1820,
   "demos": [
     {
       "topic_id": 34392,
@@ -268,6 +276,7 @@ CSS 变量驱动的设计系统：
   "max_retries": 5,
   "retry_backoff_base": 2,
   "max_html_file_size_mb": 5,
+  "max_zip_file_size_mb": 10,
   "exclude_domains": ["github.com", "bilibili.com", "forum.trae.cn", "trae-forum-cdn.trae.com.cn"],
   "demo_keywords": ["demo", "体验", "预览", "产物", "在线"]
 }
@@ -290,7 +299,7 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 │   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
 │   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   ├── demos.json                       # 所有帖子的结构化数据（10,098 条）
+│   ├── demos.json                       # 所有帖子的结构化数据（10,071 条）
 │   └── approved_projects.json          # 飞书多维表格审批数据源
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
@@ -317,6 +326,9 @@ python crawler.py
 
 # 全量重建（重新处理所有帖子）
 python crawler.py --force
+
+# 重新检查无 Demo 的帖子（发现遗漏的 ZIP 附件等）
+python crawler_v2.py --recheck
 
 # 仅渲染（不爬取，用现有数据重新生成 index.html）
 python -c "from crawler.crawler import DemoHallCrawler; DemoHallCrawler().render()"
@@ -352,6 +364,7 @@ cron: 0 10 * * *
 | 优先级 | 策略 | 说明 |
 |---|---|---|
 | 1 | HTML 附件 | Discourse `<a class="attachment">` 标签中的 .html/.htm 文件 |
+| 1b | ZIP 附件 | Discourse `<a class="attachment">` 标签中的 .zip 文件，下载后解压并提取 HTML |
 | 2 | Onebox 链接 | Discourse 自动生成的外部链接预览卡片 |
 | 3 | 关键词兜底 | 帖子正文中包含 demo/体验/预览/产物/在线 的外部链接 |
 

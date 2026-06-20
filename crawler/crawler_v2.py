@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -67,9 +68,11 @@ class DiscourseClient:
         endpoint = f"/t/{topic_id}.json"
         return self._request(endpoint)
 
-    def download_file(self, url, dest_path):
+    def download_file(self, url, dest_path, max_size_mb=None):
         """Download a file with size limit check."""
-        max_size = self.config["max_html_file_size_mb"] * 1024 * 1024
+        if max_size_mb is None:
+            max_size_mb = self.config.get("max_html_file_size_mb", 5)
+        max_size = max_size_mb * 1024 * 1024
         resp = self.session.get(url, stream=True, timeout=60)
         resp.raise_for_status()
 
@@ -106,7 +109,7 @@ class DemoExtractor:
         cooked = first_post.get("cooked", "")
         soup = BeautifulSoup(cooked, "html.parser")
 
-        # Strategy 1: Discourse HTML attachment (highest priority)
+        # Strategy 1: Discourse HTML/ZIP attachment (highest priority)
         attachment = self._extract_attachment(soup)
         if attachment:
             return {
@@ -114,6 +117,7 @@ class DemoExtractor:
                 "demo_type": "attachment",
                 "attachment_url": attachment["url"],
                 "attachment_filename": attachment["filename"],
+                "file_type": attachment.get("file_type", "html"),
                 "external_url": None
             }
 
@@ -142,13 +146,20 @@ class DemoExtractor:
         return {"has_demo": False, "demo_type": None}
 
     def _extract_attachment(self, soup):
-        """Extract HTML attachment link."""
+        """Extract HTML or ZIP attachment link."""
         for a in soup.find_all("a", class_="attachment"):
             href = a.get("href", "")
             if href.endswith(".html") or href.endswith(".htm"):
                 filename = a.get_text(strip=True)
                 full_url = urljoin(self.config["forum_url"], href)
-                return {"url": full_url, "filename": filename}
+                return {"url": full_url, "filename": filename, "file_type": "html"}
+        # Strategy 1b: ZIP attachment
+        for a in soup.find_all("a", class_="attachment"):
+            href = a.get("href", "")
+            if href.endswith(".zip"):
+                filename = a.get_text(strip=True)
+                full_url = urljoin(self.config["forum_url"], href)
+                return {"url": full_url, "filename": filename, "file_type": "zip"}
         return None
 
     def _extract_onebox(self, soup):
@@ -260,6 +271,109 @@ class DemoHallCrawler:
         self.extractor = DemoExtractor(self.config)
         self.data_mgr = DataManager(self.config)
 
+    def _download_and_process_attachment(self, demo_info, topic_id, record):
+        """Download and process an attachment (HTML or ZIP)."""
+        file_type = demo_info.get("file_type", "html")
+        demos_dir = Path(self.config["demos_dir"]) / str(topic_id)
+        demos_dir.mkdir(parents=True, exist_ok=True)
+
+        if file_type == "zip":
+            # Download ZIP
+            zip_dest = demos_dir / demo_info["attachment_filename"]
+            max_zip_mb = self.config.get("max_zip_file_size_mb", 10)
+            self.client.download_file(demo_info["attachment_url"], zip_dest, max_size_mb=max_zip_mb)
+
+            # Extract ZIP to same directory
+            with zipfile.ZipFile(zip_dest, 'r') as zf:
+                zf.extractall(demos_dir)
+
+            # Remove ZIP to save space
+            zip_dest.unlink()
+
+            # Find first HTML file (prefer index.html)
+            html_files = list(demos_dir.glob("*.html")) + list(demos_dir.glob("*.htm"))
+            # Filter out the directory itself if matched
+            html_files = [f for f in html_files if f.is_file()]
+
+            if html_files:
+                # Prefer index.html
+                index_files = [f for f in html_files if f.name.lower() == "index.html"]
+                html_file = index_files[0] if index_files else html_files[0]
+                record["demo_file"] = str(html_file)
+                record["demo_url"] = f"demos/{topic_id}/{html_file.name}"
+                record["has_demo"] = True
+                print(f"    Extracted ZIP → {html_file.name}")
+            else:
+                record["has_demo"] = False
+                print(f"    WARNING: ZIP contained no HTML files")
+        else:
+            # Original HTML download logic
+            dest = demos_dir / demo_info["attachment_filename"]
+            self.client.download_file(demo_info["attachment_url"], dest)
+            record["demo_file"] = str(dest)
+            record["demo_url"] = f"demos/{topic_id}/{demo_info['attachment_filename']}"
+            print(f"    Downloaded: {dest}")
+
+    def recheck_no_demo(self):
+        """Re-check topics that currently have no demo (for ZIP support etc.)."""
+        print(f"[{datetime.now()}] Starting recheck for topics without demo...")
+
+        no_demo_topics = [
+            d for d in self.data_mgr.data["demos"]
+            if not d.get("has_demo", False) and not d.get("archived", False)
+        ]
+        print(f"  Found {len(no_demo_topics)} topics without demo")
+
+        updated_count = 0
+        for i, existing in enumerate(no_demo_topics):
+            topic_id = existing["topic_id"]
+            print(f"  [{i+1}/{len(no_demo_topics)}] Rechecking topic {topic_id}: {existing.get('title', '')[:50]}...")
+
+            try:
+                detail = self.client.get_topic_detail(topic_id)
+            except Exception as e:
+                print(f"    ERROR fetching topic {topic_id}: {e}")
+                continue
+
+            # Re-extract demo info with updated extractor (now supports ZIP)
+            demo_info = self.extractor.extract_from_topic(detail)
+
+            if demo_info.get("has_demo"):
+                # Found a demo! Update the record
+                existing["has_demo"] = True
+                existing["demo_type"] = demo_info.get("demo_type")
+                existing["external_url"] = demo_info.get("external_url")
+
+                if demo_info.get("attachment_url"):
+                    try:
+                        self._download_and_process_attachment(
+                            demo_info, topic_id, existing
+                        )
+                    except Exception as e:
+                        print(f"    ERROR downloading attachment: {e}")
+                        existing["has_demo"] = False
+                        continue
+
+                if existing.get("has_demo"):
+                    updated_count += 1
+                    print(f"    FOUND DEMO: {demo_info.get('demo_type')} → {existing.get('demo_url', existing.get('external_url', 'N/A'))}")
+                else:
+                    print(f"    Attachment found but no valid demo")
+            else:
+                print(f"    Still no demo")
+
+            # Periodic save every 50 records
+            if (i + 1) % 50 == 0:
+                print(f"  [Checkpoint] Saving after {i+1} records...")
+                self.data_mgr.save()
+
+        # Final save
+        self.data_mgr.data["last_updated"] = datetime.now(timezone.utc).isoformat()
+        self.data_mgr.save()
+
+        print(f"[{datetime.now()}] Recheck complete. Updated: {updated_count}/{len(no_demo_topics)}")
+        return updated_count
+
     def load_approved_list(self, approved_path="data/approved_projects.json"):
         """Load approved projects from Lark Bitable."""
         if not Path(approved_path).exists():
@@ -338,11 +452,9 @@ class DemoHallCrawler:
                     # Download attachment if present
                     if demo_info.get("attachment_url"):
                         try:
-                            dest = Path(self.config["demos_dir"]) / str(topic_id_int) / demo_info["attachment_filename"]
-                            self.client.download_file(demo_info["attachment_url"], dest)
-                            demo_record["demo_file"] = str(dest)
-                            demo_record["demo_url"] = f"demos/{topic_id_int}/{demo_info['attachment_filename']}"
-                            print(f"    Downloaded: {dest}")
+                            self._download_and_process_attachment(
+                                demo_info, topic_id_int, demo_record
+                            )
                         except Exception as e:
                             print(f"    ERROR downloading attachment: {e}")
 
@@ -455,10 +567,9 @@ class DemoHallCrawler:
 
                 if demo_info.get("attachment_url"):
                     try:
-                        dest = Path(self.config["demos_dir"]) / str(topic_id) / demo_info["attachment_filename"]
-                        self.client.download_file(demo_info["attachment_url"], dest)
-                        record["demo_file"] = str(dest)
-                        record["demo_url"] = f"demos/{topic_id}/{demo_info['attachment_filename']}"
+                        self._download_and_process_attachment(
+                            demo_info, topic_id, record
+                        )
                     except Exception as e:
                         print(f"        ERROR downloading: {e}")
 
@@ -540,10 +651,16 @@ def main():
 
     parser = argparse.ArgumentParser(description="TRAE Demo Hall Crawler v2")
     parser.add_argument("--force", action="store_true", help="Re-process all topics even if already in data")
+    parser.add_argument("--recheck", action="store_true", help="Re-check only topics that currently have no demo")
     args = parser.parse_args()
 
     crawler = DemoHallCrawler()
-    total_count = crawler.crawl(force=args.force)
+
+    if args.recheck:
+        total_count = crawler.recheck_no_demo()
+    else:
+        total_count = crawler.crawl(force=args.force)
+
     crawler.render()
 
     # Auto git commit and push
