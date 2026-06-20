@@ -225,28 +225,43 @@ function createCardHTML(demo) {
     }
   }
 
+  function loadMore() {
+    if (isLoading || renderedCount >= filteredDemos.length) return;
+    isLoading = true;
+    if (loadingEl) loadingEl.style.display = 'flex';
+
+    requestAnimationFrame(() => {
+      renderBatch(BATCH_SIZE);
+      isLoading = false;
+      if (loadingEl) loadingEl.style.display = 'none';
+
+      // If sentinel is still in viewport after rendering, load more immediately
+      if (renderedCount < filteredDemos.length && sentinelEl) {
+        const rect = sentinelEl.getBoundingClientRect();
+        if (rect.top < window.innerHeight + PRELOAD_THRESHOLD) {
+          requestAnimationFrame(() => loadMore());
+        }
+      }
+    });
+  }
+
+  let sentinelEl = null;
+
   function setupScrollTrigger() {
     if (scrollObserver) scrollObserver.disconnect();
 
-    const sentinel = document.createElement('div');
-    sentinel.id = 'scroll-sentinel';
-    sentinel.style.height = '1px';
-    grid.appendChild(sentinel);
+    sentinelEl = document.createElement('div');
+    sentinelEl.id = 'scroll-sentinel';
+    sentinelEl.style.height = '1px';
+    grid.appendChild(sentinelEl);
 
     scrollObserver = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && !isLoading && renderedCount < filteredDemos.length) {
-        isLoading = true;
-        if (loadingEl) loadingEl.style.display = 'flex';
-
-        requestAnimationFrame(() => {
-          renderBatch(BATCH_SIZE);
-          isLoading = false;
-          if (loadingEl) loadingEl.style.display = 'none';
-        });
+      if (entries[0].isIntersecting) {
+        loadMore();
       }
     }, { rootMargin: `${PRELOAD_THRESHOLD}px` });
 
-    scrollObserver.observe(sentinel);
+    scrollObserver.observe(sentinelEl);
   }
 
   function resetAndRender() {
