@@ -1,7 +1,16 @@
 // ============================================================
 // TRAE AI 创造力大赛 · 灵感 Demo Hall
-// 前端交互：粒子动画、筛选、搜索、排序、滚动入场
+// 前端交互：粒子动画、无限滚动、筛选、搜索、排序
 // ============================================================
+
+/* ---------- Configuration ---------- */
+const BATCH_SIZE = 50;
+const PRELOAD_THRESHOLD = 500; // px from bottom to trigger next batch
+const MAX_DOM_CARDS = 200;
+const BUFFER_CARDS = 150;
+
+/* ---------- Data Access ---------- */
+const allDemos = window.DEMOS_DATA || [];
 
 /* ---------- Particle Canvas Background ---------- */
 (function initParticles() {
@@ -61,7 +70,6 @@
       p.update();
       p.draw();
 
-      // Connect nearby particles
       for (let j = i + 1; j < particles.length; j++) {
         const dx = p.x - particles[j].x;
         const dy = p.y - particles[j].y;
@@ -77,7 +85,6 @@
         }
       }
 
-      // Mouse interaction
       const mdx = p.x - mouseX;
       const mdy = p.y - mouseY;
       const mDist = Math.sqrt(mdx * mdx + mdy * mdy);
@@ -94,7 +101,9 @@
 
     requestAnimationFrame(animate);
   }
-  animate();
+
+  // Delay particle animation start to avoid competing with initial render
+  setTimeout(() => animate(), 500);
 })();
 
 /* ---------- Navbar Scroll Effect ---------- */
@@ -106,28 +115,170 @@
   });
 })();
 
-/* ---------- Card Scroll Animation ---------- */
-(function initScrollReveal() {
-  const cards = document.querySelectorAll('.card');
-  if (!cards.length) return;
+/* ---------- Card Factory ---------- */
+const TAG_IMG_MAP = {
+  '生活娱乐': 'life-default.png',
+  '学习工作': 'study-default.png',
+  '社会服务': 'common-env-default.png',
+  '硬件交互': 'hardware-default.png',
+  '社会公益': 'special-default.png'
+};
 
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach((entry, i) => {
-      if (entry.isIntersecting) {
-        setTimeout(() => {
-          entry.target.classList.add('visible');
-        }, i * 50);
-        observer.unobserve(entry.target);
-      }
+function createCardHTML(demo) {
+  const tag = demo.tags && demo.tags[0] ? demo.tags[0] : '';
+  const tagImg = TAG_IMG_MAP[tag] || '';
+  const approvedBadge = demo.approved
+    ? '<span class="approved-badge" title="官方审核通过">&#10003;</span>'
+    : '';
+
+  let demoBtn = '';
+  if (demo.has_demo) {
+    if (demo.demo_url) {
+      demoBtn = `<a href="${demo.demo_url}" target="_blank" class="btn btn-primary btn-sm"><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 查看 Demo</a>`;
+    } else if (demo.external_url) {
+      demoBtn = `<a href="${demo.external_url}" target="_blank" class="btn btn-primary btn-sm"><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 查看 Demo</a>`;
+    }
+  } else {
+    demoBtn = '<button class="btn btn-primary btn-sm disabled" disabled><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 暂无 Demo</button>';
+  }
+
+  const forumUrl = `https://forum.trae.cn/t/topic/${demo.topic_id}`;
+
+  return `<div class="card"
+    data-tags="${(demo.tags || []).join(',')}"
+    data-title="${demo.title}"
+    data-excerpt="${demo.excerpt || ''}"
+    data-created="${demo.created_at}"
+    data-views="${demo.views}"
+    data-likes="${demo.like_count}"
+    data-approved="${demo.approved ? 'true' : 'false'}">
+    <div class="card-tag-row">
+      ${tagImg ? `<img src="assets/tracks/${tagImg}" alt="${tag}" class="card-tag-img" loading="lazy">` : ''}
+      <span class="card-tag-text">${tag}</span>
+      ${approvedBadge}
+    </div>
+    <h3 class="card-title">${demo.title}</h3>
+    <p class="card-excerpt">${demo.excerpt || '暂无描述'}</p>
+    <div class="card-meta">
+      <span class="meta-item"><img src="assets/icons/eye.svg" class="meta-icon" alt="views" loading="lazy"> ${demo.views}</span>
+      <span class="meta-item"><img src="assets/icons/heart.svg" class="meta-icon" alt="likes" loading="lazy"> ${demo.like_count}</span>
+      <span class="meta-item"><img src="assets/icons/user.svg" class="meta-icon" alt="author" loading="lazy"> ${demo.author}</span>
+    </div>
+    <div class="card-actions">
+      ${demoBtn}
+      <a href="${forumUrl}" target="_blank" class="btn btn-secondary btn-sm"><img src="assets/icons/external.svg" class="btn-icon" alt="" loading="lazy"> 社区帖子</a>
+    </div>
+  </div>`;
+}
+
+/* ---------- Infinite Scroll Engine ---------- */
+(function initInfiniteScroll() {
+  const grid = document.getElementById('cards-grid');
+  const loadingEl = document.getElementById('loading');
+  const noResultsEl = document.getElementById('no-results');
+  if (!grid) return;
+
+  let filteredDemos = [...allDemos];
+  let renderedCount = 0;
+  let isLoading = false;
+  let scrollObserver = null;
+  let revealObserver = null;
+
+  function setupRevealObserver() {
+    if (revealObserver) revealObserver.disconnect();
+    revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry, i) => {
+        if (entry.isIntersecting) {
+          setTimeout(() => {
+            entry.target.classList.add('visible');
+          }, i * 30);
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1 });
+  }
+
+  function renderBatch(count) {
+    const end = Math.min(renderedCount + count, filteredDemos.length);
+    const batch = filteredDemos.slice(renderedCount, end);
+
+    const fragment = document.createDocumentFragment();
+    batch.forEach(demo => {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = createCardHTML(demo);
+      const card = wrapper.firstElementChild;
+      fragment.appendChild(card);
+      if (revealObserver) revealObserver.observe(card);
     });
-  }, { threshold: 0.1 });
 
-  cards.forEach(card => observer.observe(card));
+    grid.appendChild(fragment);
+    renderedCount = end;
+
+    // DOM recycling: remove top batches if too many cards
+    const cards = grid.querySelectorAll('.card');
+    if (cards.length > MAX_DOM_CARDS) {
+      const toRemove = cards.length - BUFFER_CARDS;
+      for (let i = 0; i < toRemove; i++) {
+        if (revealObserver) revealObserver.unobserve(cards[i]);
+        cards[i].remove();
+      }
+    }
+  }
+
+  function setupScrollTrigger() {
+    if (scrollObserver) scrollObserver.disconnect();
+
+    const sentinel = document.createElement('div');
+    sentinel.id = 'scroll-sentinel';
+    sentinel.style.height = '1px';
+    grid.appendChild(sentinel);
+
+    scrollObserver = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && !isLoading && renderedCount < filteredDemos.length) {
+        isLoading = true;
+        if (loadingEl) loadingEl.style.display = 'flex';
+
+        requestAnimationFrame(() => {
+          renderBatch(BATCH_SIZE);
+          isLoading = false;
+          if (loadingEl) loadingEl.style.display = 'none';
+        });
+      }
+    }, { rootMargin: `${PRELOAD_THRESHOLD}px` });
+
+    scrollObserver.observe(sentinel);
+  }
+
+  function resetAndRender() {
+    grid.innerHTML = '';
+    renderedCount = 0;
+
+    if (filteredDemos.length === 0) {
+      if (noResultsEl) noResultsEl.style.display = 'block';
+      if (loadingEl) loadingEl.style.display = 'none';
+      return;
+    }
+
+    if (noResultsEl) noResultsEl.style.display = 'none';
+
+    setupRevealObserver();
+    renderBatch(BATCH_SIZE);
+    setupScrollTrigger();
+  }
+
+  // Expose reset function for filters
+  window.resetInfiniteScroll = resetAndRender;
+  window.setFilteredDemos = (demos) => {
+    filteredDemos = demos;
+    resetAndRender();
+  };
+
+  // Initial render
+  resetAndRender();
 })();
 
-/* ---------- Filter, Search, Sort ---------- */
+/* ---------- Filter, Search, Sort (Data Layer) ---------- */
 (function initFilters() {
-  const cards = Array.from(document.querySelectorAll('.card'));
   const tagPills = document.querySelectorAll('.tag-pill');
   const searchInput = document.getElementById('search-input');
   const sortSelect = document.getElementById('sort-select');
@@ -138,44 +289,49 @@
   let sortBy = 'newest';
   let approvedOnly = true;
 
-  function filterAndSort() {
-    let visible = cards.filter(card => {
-      // Approval filter
-      if (approvedOnly) {
-        if (card.dataset.approved !== 'true') return false;
-      }
-      // Tag filter
-      if (activeTag !== 'all') {
-        const cardTags = (card.dataset.tags || '').split(',').map(t => t.trim());
-        if (!cardTags.includes(activeTag)) return false;
-      }
-      // Search filter
-      if (searchQuery) {
-        const text = (card.dataset.title + ' ' + card.dataset.excerpt).toLowerCase();
-        if (!text.includes(searchQuery)) return false;
-      }
-      return true;
-    });
+  function getFilteredSorted() {
+    let result = [...allDemos];
+
+    // Approval filter
+    if (approvedOnly) {
+      result = result.filter(d => d.approved);
+    }
+
+    // Tag filter
+    if (activeTag !== 'all') {
+      result = result.filter(d => d.tags && d.tags.includes(activeTag));
+    }
+
+    // Search filter
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(d =>
+        d.title.toLowerCase().includes(q) ||
+        (d.excerpt || '').toLowerCase().includes(q)
+      );
+    }
 
     // Sort
-    visible.sort((a, b) => {
-      if (sortBy === 'newest') {
-        return new Date(b.dataset.created) - new Date(a.dataset.created);
-      } else if (sortBy === 'views') {
-        return parseInt(b.dataset.views) - parseInt(a.dataset.views);
-      } else if (sortBy === 'likes') {
-        return parseInt(b.dataset.likes) - parseInt(a.dataset.likes);
-      }
-      return 0;
-    });
+    switch (sortBy) {
+      case 'newest':
+        result.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+        break;
+      case 'views':
+        result.sort((a, b) => (b.views || 0) - (a.views || 0));
+        break;
+      case 'likes':
+        result.sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
+        break;
+    }
 
-    // Update DOM
-    const grid = document.querySelector('.cards-grid');
-    visible.forEach(card => {
-      card.classList.remove('hidden');
-      grid.appendChild(card);
-    });
-    cards.filter(c => !visible.includes(c)).forEach(c => c.classList.add('hidden'));
+    return result;
+  }
+
+  function applyFilters() {
+    const filtered = getFilteredSorted();
+    if (window.setFilteredDemos) {
+      window.setFilteredDemos(filtered);
+    }
   }
 
   // Tag click
@@ -184,7 +340,7 @@
       tagPills.forEach(p => p.classList.remove('active'));
       pill.classList.add('active');
       activeTag = pill.dataset.tag;
-      filterAndSort();
+      applyFilters();
     });
   });
 
@@ -195,7 +351,7 @@
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
         searchQuery = e.target.value.toLowerCase().trim();
-        filterAndSort();
+        applyFilters();
       }, 300);
     });
   }
@@ -204,7 +360,7 @@
   if (sortSelect) {
     sortSelect.addEventListener('change', (e) => {
       sortBy = e.target.value;
-      filterAndSort();
+      applyFilters();
     });
   }
 
@@ -212,10 +368,7 @@
   if (approvedOnlyCheckbox) {
     approvedOnlyCheckbox.addEventListener('change', (e) => {
       approvedOnly = e.target.checked;
-      filterAndSort();
+      applyFilters();
     });
   }
-
-  // Initial filter
-  filterAndSort();
 })();
