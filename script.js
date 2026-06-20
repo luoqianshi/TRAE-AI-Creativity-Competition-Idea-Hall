@@ -183,6 +183,34 @@ function createCardHTML(demo) {
   let isLoading = false;
   let scrollObserver = null;
   let revealObserver = null;
+  let loadMoreBtn = null;
+
+  /* --- "Load More" Button --- */
+  function createLoadMoreButton() {
+    if (loadMoreBtn) loadMoreBtn.remove();
+    loadMoreBtn = document.createElement('button');
+    loadMoreBtn.className = 'load-more-btn';
+    loadMoreBtn.addEventListener('click', () => loadMore());
+    updateLoadMoreButton();
+    grid.parentElement.appendChild(loadMoreBtn);
+  }
+
+  function updateLoadMoreButton() {
+    if (!loadMoreBtn) return;
+    if (isLoading) {
+      loadMoreBtn.className = 'load-more-btn loading';
+      loadMoreBtn.innerHTML = '<span class="load-more-spinner"></span> 加载中...';
+      loadMoreBtn.disabled = true;
+    } else if (renderedCount >= filteredDemos.length) {
+      loadMoreBtn.className = 'load-more-btn done';
+      loadMoreBtn.textContent = `已展示全部 ${filteredDemos.length} 个作品`;
+      loadMoreBtn.disabled = true;
+    } else {
+      loadMoreBtn.className = 'load-more-btn';
+      loadMoreBtn.textContent = `加载更多（已加载 ${renderedCount} / ${filteredDemos.length}）`;
+      loadMoreBtn.disabled = false;
+    }
+  }
 
   function setupRevealObserver() {
     if (revealObserver) revealObserver.disconnect();
@@ -229,11 +257,13 @@ function createCardHTML(demo) {
     if (isLoading || renderedCount >= filteredDemos.length) return;
     isLoading = true;
     if (loadingEl) loadingEl.style.display = 'flex';
+    updateLoadMoreButton();
 
     requestAnimationFrame(() => {
       renderBatch(BATCH_SIZE);
       isLoading = false;
       if (loadingEl) loadingEl.style.display = 'none';
+      updateLoadMoreButton();
 
       // If sentinel is still in viewport after rendering, load more immediately
       if (renderedCount < filteredDemos.length && sentinelEl) {
@@ -271,6 +301,7 @@ function createCardHTML(demo) {
     if (filteredDemos.length === 0) {
       if (noResultsEl) noResultsEl.style.display = 'block';
       if (loadingEl) loadingEl.style.display = 'none';
+      if (loadMoreBtn) loadMoreBtn.style.display = 'none';
       return;
     }
 
@@ -279,6 +310,7 @@ function createCardHTML(demo) {
     setupRevealObserver();
     renderBatch(BATCH_SIZE);
     setupScrollTrigger();
+    createLoadMoreButton();
   }
 
   // Expose reset function for filters
