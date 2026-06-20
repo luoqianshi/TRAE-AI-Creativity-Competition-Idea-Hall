@@ -1,0 +1,16 @@
+# Tasks
+- [x] Task 1: 创建"我的"页面目录和基础文件
+  - [x] SubTask 1.1: 创建 pages/my/index 目录
+  - [x] SubTask 1.2: 创建 index.js 页面逻辑
+  - [x] SubTask 1.3: 创建 index.json 页面配置
+  - [x] SubTask 1.4: 创建 index.wxml 页面结构
+  - [x] SubTask 1.5: 创建 index.wxss 页面样式
+- [x] Task 2: 添加"我的"页面图标资源
+  - [x] SubTask 2.1: 添加 my.png 默认图标
+  - [x] SubTask 2.2: 添加 my-active.png 选中态图标
+- [x] Task 3: 配置 app.json tabBar
+  - [x] SubTask 3.1: 在 pages 数组中添加 pages/my/index
+  - [x] SubTask 3.2: 添加 tabBar 配置（list、color、selectedColor、backgroundColor）
+- [x] Task 4: 验证功能
+  - [x] SubTask 4.1: 确认 tabBar 显示正确
+  - [x] SubTask 4.2: 确认页面跳转正常

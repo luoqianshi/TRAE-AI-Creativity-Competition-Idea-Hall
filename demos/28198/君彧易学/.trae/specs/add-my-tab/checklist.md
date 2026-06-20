@@ -1,0 +1,9 @@
+- [x] app.json 包含完整的 tabBar 配置
+- [x] pages/my/index.js 文件存在且包含页面逻辑
+- [x] pages/my/index.json 文件存在且配置正确
+- [x] pages/my/index.wxml 文件存在且包含基础结构
+- [x] pages/my/index.wxss 文件存在且包含基础样式
+- [x] my.png 图标文件存在于 images/icons/ 目录
+- [x] my-active.png 图标文件存在于 images/icons/ 目录
+- [x] tabBar 正常显示在页面底部
+- [x] 点击"我的" Tab 可正常跳转至对应页面

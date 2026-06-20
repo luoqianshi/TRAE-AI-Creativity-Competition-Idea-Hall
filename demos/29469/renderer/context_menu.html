@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+            user-select: none;
+            padding: 6px;
+        }
+
+        .menu-container {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .menu-item {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            height: 36px;
+            padding: 0 10px 0 10px;
+            border-radius: 18px;
+            background: rgba(35, 50, 80, 0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1.5px solid rgba(120, 170, 255, 0.25);
+            box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+            cursor: pointer;
+            white-space: nowrap;
+            /* 动画由JS控制，不设默认transition */
+        }
+        .menu-item:hover {
+            background: rgba(55, 85, 140, 0.95);
+            border-color: rgba(140, 190, 255, 0.5);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 1px rgba(100, 160, 255, 0.15);
+        }
+        .menu-item.current {
+            border-color: rgba(100, 200, 255, 0.45);
+        }
+        .menu-item.selected {
+            background: rgba(30, 140, 70, 0.88);
+            border-color: rgba(80, 220, 120, 0.65);
+            box-shadow: 0 0 5px rgba(80, 200, 120, 0.25);
+        }
+
+        .menu-item svg {
+            width: 18px;
+            height: 18px;
+            fill: rgba(200, 220, 255, 0.9);
+            flex-shrink: 0;
+        }
+        .menu-item:hover svg { fill: #fff; }
+        .menu-item.selected svg { fill: rgba(200, 255, 210, 1); }
+
+        .menu-label {
+            margin-left: 8px;
+            font-size: 12.5px;
+            color: rgba(210, 225, 255, 0.9);
+            letter-spacing: 0.3px;
+        }
+        .menu-item:hover .menu-label { color: #fff; }
+        .menu-item.selected .menu-label { color: rgba(210, 255, 220, 1); }
+
+        .menu-item.current .menu-label::after {
+            content: ' ✓';
+            color: rgba(100, 200, 255, 0.8);
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="menu-container" id="menuContainer"></div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        const FEATURE_DEFS = [
+            {
+                mode: 'ai-input',
+                label: 'AI输入法',
+                loginRequired: false,
+                icon: '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/></svg>'
+            },
+            {
+                mode: 'yaozhi',
+                label: '药院小智',
+                loginRequired: true,
+                icon: '<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z"/></svg>'
+            },
+            {
+                mode: 'teaching',
+                label: '联网助手',
+                loginRequired: true,
+                icon: '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>'
+            },
+            {
+                mode: 'teaching-demo',
+                label: '教学演示',
+                loginRequired: true,
+                icon: '<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>'
+            }
+        ];
+
+        let currentMode = 'ai-input';
+        let isLoggedIn = false;
+        let ballSide = 'right'; // 悬浮球在菜单的哪一侧
+
+        // 接收菜单数据
+        ipcRenderer.on('context-menu-data', (event, data) => {
+            currentMode = data.currentMode || 'ai-input';
+            isLoggedIn = !!data.isLoggedIn;
+            ballSide = data.ballSide || 'right';
+            buildMenu();
+        });
+
+        function getAvailableFeatures() {
+            return FEATURE_DEFS.filter(f => !f.loginRequired || isLoggedIn);
+        }
+
+        function buildMenu() {
+            const container = document.getElementById('menuContainer');
+            container.innerHTML = '';
+            const features = getAvailableFeatures();
+
+            features.forEach((feat, i) => {
+                const item = document.createElement('div');
+                item.className = 'menu-item';
+                if (feat.mode === currentMode) item.classList.add('current');
+                item.innerHTML = feat.icon + '<span class="menu-label">' + feat.label + '</span>';
+                item.dataset.mode = feat.mode;
+
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onItemSelected(item, feat.mode);
+                });
+
+                container.appendChild(item);
+            });
+
+            // 先隐藏所有项，等resize后再播放动画
+            const items = container.querySelectorAll('.menu-item');
+            items.forEach(item => {
+                item.style.opacity = '0';
+                item.style.transform = 'scale(0.3)';
+            });
+
+            // 通知主进程菜单已渲染，调整窗口大小
+            setTimeout(() => {
+                const rect = container.getBoundingClientRect();
+                ipcRenderer.send('context-menu-resize', {
+                    width: Math.ceil(rect.width) + 4,
+                    height: Math.ceil(rect.height) + 12
+                });
+            }, 30);
+        }
+
+        // resize完成后触发从悬浮球向外弹出的动画
+        ipcRenderer.on('context-menu-animate', () => {
+            animateFromBall();
+        });
+
+        function animateFromBall() {
+            const container = document.getElementById('menuContainer');
+            const items = container.querySelectorAll('.menu-item');
+            const count = items.length;
+            if (count === 0) return;
+
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+
+            // 菜单项从窗口边缘外一小段距离飞入，而非从球中心
+            items.forEach((item, i) => {
+                const itemRect = item.getBoundingClientRect();
+                const itemCenterY = itemRect.top + itemRect.height / 2;
+                // Y方向偏移：根据与窗口中心的距离计算
+                const dy = (winH / 2 - itemCenterY) * 0.15;
+
+                // X方向：从边缘外20px处飞入
+                const dx = ballSide === 'right' ? 20 : -20;
+
+                item.style.transition = 'none';
+                item.style.transform = `translate(${dx}px, ${dy}px) scale(0.85)`;
+                item.style.opacity = '0';
+                item.offsetHeight;
+            });
+
+            // 显示窗口
+            ipcRenderer.send('context-menu-show');
+
+            // 同时开始动画
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    items.forEach((item, i) => {
+                        item.style.transition = 'all 0.10s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                        item.style.transform = 'translate(0, 0) scale(1)';
+                        item.style.opacity = '1';
+                    });
+                });
+            });
+        }
+
+        function onItemSelected(clickedItem, mode) {
+            clickedItem.classList.add('selected');
+            clickedItem.classList.remove('current');
+
+            const items = document.querySelectorAll('.menu-item');
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+            let ballCenterX = ballSide === 'right' ? winW + 46 : -46;
+
+            // 其他项快速收缩消失
+            items.forEach(item => {
+                if (item !== clickedItem) {
+                    const dx = ballSide === 'right' ? 12 : -12;
+                    item.style.transition = 'all 0.18s ease';
+                    item.style.transform = `translate(${dx}px, 0) scale(0.7)`;
+                    item.style.opacity = '0';
+                }
+            });
+
+            ipcRenderer.send('context-menu-select', mode);
+
+            // 选中项0.5秒后消失
+            setTimeout(() => {
+                const dx = ballSide === 'right' ? 12 : -12;
+                clickedItem.style.transition = 'all 0.2s ease';
+                clickedItem.style.transform = `translate(${dx}px, 0) scale(0.7)`;
+                clickedItem.style.opacity = '0';
+
+                setTimeout(() => {
+                    ipcRenderer.send('context-menu-close');
+                }, 200);
+            }, 500);
+        }
+
+        // 点击窗口外关闭
+        ipcRenderer.on('context-menu-blur', () => {
+            closeMenu();
+        });
+
+        function closeMenu() {
+            const items = document.querySelectorAll('.menu-item');
+
+            items.forEach((item, i) => {
+                const dx = ballSide === 'right' ? 12 : -12;
+                item.style.transition = `all 0.18s ease ${i * 30}ms`;
+                item.style.transform = `translate(${dx}px, 0) scale(0.7)`;
+                item.style.opacity = '0';
+            });
+
+            setTimeout(() => {
+                ipcRenderer.send('context-menu-close');
+            }, items.length * 30 + 200);
+        }
+
+        // 阻止默认右键菜单
+        document.addEventListener('contextmenu', (e) => e.preventDefault());
+    </script>
+</body>
+</html>

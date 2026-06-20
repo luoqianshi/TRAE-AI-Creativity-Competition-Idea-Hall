@@ -1,0 +1,9 @@
+@echo off
+echo 正在安装依赖...
+npm.cmd install --legacy-peer-deps
+echo.
+echo 正在构建项目...
+npm.cmd run build
+echo.
+echo 构建完成！启动预览服务器...
+npm.cmd run preview

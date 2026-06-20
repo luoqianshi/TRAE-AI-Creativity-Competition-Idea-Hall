@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XiaoZhi TTS Player</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden; user-select: none; background: transparent;
+            padding: 0;
+        }
+        .tts-ball {
+            width: 60px; height: 60px;
+            border-radius: 50%;
+            background: rgba(20, 60, 40, 0.85);
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid rgba(82, 196, 26, 0.3);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        .play-icon {
+            width: 26px; height: 26px;
+            position: absolute;
+            z-index: 1;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+        }
+        .play-icon svg {
+            width: 100%; height: 100%;
+            fill: rgba(163, 229, 172, 0.4);
+            stroke: none;
+        }
+        .wave-container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            z-index: 2;
+        }
+        .wave-bar {
+            width: 5px;
+            height: 16px;
+            background: rgba(103, 241, 34, 0.7);
+            border-radius: 3px;
+            transition: transform 0.05s ease;
+            transform-origin: center center;
+        }
+        .wave-bar:nth-child(1) { height: 16px; }
+        .wave-bar:nth-child(2) { height: 24px; }
+        .wave-bar:nth-child(3) { height: 32px; }
+        .wave-bar:nth-child(4) { height: 24px; }
+        .wave-bar:nth-child(5) { height: 16px; }
+    </style>
+</head>
+<body>
+    <div class="tts-ball" id="ttsBall">
+        <div class="play-icon">
+            <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+                <path d="M897.143467 597.051733l-464.648534 311.5264c-46.976 31.488-110.592 18.944-142.08-28.023466A102.4 102.4 0 0 1 273.066667 823.5264V200.4736c0-56.5504 45.8496-102.4 102.4-102.4a102.4 102.4 0 0 1 57.028266 17.348267l464.64 311.5264c46.976 31.488 59.528533 95.104 28.032 142.08a102.4 102.4 0 0 1-28.023466 28.023466z"></path>
+            </svg>
+        </div>
+        <div class="wave-container" id="waveContainer">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        const ttsBall = document.getElementById('ttsBall');
+        const waveContainer = document.getElementById('waveContainer');
+        const waveBars = waveContainer.querySelectorAll('.wave-bar');
+
+        const PROXY_URL = 'http://localhost:28517/proxy';
+        let TTS_VOICE = 'xiaoxiao';
+        let TTS_RATE = 0;
+        let TTS_PITCH = 0;
+        let TTS_VOLUME = 0;
+
+        let audioContext = null;
+        let analyser = null;
+        let animFrame = null;
+        let currentAudio = null;
+        let currentSource = null;
+        let sentenceQueue = [];
+        let isPlaying = false;
+        let isProcessingQueue = false;
+        let streamEnded = false;
+        let textBuffer = '';
+        let isActive = false;
+        let prefetchPromise = null;
+        let prefetchSentence = null;
+
+        const baseHeights = [16, 24, 32, 24, 16];
+
+        function stripMarkdown(text) {
+            return text
+                .replace(/```[\s\S]*?```/g, (m) => m.replace(/```\w*\n?/g, '').replace(/```/g, ''))
+                .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+                .replace(/#/g, '')
+                .replace(/\*\*(.+?)\*\*/g, '$1')
+                .replace(/__(.+?)__/g, '$1')
+                .replace(/\*(.+?)\*/g, '$1')
+                .replace(/(?<!\w)_(.+?)_(?!\w)/g, '$1')
+                // 移除所有单独的*号（列表标记等）
+                .replace(/\*/g, '')
+                .replace(/~~(.+?)~~/g, '$1')
+                .replace(/`(.+?)`/g, '$1')
+                .replace(/^>\s+/gm, '')
+                .replace(/^[\s]*[-*+]\s+/gm, '')
+                .replace(/^\d+\.\s+/gm, '')
+                .replace(/^[-*_]{3,}\s*$/gm, '')
+                .replace(/<[^>]+>/g, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
+
+        async function fetchTtsAudio(text) {
+            const cleanText = stripMarkdown(text);
+            const resp = await fetch(PROXY_URL + '/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: cleanText,
+                    voice: TTS_VOICE,
+                    rate: TTS_RATE,
+                    pitch: TTS_PITCH,
+                    volume: TTS_VOLUME
+                })
+            });
+            if (!resp.ok) throw new Error('TTS HTTP ' + resp.status);
+            return await resp.arrayBuffer();
+        }
+
+        function initAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 512;
+                analyser.smoothingTimeConstant = 0.3;
+                analyser.connect(audioContext.destination);
+            }
+        }
+
+        async function playAudioBuffer(arrayBuffer) {
+            initAudioContext();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            if (currentSource) {
+                try { currentSource.stop(); } catch(e) {}
+                currentSource = null;
+            }
+
+            const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            return new Promise((resolve, reject) => {
+                const source = audioContext.createBufferSource();
+                source.buffer = decodedBuffer;
+                source.connect(analyser);
+                source.onended = () => {
+                    isPlaying = false;
+                    currentSource = null;
+                    resolve();
+                };
+                source.onerror = (e) => {
+                    isPlaying = false;
+                    currentSource = null;
+                    reject(e);
+                };
+                currentSource = source;
+                isPlaying = true;
+                source.start(0);
+            });
+        }
+
+        // 移除完整的MCP工具调用JSON块，不完整的保留在buffer中等待后续数据
+        function removeCompleteToolCalls(text) {
+            let result = '';
+            let pos = 0;
+            while (true) {
+                const startIdx = text.indexOf('{"icon":', pos);
+                if (startIdx === -1) { result += text.substring(pos); break; }
+                result += text.substring(pos, startIdx);
+                let depth = 0, inStr = false, escape = false, endIdx = -1;
+                for (let i = startIdx; i < text.length; i++) {
+                    const ch = text[i];
+                    if (escape) { escape = false; continue; }
+                    if (ch === '\\') { escape = true; continue; }
+                    if (ch === '"') { inStr = !inStr; continue; }
+                    if (inStr) continue;
+                    if (ch === '{') depth++;
+                    else if (ch === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
+                }
+                if (endIdx === -1) { result += text.substring(startIdx); break; }
+                pos = endIdx + 1;
+            }
+            return result;
+        }
+
+        function extractSentence() {
+            const match = textBuffer.match(/^(.*?[。！？；\n])/);
+            if (match) {
+                const sentence = match[1];
+                textBuffer = textBuffer.substring(sentence.length);
+                return sentence.trim();
+            }
+            return null;
+        }
+
+        function flushRemaining() {
+            textBuffer = removeCompleteToolCalls(textBuffer);
+            // 移除可能残留的不完整工具调用JSON
+            const toolStart = textBuffer.indexOf('{"icon":');
+            if (toolStart !== -1) {
+                textBuffer = textBuffer.substring(0, toolStart);
+            }
+            if (textBuffer.trim().length > 0) {
+                sentenceQueue.push(textBuffer.trim());
+                textBuffer = '';
+            }
+        }
+
+        function startPrefetch(sentence) {
+            prefetchSentence = sentence;
+            prefetchPromise = fetchTtsAudio(sentence).then(
+                (data) => ({ data, sentence }),
+                (err) => ({ error: err, sentence })
+            );
+        }
+
+        let smoothedVolume = 0;
+        let lastVolumes = [];
+
+        function startWaveAnimation() {
+            if (animFrame) return;
+
+            function animate() {
+                animFrame = requestAnimationFrame(animate);
+
+                let volume = 0;
+                if (analyser && isPlaying) {
+                    const timeData = new Float32Array(analyser.fftSize);
+                    analyser.getFloatTimeDomainData(timeData);
+                    let sum = 0;
+                    for (let i = 0; i < timeData.length; i++) {
+                        sum += timeData[i] * timeData[i];
+                    }
+                    const rms = Math.sqrt(sum / timeData.length);
+                    let rawVolume = Math.min(rms * 6, 1);
+                    
+                    lastVolumes.push(rawVolume);
+                    if (lastVolumes.length > 8) {
+                        lastVolumes.shift();
+                    }
+                    const avgVolume = lastVolumes.reduce((a, b) => a + b, 0) / lastVolumes.length;
+                    smoothedVolume = smoothedVolume * 0.7 + avgVolume * 0.3;
+                    volume = smoothedVolume;
+                } else if (isPlaying) {
+                    volume = 0.2;
+                }
+
+                const isSilent = volume < 0.05;
+
+                waveBars.forEach((bar, i) => {
+                    if (isSilent) {
+                        const time = Date.now() / 500;
+                        const tinyWave = Math.sin(time + i * 1.2) * 0.05;
+                        bar.style.transform = `scaleY(${0.35 + tinyWave})`;
+                    } else {
+                        const time = Date.now() / 120;
+                        const waveOffset = Math.sin(time + i * 0.5) * 0.25;
+                        const targetScale = 0.3 + volume * 0.8 + waveOffset;
+                        const scale = Math.max(0.3, Math.min(1.4, targetScale));
+                        bar.style.transform = `scaleY(${scale})`;
+                    }
+                    bar.style.height = `${baseHeights[i]}px`;
+                });
+            }
+
+            animFrame = requestAnimationFrame(animate);
+        }
+
+        function stopWaveAnimation() {
+            if (animFrame) {
+                cancelAnimationFrame(animFrame);
+                animFrame = null;
+            }
+            waveBars.forEach((bar, i) => {
+                bar.style.transform = 'scaleY(0.5)';
+                bar.style.height = `${baseHeights[i]}px`;
+            });
+        }
+
+        async function processQueue() {
+            if (!isActive || isProcessingQueue) return;
+            isProcessingQueue = true;
+
+            try {
+                while (isActive && !isPaused) {
+                    let audioData;
+                    let sentence;
+
+                    if (prefetchPromise && prefetchSentence) {
+                        sentence = prefetchSentence;
+                        const result = await prefetchPromise;
+                        prefetchPromise = null;
+                        prefetchSentence = null;
+                        if (!isActive) break;
+                        if (result.error) {
+                            console.error('TTS prefetch error:', result.error);
+                            sentenceQueue.unshift(sentence);
+                            await new Promise(r => setTimeout(r, 500));
+                            continue;
+                        }
+                        audioData = result.data;
+                    } else if (sentenceQueue.length > 0) {
+                        sentence = sentenceQueue.shift();
+                        let retries = 2;
+                        while (retries > 0) {
+                            try {
+                                audioData = await fetchTtsAudio(sentence);
+                                break;
+                            } catch (e) {
+                                retries--;
+                                if (retries <= 0) {
+                                    console.error('TTS fetch error after retries:', e);
+                                    break;
+                                }
+                                await new Promise(r => setTimeout(r, 500));
+                            }
+                        }
+                        if (!audioData) continue;
+                        if (!isActive) break;
+                    } else {
+                        break;
+                    }
+
+                    if (sentenceQueue.length > 0 && !prefetchPromise) {
+                        startPrefetch(sentenceQueue.shift());
+                    }
+
+                    try {
+                        await playAudioBuffer(audioData);
+                    } catch (e) {
+                        console.error('TTS play error:', e);
+                    }
+                }
+            } finally {
+                isProcessingQueue = false;
+            }
+
+            if (sentenceQueue.length > 0 && isActive) {
+                processQueue();
+                return;
+            }
+
+            if (isActive && streamEnded && textBuffer.trim().length === 0 && sentenceQueue.length === 0 && !isPlaying) {
+                stopWaveAnimation();
+                ipcRenderer.send('tts-playback-done');
+            }
+        }
+
+        function handleTextChunk(text) {
+            if (!isActive) return;
+            textBuffer += text;
+            textBuffer = removeCompleteToolCalls(textBuffer);
+
+            let sentence;
+            while ((sentence = extractSentence()) !== null) {
+                if (sentence.length > 0) {
+                    sentenceQueue.push(sentence);
+                }
+            }
+
+            if (sentenceQueue.length > 0 && !isPlaying && !isProcessingQueue) {
+                processQueue();
+            } else if (sentenceQueue.length > 0 && isProcessingQueue && !prefetchPromise) {
+                startPrefetch(sentenceQueue.shift());
+            }
+        }
+
+        function handleStreamEnd() {
+            if (!isActive) return;
+            streamEnded = true;
+            flushRemaining();
+            if (sentenceQueue.length > 0 && !isProcessingQueue) {
+                processQueue();
+            } else if (sentenceQueue.length === 0 && !isPlaying && !isProcessingQueue) {
+                stopWaveAnimation();
+                ipcRenderer.send('tts-playback-done');
+            }
+        }
+
+        function stopAll() {
+            isActive = false;
+            isPlaying = false;
+            isProcessingQueue = false;
+            isPaused = false;
+            streamEnded = false;
+            prefetchPromise = null;
+            prefetchSentence = null;
+            sentenceQueue = [];
+            textBuffer = '';
+
+            if (currentSource) {
+                try { currentSource.stop(); } catch(e) {}
+                currentSource = null;
+            }
+
+            stopWaveAnimation();
+        }
+
+        let isPaused = false;
+
+        function togglePause() {
+            if (!isActive) return;
+
+            if (isPaused) {
+                // 恢复播放
+                isPaused = false;
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                if (currentSource && isPlaying) {
+                    // 当前有音频在播放，恢复
+                }
+                // 恢复队列处理
+                if (sentenceQueue.length > 0 && !isProcessingQueue) {
+                    processQueue();
+                }
+                startWaveAnimation();
+                ipcRenderer.send('tts-pause-changed', false);
+            } else {
+                // 暂停播放
+                isPaused = true;
+                if (audioContext) {
+                    audioContext.suspend();
+                }
+                stopWaveAnimation();
+                ipcRenderer.send('tts-pause-changed', true);
+            }
+        }
+
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let mouseDownTime = 0;
+        const DRAG_THRESHOLD = 5;
+
+        ttsBall.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isDragging = false;
+            dragStartX = e.screenX;
+            dragStartY = e.screenY;
+            mouseDownTime = Date.now();
+            ipcRenderer.send('tts-start-drag');
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (dragStartX === 0 && dragStartY === 0) return;
+            const dx = e.screenX - dragStartX;
+            const dy = e.screenY - dragStartY;
+            if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+                isDragging = true;
+            }
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            ipcRenderer.send('tts-end-drag');
+            if (!isDragging && (Date.now() - mouseDownTime) < 500) {
+                togglePause();
+            }
+            isDragging = false;
+            dragStartX = 0;
+            dragStartY = 0;
+        });
+
+        document.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+
+        ipcRenderer.on('tts-start', (event, settings) => {
+            isActive = true;
+            isPlaying = false;
+            isProcessingQueue = false;
+            isPaused = false;
+            streamEnded = false;
+            prefetchPromise = null;
+            prefetchSentence = null;
+            sentenceQueue = [];
+            textBuffer = '';
+            smoothedVolume = 0;
+            lastVolumes = [];
+            if (settings) {
+                TTS_VOICE = settings.voice || 'xiaoxiao';
+                TTS_RATE = settings.rate || 0;
+                TTS_PITCH = settings.pitch || 0;
+                TTS_VOLUME = settings.volume || 0;
+            }
+            startWaveAnimation();
+        });
+
+        ipcRenderer.on('tts-text', (event, text) => {
+            handleTextChunk(text);
+        });
+
+        ipcRenderer.on('tts-stream-end', () => {
+            handleStreamEnd();
+        });
+
+        ipcRenderer.on('tts-force-stop', () => {
+            stopAll();
+        });
+
+        ipcRenderer.on('tts-settings-changed', (event, settings) => {
+            if (settings) {
+                TTS_VOICE = settings.voice || TTS_VOICE;
+                TTS_RATE = settings.rate !== undefined ? settings.rate : TTS_RATE;
+                TTS_PITCH = settings.pitch !== undefined ? settings.pitch : TTS_PITCH;
+                TTS_VOLUME = settings.volume !== undefined ? settings.volume : TTS_VOLUME;
+            }
+        });
+
+        waveBars.forEach((bar, i) => {
+            bar.style.height = `${baseHeights[i]}px`;
+            bar.style.transform = 'scaleY(0.5)';
+        });
+    </script>
+</body>
+</html>

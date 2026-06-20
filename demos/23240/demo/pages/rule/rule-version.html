@@ -1,0 +1,233 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>规则版本管理 - 规则引擎与审核管理</title>
+    <link rel="stylesheet" href="../../css/style.css">
+    <link rel="stylesheet" href="../../css/layout.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css">
+    <style>
+        .rule-selector { display:flex; gap:12px; align-items:center; padding:16px 20px; background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%); border:1px solid #bfdbfe; border-radius:8px; margin-bottom:16px; }
+        .rule-selector .label { font-weight:600; color:#1e40af; }
+        .rule-selector select { flex:1; max-width:320px; padding:8px 12px; border:1px solid #bfdbfe; border-radius:6px; background:#fff; font-size:14px; }
+        /* 标题区域可动态修改 */
+        #page-title { display:inline; }
+        #page-subtitle { }
+        .version-compare { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+        .version-box { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+        .version-box .vb-head { padding:10px 16px; background:#f8fafc; font-weight:600; color:#334155; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; }
+        .version-box .vb-body { padding:16px; font-family:Consolas,monospace; font-size:13px; line-height:1.8; background:#fafbfc; }
+        .diff-line-removed { background:#fee2e2; color:#991b1b; padding:2px 8px; border-left:3px solid #dc2626; display:block; margin:2px 0; border-radius:2px; }
+        .diff-line-added { background:#dcfce7; color:#166534; padding:2px 8px; border-left:3px solid #16a34a; display:block; margin:2px 0; border-radius:2px; }
+        .diff-line-modified { background:#fef3c7; color:#92400e; padding:2px 8px; border-left:3px solid #d97706; display:block; margin:2px 0; border-radius:2px; }
+        .diff-line-normal { padding:2px 8px; display:block; color:#475569; }
+    </style>
+<script src="../../js/nav-helper.js"></script>
+<script>
+    // 规则选择器切换时，动态更新页面标题为「规则名称 - 历史版本」
+    (function () {
+        var selector = document.getElementById('rule-selector');
+        var titleEl = document.getElementById('page-title');
+        if (!selector || !titleEl) return;
+
+        function updateTitle() {
+            var opt = selector.options[selector.selectedIndex];
+            var name = opt.getAttribute('data-name') || (opt.textContent.split(' - ')[1] || '').split('（')[0];
+            if (titleEl) titleEl.textContent = name + ' - 历史版本';
+            document.title = name + ' - 历史版本';
+        }
+
+        selector.addEventListener('change', updateTitle);
+        // 页面初始化时，若存在 URL 参数 ?name=接口命名格式校验，则按 data-name 匹配
+        try {
+            var m = window.location.search.match(/[?&]name=([^&]+)/);
+            if (m) {
+                var targetName = decodeURIComponent(m[1].replace(/\+/g, ' '));
+                for (var i = 0; i < selector.options.length; i++) {
+                    if (selector.options[i].getAttribute('data-name') === targetName) {
+                        selector.selectedIndex = i;
+                        updateTitle();
+                        break;
+                    }
+                }
+            }
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</head>
+<body>
+
+<div class="page-wrapper">
+
+    <!-- ====== 页面标题区 ====== -->
+    <div class="page-header">
+        <div class="title-group">
+            <h2><i class="fa fa-code-fork" style="color:var(--primary);margin-right:8px"></i><span id="page-title">接口命名格式校验 - 历史版本</span></h2>
+            <div class="page-desc" id="page-subtitle">
+                查看规则历史版本、版本对比与回滚
+            </div>
+        </div>
+        <div class="action-group">
+            <button class="btn btn-default"><i class="fa fa-file-text-o"></i> 查看规则定义</button>
+        </div>
+    </div>
+
+    <!-- ====== 规则选择器 ====== -->
+    <div class="rule-selector">
+        <span class="label"><i class="fa fa-filter"></i> 当前规则：</span>
+        <select id="rule-selector">
+            <option data-name="接口命名格式校验">R-FMT-0001 - 接口命名格式校验（当前生效版本：v3.2）</option>
+            <option data-name="字段命名小驼峰校验">R-FMT-0002 - 字段命名小驼峰校验（当前版本：v2.1）</option>
+            <option data-name="返回码标准合规检查">R-STD-0003 - 返回码标准合规检查（当前版本：v4.0）</option>
+            <option data-name="敏感字段脱敏检查">R-BIZ-0005 - 敏感字段脱敏检查（当前版本：v1.5）</option>
+            <option data-name="必填字段完整性校验">R-INT-0010 - 必填字段完整性校验（当前版本：v2.8）</option>
+        </select>
+        <button class="btn btn-default"><i class="fa fa-refresh"></i> 刷新</button>
+    </div>
+
+    <!-- ====== 版本列表 ====== -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><i class="fa fa-history"></i> 版本历史（接口命名格式校验）</div>
+            <div class="card-action">
+                <a href="javascript:;">导出变更记录</a>
+            </div>
+        </div>
+        <div class="card-body" style="padding:0">
+            <div class="table-wrapper" style="border:none;border-radius:0">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th class="text-center" style="width:80px">版本号</th>
+                            <th class="text-center" style="width:100px">发布状态</th>
+                            <th class="text-center" style="width:120px">生效日期</th>
+                            <th>变更说明</th>
+                            <th class="text-center" style="width:100px">创建人</th>
+                            <th class="text-center" style="width:180px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background:#f0fdf4">
+                            <td class="text-center"><strong style="color:#16a34a;font-size:16px">v3.2</strong><div style="font-size:11px;color:#16a34a;margin-top:2px"><i class="fa fa-star"></i> 当前版本</div></td>
+                            <td class="text-center"><span class="tag tag-success">已发布</span></td>
+                            <td class="text-center">2026-06-04</td>
+                            <td>新增对RESTful路径参数的支持，修复版本号后两位不识别的问题</td>
+                            <td class="text-center">张工</td>
+                            <td class="text-center op-col"><a href="javascript:;">对比</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center"><strong>v3.1</strong></td>
+                            <td class="text-center"><span class="tag tag-default">历史</span></td>
+                            <td class="text-center">2026-05-20</td>
+                            <td>优化正则表达式性能，平均执行耗时降低35%</td>
+                            <td class="text-center">李工</td>
+                            <td class="text-center op-col"><a href="javascript:;">回滚</a><a href="javascript:;">设为当前</a><a href="javascript:;">对比</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center"><strong>v3.0</strong></td>
+                            <td class="text-center"><span class="tag tag-default">历史</span></td>
+                            <td class="text-center">2026-04-15</td>
+                            <td>支持三级业务域前缀识别（原只支持两级）</td>
+                            <td class="text-center">王工</td>
+                            <td class="text-center op-col"><a href="javascript:;">回滚</a><a href="javascript:;">设为当前</a><a href="javascript:;">对比</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center"><strong>v2.5</strong></td>
+                            <td class="text-center"><span class="tag tag-default">历史</span></td>
+                            <td class="text-center">2026-03-10</td>
+                            <td>增加接口英文缩写白名单（OA、HR、CRM等）</td>
+                            <td class="text-center">赵工</td>
+                            <td class="text-center op-col"><a href="javascript:;">回滚</a><a href="javascript:;">设为当前</a><a href="javascript:;">对比</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center"><strong>v2.4</strong></td>
+                            <td class="text-center"><span class="tag tag-warning">草稿</span></td>
+                            <td class="text-center">-</td>
+                            <td><span style="color:#d97706">[草稿]</span> 增加对数字ID后缀的特殊处理（尚未发布）</td>
+                            <td class="text-center">张工</td>
+                            <td class="text-center op-col"><a href="javascript:;">编辑</a><a href="javascript:;">发布</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center"><strong>v2.0</strong></td>
+                            <td class="text-center"><span class="tag tag-default">历史</span></td>
+                            <td class="text-center">2026-01-20</td>
+                            <td>规范首次重大升级：统一各业务线命名规则</td>
+                            <td class="text-center">架构组</td>
+                            <td class="text-center op-col"><a href="javascript:;">回滚</a><a href="javascript:;">设为当前</a><a href="javascript:;">对比</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center"><strong>v1.0</strong></td>
+                            <td class="text-center"><span class="tag tag-default">历史</span></td>
+                            <td class="text-center">2025-09-01</td>
+                            <td>规则初版发布</td>
+                            <td class="text-center">架构组</td>
+                            <td class="text-center op-col"><a href="javascript:;">回滚</a><a href="javascript:;">设为当前</a><a href="javascript:;">对比</a></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 版本对比视图 ====== -->
+    <div class="card" style="margin-top:16px">
+        <div class="card-header">
+            <div class="card-title"><i class="fa fa-columns"></i> 版本对比 · v3.1 → v3.2</div>
+            <div class="card-action">
+                <a href="javascript:;">切换对比版本</a>
+                <a href="javascript:;">仅显示差异</a>
+            </div>
+        </div>
+        <div class="card-body">
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+                <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:16px;height:16px;background:#fee2e2;border-left:3px solid #dc2626"></span> 删除</div>
+                <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:16px;height:16px;background:#dcfce7;border-left:3px solid #16a34a"></span> 新增</div>
+                <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:16px;height:16px;background:#fef3c7;border-left:3px solid #d97706"></span> 修改</div>
+            </div>
+            <div class="version-compare">
+                <div class="version-box">
+                    <div class="vb-head"><span><i class="fa fa-clock-o"></i> 旧版本 v3.1</span><span style="color:#94a3b8;font-weight:400">2026-05-20</span></div>
+                    <div class="vb-body">
+<strong style="color:#1e40af">【规则条件】</strong>
+<span class="diff-line-normal">IF 接口名称存在</span>
+<span class="diff-line-modified">- 匹配正则: ^[a-z]{2}\.[a-z]+\.[a-zA-Z0-9]+$</span>
+<span class="diff-line-removed">- 不包含特殊字符 "@#$"</span>
+<span class="diff-line-normal">- 长度 5~50 字符</span>
+
+<strong style="color:#1e40af;margin-top:10px;display:block">【规则动作】</strong>
+<span class="diff-line-normal">THEN 标记：阻断</span>
+<span class="diff-line-modified">- 提示信息：接口命名不符合规范</span>
+<span class="diff-line-removed">- 禁止提交审核</span>
+
+<strong style="color:#1e40af;margin-top:10px;display:block">【严重程度】</strong>
+<span class="diff-line-normal">阻断</span>
+                    </div>
+                </div>
+                <div class="version-box">
+                    <div class="vb-head"><span><i class="fa fa-star" style="color:#16a34a"></i> 新版本 v3.2</span><span style="color:#94a3b8;font-weight:400">2026-06-04</span></div>
+                    <div class="vb-body">
+<strong style="color:#1e40af">【规则条件】</strong>
+<span class="diff-line-normal">IF 接口名称存在</span>
+<span class="diff-line-modified">+ 匹配正则: ^[a-z]{2,3}\.[a-z0-9_]+\.[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$</span>
+<span class="diff-line-added">+ 支持 RESTful 路径参数 {id}/{code}</span>
+<span class="diff-line-normal">- 长度 5~50 字符</span>
+
+<strong style="color:#1e40af;margin-top:10px;display:block">【规则动作】</strong>
+<span class="diff-line-normal">THEN 标记：阻断</span>
+<span class="diff-line-modified">+ 提示信息：接口命名不符合规范，请参考《命名规范v3.2》</span>
+<span class="diff-line-added">+ 提供一键修正建议按钮</span>
+
+<strong style="color:#1e40af;margin-top:10px;display:block">【严重程度】</strong>
+<span class="diff-line-normal">阻断</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script src="../../js/mock-data.js"></script>
+</body>
+</html>

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeakType Expanded</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden; user-select: none; background: transparent;
+            padding: 3px;
+        }
+        .expanded-mode {
+            width: 200px; height: 50px;
+            background: rgba(30, 30, 45, 0.85);
+            border-radius: 25px;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+        .visualization {
+            display: flex; align-items: center; justify-content: center;
+            width: 100%; height: 100%; padding: 0 8px;
+            gap: 0; position: relative;
+        }
+        .wave-canvas { height: 40px; flex: 1; }
+        .center-content {
+            display: flex; align-items: center; justify-content: center;
+            width: 36px; flex-shrink: 0;
+        }
+        .stop-btn {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+            border: none; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .stop-btn:hover { transform: scale(1.1); }
+        .stop-btn-icon { width: 10px; height: 10px; border-radius: 2px; background: white; }
+        .processing-text {
+            display: none; position: absolute;
+            left: 0; top: 0; width: 100%; height: 100%;
+            align-items: center; justify-content: center;
+            overflow: hidden; z-index: 5;
+        }
+        .processing-text.show { display: flex; }
+        .stop-btn.hidden { display: none; }
+        .processing-ripple {
+            position: absolute; left: 50%; top: 50%;
+            width: 10px; height: 10px;
+            transform: translate(-50%, -50%); border-radius: 50%;
+        }
+        .processing-ripple-1 { border: 1.5px solid rgba(255,107,107,0.6); animation: processingRipple 3s ease-out infinite; }
+        .processing-ripple-2 { border: 1.2px solid rgba(255,150,150,0.4); animation: processingRipple 3s ease-out infinite 1s; }
+        .processing-ripple-3 { border: 0.8px solid rgba(255,180,180,0.25); animation: processingRipple 3s ease-out infinite 2s; }
+        @keyframes processingRipple {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.85; }
+            100% { transform: translate(-50%, -50%) scale(24); opacity: 0; }
+        }
+        .processing-label {
+            font-size: 13px; font-weight: 500; letter-spacing: 2px;
+            color: rgba(255,255,255,0.9); position: relative; z-index: 2;
+            animation: processingGlow 3s ease-in-out infinite;
+        }
+        @keyframes processingGlow {
+            0%, 100% { transform: scale(0.88); }
+            50% { transform: scale(1.1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="expanded-mode">
+        <div class="visualization">
+            <canvas class="wave-canvas" id="leftWave"></canvas>
+            <div class="center-content">
+                <button class="stop-btn" id="stopBtn">
+                    <div class="stop-btn-icon"></div>
+                </button>
+                <span class="processing-text" id="processingText">
+                    <div class="processing-ripple processing-ripple-1"></div>
+                    <div class="processing-ripple processing-ripple-2"></div>
+                    <div class="processing-ripple processing-ripple-3"></div>
+                    <span class="processing-label">AI优化</span>
+                </span>
+            </div>
+            <canvas class="wave-canvas" id="rightWave"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        const leftWaveCanvas = document.getElementById('leftWave');
+        const rightWaveCanvas = document.getElementById('rightWave');
+        const stopBtn = document.getElementById('stopBtn');
+        const processingText = document.getElementById('processingText');
+
+        let canvasesReady = false;
+        let ignoreTimer = null;
+        let vizStream = null;
+        let vizAudioContext = null;
+        let vizAnalyser = null;
+        let vizAnimFrame = null;
+        let wavePhase = 0;
+
+        function initWaveCanvases() {
+            const dpr = window.devicePixelRatio || 1;
+            [leftWaveCanvas, rightWaveCanvas].forEach(canvas => {
+                const rect = canvas.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    canvas.width = rect.width * dpr;
+                    canvas.height = rect.height * dpr;
+                    const ctx = canvas.getContext('2d');
+                    ctx.scale(dpr, dpr);
+                }
+            });
+            canvasesReady = true;
+        }
+
+        function drawWave(canvas, amplitude, phase, direction) {
+            if (!canvasesReady) return;
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const w = canvas.width / dpr;
+            const h = canvas.height / dpr;
+            if (w <= 0 || h <= 0) return;
+            ctx.clearRect(0, 0, w, h);
+
+            const midY = h / 2;
+            const boostedAmp = Math.pow(amplitude, 0.3);
+            const maxAmp = h * 0.5;
+            const amp = boostedAmp * maxAmp;
+            const freq = 4.5 + amplitude * 7;
+
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+            ctx.lineWidth = 1.8;
+            ctx.lineCap = 'round';
+
+            for (let x = 0; x < w; x++) {
+                const xRatio = x / w;
+                const envelope = Math.sin(xRatio * Math.PI);
+                let y;
+                if (direction === 'left') {
+                    y = midY + Math.sin((1 - xRatio) * Math.PI * freq + phase) * amp * envelope;
+                } else {
+                    y = midY + Math.sin(xRatio * Math.PI * freq + phase) * amp * envelope;
+                }
+                if (x === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 107, 107, 0.35)';
+            ctx.lineWidth = 1.2;
+            for (let x = 0; x < w; x++) {
+                const xRatio = x / w;
+                const envelope = Math.sin(xRatio * Math.PI);
+                let y;
+                if (direction === 'left') {
+                    y = midY - Math.sin((1 - xRatio) * Math.PI * freq + phase) * amp * envelope * 0.5;
+                } else {
+                    y = midY - Math.sin(xRatio * Math.PI * freq + phase) * amp * envelope * 0.5;
+                }
+                if (x === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        function resetWaves() {
+            [leftWaveCanvas, rightWaveCanvas].forEach(canvas => {
+                const dpr = window.devicePixelRatio || 1;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+            });
+        }
+
+        async function startVisualization() {
+            try {
+                vizStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                vizAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = vizAudioContext.createMediaStreamSource(vizStream);
+                vizAnalyser = vizAudioContext.createAnalyser();
+                vizAnalyser.fftSize = 512;
+                vizAnalyser.smoothingTimeConstant = 0.3;
+                source.connect(vizAnalyser);
+
+                const timeData = new Float32Array(vizAnalyser.fftSize);
+                let currentAmplitude = 0;
+
+                function animate() {
+                    vizAnimFrame = requestAnimationFrame(animate);
+
+                    vizAnalyser.getFloatTimeDomainData(timeData);
+                    let sum = 0;
+                    for (let i = 0; i < timeData.length; i++) {
+                        sum += timeData[i] * timeData[i];
+                    }
+                    const rms = Math.sqrt(sum / timeData.length);
+                    currentAmplitude = currentAmplitude * 0.5 + rms * 0.5;
+
+                    wavePhase += 0.15;
+                    drawWave(leftWaveCanvas, currentAmplitude, wavePhase, 'left');
+                    drawWave(rightWaveCanvas, currentAmplitude, wavePhase, 'right');
+                }
+
+                vizAnimFrame = requestAnimationFrame(animate);
+            } catch (e) {
+                console.error('可视化音频获取失败:', e);
+            }
+        }
+
+        function stopVisualization() {
+            if (vizAnimFrame) {
+                cancelAnimationFrame(vizAnimFrame);
+                vizAnimFrame = null;
+            }
+            if (vizAudioContext) {
+                vizAudioContext.close().catch(() => {});
+                vizAudioContext = null;
+            }
+            if (vizStream) {
+                vizStream.getTracks().forEach(t => t.stop());
+                vizStream = null;
+            }
+            vizAnalyser = null;
+            resetWaves();
+        }
+
+        stopBtn.addEventListener('click', () => {
+            ipcRenderer.send('expanded-stop-clicked');
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            const rect = stopBtn.getBoundingClientRect();
+            const overBtn = e.clientX >= rect.left && e.clientX <= rect.right &&
+                            e.clientY >= rect.top && e.clientY <= rect.bottom;
+            clearTimeout(ignoreTimer);
+            if (overBtn) {
+                ipcRenderer.send('set-expanded-ignore-mouse', false);
+            } else {
+                ignoreTimer = setTimeout(() => {
+                    ipcRenderer.send('set-expanded-ignore-mouse', true);
+                }, 200);
+            }
+        });
+
+        requestAnimationFrame(() => {
+            initWaveCanvases();
+        });
+
+        ipcRenderer.on('start-viz', () => {
+            stopBtn.classList.remove('hidden');
+            processingText.classList.remove('show');
+            resetWaves();
+            startVisualization();
+        });
+
+        ipcRenderer.on('stop-viz', () => {
+            stopVisualization();
+        });
+
+        ipcRenderer.on('show-processing', () => {
+            stopVisualization();
+            stopBtn.classList.add('hidden');
+            processingText.classList.add('show');
+            resetWaves();
+        });
+
+        ipcRenderer.on('reset-waves', () => {
+            stopVisualization();
+            resetWaves();
+        });
+    </script>
+</body>
+</html>

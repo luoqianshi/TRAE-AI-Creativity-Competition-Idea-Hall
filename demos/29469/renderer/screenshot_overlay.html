@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Screenshot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            overflow: hidden;
+            user-select: none;
+            cursor: crosshair;
+            background: transparent;
+        }
+        #screenshotImg {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 0;
+        }
+        /* 半透明遮罩 - 四块 */
+        .mask {
+            position: fixed;
+            background: rgba(0, 0, 0, 0.35);
+            z-index: 1;
+            transition: none;
+        }
+        #maskTop { top: 0; left: 0; right: 0; }
+        #maskBottom { bottom: 0; left: 0; right: 0; }
+        #maskLeft { top: 0; bottom: 0; left: 0; }
+        #maskRight { top: 0; bottom: 0; right: 0; }
+        /* 选区 */
+        #selection {
+            position: fixed;
+            border: 2px solid rgba(100, 180, 255, 0.8);
+            z-index: 2;
+            display: none;
+            box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.35);
+        }
+        #selection::after {
+            content: '';
+            position: absolute;
+            top: -2px; left: -2px; right: -2px; bottom: -2px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        /* 尺寸提示 */
+        #sizeHint {
+            position: fixed;
+            z-index: 5;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 3px;
+            display: none;
+            pointer-events: none;
+            font-family: monospace;
+        }
+        /* 操作按钮 */
+        #actionBar {
+            position: fixed;
+            z-index: 10;
+            display: none;
+            gap: 6px;
+            align-items: center;
+        }
+        .action-btn {
+            width: 32px; height: 32px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s;
+        }
+        .action-btn svg { width: 18px; height: 18px; }
+        .btn-confirm {
+            background: rgba(76, 175, 80, 0.9);
+        }
+        .btn-confirm:hover { background: rgba(76, 175, 80, 1); }
+        .btn-confirm svg { fill: #fff; }
+        .btn-cancel {
+            background: rgba(244, 67, 54, 0.8);
+        }
+        .btn-cancel:hover { background: rgba(244, 67, 54, 1); }
+        .btn-cancel svg { fill: #fff; }
+        /* 十字线 */
+        #crossH, #crossV {
+            position: fixed;
+            z-index: 3;
+            pointer-events: none;
+        }
+        #crossH {
+            left: 0; right: 0;
+            height: 1px;
+            background: rgba(100, 180, 255, 0.4);
+        }
+        #crossV {
+            top: 0; bottom: 0;
+            width: 1px;
+            background: rgba(100, 180, 255, 0.4);
+        }
+        /* 提示 */
+        #tip {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255,255,255,0.7);
+            font-size: 16px;
+            z-index: 4;
+            pointer-events: none;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <img id="screenshotImg" />
+    <div id="crossH"></div>
+    <div id="crossV"></div>
+    <div id="selection"></div>
+    <div id="sizeHint"></div>
+    <div id="actionBar">
+        <button class="action-btn btn-confirm" id="confirmBtn" title="确认截图">
+            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        </button>
+        <button class="action-btn btn-cancel" id="cancelBtn" title="取消 (Esc)">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+    </div>
+    <div id="tip">点击拖动选取截图区域</div>
+    <canvas id="cropCanvas" style="display:none"></canvas>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+        const img = document.getElementById('screenshotImg');
+        const selection = document.getElementById('selection');
+        const sizeHint = document.getElementById('sizeHint');
+        const actionBar = document.getElementById('actionBar');
+        const confirmBtn = document.getElementById('confirmBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+        const crossH = document.getElementById('crossH');
+        const crossV = document.getElementById('crossV');
+        const tip = document.getElementById('tip');
+        const cropCanvas = document.getElementById('cropCanvas');
+
+        let isDragging = false;
+        let startX = 0, startY = 0;
+        let selX = 0, selY = 0, selW = 0, selH = 0;
+        let screenshotDataUrl = '';
+        let scaleFactor = 1;
+
+        // 接收截图数据
+        ipcRenderer.on('screenshot-data', (event, data) => {
+            screenshotDataUrl = data.dataUrl;
+            scaleFactor = data.scaleFactor || 1;
+            img.src = screenshotDataUrl;
+            img.onload = () => {
+                tip.style.display = 'block';
+            };
+        });
+
+        // 鼠标移动 → 十字线
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) {
+                crossH.style.top = e.clientY + 'px';
+                crossV.style.left = e.clientX + 'px';
+                crossH.style.display = 'block';
+                crossV.style.display = 'block';
+            }
+        });
+
+        // 鼠标按下 → 开始选区
+        document.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.action-btn')) return;
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            selection.style.display = 'none';
+            actionBar.style.display = 'none';
+            tip.style.display = 'none';
+        });
+
+        // 鼠标移动 → 更新选区
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const cx = e.clientX;
+            const cy = e.clientY;
+            selX = Math.min(startX, cx);
+            selY = Math.min(startY, cy);
+            selW = Math.abs(cx - startX);
+            selH = Math.abs(cy - startY);
+
+            selection.style.left = selX + 'px';
+            selection.style.top = selY + 'px';
+            selection.style.width = selW + 'px';
+            selection.style.height = selH + 'px';
+            selection.style.display = 'block';
+
+            // 尺寸提示
+            const realW = Math.round(selW * scaleFactor);
+            const realH = Math.round(selH * scaleFactor);
+            sizeHint.textContent = `${realW} × ${realH}`;
+            sizeHint.style.left = (selX + selW / 2 - 30) + 'px';
+            sizeHint.style.top = (selY - 24) + 'px';
+            sizeHint.style.display = 'block';
+
+            // 隐藏十字线
+            crossH.style.display = 'none';
+            crossV.style.display = 'none';
+        });
+
+        // 鼠标松开 → 显示操作按钮
+        document.addEventListener('mouseup', (e) => {
+            if (!isDragging) return;
+            isDragging = false;
+            if (selW < 5 || selH < 5) {
+                selection.style.display = 'none';
+                sizeHint.style.display = 'none';
+                tip.style.display = 'block';
+                return;
+            }
+            // 显示操作按钮在选区右下角
+            let barX = selX + selW + 8;
+            let barY = selY + selH + 8;
+            // 防止超出屏幕
+            if (barX + 80 > window.innerWidth) barX = selX + selW - 80;
+            if (barY + 40 > window.innerHeight) barY = selY + selH - 40;
+            actionBar.style.left = barX + 'px';
+            actionBar.style.top = barY + 'px';
+            actionBar.style.display = 'flex';
+        });
+
+        // 确认截图
+        confirmBtn.addEventListener('click', () => {
+            if (selW < 5 || selH < 5) return;
+            // 使用 canvas 裁剪
+            const ctx = cropCanvas.getContext('2d');
+            const realX = Math.round(selX * scaleFactor);
+            const realY = Math.round(selY * scaleFactor);
+            const realW = Math.round(selW * scaleFactor);
+            const realH = Math.round(selH * scaleFactor);
+            cropCanvas.width = realW;
+            cropCanvas.height = realH;
+
+            const tempImg = new Image();
+            tempImg.onload = () => {
+                ctx.drawImage(tempImg, realX, realY, realW, realH, 0, 0, realW, realH);
+                const croppedDataUrl = cropCanvas.toDataURL('image/png');
+                ipcRenderer.send('screenshot-confirm', { dataUrl: croppedDataUrl });
+            };
+            tempImg.src = screenshotDataUrl;
+        });
+
+        // 取消截图
+        cancelBtn.addEventListener('click', () => {
+            ipcRenderer.send('screenshot-cancel');
+        });
+
+        // ESC 取消
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                ipcRenderer.send('screenshot-cancel');
+            } else if (e.key === 'Enter' && selW >= 5 && selH >= 5) {
+                confirmBtn.click();
+            }
+        });
+    </script>
+</body>
+</html>
