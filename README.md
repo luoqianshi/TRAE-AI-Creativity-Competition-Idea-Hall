@@ -8,60 +8,80 @@
 
 [在线访问](https://luoqianshi.github.io/TRAE-AI-Creativity-Competition-Idea-Hall) · [前往社区报名](https://forum.trae.cn/c/38-category/40-category/40) · [TRAE 官网](https://www.trae.cn)
 
+---
+
 ## 当前数据
 
 | 维度 | 数量 |
 |---|---|
-| 总报名帖 | **628** |
-| 含 HTML Demo | **457** |
-| 暂无 Demo | **171** |
-| 生活娱乐 | 210 |
-| 学习工作 | 257 |
-| 社会服务 | 105 |
-| 社会公益 | 101 |
-| 硬件交互 | 22 |
+| 总报名帖 | **10,098** |
+| 含 HTML Demo | **7,709** |
+| 暂无 Demo | **2,389** |
+| 生活娱乐 | 3,234 |
+| 学习工作 | 4,302 |
+| 社会服务 | 1,725 |
+| 硬件交互 | 471 |
+| 社会公益 | 1,406 |
 
-> 数据更新时间：2026-06-19 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40)
+> 数据更新时间：2026-06-20 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
+
+---
 
 ## 功能特性
 
-**自动爬取**
-- 通过 Discourse API 获取大赛报名专区（Category ID: 39）的所有帖子
-- 三层 Demo 提取策略：HTML 附件 > Onebox 外部链接 > 关键词上下文兜底
-- 增量更新：只处理新增帖子，已有帖子跳过（支持 `--force` 全量重建）
+### 自动爬取
+
+- 通过 **Discourse API** 获取大赛报名专区（Category ID: 39）的所有帖子
+- **双数据源策略（v2）**：以飞书多维表格审批名单为主数据源，Discourse API 为补充，确保已审核项目优先收录
+- **三层 Demo 提取策略**：HTML 附件 > Onebox 外部链接 > 关键词上下文兜底
+- **增量更新**：只处理新增帖子，已有帖子跳过（支持 `--force` 全量重建）
 - 无 Demo 的帖子同样记录在册，卡片按钮置灰显示「暂无 Demo」
+- 每 100 条记录自动保存检查点，防止中断丢失数据
 
-**分类展示**
+### 分类展示
+
 - 按五大赛道自动分类：生活娱乐、学习工作、社会服务、硬件交互、社会公益
-- 支持按赛道筛选、关键词搜索、按时间/浏览量/点赞数排序
-- 每张卡片展示标题、摘要、浏览量、点赞数、作者
+- 支持按赛道筛选、关键词搜索（标题 + 摘要）、按时间/浏览量/点赞数排序
+- **审核状态筛选**：Toggle 开关切换「仅展示官方审核通过」/「展示全部」
+- 每张卡片展示赛道图标、标题、摘要、浏览量、点赞数、作者、审核标记
 
-**在线体验**
+### 在线体验
+
 - HTML Demo 在新窗口直接打开，无需下载
 - 社区原帖链接一键跳转
-- 所有 Demo 文件以相对路径部署，兼容 GitHub Pages 子路径
+- 所有 Demo 文件以相对路径部署（`demos/{topic_id}/xxx.html`），兼容 GitHub Pages 子路径
 
-**TRAE 深色科技风 UI**
-- 纯黑底色 + 荧光绿（`#22c55e`）强调色
-- Canvas 2D 粒子动画背景，支持鼠标交互
-- 赛道图标从 TRAE 官网提取，SVG 图标替换 emoji
+### TRAE 深色科技风 UI
+
+- 纯黑底色（`#0a0a0a`）+ 荧光绿（`#22c55e`）强调色
+- **Canvas 2D 粒子动画背景**：60 个粒子 + 距离连线 + 鼠标交互（150px 范围内高亮连线）
+- 毛玻璃导航栏（`backdrop-filter: blur(14px)`），滚动后加深背景
+- 赛道图标从 TRAE 官网提取的 PNG（5 赛道 x default/active 状态）
+- 浏览量/点赞/作者/按钮均使用自定义荧光绿 SVG 图标（非 emoji）
 - 响应式布局，移动端适配
+- 卡片滚动入场动画（IntersectionObserver + 逐张延迟 50ms）
+
+---
 
 ## 技术架构
 
 ```
-TRAE 定时任务（每日 10:00）
+TRAE 定时任务（每日 10:00 北京时间）
     │
     ▼
-Python 爬虫（Discourse API）
-    ├── 获取帖子列表 → 增量比对
-    ├── 提取 Demo 附件/链接
-    ├── 下载 HTML 文件到 demos/
-    └── 更新 data/demos.json
+Python 爬虫（双数据源）
+    ├── Step 1: 加载飞书多维表格审批名单（data/approved_projects.json）
+    ├── Step 2: 逐个处理审批项目，通过 Discourse API 补充元数据
+    │           ├── 提取 Demo 附件/链接（三层策略）
+    │           ├── 下载 HTML 文件到 demos/{topic_id}/
+    │           └── 标记 approved: True
+    ├── Step 3: 爬取 Discourse API 获取未审批的新帖子
+    │           └── 标记 approved: False
+    └── 更新 data/demos.json（每 100 条自动保存）
     │
     ▼
 Jinja2 模板渲染
-    └── 生成 index.html（纯静态）
+    └── 生成 index.html（纯静态，含统计数据）
     │
     ▼
 Git push → GitHub Actions → GitHub Pages
@@ -69,31 +89,221 @@ Git push → GitHub Actions → GitHub Pages
 
 **技术选型理由**：纯静态生成（SSG），没有服务器、没有数据库、没有运行时依赖。GitHub Pages 免费托管，域名自带 HTTPS。爬虫和渲染在 TRAE 定时任务里跑，push 触发 Actions 自动部署。整条链路成本为零。
 
+---
+
+## 技术实现细节
+
+### 1. 爬虫架构（crawler/crawler.py & crawler_v2.py）
+
+爬虫采用面向对象设计，由四个核心类组成：
+
+#### DiscourseClient — API 客户端
+
+- 封装 Discourse 论坛 REST API，带**限速和指数退避重试**
+- 每次请求间隔 1.5s（`rate_limit_delay`），最多重试 5 次，退避基数 2，上限 8s
+- 遇到 HTTP 429 时读取 `Retry-After` 头动态等待
+- 超时设置：API 请求 15s，文件下载 60s
+- 核心方法：
+  - `get_category_topics(page)` — 分页获取分类帖子列表
+  - `get_topic_detail(topic_id)` — 获取帖子详情（含 cooked HTML 正文）
+  - `download_file(url, dest_path)` — 流式下载，实时校验大小（上限 5MB）
+
+#### DemoExtractor — Demo 资源提取器
+
+从 Discourse 帖子的 `cooked` HTML 中提取 Demo，采用**三层优先级策略**：
+
+| 优先级 | 策略 | 实现方式 | 说明 |
+|---|---|---|---|
+| 1 | HTML 附件 | 解析 `<a class="attachment">` | 提取 `.html/.htm` 后缀的附件链接 |
+| 2 | Onebox 链接 | 解析 `<aside class="onebox">` | 提取 Discourse 自动生成的外部链接预览卡片 |
+| 3 | 关键词兜底 | 遍历 `<a>` 标签 + 父元素文本匹配 | 查找父元素包含 demo/体验/预览/产物/在线 的外部链接 |
+
+URL 校验规则：
+- 排除域名：`github.com`、`bilibili.com`、`forum.trae.cn`、`trae-forum-cdn.trae.com.cn`
+- 排除论坛内部链接（含 `/t/topic/`）
+- 去除 `www.` 前缀后匹配
+
+#### DataManager — 数据管理器
+
+管理 `data/demos.json` 的读写，核心特性：
+- **增量更新**：通过 `get_existing_ids()` 返回已有 topic_id 集合，跳过已处理帖子
+- **合并写入**：`add_or_update()` 采用合并模式，新数据只覆盖非 None 字段，保留已有字段不被覆盖
+- **自动统计**：`save()` 时自动计算 `total_count`、`approved_count`、`unapproved_count`
+- **归档机制**：支持 `archived` 标记，`get_active_demos()` 返回非归档帖子并按时间倒序排列
+
+#### DemoHallCrawler — 主编排器
+
+串联整个爬取-提取-下载-渲染流程：
+
+**v1（crawler.py）**：纯 Discourse API 单数据源，分页遍历 Category 39 所有帖子
+
+**v2（crawler_v2.py）**：双数据源策略
+1. 加载飞书多维表格审批名单作为主数据源（`data/approved_projects.json`）
+2. 逐个处理审批项目，调用 Discourse API 补充元数据（浏览量、标签、摘要等）
+3. 再爬 Discourse API 获取不在审批列表中的额外帖子（捕获尚未审批的新帖）
+4. 降级方案：审批名单不存在时回退到纯 Discourse 模式
+
+### 2. 数据结构（data/demos.json）
+
+```json
+{
+  "last_updated": "2026-06-19T20:04:54.245239+00:00",
+  "total_count": 10071,
+  "approved_count": 7709,
+  "unapproved_count": 2362,
+  "demos": [
+    {
+      "topic_id": 34392,
+      "title": "MIND SPACE 心情日记",
+      "forum_url": "https://forum.trae.cn/t/topic/34392",
+      "author": "username",
+      "created_at": "2026-06-19T09:16:36.232Z",
+      "tags": ["生活娱乐", "社会公益"],
+      "views": 128,
+      "like_count": 5,
+      "excerpt": "帖子摘要文本...",
+      "cover_image": "https://...",
+      "approved": true,
+      "approved_source": "lark_bitable",
+      "demo_type": "attachment",
+      "demo_file": "/absolute/path/to/demos/34392/demo.html",
+      "demo_url": "demos/34392/demo.html",
+      "external_url": null,
+      "has_demo": true,
+      "archived": false
+    }
+  ]
+}
+```
+
+关键字段说明：
+- `approved` / `approved_source`：审核状态及来源（`lark_bitable` 或 null）
+- `demo_type`：`attachment`（本地下载）/ `external`（外部链接）/ `null`（无 Demo）
+- `demo_url`：相对路径，用于网页引用（兼容 GitHub Pages）
+- `demo_file`：本地绝对路径，用于爬虫内部管理
+
+### 3. 模板渲染（templates/index.html.j2）
+
+使用 Jinja2 模板引擎，渲染时传入：
+- `demos`：所有非归档帖子列表（按时间倒序）
+- `stats`：统计字典（总数 + 各赛道数量）
+- `track_tags`：赛道标签映射
+- `last_updated`：最后更新时间
+
+模板结构：
+- **Hero 区域**：项目标题 + 描述 + CTA 按钮 + 统计数字（总作品 + 五赛道）
+- **Filter Bar**：赛道标签筛选 + 排序下拉 + 审核状态 Toggle
+- **Cards Grid**：卡片列表，每张卡片包含赛道图标、审核标记、标题、摘要、浏览/点赞/作者、操作按钮
+- **Footer**：数据来源 + 作者链接 + 更新时间
+
+### 4. 前端交互（script.js）
+
+全部原生 JavaScript，无框架依赖，由四个 IIFE 模块组成：
+
+#### 粒子动画系统
+- Canvas 2D 实现，60 个粒子，随机位置/速度/半径
+- **粒子连线**：距离 < 120px 的粒子间绘制半透明绿色连线（opacity 随距离线性衰减，最大 0.2）
+- **鼠标交互**：距离 < 150px 的粒子与鼠标位置连线（opacity 最大 0.3，线宽 0.8）
+- 使用 `requestAnimationFrame` 驱动动画循环，窗口 resize 自适应
+
+#### 导航栏滚动效果
+- 监听 `scroll` 事件，滚动超过 50px 时添加 `.scrolled` 类加深背景透明度
+
+#### 卡片滚动入场动画
+- 使用 `IntersectionObserver`，阈值 0.1
+- 进入视口时逐张添加 `.visible` 类，每张延迟 50ms 实现瀑布效果
+- 触发后立即 `unobserve`，不重复动画
+
+#### 筛选 / 搜索 / 排序
+- **赛道筛选**：点击 tag-pill 切换 active 状态，按 `data-tags` 属性过滤
+- **关键词搜索**：300ms 防抖，匹配 `data-title` + `data-excerpt`
+- **排序**：支持最新发布（`data-created`）、最多浏览（`data-views`）、最多点赞（`data-likes`）
+- **审核筛选**：Toggle 开关控制 `data-approved` 过滤
+- 过滤后通过 DOM 重排（`appendChild`）实现无刷新更新
+
+### 5. 样式体系（styles.css）
+
+CSS 变量驱动的设计系统：
+
+| 类别 | 变量 | 值 | 用途 |
+|---|---|---|---|
+| 背景 | `--bg-base` | `#0a0a0a` | 页面底色 |
+| 背景 | `--bg-card` | `#18181b` | 卡片背景 |
+| 背景 | `--bg-tag` | `#27272a` | 标签/筛选栏 |
+| 强调 | `--accent` | `#22c55e` | 荧光绿主色 |
+| 强调 | `--accent-glow` | `rgba(34,197,94,0.35)` | 发光效果 |
+| 文字 | `--text-primary` | `#ffffff` | 主标题 |
+| 文字 | `--text-secondary` | `#a1a1aa` | 摘要/描述 |
+| 布局 | `--container` | `1280px` | 最大内容宽度 |
+| 布局 | `--radius-card` | `16px` | 卡片圆角 |
+
+字体栈：
+- 无衬线：`Inter` → `SF Pro Display` → `PingFang SC` → `Microsoft YaHei` → 系统字体
+- 等宽：`JetBrains Mono` → `SF Mono` → `Menlo` → `Consolas`
+
+### 6. CI/CD 部署（.github/workflows/deploy.yml）
+
+标准 GitHub Pages 部署流程：
+
+```yaml
+触发条件: push 到 main 分支 / 手动 workflow_dispatch
+权限: contents:read, pages:write, id-token:write
+并发控制: group: pages, cancel-in-progress: false
+步骤:
+  1. actions/checkout@v4        — 拉取代码
+  2. actions/configure-pages@v4  — 配置 Pages 环境
+  3. actions/upload-pages-artifact@v3 — 上传整个仓库根目录
+  4. actions/deploy-pages@v4     — 部署到 GitHub Pages
+```
+
+### 7. 爬虫配置（crawler/config.json）
+
+```json
+{
+  "forum_url": "https://forum.trae.cn",
+  "category_id": 39,
+  "api_base": "https://forum.trae.cn",
+  "posts_per_page": 30,
+  "rate_limit_delay": 1.5,
+  "max_retries": 5,
+  "retry_backoff_base": 2,
+  "max_html_file_size_mb": 5,
+  "exclude_domains": ["github.com", "bilibili.com", "forum.trae.cn", "trae-forum-cdn.trae.com.cn"],
+  "demo_keywords": ["demo", "体验", "预览", "产物", "在线"]
+}
+```
+
+---
+
 ## 仓库结构
 
 ```
 TRAE-AI-Creativity-Competition-Idea-Hall/
-├── index.html              # 生成的静态首页（Git 追踪）
-├── styles.css             # TRAE 深色科技风样式
-├── script.js              # 粒子动画、筛选、搜索、排序
+├── index.html                          # 生成的静态首页（Git 追踪）
+├── styles.css                          # TRAE 深色科技风样式（CSS 变量体系）
+├── script.js                           # 前端交互（粒子动画/筛选/搜索/排序）
 ├── templates/
-│   └── index.html.j2       # Jinja2 模板
+│   └── index.html.j2                   # Jinja2 模板
 ├── crawler/
-│   ├── crawler.py          # 爬虫主程序（爬取 + 渲染 + Git 推送）
-│   ├── config.json         # 爬虫配置
-│   └── requirements.txt    # Python 依赖
+│   ├── crawler.py                      # 爬虫 v1（单数据源：Discourse API）
+│   ├── crawler_v2.py                   # 爬虫 v2（双数据源：飞书审批 + Discourse API）
+│   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
+│   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   └── demos.json          # 所有帖子的结构化数据
-├── demos/                  # 下载的 HTML Demo 文件（按 topic_id 分目录）
+│   ├── demos.json                       # 所有帖子的结构化数据（10,098 条）
+│   └── approved_projects.json          # 飞书多维表格审批数据源
+├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
-│   ├── trae-work.png       # Logo & Favicon
-│   ├── icons/              # SVG 图标（eye/heart/user/play/external）
-│   └── tracks/             # 赛道图标 PNG（5 赛道 × default/active）
+│   ├── trae-work.png                    # Logo & Favicon
+│   ├── icons/                          # SVG 图标（eye/heart/user/play/external 等 16 个）
+│   └── tracks/                         # 赛道图标 PNG（5 赛道 x default/active = 10 个）
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml      # GitHub Actions 部署配置
+│       └── deploy.yml                   # GitHub Actions 部署配置
 └── README.md
 ```
+
+---
 
 ## 本地开发
 
@@ -116,6 +326,8 @@ cd ..
 python -m http.server 8889
 # 打开 http://localhost:8889
 ```
+
+---
 
 ## 自动更新机制
 
@@ -142,6 +354,8 @@ cron: 0 10 * * *
 | 1 | HTML 附件 | Discourse `<a class="attachment">` 标签中的 .html/.htm 文件 |
 | 2 | Onebox 链接 | Discourse 自动生成的外部链接预览卡片 |
 | 3 | 关键词兜底 | 帖子正文中包含 demo/体验/预览/产物/在线 的外部链接 |
+
+---
 
 ## 作者
 
