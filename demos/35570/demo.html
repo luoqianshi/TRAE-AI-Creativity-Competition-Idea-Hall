@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D 鲁班锁交互沙盒</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: radial-gradient(circle at center, #2e2823 0%, #0c0a09 100%);
+      color: #c6a265;
+      font-family: 'Noto Serif SC', "KaiTi", serif;
+    }
+    
+    #title {
+      position: absolute;
+      top: 30px;
+      left: 30px;
+      font-size: 28px;
+      font-weight: bold;
+      letter-spacing: 4px;
+      text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
+      pointer-events: none;
+      z-index: 10;
+    }
+    #title span { font-size: 14px; opacity: 0.7; letter-spacing: 2px; display: block; margin-top: 8px; }
+
+    /* UI 控制面板 */
+    #ui-panel {
+      position: absolute;
+      bottom: 30px;
+      right: 30px;
+      background: rgba(20, 15, 10, 0.85);
+      border: 1px solid rgba(198, 162, 101, 0.4);
+      padding: 20px;
+      border-radius: 8px;
+      width: 280px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 10;
+    }
+
+    .slider-group { margin-bottom: 15px; }
+    .slider-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    
+    .color-dot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    input[type="range"] {
+      width: 140px;
+      accent-color: #c6a265;
+      cursor: pointer;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px 0;
+      background: rgba(198, 162, 101, 0.1);
+      border: 1px solid #c6a265;
+      color: #c6a265;
+      font-family: inherit;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    button:hover {
+      background: rgba(198, 162, 101, 0.3);
+      box-shadow: 0 0 10px rgba(198, 162, 101, 0.2);
+    }
+    button:active { transform: scale(0.95); }
+
+    /* 操作提示 */
+    #hint {
+      position: absolute;
+      bottom: 30px;
+      left: 30px;
+      color: rgba(255,255,255,0.4);
+      font-size: 14px;
+      pointer-events: none;
+    }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <div id="title">六子联方<br><span>3D 鲁班锁拼装沙盒</span></div>
+  <div id="hint">左键拖拽旋转视角 | 滚轮缩放</div>
+
+  <div id="ui-panel">
+    <div id="sliders">
+      </div>
+    <div class="btn-group">
+      <button onclick="explodeAll()">一键炸开</button>
+      <button onclick="assembleAll()">一键归位</button>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------
+    // 1. 初始化 Three.js 场景
+    // -------------------------
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(10, 8, 12);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxDistance = 30;
+    controls.minDistance = 5;
+
+    // 添加灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffedd6, 0.8);
+    dirLight.position.set(10, 15, 10);
+    dirLight.castShadow = true;
+    dirLight.shadow.camera.left = -10;
+    dirLight.shadow.camera.right = 10;
+    dirLight.shadow.camera.top = 10;
+    dirLight.shadow.camera.bottom = -10;
+    scene.add(dirLight);
+
+    const fillLight = new THREE.DirectionalLight(0xaaccff, 0.3);
+    fillLight.position.set(-10, -5, -10);
+    scene.add(fillLight);
+
+    // -------------------------
+    // 2. 几何体构建：组装带凹槽的木条
+    // -------------------------
+    // 为了不依赖外部建模软件，我们用 3 个基础 Box 组合成一根带缺口的木条
+    function createNotchedStick(colorHex) {
+      const group = new THREE.Group();
+      const material = new THREE.MeshStandardMaterial({ 
+        color: colorHex, 
+        roughness: 0.7, 
+        metalness: 0.1 
+      });
+
+      // 左段
+      const boxLeft = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), material);
+      boxLeft.position.set(-1.5, 0, 0);
+      boxLeft.castShadow = true;
+      boxLeft.receiveShadow = true;
+      group.add(boxLeft);
+
+      // 右段
+      const boxRight = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), material);
+      boxRight.position.set(1.5, 0, 0);
+      boxRight.castShadow = true;
+      boxRight.receiveShadow = true;
+      group.add(boxRight);
+
+      // 底部连接桥 (形成凹槽)
+      const boxBridge = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 1), material);
+      boxBridge.position.set(0, -0.3, 0);
+      boxBridge.castShadow = true;
+      boxBridge.receiveShadow = true;
+      group.add(boxBridge);
+
+      // 为每根木条添加边框线，增强空间咬合的辨识度
+      const edgesMaterial = new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.3, transparent: true });
+      [boxLeft, boxRight, boxBridge].forEach(mesh => {
+        const edges = new THREE.EdgesGeometry(mesh.geometry);
+        const line = new THREE.LineSegments(edges, edgesMaterial);
+        line.position.copy(mesh.position);
+        group.add(line);
+      });
+
+      return group;
+    }
+
+    // -------------------------
+    // 3. 配置 6 根木条的属性
+    // -------------------------
+    const stickConfigs = [
+      { id: 1, name: "X轴-红", color: 0xc94a4a, axis: 'x', dir: 1,  rot: [0, 0, 0],              basePos: [0, 0.5, 0.5] },
+      { id: 2, name: "X轴-橙", color: 0xd98236, axis: 'x', dir: -1, rot: [0, 0, Math.PI],        basePos: [0, -0.5, -0.5] },
+      { id: 3, name: "Y轴-绿", color: 0x4a8c54, axis: 'y', dir: 1,  rot: [0, 0, Math.PI/2],      basePos: [0.5, 0, -0.5] },
+      { id: 4, name: "Y轴-青", color: 0x479da8, axis: 'y', dir: -1, rot: [0, 0, -Math.PI/2],     basePos: [-0.5, 0, 0.5] },
+      { id: 5, name: "Z轴-蓝", color: 0x3d6cb3, axis: 'z', dir: 1,  rot: [0, -Math.PI/2, 0],     basePos: [0.5, 0.5, 0] },
+      { id: 6, name: "Z轴-紫", color: 0x8a5da8, axis: 'z', dir: -1, rot: [Math.PI, Math.PI/2, 0],basePos: [-0.5, -0.5, 0] },
+    ];
+
+    const pieces = [];
+
+    // 生成木条并添加到场景
+    stickConfigs.forEach((conf, index) => {
+      const stick = createNotchedStick(conf.color);
+      
+      // 设置基础旋转
+      stick.rotation.set(...conf.rot);
+      
+      // 将自定义数据绑定到对象上
+      stick.userData = {
+        axis: conf.axis,
+        dir: conf.dir,
+        basePos: new THREE.Vector3(...conf.basePos),
+        currentOffset: 0
+      };
+
+      // 初始位置
+      stick.position.copy(stick.userData.basePos);
+      
+      scene.add(stick);
+      pieces.push(stick);
+
+      // 动态生成 UI 滑块
+      const uiContainer = document.getElementById('sliders');
+      const row = document.createElement('div');
+      row.className = 'slider-row';
+      row.innerHTML = `
+        <span><span class="color-dot" style="background:${'#'+conf.color.toString(16)}"></span>${conf.name}</span>
+        <input type="range" id="slider-${index}" min="0" max="6" step="0.1" value="0" oninput="updatePiece(${index}, this.value)">
+      `;
+      uiContainer.appendChild(row);
+    });
+
+    // -------------------------
+    // 4. 交互逻辑与动画更新
+    // -------------------------
+    function updatePiece(index, offsetValue) {
+      const stick = pieces[index];
+      const data = stick.userData;
+      data.currentOffset = parseFloat(offsetValue);
+      
+      // 根据滑动值、基准位置和方向计算实际空间坐标
+      stick.position.copy(data.basePos);
+      stick.position[data.axis] += data.currentOffset * data.dir;
+    }
+
+    function setAllSliders(value) {
+      pieces.forEach((stick, index) => {
+        const slider = document.getElementById(`slider-${index}`);
+        slider.value = value;
+        updatePiece(index, value);
+      });
+    }
+
+    // 暴露给全局的按钮方法
+    window.explodeAll = () => setAllSliders(4);
+    window.assembleAll = () => setAllSliders(0);
+
+    // 窗口自适应
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // -------------------------
+    // 5. 渲染循环
+    // -------------------------
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update(); // 必须调用以支持拖拽阻尼
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // 初始展示时自动做一点旋转效果
+    let autoRotate = true;
+    document.addEventListener('mousedown', () => autoRotate = false);
+    document.addEventListener('touchstart', () => autoRotate = false);
+    
+    scene.rotation.y = Math.PI / 4;
+    scene.rotation.x = Math.PI / 8;
+  </script>
+</body>
+</html>

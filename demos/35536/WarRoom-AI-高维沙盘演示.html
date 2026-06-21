@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>War-Room AI | 高维沙盘演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        dark: '#0a0a0f',
+                        panel: '#151520',
+                        accent: '#00f0ff',
+                        danger: '#ff2a2a',
+                        warning: '#ffb000',
+                        cfo: '#a855f7',
+                        pr: '#3b82f6',
+                        rival: '#ef4444',
+                        consumer: '#10b981',
+                        ceo: '#f59e0b'
+                    },
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'monospace'],
+                        sans: ['Noto Sans SC', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #0a0a0f; color: #e2e8f0; overflow: hidden; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0a0f; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        
+        /* 呼吸灯动画 */
+        .pulse-active { animation: pulse-shadow 1.5s infinite; }
+        @keyframes pulse-shadow {
+            0% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(0, 240, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0); }
+        }
+
+        /* 打字机光标 */
+        .typing-cursor::after {
+            content: '█';
+            animation: blink 1s step-start infinite;
+            color: #00f0ff;
+            margin-left: 4px;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* 聊天气泡出场动画 */
+        .message-enter {
+            animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        @keyframes slideUp {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 扫描线特效 */
+        .scanline {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.1) 50%, rgba(0,0,0,0.1));
+            background-size: 100% 4px;
+            pointer-events: none; z-index: 50; opacity: 0.3;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col font-sans relative">
+    <div class="scanline"></div>
+
+    <!-- 顶部导航条 -->
+    <header class="h-14 border-b border-gray-800 bg-panel/80 flex items-center px-6 justify-between z-10">
+        <div class="flex items-center gap-3">
+            <i class="fa-solid fa-chess-knight text-accent text-xl"></i>
+            <h1 class="text-lg font-bold tracking-widest text-white">WAR-ROOM <span class="text-accent text-sm font-mono">v2.0</span></h1>
+            <span class="ml-4 px-2 py-0.5 bg-danger/20 border border-danger text-danger text-xs font-mono rounded animate-pulse">CLASSIFIED</span>
+        </div>
+        <div class="flex gap-4 text-sm font-mono text-gray-400">
+            <span>SYS_LOAD: <span class="text-accent">42%</span></span>
+            <span>ACTIVE_AGENTS: <span class="text-white" id="agent-count">5</span></span>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden z-10">
+        <!-- 左侧面板：控制台 & Agent 列表 -->
+        <aside class="w-80 border-r border-gray-800 bg-panel flex flex-col">
+            <!-- 决策输入区 -->
+            <div class="p-5 border-b border-gray-800">
+                <h2 class="text-xs text-gray-400 font-mono mb-2"><i class="fa-solid fa-terminal mr-2"></i>SCENARIO_INPUT</h2>
+                <textarea id="scenario-input" class="w-full h-32 bg-dark border border-gray-700 rounded p-3 text-sm text-gray-200 focus:border-accent focus:outline-none resize-none font-sans" readonly>作为一家新势力车企，为冲刺Q3销量，我计划下周将旗舰车型直降 20%，请各位推演后果。</textarea>
+                <button id="start-btn" onclick="startSimulation()" class="w-full mt-4 bg-accent/10 border border-accent text-accent hover:bg-accent hover:text-dark transition-all py-2 rounded font-bold tracking-wider text-sm flex justify-center items-center gap-2">
+                    <i class="fa-solid fa-play"></i> 启动全维推演
+                </button>
+            </div>
+
+            <!-- Agent 状态列表 -->
+            <div class="p-5 flex-1 overflow-y-auto">
+                <h2 class="text-xs text-gray-400 font-mono mb-4"><i class="fa-solid fa-microchip mr-2"></i>NEURAL_AGENTS</h2>
+                <div class="space-y-3" id="agent-list">
+                    <!-- Agent 项通过 JS 渲染以控制状态 -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- 右侧主区：沙盘推演流 & 报告 -->
+        <main class="flex-1 flex flex-col bg-dark relative">
+            <!-- 推演日志区 -->
+            <div id="chat-container" class="flex-1 overflow-y-auto p-8 space-y-6 pb-32">
+                <div class="text-center text-gray-600 font-mono text-sm mt-10">
+                    <i class="fa-solid fa-shield-halved text-3xl mb-3 opacity-50"></i>
+                    <p>SYSTEM IDLE. AWAITING SCENARIO INITIALIZATION.</p>
+                </div>
+            </div>
+
+            <!-- 动态系统警告条 (绝对定位) -->
+            <div id="sys-warning" class="absolute top-4 left-1/2 -translate-x-1/2 bg-danger/90 text-white px-6 py-2 rounded-full font-mono text-sm shadow-[0_0_20px_rgba(255,42,42,0.5)] flex items-center gap-3 transition-transform duration-300 translate-y-[-150%]">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span id="warning-text">CRITICAL RISK DETECTED</span>
+            </div>
+
+            <!-- 底部状态栏 -->
+            <div class="h-12 border-t border-gray-800 bg-panel/50 flex items-center px-4 justify-between font-mono text-xs text-gray-500">
+                <div id="sim-status">STATUS: STANDBY</div>
+                <button id="report-btn" onclick="showReport()" class="hidden bg-white text-black px-4 py-1 rounded font-bold hover:bg-gray-200">查看最终决策报告</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- 最终报告弹窗 -->
+    <div id="report-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex justify-center items-center opacity-0 transition-opacity duration-300">
+        <div class="bg-panel border border-gray-700 w-full max-w-3xl rounded-xl shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300" id="report-content">
+            <div class="h-1 bg-gradient-to-r from-accent via-purple-500 to-danger"></div>
+            <div class="p-6 border-b border-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-file-contract text-accent mr-2"></i>最终决策沙盘报告</h2>
+                <button onclick="closeReport()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <div class="p-8 max-h-[70vh] overflow-y-auto space-y-6 text-gray-300 text-sm leading-relaxed">
+                <div>
+                    <h3 class="text-accent font-bold mb-2">决议结论 (EXECUTIVE SUMMARY)</h3>
+                    <p class="p-4 bg-danger/10 border border-danger/30 rounded text-danger font-bold">⛔ 强烈不建议执行直接降价 20% 的策略。</p>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-dark p-4 rounded border border-gray-800">
+                        <h4 class="text-white font-bold mb-2"><i class="fa-solid fa-coins text-warning mr-2"></i>核心风险</h4>
+                        <ul class="list-disc pl-4 space-y-1 text-gray-400">
+                            <li>毛利率击穿，现金流寿命缩短至 4 个月。</li>
+                            <li>老车主集体维权，引发不可控的公关危机。</li>
+                            <li>竞品将趁机发起底盘/电池质量抹黑战。</li>
+                        </ul>
+                    </div>
+                    <div class="bg-dark p-4 rounded border border-gray-800">
+                        <h4 class="text-white font-bold mb-2"><i class="fa-solid fa-lightbulb text-accent mr-2"></i>替代方案 (Plan B)</h4>
+                        <ul class="list-disc pl-4 space-y-1 text-gray-400">
+                            <li>推出"青春版"精简配置车型，以此实现变相降价。</li>
+                            <li>向老车主发放等额智驾包或终身质保作为安抚。</li>
+                            <li>联合金融机构推出免息贷款，降低购车门槛而非指导价。</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS 核心逻辑 -->
+    <script>
+        const agents = [
+            { id: 'cfo', name: 'Alina (CFO)', role: '首席财务官', color: 'text-cfo', border: 'border-cfo' },
+            { id: 'pr', name: 'Marcus (PR/Legal)', role: '公关法务', color: 'text-pr', border: 'border-pr' },
+            { id: 'rival', name: 'Nemesis-X', role: '竞品行为拟态', color: 'text-rival', border: 'border-rival' },
+            { id: 'consumer', name: 'User-Persona', role: '目标客群画像', color: 'text-consumer', border: 'border-consumer' },
+            { id: 'ceo', name: 'Chairman (AI)', role: '决策大脑', color: 'text-ceo', border: 'border-ceo' }
+        ];
+
+        // 预设的剧本（核心表现力所在）
+        const script = [
+            { agent: 'cfo', delay: 1500, text: "警告。基于当前供应链成本，直降 20% 将彻底击穿我们的毛利防线。我们单车将亏损 3.2 万元。按此销量预测，公司现金流将在 4 个月后断裂。" },
+            { agent: 'pr', delay: 2500, text: "且慢！老车主社群必定炸锅。上个月刚提车的用户损失惨重。法务部预计会面临全国至少 15 个城市的联合维权和门店堵塞，品牌信任度将一夜归零。" },
+            { type: 'warning', delay: 500, text: "CRITICAL: 监测到老用户口碑崩盘风险" },
+            { agent: 'rival', delay: 3000, text: "如果你们敢降价，说明你们急了。作为你们最大的竞品，我明天就会投放水军通稿，宣称你们降价是因为‘核心电池组件缩水’，把水搅浑，让持币待购的用户不敢买你们的车。" },
+            { agent: 'consumer', delay: 3500, text: "作为消费者，看到降价 20% 我确实心动。但我更怕你们公司倒闭导致售后无门。而且，既然能降 20%，下个月是不是还能降？我决定再等等（持币观望）。" },
+            { agent: 'cfo', delay: 2000, text: "看吧，降价不仅没换来销量，反而换来了观望。这是标准的‘量价双杀’绝境。" },
+            { agent: 'ceo', delay: 4000, text: "推演终止。结论清晰：直接降价是自杀行为。我建议启动 Plan B：不改指导价，但推出限时的‘3年免息+赠送高阶智驾包’的变相优惠，以此保护老车主权益和品牌调性。正在生成最终报告..." },
+            { type: 'finish', delay: 1000 }
+        ];
+
+        // 初始化 Agent 列表
+        function initAgents() {
+            const list = document.getElementById('agent-list');
+            list.innerHTML = agents.map(a => `
+                <div id="agent-card-${a.id}" class="flex items-center gap-3 p-3 bg-dark border border-gray-800 rounded transition-all duration-300">
+                    <div id="avatar-${a.id}" class="w-10 h-10 rounded-full border-2 border-gray-700 flex justify-center items-center bg-panel transition-colors duration-300">
+                        <i class="fa-solid fa-robot text-gray-500"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm font-bold ${a.color}">${a.name}</div>
+                        <div class="text-xs text-gray-500 font-mono">${a.role}</div>
+                    </div>
+                    <div id="status-${a.id}" class="ml-auto text-[10px] font-mono text-gray-600 bg-gray-800 px-2 py-0.5 rounded">IDLE</div>
+                </div>
+            `).join('');
+        }
+
+        function setAgentStatus(id, status) {
+            const card = document.getElementById(`agent-card-${id}`);
+            const avatar = document.getElementById(`avatar-${id}`);
+            const statusLabel = document.getElementById(`status-${id}`);
+            const agent = agents.find(a => a.id === id);
+
+            if (status === 'thinking') {
+                avatar.className = `w-10 h-10 rounded-full border-2 ${agent.border} flex justify-center items-center bg-panel pulse-active`;
+                avatar.innerHTML = `<i class="fa-solid fa-microchip ${agent.color} animate-spin"></i>`;
+                statusLabel.innerText = 'CALCULATING';
+                statusLabel.className = `ml-auto text-[10px] font-mono ${agent.color} bg-${agent.color}/10 border border-${agent.color}/30 px-2 py-0.5 rounded animate-pulse`;
+            } else if (status === 'speaking') {
+                avatar.className = `w-10 h-10 rounded-full border-2 ${agent.border} flex justify-center items-center bg-${agent.color}/20`;
+                avatar.innerHTML = `<i class="fa-solid fa-comment-dots ${agent.color}"></i>`;
+                statusLabel.innerText = 'SPEAKING';
+                statusLabel.className = `ml-auto text-[10px] font-mono ${agent.color} px-2 py-0.5 rounded`;
+            } else {
+                avatar.className = `w-10 h-10 rounded-full border-2 border-gray-700 flex justify-center items-center bg-panel`;
+                avatar.innerHTML = `<i class="fa-solid fa-robot text-gray-500"></i>`;
+                statusLabel.innerText = 'IDLE';
+                statusLabel.className = `ml-auto text-[10px] font-mono text-gray-600 bg-gray-800 px-2 py-0.5 rounded`;
+            }
+        }
+
+        function addMessage(agentId, text) {
+            const container = document.getElementById('chat-container');
+            const agent = agents.find(a => a.id === agentId);
+            const msgId = 'msg-' + Math.random().toString(36).substr(2, 9);
+            
+            const time = new Date().toLocaleTimeString('en-US', {hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit'}) + ':' + Math.floor(Math.random()*999).toString().padStart(3,'0');
+
+            const html = `
+                <div class="message-enter flex flex-col items-start mb-6 w-full max-w-2xl ${agentId === 'ceo' ? 'mx-auto items-center' : ''}">
+                    <div class="flex items-center gap-2 mb-1 ${agentId === 'ceo' ? 'justify-center' : ''}">
+                        <span class="font-bold ${agent.color} text-sm">${agent.name}</span>
+                        <span class="text-xs text-gray-600 font-mono">[${time}]</span>
+                    </div>
+                    <div id="${msgId}" class="p-4 rounded-lg text-sm text-gray-200 border border-gray-800 ${agentId === 'ceo' ? 'bg-panel border-ceo text-center shadow-[0_0_15px_rgba(245,158,11,0.2)]' : 'bg-panel/50'} leading-relaxed w-full">
+                        <span class="typing-cursor"></span>
+                    </div>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', html);
+            container.scrollTop = container.scrollHeight;
+
+            // 模拟打字效果
+            const textElement = document.getElementById(msgId);
+            let i = 0;
+            const speed = 20; // ms per char
+            
+            return new Promise(resolve => {
+                const interval = setInterval(() => {
+                    textElement.innerHTML = text.substring(0, i) + '<span class="typing-cursor"></span>';
+                    container.scrollTop = container.scrollHeight;
+                    i++;
+                    if (i > text.length) {
+                        clearInterval(interval);
+                        textElement.innerHTML = text; // 移除光标
+                        resolve();
+                    }
+                }, speed);
+            });
+        }
+
+        function showWarning(text) {
+            const warning = document.getElementById('sys-warning');
+            document.getElementById('warning-text').innerText = text;
+            warning.classList.remove('translate-y-[-150%]');
+            setTimeout(() => {
+                warning.classList.add('translate-y-[-150%]');
+            }, 3000);
+        }
+
+        async function startSimulation() {
+            const btn = document.getElementById('start-btn');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> 推演进行中...`;
+            btn.className = "w-full mt-4 bg-gray-800 text-gray-500 py-2 rounded font-bold tracking-wider text-sm flex justify-center items-center gap-2 cursor-not-allowed";
+            
+            const container = document.getElementById('chat-container');
+            container.innerHTML = ''; // 清空提示
+            document.getElementById('sim-status').innerText = 'STATUS: SIMULATING...';
+
+            for (const step of script) {
+                await new Promise(r => setTimeout(r, step.delay)); // 等待思考时间
+
+                if (step.type === 'finish') {
+                    document.getElementById('sim-status').innerText = 'STATUS: COMPLETED';
+                    document.getElementById('report-btn').classList.remove('hidden');
+                    showReport();
+                    break;
+                }
+
+                if (step.type === 'warning') {
+                    showWarning(step.text);
+                    continue;
+                }
+
+                // Agent 开始思考
+                setAgentStatus(step.agent, 'thinking');
+                await new Promise(r => setTimeout(r, 1000)); // 假装思考1秒
+
+                // Agent 开始说话
+                setAgentStatus(step.agent, 'speaking');
+                await addMessage(step.agent, step.text);
+                
+                // Agent 恢复空闲
+                setAgentStatus(step.agent, 'idle');
+            }
+        }
+
+        function showReport() {
+            const modal = document.getElementById('report-modal');
+            const content = document.getElementById('report-content');
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                content.classList.remove('scale-95');
+            }, 10);
+        }
+
+        function closeReport() {
+            const modal = document.getElementById('report-modal');
+            const content = document.getElementById('report-content');
+            modal.classList.add('opacity-0');
+            content.classList.add('scale-95');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+            }, 300);
+        }
+
+        // 初始化
+        initAgents();
+    </script>
+</body>
+</html>

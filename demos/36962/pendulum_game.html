@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>无尽摆荡</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(180deg, #0c0c1e 0%, #1a1a3e 100%);
+            overflow: hidden;
+        }
+        canvas {
+            border: 2px solid #4a90d9;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(74, 144, 217, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // 设置画布大小
+        canvas.width = 600;
+        canvas.height = 600;
+
+        // 物理参数
+        const gravity = 0.3;
+        const damping = 0.999;
+        const swingDamping = 0.9995;
+        const ropeLength = 120;
+        const captureRange = 90;
+
+        // 游戏状态
+        let scrollY = 0;
+        let score = 0;
+        let isGameOver = false;
+
+        // 当前锚点
+        let currentAnchor = {
+            x: canvas.width / 2,
+            y: 100,
+            id: 0
+        };
+
+        // 锚点列表
+        let anchors = [currentAnchor];
+
+        // 小球状态
+        const ball = {
+            isCaptured: true,
+            angle: Math.PI / 4,
+            angularVelocity: 0,
+            x: 0,
+            y: 0,
+            vx: 0,
+            vy: 0,
+            radius: 20,
+            color: '#ff6b6b'
+        };
+
+        // 障碍物列表
+        let obstacles = [];
+
+        // 碰撞效果
+        let collisionEffects = [];
+
+        // 初始化障碍物 - 确保完全不在初始锚点的摆动范围内
+        function initObstacles() {
+            // 初始锚点在 (300, 100)，摆动半径 ropeLength=120
+            // 摆动圆水平范围：x [180, 420]，垂直范围：y [-20, 220]
+            // 挡板必须完全在摆动圆外部（左侧 x+width < 180，或右侧 x > 420），运动范围也要安全
+            
+            obstacles = [
+                // 在锚点左侧，摆动圆下方，安全
+                { x: 50, y: 350, width: 80, height: 20, speed: 0.8, direction: 1, minX: 30, maxX: 170, color: '#4ecdc4' },
+                // 在锚点右侧，摆动圆下方，安全
+                { x: 470, y: 400, width: 80, height: 20, speed: 0.6, direction: -1, minX: 430, maxX: 570, color: '#ffe66d' },
+                // 在锚点下方偏左，摆动圆下方，但x范围不能进入摆动圆水平范围[180,420]
+                // 必须保持在左侧：x + width < 180，所以 x < 100
+                { x: 50, y: 500, width: 100, height: 20, speed: 0.7, direction: 1, minX: 30, maxX: 70, color: '#95e1d3' }
+            ];
+        }
+
+        // 计算小球当前位置
+        function getBallPosition() {
+            if (ball.isCaptured) {
+                const x = currentAnchor.x + ropeLength * Math.sin(ball.angle);
+                const y = currentAnchor.y + ropeLength * Math.cos(ball.angle);
+                return { x, y };
+            }
+            return { x: ball.x, y: ball.y };
+        }
+
+        // 检查点是否在摆动范围内
+        function isInSwingArea(obsX, obsY, obsWidth, obsHeight, anchorX, anchorY) {
+            const closestX = Math.max(anchorX - ropeLength, Math.min(obsX + obsWidth / 2, anchorX + ropeLength));
+            const closestY = Math.max(anchorY - ropeLength, Math.min(obsY + obsHeight / 2, anchorY + ropeLength));
+            
+            const dx = closestX - anchorX;
+            const dy = closestY - anchorY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            return distance < ropeLength + Math.max(obsWidth, obsHeight) / 2;
+        }
+
+        // 计算障碍物相对于锚点的安全运动范围
+        // 安全条件：障碍物必须完全在摆动圆外部（左侧或右侧）
+        function getSafeMovementRanges(obsWidth, obsX, obsY, obsHeight, anchorX, anchorY) {
+            const obsTop = obsY - obsHeight / 2;
+            const obsBottom = obsY + obsHeight / 2;
+            const obsLeft = obsX;
+            const obsRight = obsX + obsWidth;
+            
+            const swingTop = anchorY - ropeLength;
+            const swingBottom = anchorY + ropeLength;
+            const swingLeft = anchorX - ropeLength;
+            const swingRight = anchorX + ropeLength;
+            
+            // 情况1：障碍物完全在摆动圆上方 - 可能从侧面进入
+            if (obsBottom < swingTop) {
+                const safeLeftMax = swingLeft - obsWidth;
+                const safeRightMin = swingRight;
+                return {
+                    leftSafe: obsLeft < safeLeftMax,
+                    rightSafe: obsLeft > safeRightMin,
+                    leftMax: safeLeftMax,
+                    rightMin: safeRightMin
+                };
+            }
+            
+            // 情况2：障碍物完全在摆动圆下方 - 可能从侧面进入
+            if (obsTop > swingBottom) {
+                const safeLeftMax = swingLeft - obsWidth;
+                const safeRightMin = swingRight;
+                return {
+                    leftSafe: obsLeft < safeLeftMax,
+                    rightSafe: obsLeft > safeRightMin,
+                    leftMax: safeLeftMax,
+                    rightMin: safeRightMin
+                };
+            }
+            
+            // 情况3：障碍物与摆动圆在y方向有重叠 - 必须完全在左右两侧
+            if (obsRight <= swingLeft) {
+                // 完全在左侧
+                return {
+                    leftSafe: true,
+                    rightSafe: false,
+                    leftMax: swingLeft - obsWidth,
+                    rightMin: canvas.width
+                };
+            }
+            
+            if (obsLeft >= swingRight) {
+                // 完全在右侧
+                return {
+                    leftSafe: false,
+                    rightSafe: true,
+                    leftMax: 0,
+                    rightMin: swingRight
+                };
+            }
+            
+            // 情况4：与摆动圆相交
+            const safeLeftMax = swingLeft - obsWidth;
+            const safeRightMin = swingRight;
+            return {
+                leftSafe: obsLeft < safeLeftMax,
+                rightSafe: obsLeft > safeRightMin,
+                leftMax: safeLeftMax,
+                rightMin: safeRightMin
+            };
+        }
+
+        // 计算所有锚点限制下的安全运动范围
+        function getAllSafeRanges(obsWidth, obsX, obsY, obsHeight) {
+            let leftSafe = true;
+            let rightSafe = true;
+            let globalLeftMax = 0;
+            let globalRightMin = canvas.width;
+            
+            for (const anchor of anchors) {
+                const ranges = getSafeMovementRanges(obsWidth, obsX, obsY, obsHeight, anchor.x, anchor.y);
+                
+                leftSafe = leftSafe && ranges.leftSafe;
+                rightSafe = rightSafe && ranges.rightSafe;
+                
+                globalLeftMax = Math.max(globalLeftMax, ranges.leftMax);
+                globalRightMin = Math.min(globalRightMin, ranges.rightMin);
+            }
+            
+            return {
+                leftSafe,
+                rightSafe,
+                globalLeftMax,
+                globalRightMin,
+                safeMinX: globalLeftMax,
+                safeMaxX: globalRightMin
+            };
+        }
+
+        // 生成新的锚点和障碍物
+        function spawnNewElements() {
+            const lowestAnchor = anchors.reduce((lowest, a) => a.y > lowest.y ? a : lowest, anchors[0]);
+
+            if (lowestAnchor.y < scrollY + canvas.height + 200) {
+                const newY = lowestAnchor.y + 300 + Math.random() * 80;
+                
+                const side = Math.random() > 0.5 ? 'left' : 'right';
+                let newX;
+                if (side === 'left') {
+                    newX = 120 + Math.random() * 100;
+                } else {
+                    newX = canvas.width - 220 - Math.random() * 100;
+                }
+                
+                const newAnchor = {
+                    x: newX,
+                    y: newY,
+                    id: Date.now()
+                };
+                anchors.push(newAnchor);
+
+                // 生成1-2个障碍物
+                const obstacleCount = Math.random() > 0.6 ? 2 : 1;
+                
+                for (let i = 0; i < obstacleCount; i++) {
+                    let obstacle = null;
+                    let attempts = 0;
+                    const maxAttempts = 30;
+                    
+                    while (!obstacle && attempts < maxAttempts) {
+                        attempts++;
+                        
+                        const width = 60 + Math.random() * 40;
+                        const height = 15 + Math.random() * 10;
+                        
+                        // 障碍物只能在两个锚点之间的区域生成
+                        const minY = lowestAnchor.y + ropeLength + 50;
+                        const maxY = newY - ropeLength - 50;
+                        
+                        if (minY >= maxY) continue;
+                        
+                        const y = minY + Math.random() * (maxY - minY);
+                        
+                        // 计算所有锚点限制下的安全运动范围
+                        const safeRanges = getAllSafeRanges(width, 0, y, height);
+                        
+                        if (safeRanges.safeMinX >= safeRanges.safeMaxX - 50) {
+                            continue;
+                        }
+                        
+                        // 选择障碍物的初始位置
+                        const maxInitialX = Math.min(safeRanges.safeMaxX - width, canvas.width - 50);
+                        const minInitialX = Math.max(safeRanges.safeMinX, 50);
+                        
+                        if (minInitialX >= maxInitialX) continue;
+                        
+                        const x = minInitialX + Math.random() * (maxInitialX - minInitialX);
+                        
+                        // 最终检查
+                        if (isInSwingArea(x, y, width, height, lowestAnchor.x, lowestAnchor.y) ||
+                            isInSwingArea(x, y, width, height, newX, newY)) {
+                            continue;
+                        }
+                        
+                        // 限制运动范围
+                        const movementMinX = Math.max(safeRanges.safeMinX, 30);
+                        const movementMaxX = Math.min(safeRanges.safeMaxX - width, canvas.width - 30);
+                        
+                        if (movementMinX >= movementMaxX) continue;
+                        
+                        obstacle = {
+                            x: x,
+                            y: y,
+                            width: width,
+                            height: height,
+                            speed: 0.3 + Math.random() * 0.6,
+                            direction: Math.random() > 0.5 ? 1 : -1,
+                            minX: movementMinX,
+                            maxX: movementMaxX,
+                            color: `hsl(${120 + Math.random() * 60}, 70%, 60%)`
+                        };
+                    }
+                    
+                    if (obstacle) {
+                        obstacles.push(obstacle);
+                    }
+                }
+            }
+        }
+
+        // 移除屏幕外的元素
+        function cleanupOffscreenElements() {
+            anchors = anchors.filter(a => a.y > scrollY - 200);
+            obstacles = obstacles.filter(o => o.y > scrollY - 200);
+        }
+
+        // 更新碰撞效果
+        function updateCollisionEffects() {
+            collisionEffects = collisionEffects.filter(effect => {
+                effect.radius += effect.type === 'capture' ? 3 : 2;
+                effect.alpha -= effect.type === 'capture' ? 0.06 : 0.05;
+                return effect.alpha > 0;
+            });
+        }
+
+        // 更新滚动
+        function updateScroll() {
+            const pos = getBallPosition();
+            const targetScroll = pos.y - canvas.height * 0.6;
+            
+            if (targetScroll > scrollY) {
+                scrollY += (targetScroll - scrollY) * 0.1;
+                score += 0.1;
+            }
+        }
+
+        // 绘制背景
+        function drawBackground() {
+            const gradient = ctx.createLinearGradient(0, -scrollY * 0.5, 0, canvas.height - scrollY * 0.5);
+            gradient.addColorStop(0, '#0c0c1e');
+            gradient.addColorStop(1, '#1a1a3e');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            for (let i = 0; i < 50; i++) {
+                const x = (i * 73 + scrollY * 0.3) % canvas.width;
+                const y = (i * 37 + scrollY * 0.5) % canvas.height;
+                const size = 1 + (i % 3);
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // 绘制锚点
+        function drawAnchors() {
+            anchors.forEach(anchor => {
+                const screenY = anchor.y - scrollY;
+                
+                // 锚点本身
+                ctx.fillStyle = '#ffd93d';
+                ctx.beginPath();
+                ctx.arc(anchor.x, screenY, 8, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 捕获范围（蓝色虚线圆）
+                ctx.strokeStyle = 'rgba(78, 205, 196, 0.3)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.arc(anchor.x, screenY, captureRange, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            });
+        }
+
+        // 绘制绳子
+        function drawRope() {
+            if (!ball.isCaptured) return;
+            
+            const pos = getBallPosition();
+            const screenY = currentAnchor.y - scrollY;
+            const ballScreenY = pos.y - scrollY;
+            
+            ctx.strokeStyle = '#8b7355';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(currentAnchor.x, screenY);
+            ctx.lineTo(pos.x, ballScreenY);
+            ctx.stroke();
+        }
+
+        // 绘制障碍物
+        function drawObstacles() {
+            obstacles.forEach(obs => {
+                const screenY = obs.y - scrollY;
+                
+                // 挡板本体
+                ctx.fillStyle = obs.color;
+                ctx.shadowColor = obs.color;
+                ctx.shadowBlur = 10;
+                ctx.fillRect(obs.x, screenY, obs.width, obs.height);
+                ctx.shadowBlur = 0;
+                
+                // 边缘高光
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(obs.x, screenY, obs.width, obs.height);
+            });
+        }
+
+        // 绘制小球
+        function drawBall() {
+            const pos = getBallPosition();
+            const screenY = pos.y - scrollY;
+            
+            // 飞行时的尾迹效果
+            if (!ball.isCaptured) {
+                for (let i = 0; i < 5; i++) {
+                    const alpha = 0.1 * (5 - i);
+                    const trailX = ball.x - ball.vx * i * 3;
+                    const trailY = ball.y - ball.vy * i * 3;
+                    ctx.fillStyle = `rgba(255, 107, 107, ${alpha})`;
+                    ctx.beginPath();
+                    ctx.arc(trailX, trailY - scrollY, ball.radius * (1 - i * 0.15), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            
+            // 小球本体
+            ctx.fillStyle = ball.color;
+            ctx.shadowColor = ball.color;
+            ctx.shadowBlur = 15;
+            ctx.beginPath();
+            ctx.arc(pos.x, screenY, ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // 高光
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.beginPath();
+            ctx.arc(pos.x - 5, screenY - 5, ball.radius * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 绘制碰撞效果
+        function drawCollisionEffects() {
+            collisionEffects.forEach(effect => {
+                ctx.strokeStyle = effect.type === 'capture' 
+                    ? `rgba(78, 205, 196, ${effect.alpha})` 
+                    : `rgba(255, 200, 100, ${effect.alpha})`;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(effect.x, effect.y - scrollY, effect.radius, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+        }
+
+        // 绘制UI
+        function drawUI() {
+            ctx.fillStyle = '#fff';
+            ctx.font = '20px Arial';
+            ctx.fillText(`得分: ${Math.floor(score)}`, 20, 30);
+            
+            if (ball.isCaptured) {
+                ctx.fillText('点击鼠标释放小球', 20, canvas.height - 20);
+            } else {
+                ctx.fillText('飞行中...', 20, canvas.height - 20);
+            }
+            
+            if (isGameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = '#ff6b6b';
+                ctx.font = '40px Arial';
+                ctx.fillText('游戏结束', canvas.width / 2 - 80, canvas.height / 2 - 20);
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = '24px Arial';
+                ctx.fillText(`最终得分: ${Math.floor(score)}`, canvas.width / 2 - 80, canvas.height / 2 + 20);
+                ctx.fillText('按 R 键重新开始', canvas.width / 2 - 90, canvas.height / 2 + 60);
+            }
+        }
+
+        // 更新小球
+        function updateBall() {
+            if (isGameOver) return;
+
+            if (ball.isCaptured) {
+                const angularAcceleration = -(gravity / ropeLength) * Math.sin(ball.angle);
+                ball.angularVelocity += angularAcceleration;
+                ball.angularVelocity *= swingDamping;
+                ball.angle += ball.angularVelocity;
+            } else {
+                ball.vy += gravity;
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+                
+                // 检测是否落入新锚点的捕获范围
+                for (const anchor of anchors) {
+                    if (anchor.id === currentAnchor.id) continue;
+                    
+                    const dx = ball.x - anchor.x;
+                    const dy = ball.y - anchor.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < captureRange) {
+                        ball.isCaptured = true;
+                        currentAnchor = anchor;
+                        ball.angle = Math.atan2(dx, dy);
+                        
+                        // 转换线速度为角速度
+                        const tangentX = Math.cos(ball.angle);
+                        const tangentY = -Math.sin(ball.angle);
+                        ball.angularVelocity = (ball.vx * tangentX + ball.vy * tangentY) / ropeLength;
+                        
+                        collisionEffects.push({
+                            type: 'capture',
+                            x: anchor.x,
+                            y: anchor.y,
+                            radius: 10,
+                            alpha: 1
+                        });
+                        break;
+                    }
+                }
+                
+                // 检测游戏结束
+                if (ball.y > scrollY + canvas.height + 100) {
+                    isGameOver = true;
+                }
+            }
+        }
+
+        // 更新障碍物
+        function updateObstacles() {
+            obstacles.forEach(obs => {
+                obs.x += obs.speed * obs.direction;
+                
+                if (obs.x <= obs.minX) {
+                    obs.x = obs.minX;
+                    obs.direction = 1;
+                } else if (obs.x + obs.width >= obs.maxX) {
+                    obs.x = obs.maxX - obs.width;
+                    obs.direction = -1;
+                }
+            });
+        }
+
+        // 检测碰撞
+        function checkCollisions() {
+            if (isGameOver) return;
+            
+            const pos = getBallPosition();
+            
+            for (const obs of obstacles) {
+                if (pos.x + ball.radius > obs.x && 
+                    pos.x - ball.radius < obs.x + obs.width &&
+                    pos.y + ball.radius > obs.y && 
+                    pos.y - ball.radius < obs.y + obs.height) {
+                    
+                    // 计算碰撞法线
+                    const overlapX = (obs.x + obs.width / 2) - pos.x;
+                    const overlapY = (obs.y + obs.height / 2) - pos.y;
+                    const dist = Math.sqrt(overlapX * overlapX + overlapY * overlapY);
+                    const nx = overlapX / dist;
+                    const ny = overlapY / dist;
+                    
+                    if (ball.isCaptured) {
+                        // 摆动时的碰撞
+                        const anchorDx = pos.x - currentAnchor.x;
+                        const anchorDy = pos.y - currentAnchor.y;
+                        const crossProduct = anchorDx * ny - anchorDy * nx;
+                        
+                        const maxAngularChange = 0.5;
+                        const angularChange = Math.max(-maxAngularChange, Math.min(maxAngularChange, crossProduct * 0.08));
+                        ball.angularVelocity += angularChange;
+                        
+                        const maxAngularVelocity = 3;
+                        ball.angularVelocity = Math.max(-maxAngularVelocity, Math.min(maxAngularVelocity, ball.angularVelocity));
+                    } else {
+                        // 飞行时的碰撞
+                        const dotProduct = ball.vx * nx + ball.vy * ny;
+                        
+                        ball.vx = (ball.vx - 2 * dotProduct * nx) * 0.8;
+                        ball.vy = (ball.vy - 2 * dotProduct * ny) * 0.8;
+                        
+                        // 额外的碰撞冲力
+                        ball.vx += nx * 2;
+                        ball.vy += ny * 2;
+                        
+                        collisionEffects.push({
+                            type: 'collision',
+                            x: pos.x,
+                            y: pos.y,
+                            radius: 10,
+                            alpha: 1
+                        });
+                    }
+                    
+                    // 推出碰撞区域
+                    const pushDist = ball.radius + 5;
+                    if (ball.isCaptured) {
+                        const newX = pos.x + nx * pushDist;
+                        const newY = pos.y + ny * pushDist;
+                        ball.angle = Math.atan2(newX - currentAnchor.x, newY - currentAnchor.y);
+                    } else {
+                        ball.x += nx * pushDist;
+                        ball.y += ny * pushDist;
+                    }
+                }
+            }
+        }
+
+        // 释放小球
+        function releaseBall() {
+            if (ball.isCaptured && !isGameOver) {
+                const pos = getBallPosition();
+                ball.x = pos.x;
+                ball.y = pos.y;
+                ball.vx = ball.angularVelocity * ropeLength * Math.cos(ball.angle);
+                ball.vy = ball.angularVelocity * ropeLength * Math.sin(ball.angle);
+                ball.isCaptured = false;
+            }
+        }
+
+        // 重置游戏
+        function resetGame() {
+            scrollY = 0;
+            score = 0;
+            isGameOver = false;
+
+            currentAnchor = { x: canvas.width / 2, y: 100, id: 0 };
+            anchors = [currentAnchor];
+
+            ball.isCaptured = true;
+            ball.angle = Math.PI / 4;
+            ball.angularVelocity = 0;
+            ball.x = 0;
+            ball.y = 0;
+            ball.vx = 0;
+            ball.vy = 0;
+
+            collisionEffects = [];
+            initObstacles();
+        }
+
+        // 鼠标事件
+        canvas.addEventListener('mousedown', releaseBall);
+
+        // 键盘事件
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'r' || e.key === 'R') {
+                resetGame();
+            }
+            if (e.key === ' ') {
+                releaseBall();
+            }
+        });
+
+        // 游戏循环
+        function gameLoop() {
+            drawBackground();
+            updateScroll();
+            spawnNewElements();
+            cleanupOffscreenElements();
+            updateBall();
+            updateObstacles();
+            checkCollisions();
+            updateCollisionEffects();
+            drawAnchors();
+            drawRope();
+            drawObstacles();
+            drawBall();
+            drawCollisionEffects();
+            drawUI();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 启动游戏
+        initObstacles();
+        gameLoop();
+    </script>
+</body>
+</html>

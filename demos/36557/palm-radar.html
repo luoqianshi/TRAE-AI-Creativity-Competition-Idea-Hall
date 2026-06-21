@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>掌上雷达 — ESP32-S3 掌上WiFi人体探测器</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #12171f;
+    --border: #1e2a3a;
+    --green: #00e676;
+    --green-dim: #00c85355;
+    --green-glow: #00e67666;
+    --cyan: #00e5ff;
+    --orange: #ff9100;
+    --white: #e0e0e0;
+    --gray: #8892a4;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+
+  /* ── 雷达背景动画 ── */
+  .radar-bg {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 900px; height: 900px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.08;
+  }
+  .radar-bg canvas {
+    width: 100%; height: 100%;
+  }
+
+  /* ── 导航 ── */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: #0a0e14ee;
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 0;
+  }
+  nav .inner {
+    max-width: 960px; margin: 0 auto; padding: 0 24px;
+    display: flex; align-items: center; gap: 32px;
+  }
+  nav .logo { font-size: 18px; font-weight: 700; color: var(--green); }
+  nav a { color: var(--gray); text-decoration: none; font-size: 14px; transition: color .2s; }
+  nav a:hover { color: var(--green); }
+
+  /* ── 容器 ── */
+  section { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 80px 24px; }
+
+  /* ── Hero ── */
+  .hero {
+    text-align: center; padding-top: 100px; padding-bottom: 120px;
+  }
+  .hero .device-ring {
+    width: 220px; height: 220px;
+    margin: 0 auto 48px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #1a2a1a 0%, #0a0e14 70%);
+    border: 2px solid var(--green-dim);
+    box-shadow: 0 0 80px #00e67622, inset 0 0 40px #00e6760a;
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    animation: pulse-ring 3s ease-in-out infinite;
+  }
+  @keyframes pulse-ring {
+    0%, 100% { box-shadow: 0 0 80px #00e67622, inset 0 0 40px #00e6760a; }
+    50% { box-shadow: 0 0 120px #00e67633, inset 0 0 60px #00e67612; }
+  }
+  .device-ring .radar-sweep {
+    width: 100%; height: 100%; border-radius: 50%;
+    background: conic-gradient(from 0deg, #00e67600 0%, #00e67622 5%, #00e67600 10%);
+    animation: sweep 2.5s linear infinite;
+  }
+  @keyframes sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .device-ring .dot {
+    position: absolute; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 12px var(--green), 0 0 24px var(--green);
+  }
+  .device-ring .dot:nth-child(2) { top: 25%; left: 60%; animation: blink 1.2s infinite; }
+  .device-ring .dot:nth-child(3) { top: 55%; left: 25%; animation: blink 1.8s .5s infinite; }
+  .device-ring .dot:nth-child(4) { top: 40%; left: 70%; animation: blink 2.1s .3s infinite; }
+  @keyframes blink {
+    0%, 100% { opacity: 0.3; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.8); }
+  }
+
+  .hero h1 {
+    font-size: 48px; font-weight: 800; letter-spacing: -1px;
+    background: linear-gradient(135deg, var(--green) 0%, var(--cyan) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 16px;
+  }
+  .hero .subtitle {
+    font-size: 18px; color: var(--gray); max-width: 520px; margin: 0 auto 32px;
+  }
+  .hero .badges {
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+  }
+  .badge {
+    padding: 6px 16px; border-radius: 20px; font-size: 12px;
+    border: 1px solid var(--border); color: var(--gray);
+  }
+
+  /* ── 板块标题 ── */
+  .sec-title {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 3px;
+    color: var(--green); margin-bottom: 12px;
+  }
+  .sec-heading {
+    font-size: 32px; font-weight: 700; margin-bottom: 40px;
+  }
+
+  /* ── 硬件面板 ── */
+  .hw-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+  }
+  .hw-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; transition: border-color .3s, transform .3s;
+  }
+  .hw-card:hover { border-color: var(--green-dim); transform: translateY(-2px); }
+  .hw-card .icon { font-size: 28px; margin-bottom: 12px; }
+  .hw-card h3 { font-size: 14px; color: var(--green); margin-bottom: 6px; }
+  .hw-card p { font-size: 13px; color: var(--gray); line-height: 1.6; }
+
+  /* ── 原理流程图 ── */
+  .flow {
+    display: flex; flex-wrap: wrap; gap: 20px; justify-content: center;
+    align-items: center; padding: 40px 0;
+  }
+  .flow-node {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 24px; text-align: center; font-size: 13px; min-width: 140px;
+  }
+  .flow-node .step { font-size: 11px; color: var(--green); margin-bottom: 4px; }
+  .flow-arrow { color: var(--green-dim); font-size: 24px; }
+
+  /* ── 对比表 ── */
+  .compare-table {
+    width: 100%; border-collapse: collapse; margin: 24px 0;
+  }
+  .compare-table th {
+    text-align: left; padding: 12px 16px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--gray);
+    border-bottom: 1px solid var(--border);
+  }
+  .compare-table td {
+    padding: 14px 16px; font-size: 13px; border-bottom: 1px solid #1a2230;
+  }
+  .compare-table tr td:first-child { color: var(--green); font-weight: 600; }
+  .check { color: var(--green); }
+  .warn { color: var(--orange); }
+
+  /* ── 步骤 ── */
+  .steps {
+    display: flex; flex-direction: column; gap: 24px;
+  }
+  .step-card {
+    display: flex; gap: 20px; align-items: flex-start;
+  }
+  .step-num {
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 2px solid var(--green-dim);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700; color: var(--green);
+    flex-shrink: 0;
+  }
+  .step-body h3 { font-size: 16px; margin-bottom: 6px; }
+  .step-body p { font-size: 13px; color: var(--gray); }
+  .step-body code {
+    background: #1a2a1a; color: var(--green); padding: 2px 8px;
+    border-radius: 4px; font-size: 12px;
+  }
+
+  /* ── 用户场景 ── */
+  .scenario-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .scenario-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px;
+  }
+  .scenario-card .emoji { font-size: 36px; margin-bottom: 8px; }
+  .scenario-card h3 { font-size: 15px; margin-bottom: 6px; }
+  .scenario-card p { font-size: 13px; color: var(--gray); }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; padding: 60px 24px;
+    color: var(--gray); font-size: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── 响应式 ── */
+  @media (max-width: 600px) {
+    .hero h1 { font-size: 32px; }
+    .flow { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+
+  /* ── 分数计数器动画 ── */
+  .score-bar {
+    display: flex; align-items: center; gap: 8px; padding: 4px 0;
+  }
+  .score-fill {
+    height: 6px; border-radius: 3px; background: var(--green);
+    transition: width 1s ease;
+  }
+  .score-track {
+    flex: 1; height: 6px; border-radius: 3px; background: #1e2a3a;
+  }
+</style>
+</head>
+<body>
+
+<!-- 全局雷达背景 -->
+<div class="radar-bg"><canvas id="bgRadar"></canvas></div>
+
+<!-- 导航 -->
+<nav>
+  <div class="inner">
+    <div class="logo">▸ PALM RADAR</div>
+    <a href="#overview">概述</a>
+    <a href="#hardware">硬件</a>
+    <a href="#how">原理</a>
+    <a href="#start">上手</a>
+    <a href="#scenarios">场景</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero" id="overview">
+  <div class="device-ring">
+    <div class="radar-sweep"></div>
+    <div class="dot"></div>
+    <div class="dot"></div>
+    <div class="dot"></div>
+  </div>
+  <h1>掌上雷达</h1>
+  <p class="subtitle">
+    基于 ESP32-S3 的掌上 WiFi 人体探测器。<br>
+    无需摄像头、无需穿戴设备，握在手心就能感知周围。
+  </p>
+  <div class="badges">
+    <span class="badge">ESP32-S3R8</span>
+    <span class="badge">360×360 触摸屏</span>
+    <span class="badge">WiFi 感知</span>
+    <span class="badge">六轴 IMU</span>
+    <span class="badge">双麦克风</span>
+    <span class="badge">CNC 铝合金</span>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<!-- 比赛报名信息 -->
+<!-- ============================================ -->
+<section style="scroll-margin-top:80px;">
+  <div style="
+    background: linear-gradient(135deg, #0f1a1f 0%, #12171f 50%, #0a0e14 100%);
+    border: 2px solid var(--green-dim);
+    border-radius: 16px;
+    padding: 40px 36px;
+    position: relative;
+    overflow: hidden;
+  ">
+    <!-- 装饰角标 -->
+    <div style="
+      position: absolute; top: -1px; right: -1px;
+      background: var(--green); color: #000;
+      font-size: 11px; font-weight: 700; letter-spacing: 1px;
+      padding: 6px 16px; border-radius: 0 14px 0 12px;
+    ">参赛作品</div>
+
+    <!-- 赛道标签 -->
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:24px;">
+      <span style="background:var(--green); color:#000; padding:4px 14px; border-radius:14px; font-size:11px; font-weight:700; letter-spacing:1px;">生活娱乐</span>
+      <span style="background:#1a2a2a; color:var(--green); padding:4px 14px; border-radius:14px; font-size:11px; font-weight:700; border:1px solid var(--green-dim); letter-spacing:1px;">硬件交互</span>
+      <span style="background:#2a1a1a; color:var(--orange); padding:4px 14px; border-radius:14px; font-size:11px; font-weight:700; border:1px solid #ff910044; letter-spacing:1px;">社会公益</span>
+    </div>
+
+    <!-- 主标题 -->
+    <h2 style="
+      font-size: 28px; font-weight: 800; margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--green) 0%, var(--cyan) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    ">【生活娱乐赛道 + 社会公益】WIFI生命探测仪</h2>
+    <p style="font-size:14px; color:var(--gray); margin-bottom:40px;">
+      基于开源 WiFi 感知技术，用一块 ESP32 开发板构建的非视觉生命探测与独居关怀系统
+    </p>
+
+    <!-- ─── 第一部分：创意名称 + 创意介绍 ─── -->
+    <div style="margin-bottom:36px;">
+      <h3 style="
+        display:flex; align-items:center; gap:10px; font-size:15px; margin-bottom:20px;
+        padding-bottom:10px; border-bottom:1px solid var(--border);
+      ">
+        <span style="background:var(--green-dim); color:var(--green); width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; font-size:13px; font-weight:700;">1</span>
+        创意名称 + 创意介绍
+      </h3>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+        <!-- 想解决什么问题 -->
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">🎯</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">想解决什么问题</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            基于开源的 WiFi 信道状态感知技术（参考 ESPectre / RuView 项目思路），使用 ESP32-S3 开发板构建一台<strong style="color:var(--white);">掌上生命探测仪</strong>。只要室内存在 WiFi 信号，无需摄像头、无需穿戴设备，就能让子女和社区工作人员远程知晓独居老人<strong style="color:var(--white);">是否在家中活动、是否存在异常长时间静止</strong>。同时可扩展为公共场所的<strong style="color:var(--white);">社交密度探测器</strong>，辅助空间管理和人群疏导。
+          </p>
+        </div>
+
+        <!-- 为什么会想到做这个 -->
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">💡</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">为什么会想到做这个</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            目前社区工作人员需要定期上门走访慰问老年人，老小区没有电梯，逐户爬楼梯效率低、强度大。独居老人一旦发生意外（跌倒、昏迷），可能在数小时内无人知晓。最关键的是 ——<strong style="color:var(--white);">WiFi 信号探测完全不需要摄像头和麦克风，不采集任何音视频信息，从根本上保护老年人隐私权</strong>，让技术关怀不再以牺牲尊严为代价。
+          </p>
+        </div>
+
+        <!-- 大概是什么产品 -->
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">📱</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">大概是什么产品</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            一台<strong style="color:var(--white);">圆形触控屏硬件设备</strong>（1.85 英寸、360×360 分辨率、CNC 铝合金外壳）。版型小巧可挂墙/放桌面，内置 WiFi 感知模组、六轴传感器、扬声器和锂电池。探测数据可推送到手机 App 或接入社区平台，子女和工作人员通过手机即可查看老人的活动状态。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── 第二部分：目标用户及痛点 ─── -->
+    <div style="margin-bottom:36px;">
+      <h3 style="
+        display:flex; align-items:center; gap:10px; font-size:15px; margin-bottom:20px;
+        padding-bottom:10px; border-bottom:1px solid var(--border);
+      ">
+        <span style="background:var(--green-dim); color:var(--green); width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; font-size:13px; font-weight:700;">2</span>
+        目标用户及痛点
+      </h3>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">👥 面向用户</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            <strong style="color:var(--white);">与父母分开居住的年轻人</strong> —— 想知道独居父母今天是否正常活动，又不想频繁打电话打扰。<br><br>
+            <strong style="color:var(--white);">社区工作人员 / 养老机构护工</strong> —— 面对数十户独居老人，需要高效掌握每户的基本安全状态。
+          </p>
+        </div>
+
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">📍 使用场景</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            独居老人的住宅（客厅/卧室/卫生间）、养老院房间、老旧小区。<br>
+            设备贴在墙上或放在角落，连上家中 WiFi 即可工作，无需老人任何操作。
+          </p>
+        </div>
+
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">💔 当前痛点</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            • 只能打电话确认 —— 如果老人没接，焦虑和无助感会瞬间涌上来。<br>
+            • 社区人员只能上门走访 —— 人力有限，老小区爬楼一趟就是半天。<br>
+            • 摄像头上门侵犯隐私 —— 没有人愿意被24小时监视。<br>
+            • 跌倒/昏迷后的"黄金窗口"很短 —— 但传统手段发现异常可能需要数小时甚至数天。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── 第三部分：价值与意义 ─── -->
+    <div style="margin-bottom:36px;">
+      <h3 style="
+        display:flex; align-items:center; gap:10px; font-size:15px; margin-bottom:20px;
+        padding-bottom:10px; border-bottom:1px solid var(--border);
+      ">
+        <span style="background:var(--green-dim); color:var(--green); width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; font-size:13px; font-weight:700;">3</span>
+        价值与意义
+      </h3>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">🔒</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">隐私优先的关怀</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            全程不使用摄像头和麦克风，仅分析室内 WiFi 信号变化来判断是否有人活动。不采集任何图像、声音或可识别个人身份的信息。技术关怀和隐私保护<strong style="color:var(--white);">不是二选一</strong>。
+          </p>
+        </div>
+
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">⏱️</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">缩短意外发现时间</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            设备检测到老人长时间静止（超过日常活动模式阈值）时自动推送提醒。将意外发现窗口从"可能数天"压缩到"分钟级"，大幅提升急救成功率。
+          </p>
+        </div>
+
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">🏛️</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">社区工作减负</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            一台几十元的设备替代每周数次上门。社区人员可在后台统一查看辖区内独居老人活动概览，将有限的人力精准分配到<strong style="color:var(--white);">真正需要上门关注</strong>的住户。
+          </p>
+        </div>
+
+        <div style="background:#0d1117; border:1px solid var(--border); border-radius:12px; padding:24px;">
+          <div style="font-size:20px; margin-bottom:10px;">🌐</div>
+          <h4 style="font-size:14px; color:var(--green); margin-bottom:8px;">技术普惠</h4>
+          <p style="font-size:13px; color:var(--gray); line-height:1.8;">
+            基于开源社区的 WiFi 感知研究成果（ESPectre / RuView），将学术论文和 GitHub 项目转化为普通人都能用得起的民生设备。技术门槛向下走，社会价值向上走。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── 第四部分：创意产物 HTML ─── -->
+    <div style="margin-bottom:8px;">
+      <h3 style="
+        display:flex; align-items:center; gap:10px; font-size:15px; margin-bottom:20px;
+        padding-bottom:10px; border-bottom:1px solid var(--border);
+      ">
+        <span style="background:var(--green-dim); color:var(--green); width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; font-size:13px; font-weight:700;">4</span>
+        创意产物（本 HTML 文件）
+      </h3>
+      <div style="background:#0d1117; border:1px solid var(--green-dim); border-radius:12px; padding:24px; text-align:center;">
+        <p style="color:var(--green); font-size:15px; margin-bottom:6px;">本页面由 TRAE Work AI 辅助生成</p>
+        <p style="color:var(--gray); font-size:13px; line-height:1.8;">
+          本 HTML 完整展示了"掌上雷达 / WiFi 生命探测仪"的创意方案，<br>
+          包含：产品形态、硬件复用、技术原理、对比分析、用户场景和上手路径。<br>
+          文件随参赛作品一并提交至社区。
+        </p>
+        <div style="margin-top:16px; padding:10px 20px; background:#0a1a0a; border-radius:8px; display:inline-block;">
+          <code style="color:var(--green); font-size:12px;">palm-radar.html</code>
+          <span style="color:var(--gray); font-size:11px; margin-left:12px;">Generated by TRAE Work · Auto Mode</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- 它能做什么 -->
+<section>
+  <div class="sec-title">What It Does</div>
+  <div class="sec-heading">手心上的雷达站</div>
+
+  <div class="hw-grid">
+    <div class="hw-card">
+      <div class="icon">📡</div>
+      <h3>WiFi 人体感知</h3>
+      <p>监听周围 WiFi 信号 RSSI 波动，人体移动时扰动信号场，实时捕获并显示在屏幕上。</p>
+    </div>
+    <div class="hw-card">
+      <div class="icon">🎯</div>
+      <h3>雷达扫描界面</h3>
+      <p>360×360 圆形屏天然适配雷达 UI——扫描线旋转，检测到扰动时闪烁光点 + 音效。</p>
+    </div>
+    <div class="hw-card">
+      <div class="icon">🧭</div>
+      <h3>IMU 方向感知</h3>
+      <p>六轴传感器检测你的朝向，转身时雷达画面同步旋转，始终以你为圆心。</p>
+    </div>
+    <div class="hw-card">
+      <div class="icon">🔊</div>
+      <h3>声音反馈</h3>
+      <p>板上扬声器输出雷达 Ping 音效，检测到人瞬间"滴滴"报警，夜间静默模式可选。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 硬件复用 -->
+<section id="hardware">
+  <div class="sec-title">Hardware Map</div>
+  <div class="sec-heading">每一颗芯片都不浪费</div>
+
+  <table class="compare-table">
+    <thead>
+      <tr><th>硬件资源</th><th>在掌上雷达中的角色</th><th>状态</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>ESP32-S3R8 双核 240MHz</td><td>主控：WiFi 嗅探 + 信号处理 + UI 渲染</td><td class="check">✓ 全速运转</td></tr>
+      <tr><td>360×360 TFT LCD (ST77916)</td><td>雷达扫描 UI：极坐标网格 + 扫描线 + 目标光点</td><td class="check">✓ 核心交互</td></tr>
+      <tr><td>CST816S 电容触摸</td><td>触摸切换探测灵敏度 / 显示模式 / 静音</td><td class="check">✓ 触控交互</td></tr>
+      <tr><td>QMI8658 六轴 IMU</td><td>感知持有者朝向，雷达画面随身体转动</td><td class="check">✓ 体感联动</td></tr>
+      <tr><td>2.4GHz WiFi</td><td>被动嗅探周围 WiFi 数据包 RSSI 波动</td><td class="check">✓ 感知核心</td></tr>
+      <tr><td>ES8311 音频 DAC + 扬声器</td><td>雷达 Ping 声 / 目标报警音 / 静默模式</td><td class="check">✓ 听觉反馈</td></tr>
+      <tr><td>双麦克风 + ES7210 回声消除</td><td>声学辅助检测（脚步声/开门声增强置信度）</td><td class="warn">◐ 可选增强</td></tr>
+      <tr><td>锂电池 + BQ27220 电量检测</td><td>移动供电，屏幕显示电量，掌上续航</td><td class="check">✓ 移动供电</td></tr>
+      <tr><td>CNC 铝合金外壳 + 挂绳孔</td><td>挂脖子 / 挂腰间 / 手持，真正的随身设备</td><td class="check">✓ 随身携带</td></tr>
+      <tr><td>Micro SD 卡槽</td><td>记录探测日志，回放历史轨迹</td><td class="warn">◐ 可选功能</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 工作原理 -->
+<section id="how">
+  <div class="sec-title">How It Works</div>
+  <div class="sec-heading">WiFi 信号就是你的雷达波</div>
+
+  <div class="flow">
+    <div class="flow-node">
+      <div class="step">STEP 1</div>
+      周围 WiFi 信号<br>持续传播
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="step">STEP 2</div>
+      ESP32 嗅探<br>RSSI 实时波动
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="step">STEP 3</div>
+      滑动窗口<br>方差计算
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="step">STEP 4</div>
+      超过阈值<br>判定为"有人"
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="step">STEP 5</div>
+      屏幕光点闪烁<br>扬声器报警
+    </div>
+  </div>
+
+  <div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:28px; margin-top:20px;">
+    <h3 style="color:var(--green); margin-bottom:12px; font-size:14px;">核心算法（仅 3 步）</h3>
+    <p style="color:var(--gray); font-size:13px; line-height:2;">
+      ① 每秒采集周围 WiFi 信道的 RSSI 值，形成时间序列<br>
+      ② 对最近 3 秒的 RSSI 数据计算滑动方差<br>
+      ③ 方差 &gt; 校准基线 + 阈值 → 判定环境中有活动物体<br><br>
+      与 ESPectre 的 CSI 方案不同，这里使用更轻量的 RSSI 方差法，<br>
+      足以检测室内人员走动（2–5 米范围），且完全跑在单块 ESP32-S3 上。
+    </p>
+  </div>
+</section>
+
+<!-- 对比 -->
+<section>
+  <div class="sec-title">vs Alternatives</div>
+  <div class="sec-heading">为什么不用 CSI？</div>
+
+  <table class="compare-table">
+    <thead>
+      <tr><th></th><th>掌上雷达（RSSI）</th><th>RuView / ESPectre（CSI）</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>精度</td>
+        <td>检测有人/无人走动</td>
+        <td class="warn">宣称姿态 / 心跳 / 呼吸</td>
+      </tr>
+      <tr><td>需要电脑？</td><td class="check">不需要，单机运行</td><td class="warn">需要 PC 跑 Docker 推理</td></tr>
+      <tr><td>LCD 屏幕</td><td class="check">原生雷达 UI</td><td>不支持</td></tr>
+      <tr><td>IMU / 扬声器</td><td class="check">全部利用</td><td>不支持</td></tr>
+      <tr><td>社区验证</td><td class="check">可靠，原理简单</td><td class="warn">争议较大，复现有难度</td></tr>
+      <tr><td>上手难度</td><td class="check">零代码，烧录即用</td><td class="warn">需 Git + Docker + 编译链</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 上手 -->
+<section id="start">
+  <div class="sec-title">Get Started</div>
+  <div class="sec-heading">三步上手掌上雷达</div>
+
+  <div class="steps">
+    <div class="step-card">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>安装 Arduino IDE</h3>
+        <p>下载安装后，添加 ESP32 开发板支持 URL：<br>
+        <code>https://espressif.github.io/arduino-esp32/package_esp32_index.json</code></p>
+      </div>
+    </div>
+    <div class="step-card">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>安装依赖库</h3>
+        <p>在 Arduino 库管理器中搜索安装：<br>
+        <code>TFT_eSPI</code>（LCD驱动）、<code>CST816S</code>（触摸）、<code>QMI8658</code>（IMU）</p>
+      </div>
+    </div>
+    <div class="step-card">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>烧录 & 开机</h3>
+        <p>USB 连接板子 → 选择 <code>ESP32S3 Dev Module</code> → 点击上传<br>
+        上电自动校准 10 秒，随后雷达扫描线开始旋转 —— 完成。</p>
+      </div>
+    </div>
+  </div>
+
+  <div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:28px; margin-top:24px; text-align:center;">
+    <p style="color:var(--green); font-size:18px; margin-bottom:8px;">AI 全栈代写，零代码友好</p>
+    <p style="color:var(--gray); font-size:13px;">
+      所有 Arduino 代码、LCD UI、信号处理逻辑均由 AI 生成。<br>
+      你只需要复制粘贴、点击上传，剩下的交给板子。
+    </p>
+  </div>
+</section>
+
+<!-- 场景 -->
+<section id="scenarios">
+  <div class="sec-title">Use Scenarios</div>
+  <div class="sec-heading">从极客玩具到实用工具</div>
+
+  <div class="scenario-grid">
+    <div class="scenario-card">
+      <div class="emoji">🏠</div>
+      <h3>独居安全</h3>
+      <p>放床头/客厅，夜间模式持续监测。有人闯入时屏幕闪红 + 扬声器报警，比摄像头更保护隐私。</p>
+    </div>
+    <div class="scenario-card">
+      <div class="emoji">🏢</div>
+      <h3>办公室防摸鱼</h3>
+      <p>放工位上，老板从背后走过来时提前"滴滴"。IMU 感知你转身时自动切换静默。</p>
+    </div>
+    <div class="scenario-card">
+      <div class="emoji">🚶</div>
+      <h3>深夜楼道</h3>
+      <p>挂脖子上走夜路，屏幕显示周围活动热力。拐角检测到信号扰动时提前预警。</p>
+    </div>
+    <div class="scenario-card">
+      <div class="emoji">🔬</div>
+      <h3>极客演示</h3>
+      <p>给朋友展示"WiFi 能看见你"，雷达屏 + 音效即时反馈，科技感拉满。</p>
+    </div>
+    <div class="scenario-card">
+      <div class="emoji">🏕️</div>
+      <h3>露营警戒</h3>
+      <p>搭帐篷时放外面，有人/动物靠近帐篷区域时预警。电池供电一整夜。</p>
+    </div>
+    <div class="scenario-card">
+      <div class="emoji">🛒</div>
+      <h3>店铺客流</h3>
+      <p>放收银台，感知顾客进出频率。SD 卡记录全天人流日志，辅助运营分析。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 技术栈 -->
+<section>
+  <div class="sec-title">Tech Stack</div>
+  <div class="sec-heading">全链路跑在单颗芯片上</div>
+
+  <div class="hw-grid">
+    <div class="hw-card">
+      <div class="icon">🖥️</div>
+      <h3>Arduino 框架</h3>
+      <p>零门槛上手。官方板级支持包 + TFT_eSPI 驱动库，社区成熟。</p>
+    </div>
+    <div class="hw-card">
+      <div class="icon">📊</div>
+      <h3>LVGL 可选</h3>
+      <p>如需更精美的雷达 UI，可升级至 LVGL 图形库，支持抗锯齿和动画过渡。</p>
+    </div>
+    <div class="hw-card">
+      <div class="icon">📶</div>
+      <h3>WiFi Promiscuous Mode</h3>
+      <p>ESP32 进入混杂模式嗅探空中 WiFi 帧，提取 RSSI 序列而不需要连接任何路由器。</p>
+    </div>
+    <div class="hw-card">
+      <div class="icon">🔢</div>
+      <h3>滑动方差检测</h3>
+      <p>纯数学算法，不依赖 AI/ML。3 秒窗口滚动计算 RSSI 方差，阈值触发。</p>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <p style="margin-bottom:8px;">PALM RADAR · 掌上雷达</p>
+  <p>基于 Waveshare ESP32-S3-Touch-LCD-1.85B · 开源 · AI 辅助开发</p>
+  <p style="margin-top:16px; color:#3a4a5a;">硬件资料：docs.waveshare.net/ESP32-S3-Touch-LCD-1.85B</p>
+</footer>
+
+<!-- 背景雷达动画 -->
+<script>
+(function() {
+  const canvas = document.getElementById('bgRadar');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const size = 900;
+  canvas.width = size;
+  canvas.height = size;
+  const cx = size / 2, cy = size / 2, r = size / 2 - 4;
+
+  function draw() {
+    ctx.clearRect(0, 0, size, size);
+    // 同心圆
+    for (let i = 1; i <= 5; i++) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * i / 5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#00e67618';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    // 十字
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);
+    ctx.strokeStyle = '#00e67610';
+    ctx.stroke();
+    // 扫描线（假死）
+    const angle = (Date.now() / 3000) % 1 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+    ctx.strokeStyle = '#00e67612';
+    ctx.lineWidth = r;
+    ctx.stroke();
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+</script>
+
+</body>
+</html>

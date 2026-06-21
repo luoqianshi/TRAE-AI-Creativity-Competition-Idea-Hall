@@ -1,0 +1,606 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="page-title">👥 员工档案管理</h2>
+
+<div style="display:flex;gap:10px;margin-bottom:20px;align-items:center">
+    <a href="/employee_archive/add" class="btn btn-success">+ 新增员工</a>
+    <button id="import-btn" class="btn btn-primary">📥 智能导入</button>
+    
+    <!-- 导出功能 -->
+    <div style="flex:0 0 250px">
+        <select id="export-select" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px" onchange="handleExportModeChange()">
+            <option value="">请选择导出范围</option>
+            <option value="selected">导出选中员工</option>
+            <option value="all">导出全部员工</option>
+        </select>
+    </div>
+    <button id="export-btn" class="btn btn-info">📤 导出员工数据</button>
+    <div id="export-status" style="display:none;color:#007bff;font-weight:bold"></div>
+    
+    <div style="flex:0 0 200px">
+        <select id="status-filter" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px" onchange="window.location.href='/employee_archive?status=' + this.value">
+            <option value="all">全部状态</option>
+            <option value="active" {% if request.args.get('status', 'active') == 'active' %}selected{% endif %}>在职员工</option>
+            <option value="inactive" {% if request.args.get('status') == 'inactive' %}selected{% endif %}>离职员工</option>
+        </select>
+    </div>
+    <div style="flex:0 0 300px">
+        <input type="text" id="search-input" placeholder="输入工号或姓名搜索..." style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px">
+    </div>
+</div>
+
+<!-- 员工主要信息表格 -->
+<table id="employee-table">
+    <thead>
+        <tr>
+            <th><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th>
+            <th>工号</th>
+            <th>姓名</th>
+            <th>部门划分</th>
+            <th>一级部门</th>
+            <th>二级部门</th>
+            <th>职务</th>
+            <th>岗位类别</th>
+            <th>状态</th>
+            <th>离职日期</th>
+            <th>操作</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for emp in employees %}
+        <tr onclick="viewEmployeeDetail('{{emp.emp_no}}')" style="cursor:pointer" class="employee-row {% if not emp.is_active %}inactive-row{% endif %}">
+            <td><input type="checkbox" class="emp-checkbox" value="{{emp.emp_no}}" onclick="event.stopPropagation()"></td>
+            <td>{{emp.emp_no}}</td>
+            <td>{{emp.name}}</td>
+            <td>{{emp.dept_division or '-'}}</td>
+            <td>{{emp.level1_dept or '-'}}</td>
+            <td>{{emp.level2_dept or '-'}}</td>
+            <td>{{emp.position or '-'}}</td>
+            <td>{{emp.job_category or '-'}}</td>
+            <td>
+                {% if emp.is_active %}
+                <span style="color: #27ae60; font-weight: bold;">在职</span>
+                {% else %}
+                <span style="color: #e74c3c; font-weight: bold;">离职</span>
+                {% endif %}
+            </td>
+            <td>{{emp.resign_date or '-'}}</td>
+            <td onclick="event.stopPropagation()">
+                <a href="/employee_archive/edit/{{emp.emp_no}}" class="btn" style="padding:4px 8px;font-size:12px">编辑</a>
+                <a href="/employee_archive/delete/{{emp.emp_no}}" class="btn btn-danger" style="padding:4px 8px;font-size:12px" onclick="return confirm('确定删除该员工？')">删除</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not employees %}
+<div style="text-align:center;padding:50px;color:#95a5a6">
+    <div style="font-size:48px;margin-bottom:10px">👤</div>
+    <div>暂无员工数据</div>
+    <a href="/employee_archive/add" class="btn btn-success" style="margin-top:15px">添加第一个员工</a>
+</div>
+{% endif %}
+
+<!-- 导出进度弹窗 -->
+<div id="export-modal" class="modal-overlay">
+    <div class="modal-content" style="width:450px;">
+        <div class="modal-header">
+            <div class="modal-title">📤 导出员工数据</div>
+            <button class="close-btn" onclick="closeExportModal()">&times;</button>
+        </div>
+        
+        <div id="export-content">
+            <div id="export-progress-container">
+                <div class="progress-bar">
+                    <div class="progress-bar-fill" id="export-progress-fill"></div>
+                </div>
+                <div id="export-progress-text" style="text-align:center;color:#666;margin-top:10px">正在准备数据...</div>
+                <div id="export-stats" style="text-align:center;color:#999;font-size:12px;margin-top:5px"></div>
+            </div>
+        </div>
+        
+        <div id="export-success" style="display:none;text-align:center;padding:20px;">
+            <div style="font-size:48px;margin-bottom:10px">✅</div>
+            <div style="font-size:18px;font-weight:bold;color:#27ae60">导出成功！</div>
+            <div style="color:#666;margin-top:10px">文件已自动下载</div>
+            <button type="button" class="btn btn-success" onclick="closeExportModal()" style="margin-top:15px">确定</button>
+        </div>
+        
+        <div id="export-error" style="display:none;text-align:center;padding:20px;">
+            <div style="font-size:48px;margin-bottom:10px">❌</div>
+            <div style="font-size:18px;font-weight:bold;color:#e74c3c">导出失败</div>
+            <div id="error-message" style="color:#666;margin-top:10px"></div>
+            <button type="button" class="btn btn-danger" onclick="closeExportModal()" style="margin-top:15px">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 智能导入弹窗 -->
+<div id="import-modal" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title">📥 智能导入员工档案</div>
+            <button class="close-btn" onclick="closeImportModal()">&times;</button>
+        </div>
+        
+        <form id="import-form" enctype="multipart/form-data">
+            <div class="form-group">
+                <label>选择文件 *</label>
+                <input type="file" name="file" id="import-file" accept=".xlsx,.xls,.csv" required>
+                <p style="color:#95a5a6;font-size:12px;margin-top:5px">支持Excel(.xlsx/.xls)和CSV(.csv)格式</p>
+            </div>
+            
+            <div class="form-group">
+                <label>导入选项</label>
+                <label style="display:block;margin-bottom:5px">
+                    <input type="radio" name="import_mode" value="add" checked> 仅新增（跳过已存在的员工）
+                </label>
+                <label style="display:block">
+                    <input type="radio" name="import_mode" value="update"> 更新并新增（更新已存在的员工，新增不存在的）
+                </label>
+            </div>
+            
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+                <button type="button" class="btn btn-secondary" onclick="closeImportModal()">取消</button>
+                <button type="submit" class="btn btn-success">开始导入</button>
+            </div>
+        </form>
+        
+        <div id="import-progress" style="display:none;">
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progress-fill"></div>
+            </div>
+            <div id="progress-text" style="text-align:center;color:#666"></div>
+        </div>
+        
+        <div id="import-results" style="display:none;">
+            <div id="result-summary"></div>
+            <div id="result-errors" style="display:none;margin-top:10px;"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:15px">
+                <button type="button" class="btn btn-success" onclick="location.reload()">刷新页面</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.employee-row:hover {
+    background-color: #f8f9fa;
+}
+
+.inactive-row {
+    background-color: #f8f9fa;
+    opacity: 1.0;
+}
+
+.inactive-row td {
+    color: #6c757d;
+    font-style: italic;
+}
+
+#employee-table {
+    table-layout: fixed;
+    width: 100%;
+}
+
+#employee-table th, #employee-table td {
+    padding: 8px 12px;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#employee-table th:nth-child(7), #employee-table td:nth-child(7) {
+    width: 150px;
+}
+
+#employee-table th:nth-child(4), #employee-table td:nth-child(4) {
+    width: 80px;
+}
+
+#employee-table th:nth-child(8), #employee-table td:nth-child(8) {
+    width: 100px;
+}
+
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+}
+
+.modal-content {
+    background: white;
+    margin: 10% auto;
+    padding: 20px;
+    border-radius: 8px;
+    width: 500px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+}
+
+.close-btn:hover {
+    color: #333;
+}
+
+.import-result {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.import-success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.import-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.import-warning {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 20px;
+    background: #f3f3f3;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 15px 0;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: #3498db;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+</style>
+
+<script>
+// 员工搜索和筛选功能
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('search-input');
+    const statusFilter = document.getElementById('status-filter');
+    const table = document.getElementById('employee-table');
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    
+    function filterEmployees() {
+        const searchTerm = searchInput.value.trim().toLowerCase();
+        const status = statusFilter.value;
+        
+        rows.forEach(row => {
+            const empNo = row.cells[1].textContent.toLowerCase();  // cells[0]是checkbox
+            const name = row.cells[2].textContent.toLowerCase();    // cells[1]是工号，cells[2]是姓名
+            const isActive = !row.classList.contains('inactive-row');
+            
+            // 搜索匹配
+            const matchSearch = empNo.includes(searchTerm) || name.includes(searchTerm);
+            
+            // 状态匹配
+            let matchStatus = true;
+            if (status === 'active') {
+                matchStatus = isActive;
+            } else if (status === 'inactive') {
+                matchStatus = !isActive;
+            }
+            
+            row.style.display = (matchSearch && matchStatus) ? '' : 'none';
+        });
+    }
+    
+    if (searchInput) {
+        searchInput.addEventListener('input', filterEmployees);
+    }
+    
+    if (statusFilter) {
+        statusFilter.addEventListener('change', filterEmployees);
+    }
+    
+    // 初始加载时应用状态筛选
+    filterEmployees();
+    
+    // 导入按钮事件
+    const importBtn = document.getElementById('import-btn');
+    if (importBtn) {
+        importBtn.addEventListener('click', openImportModal);
+    }
+    
+    // 导入表单提交
+    const importForm = document.getElementById('import-form');
+    if (importForm) {
+        importForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            handleImport();
+        });
+    }
+});
+
+// 查看员工详情
+function viewEmployeeDetail(empNo) {
+    window.location.href = '/employee_archive/detail/' + empNo;
+}
+
+// 打开导入弹窗
+function openImportModal() {
+    document.getElementById('import-modal').style.display = 'block';
+    document.getElementById('import-form').style.display = 'block';
+    document.getElementById('import-progress').style.display = 'none';
+    document.getElementById('import-results').style.display = 'none';
+}
+
+// 关闭导入弹窗
+function closeImportModal() {
+    document.getElementById('import-modal').style.display = 'none';
+}
+
+// 处理导入
+function handleImport() {
+    const fileInput = document.getElementById('import-file');
+    const importMode = document.querySelector('input[name="import_mode"]:checked').value;
+    
+    if (!fileInput.files.length) {
+        alert('请选择要导入的文件');
+        return;
+    }
+    
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('import_mode', importMode);
+    
+    // 显示进度
+    document.getElementById('import-form').style.display = 'none';
+    document.getElementById('import-progress').style.display = 'block';
+    document.getElementById('import-results').style.display = 'none';
+    
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    
+    progressFill.style.width = '0%';
+    progressText.textContent = '正在解析文件...';
+    
+    // 发送导入请求
+    fetch('/employee_archive/import', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        progressFill.style.width = '100%';
+        progressText.textContent = '导入完成';
+        
+        setTimeout(() => {
+            document.getElementById('import-progress').style.display = 'none';
+            document.getElementById('import-results').style.display = 'block';
+            
+            let summaryHtml = '';
+            if (data.success) {
+                summaryHtml = `<div class="import-success">
+                    <strong>✅ 导入成功！</strong><br>
+                    成功导入: ${data.success_count} 条<br>
+                    更新: ${data.update_count} 条<br>
+                    跳过: ${data.skip_count} 条<br>
+                    失败: ${data.fail_count} 条
+                </div>`;
+            } else {
+                summaryHtml = `<div class="import-error">
+                    <strong>❌ 导入失败</strong><br>
+                    ${data.message}
+                </div>`;
+            }
+            
+            document.getElementById('result-summary').innerHTML = summaryHtml;
+            
+            if (data.errors && data.errors.length > 0) {
+                const errorsHtml = `<div class="import-warning">
+                    <strong>⚠️ 错误详情:</strong><br>
+                    ${data.errors.slice(0, 20).join('<br>')}${data.errors.length > 20 ? `...还有 ${data.errors.length - 20} 条错误` : ''}
+                </div>`;
+                document.getElementById('result-errors').innerHTML = errorsHtml;
+                document.getElementById('result-errors').style.display = 'block';
+            }
+        }, 500);
+    })
+    .catch(error => {
+        document.getElementById('import-progress').style.display = 'none';
+        document.getElementById('import-results').style.display = 'block';
+        document.getElementById('result-summary').innerHTML = `<div class="import-error">
+            <strong>❌ 请求失败</strong><br>
+            ${error.message}
+        </div>`;
+    });
+}
+
+// 全选/取消全选
+function toggleSelectAll() {
+    const selectAll = document.getElementById('select-all');
+    const checkboxes = document.querySelectorAll('.emp-checkbox');
+    checkboxes.forEach(cb => cb.checked = selectAll.checked);
+}
+
+// 导出模式变化时自动选中全部
+function handleExportModeChange() {
+    const exportSelect = document.getElementById('export-select');
+    const exportMode = exportSelect.value;
+    
+    if (exportMode === 'all') {
+        // 选择全部时，自动勾选所有员工
+        const selectAll = document.getElementById('select-all');
+        const checkboxes = document.querySelectorAll('.emp-checkbox');
+        selectAll.checked = true;
+        checkboxes.forEach(cb => cb.checked = true);
+    } else if (exportMode === 'selected') {
+        // 选择选中员工时，取消全选状态（保持用户选择）
+        const selectAll = document.getElementById('select-all');
+        selectAll.checked = false;
+    }
+}
+
+// 打开导出弹窗
+function openExportModal() {
+    document.getElementById('export-modal').style.display = 'block';
+    document.getElementById('export-content').style.display = 'block';
+    document.getElementById('export-success').style.display = 'none';
+    document.getElementById('export-error').style.display = 'none';
+    
+    // 重置进度条
+    document.getElementById('export-progress-fill').style.width = '0%';
+    document.getElementById('export-progress-text').textContent = '正在准备数据...';
+    document.getElementById('export-stats').textContent = '';
+}
+
+// 关闭导出弹窗
+function closeExportModal() {
+    document.getElementById('export-modal').style.display = 'none';
+    // 恢复按钮状态
+    const exportBtn = document.getElementById('export-btn');
+    exportBtn.disabled = false;
+}
+
+// 更新导出进度
+function updateExportProgress(percent, text, stats) {
+    document.getElementById('export-progress-fill').style.width = percent + '%';
+    document.getElementById('export-progress-text').textContent = text;
+    if (stats) {
+        document.getElementById('export-stats').textContent = stats;
+    }
+}
+
+// 导出员工数据
+function exportEmployees() {
+    const exportSelect = document.getElementById('export-select');
+    const exportMode = exportSelect.value;
+    const exportBtn = document.getElementById('export-btn');
+    
+    if (!exportMode) {
+        alert('请选择导出范围');
+        return;
+    }
+    
+    let empNos = [];
+    let exportCount = 0;
+    
+    if (exportMode === 'selected') {
+        const checkedBoxes = document.querySelectorAll('.emp-checkbox:checked');
+        empNos = Array.from(checkedBoxes).map(cb => cb.value);
+        
+        if (empNos.length === 0) {
+            alert('请先选择要导出的员工');
+            return;
+        }
+        exportCount = empNos.length;
+    } else {
+        // 导出全部，统计可见员工数量
+        const visibleRows = document.querySelectorAll('#employee-table tbody tr:not([style*="display: none"])');
+        exportCount = visibleRows.length;
+    }
+    
+    // 获取当前状态筛选
+    const statusFilter = document.getElementById('status-filter');
+    const status = statusFilter.value;
+    
+    // 构建导出URL
+    let url = '/employee_archive/export?mode=' + exportMode;
+    if (status) {
+        url += '&status=' + status;
+    }
+    if (empNos.length > 0) {
+        url += '&emp_nos=' + empNos.join(',');
+    }
+    
+    // 显示导出弹窗
+    openExportModal();
+    exportBtn.disabled = true;
+    
+    // 模拟进度更新
+    let progressInterval;
+    let currentProgress = 0;
+    
+    progressInterval = setInterval(() => {
+        if (currentProgress < 80) {
+            currentProgress += Math.random() * 15;
+            if (currentProgress > 80) currentProgress = 80;
+            updateExportProgress(currentProgress, '正在生成文件...', `预计导出 ${exportCount} 条记录`);
+        }
+    }, 300);
+    
+    // 使用fetch方式下载
+    fetch(url)
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('导出失败，服务器返回错误');
+        }
+        return response.blob();
+    })
+    .then(blob => {
+        clearInterval(progressInterval);
+        updateExportProgress(100, '生成完成，正在下载...', `共 ${exportCount} 条记录`);
+        
+        setTimeout(() => {
+            // 创建下载链接
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = '员工档案数据.csv';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(blobUrl);
+            document.body.removeChild(a);
+            
+            // 显示成功状态
+            document.getElementById('export-content').style.display = 'none';
+            document.getElementById('export-success').style.display = 'block';
+        }, 500);
+    })
+    .catch(error => {
+        clearInterval(progressInterval);
+        console.error('Export error:', error);
+        
+        document.getElementById('export-content').style.display = 'none';
+        document.getElementById('export-error').style.display = 'block';
+        document.getElementById('error-message').textContent = error.message;
+    });
+}
+
+// 绑定导出按钮事件
+document.addEventListener('DOMContentLoaded', function() {
+    const exportBtn = document.getElementById('export-btn');
+    if (exportBtn) {
+        exportBtn.addEventListener('click', exportEmployees);
+    }
+});
+</script>
+{% endblock %}

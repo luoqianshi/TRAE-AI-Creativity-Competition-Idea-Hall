@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MAP 文件内存分析报告</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --code: #3b82f6;
+      --ro: #8b5cf6;
+      --rw: #f97316;
+      --zi: #22c55e;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --border: #e2e8f0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 24px;
+    }
+    .header h1 { font-size: 1.75rem; font-weight: 700; }
+    .header .subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+    .header .meta { text-align: right; color: var(--muted); font-size: 0.85rem; }
+    .legend {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .legend span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .legend i {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .grid { display: grid; gap: 16px; margin-bottom: 16px; }
+    .grid-6 { grid-template-columns: repeat(6, 1fr); }
+    .grid-2 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+    @media (max-width: 1200px) {
+      .grid-6 { grid-template-columns: repeat(3, 1fr); }
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .card .value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+    .card .unit { font-size: 0.85rem; color: var(--muted); font-weight: 400; }
+    .section-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+    .progress-wrap { margin-bottom: 8px; }
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      margin-bottom: 6px;
+    }
+    .progress-bar {
+      height: 10px;
+      background: #e2e8f0;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 5px;
+      transition: width 0.3s;
+    }
+    .stacked-bar {
+      display: flex;
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .stacked-bar > div { height: 100%; }
+    .chart { width: 100%; height: 320px; }
+    .chart-sm { height: 280px; }
+    .chart-lg { height: 420px; }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0;
+    }
+    .tab {
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab.active {
+      color: var(--code);
+      border-bottom-color: var(--code);
+      font-weight: 600;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    th {
+      text-align: left;
+      padding: 8px 10px;
+      background: #f1f5f9;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th:hover { background: #e2e8f0; }
+    td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:hover td { background: #f8fafc; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 500;
+    }
+    .mini-bar {
+      width: 80px;
+      height: 6px;
+      background: #e2e8f0;
+      border-radius: 3px;
+      overflow: hidden;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .mini-bar-fill { height: 100%; background: var(--code); border-radius: 3px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>MAP 文件内存分析报告</h1>
+      <div class="subtitle" id="subtitle"></div>
+    </div>
+    <div class="meta">
+      <div id="date"></div>
+      <div id="source"></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:var(--code)"></i> Code</span>
+    <span><i style="background:var(--ro)"></i> RO Data</span>
+    <span><i style="background:var(--rw)"></i> RW Data</span>
+    <span><i style="background:var(--zi)"></i> ZI Data</span>
+  </div>
+
+  <div class="grid grid-6" id="summary-cards"></div>
+
+  <div class="grid grid-2">
+    <div class="card" id="flash-card"></div>
+    <div class="card" id="ram-card"></div>
+  </div>
+
+  <div class="grid grid-2" style="margin-top:16px">
+    <div class="card">
+      <div class="section-title">ROM 消耗分布 (Code + RO)</div>
+      <div id="rom-donut" class="chart chart-sm"></div>
+    </div>
+    <div class="card">
+      <div class="section-title">RAM 消耗分布 (RW + ZI)</div>
+      <div id="ram-donut" class="chart chart-sm"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="section-title">按分类内存分布 (Code / RO / RW / ZI)</div>
+    <div id="category-bar" class="chart"></div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="tabs" id="table-tabs">
+      <button class="tab active" data-tab="rom">TOP ROM 消耗</button>
+      <button class="tab" data-tab="ram">TOP RAM 消耗</button>
+      <button class="tab" data-tab="stack">TOP STACK 消耗</button>
+      <button class="tab" data-tab="all">单文件汇总</button>
+    </div>
+    <div class="table-wrap">
+      <table id="data-table">
+        <thead>
+          <tr>
+            <th data-sort="rank">#</th>
+            <th data-sort="name">模块/文件名</th>
+            <th data-sort="category">分类</th>
+            <th data-sort="code" class="num">CODE (B)</th>
+            <th data-sort="ro_data" class="num">RO DATA (B)</th>
+            <th data-sort="rw_data" class="num">RW DATA (B)</th>
+            <th data-sort="zi_data" class="num">ZI DATA (B)</th>
+            <th data-sort="total" class="num">Total</th>
+            <th>占比</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="section-title">Top 20 模块/文件消耗排行</div>
+    <div id="top20-bar" class="chart chart-lg"></div>
+  </div>
+
+  <script>
+    const DATA = {"meta":{"source_file":"omni.map","component":"Arm Compiler for Embedded 6.23","tool":"armlink [5f102400]","generated_at":"2026/06/15"},"summary":{"code":99728,"ro_data":3812,"rw_data":1936,"zi_data":45116,"total_rom":103828,"total_ram":47052,"total_ro":103540,"flash_used":103828,"flash_capacity":1048576,"ram_used":47052,"ram_capacity":260952},"categories":[{"name":"DAP/Debug","code":20548,"ro_data":30,"rw_data":16,"zi_data":4,"rom":20594,"ram":20},{"name":"USB","code":18026,"ro_data":8,"rw_data":484,"zi_data":27,"rom":18518,"ram":511},{"name":"RTOS","code":15272,"ro_data":300,"rw_data":164,"zi_data":34149,"rom":15736,"ram":34313},{"name":"HAL/STM32","code":15612,"ro_data":8,"rw_data":4,"zi_data":4,"rom":15624,"ram":8},{"name":"Application","code":11462,"ro_data":1546,"rw_data":804,"zi_data":6040,"rom":13812,"ram":6844},{"name":"Flash/VFS","code":9178,"ro_data":796,"rw_data":16,"zi_data":144,"rom":9990,"ram":160},{"name":"Other","code":3770,"ro_data":453,"rw_data":428,"zi_data":0,"rom":4651,"ram":428},{"name":"Logging/RTT","code":4064,"ro_data":217,"rw_data":12,"zi_data":2660,"rom":4293,"ram":2672},{"name":"CMSIS/Startup","code":1110,"ro_data":408,"rw_data":4,"zi_data":2048,"rom":1522,"ram":2052}],"entries":[{"name":"dap.o","category":"DAP/Debug","kind":"object","library":"","code":9228,"ro_data":30,"rw_data":0,"zi_data":4,"rom":9258,"ram":4,"stack":0},{"name":"usbd_core.o","category":"USB","kind":"object","library":"","code":7000,"ro_data":8,"rw_data":0,"zi_data":4,"rom":7008,"ram":4,"stack":0},{"name":"usbd_msc.o","category":"USB","kind":"object","library":"","code":6168,"ro_data":0,"rw_data":12,"zi_data":0,"rom":6180,"ram":12,"stack":0},{"name":"swd_host.o","category":"DAP/Debug","kind":"object","library":"","code":5822,"ro_data":0,"rw_data":16,"zi_data":0,"rom":5838,"ram":16,"stack":0},{"name":"stm32f4xx_ll_usb.o","category":"HAL/STM32","kind":"object","library":"","code":5574,"ro_data":0,"rw_data":0,"zi_data":0,"rom":5574,"ram":0,"stack":0},{"name":"rtx_thread.o","category":"RTOS","kind":"object","library":"","code":5422,"ro_data":0,"rw_data":0,"zi_data":0,"rom":5422,"ram":0,"stack":0},{"name":"stm32f4xx_hal_pcd.o","category":"HAL/STM32","kind":"object","library":"","code":5300,"ro_data":0,"rw_data":0,"zi_data":0,"rom":5300,"ram":0,"stack":0},{"name":"usbd_app.o","category":"Application","kind":"object","library":"","code":2950,"ro_data":436,"rw_data":772,"zi_data":973,"rom":4158,"ram":1745,"stack":0},{"name":"vfs.o","category":"Flash/VFS","kind":"object","library":"","code":3028,"ro_data":624,"rw_data":0,"zi_data":4,"rom":3652,"ram":4,"stack":0},{"name":"hal_udc.o","category":"USB","kind":"object","library":"","code":3236,"ro_data":0,"rw_data":0,"zi_data":8,"rom":3236,"ram":8,"stack":0},{"name":"jtag_dp.o","category":"DAP/Debug","kind":"object","library":"","code":3026,"ro_data":0,"rw_data":0,"zi_data":0,"rom":3026,"ram":0,"stack":0},{"name":"rtx_msgqueue.o","category":"RTOS","kind":"object","library":"","code":2938,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2938,"ram":0,"stack":0},{"name":"stm32f4xx_hal_rcc.o","category":"HAL/STM32","kind":"object","library":"","code":2578,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2578,"ram":0,"stack":0},{"name":"flash_app.o","category":"Application","kind":"object","library":"","code":2034,"ro_data":468,"rw_data":0,"zi_data":1052,"rom":2502,"ram":1052,"stack":0},{"name":"sw_dp.o","category":"DAP/Debug","kind":"object","library":"","code":2472,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2472,"ram":0,"stack":0},{"name":"printfa.o","category":"Other","kind":"library","library":"","code":2352,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2352,"ram":0,"stack":0},{"name":"vfs_app.o","category":"Application","kind":"object","library":"","code":1852,"ro_data":439,"rw_data":0,"zi_data":2292,"rom":2291,"ram":2292,"stack":0},{"name":"eventrecorder.o","category":"Logging/RTT","kind":"object","library":"","code":2248,"ro_data":24,"rw_data":0,"zi_data":1188,"rom":2272,"ram":1188,"stack":0},{"name":"target_flash.o","category":"Flash/VFS","kind":"object","library":"","code":2090,"ro_data":40,"rw_data":0,"zi_data":16,"rom":2130,"ram":16,"stack":0},{"name":"file_app.o","category":"Application","kind":"object","library":"","code":1994,"ro_data":40,"rw_data":0,"zi_data":40,"rom":2034,"ram":40,"stack":0},{"name":"rtx_evr.o","category":"RTOS","kind":"object","library":"","code":1662,"ro_data":0,"rw_data":0,"zi_data":0,"rom":1662,"ram":0,"stack":0},{"name":"rtx_kernel.o","category":"RTOS","kind":"object","library":"","code":1470,"ro_data":11,"rw_data":164,"zi_data":0,"rom":1645,"ram":164,"stack":0},{"name":"flash_decoder.o","category":"Flash/VFS","kind":"object","library":"","code":1520,"ro_data":0,"rw_data":0,"zi_data":68,"rom":1520,"ram":68,"stack":0},{"name":"stream_app.o","category":"Application","kind":"object","library":"","code":1332,"ro_data":8,"rw_data":32,"zi_data":265,"rom":1372,"ram":297,"stack":0},{"name":"intelhex.o","category":"Flash/VFS","kind":"object","library":"","code":1306,"ro_data":0,"rw_data":0,"zi_data":52,"rom":1306,"ram":52,"stack":0},{"name":"usbd_config.o","category":"USB","kind":"object","library":"","code":562,"ro_data":0,"rw_data":448,"zi_data":0,"rom":1010,"ram":448,"stack":0},{"name":"stm32f4xx_hal_gpio.o","category":"HAL/STM32","kind":"object","library":"","code":996,"ro_data":0,"rw_data":0,"zi_data":0,"rom":996,"ram":0,"stack":0},{"name":"rtx_system.o","category":"RTOS","kind":"object","library":"","code":940,"ro_data":0,"rw_data":0,"zi_data":0,"rom":940,"ram":0,"stack":0},{"name":"app.o","category":"Application","kind":"object","library":"","code":756,"ro_data":155,"rw_data":0,"zi_data":126,"rom":911,"ram":126,"stack":0},{"name":"segger_rtt.o","category":"Logging/RTT","kind":"object","library":"","code":856,"ro_data":26,"rw_data":0,"zi_data":1208,"rom":882,"ram":1208,"stack":0},{"name":"target.o","category":"Other","kind":"object","library":"","code":0,"ro_data":453,"rw_data":428,"zi_data":0,"rom":881,"ram":428,"stack":0},{"name":"log.o","category":"Logging/RTT","kind":"object","library":"","code":722,"ro_data":135,"rw_data":0,"zi_data":264,"rom":857,"ram":264,"stack":0},{"name":"target_family.o","category":"Flash/VFS","kind":"object","library":"","code":634,"ro_data":132,"rw_data":16,"zi_data":4,"rom":782,"ram":20,"stack":0},{"name":"rtx_memory.o","category":"RTOS","kind":"object","library":"","code":710,"ro_data":0,"rw_data":0,"zi_data":0,"rom":710,"ram":0,"stack":0},{"name":"usbd_cdc_acm.o","category":"USB","kind":"object","library":"","code":670,"ro_data":0,"rw_data":12,"zi_data":15,"rom":682,"ram":27,"stack":0},{"name":"file_validation.o","category":"Flash/VFS","kind":"object","library":"","code":592,"ro_data":0,"rw_data":0,"zi_data":0,"rom":592,"ram":0,"stack":0},{"name":"rtx_lib.o","category":"RTOS","kind":"object","library":"","code":280,"ro_data":289,"rw_data":0,"zi_data":34148,"rom":569,"ram":34148,"stack":0},{"name":"rtx_timer.o","category":"RTOS","kind":"object","library":"","code":548,"ro_data":0,"rw_data":0,"zi_data":0,"rom":548,"ram":0,"stack":0},{"name":"main.o","category":"Application","kind":"object","library":"","code":544,"ro_data":0,"rw_data":0,"zi_data":1292,"rom":544,"ram":1292,"stack":0},{"name":"rtx_mempool.o","category":"RTOS","kind":"object","library":"","code":478,"ro_data":0,"rw_data":0,"zi_data":0,"rom":478,"ram":0,"stack":0},{"name":"startup_stm32f407xx.o","category":"CMSIS/Startup","kind":"object","library":"","code":36,"ro_data":392,"rw_data":0,"zi_data":2048,"rom":428,"ram":2048,"stack":2048},{"name":"usbd_vendor.o","category":"USB","kind":"object","library":"","code":390,"ro_data":0,"rw_data":12,"zi_data":0,"rom":402,"ram":12,"stack":0},{"name":"stm32f4xx_hal_cortex.o","category":"HAL/STM32","kind":"object","library":"","code":384,"ro_data":0,"rw_data":0,"zi_data":0,"rom":384,"ram":0,"stack":0},{"name":"system_stm32f4xx.o","category":"CMSIS/Startup","kind":"object","library":"","code":320,"ro_data":16,"rw_data":4,"zi_data":0,"rom":340,"ram":4,"stack":0},{"name":"rtx_mutex.o","category":"RTOS","kind":"object","library":"","code":334,"ro_data":0,"rw_data":0,"zi_data":0,"rom":334,"ram":0,"stack":0},{"name":"dadd.o","category":"Other","kind":"library","library":"","code":334,"ro_data":0,"rw_data":0,"zi_data":0,"rom":334,"ram":0,"stack":0},{"name":"irq_armv7m.o","category":"CMSIS/Startup","kind":"object","library":"","code":256,"ro_data":0,"rw_data":0,"zi_data":0,"rom":256,"ram":0,"stack":0},{"name":"stm32f4xx_hal_msp.o","category":"HAL/STM32","kind":"object","library":"","code":250,"ro_data":0,"rw_data":0,"zi_data":0,"rom":250,"ram":0,"stack":0},{"name":"rtx_delay.o","category":"RTOS","kind":"object","library":"","code":230,"ro_data":0,"rw_data":0,"zi_data":0,"rom":230,"ram":0,"stack":0},{"name":"dmul.o","category":"Other","kind":"library","library":"","code":228,"ro_data":0,"rw_data":0,"zi_data":0,"rom":228,"ram":0,"stack":0},{"name":"ddiv.o","category":"Other","kind":"library","library":"","code":222,"ro_data":0,"rw_data":0,"zi_data":0,"rom":222,"ram":0,"stack":0},{"name":"os_systick.o","category":"RTOS","kind":"object","library":"","code":204,"ro_data":0,"rw_data":0,"zi_data":1,"rom":204,"ram":1,"stack":0},{"name":"device.o","category":"CMSIS/Startup","kind":"object","library":"","code":196,"ro_data":0,"rw_data":0,"zi_data":0,"rom":196,"ram":0,"stack":0},{"name":"stm32f4xx_hal_pcd_ex.o","category":"HAL/STM32","kind":"object","library":"","code":192,"ro_data":0,"rw_data":0,"zi_data":0,"rom":192,"ram":0,"stack":0},{"name":"timing.o","category":"CMSIS/Startup","kind":"object","library":"","code":192,"ro_data":0,"rw_data":0,"zi_data":0,"rom":192,"ram":0,"stack":0},{"name":"depilogue.o","category":"Logging/RTT","kind":"library","library":"","code":186,"ro_data":0,"rw_data":0,"zi_data":0,"rom":186,"ram":0,"stack":0},{"name":"msp.o","category":"HAL/STM32","kind":"object","library":"","code":144,"ro_data":8,"rw_data":0,"zi_data":4,"rom":152,"ram":4,"stack":0},{"name":"timing_1.o","category":"CMSIS/Startup","kind":"object","library":"","code":110,"ro_data":0,"rw_data":0,"zi_data":0,"rom":110,"ram":0,"stack":0},{"name":"uldiv.o","category":"Other","kind":"library","library":"","code":98,"ro_data":0,"rw_data":0,"zi_data":0,"rom":98,"ram":0,"stack":0},{"name":"stm32f4xx_hal.o","category":"HAL/STM32","kind":"object","library":"","code":90,"ro_data":0,"rw_data":4,"zi_data":0,"rom":94,"ram":4,"stack":0},{"name":"log_backend_rtt.o","category":"Logging/RTT","kind":"object","library":"","code":42,"ro_data":24,"rw_data":12,"zi_data":0,"rom":78,"ram":12,"stack":0},{"name":"hal_hwinfo.o","category":"HAL/STM32","kind":"object","library":"","code":66,"ro_data":0,"rw_data":0,"zi_data":0,"rom":66,"ram":0,"stack":0},{"name":"__dczerorl.o","category":"Other","kind":"library","library":"","code":58,"ro_data":0,"rw_data":0,"zi_data":0,"rom":58,"ram":0,"stack":0},{"name":"rtx_config.o","category":"RTOS","kind":"object","library":"","code":56,"ro_data":0,"rw_data":0,"zi_data":0,"rom":56,"ram":0,"stack":0},{"name":"init.o","category":"Other","kind":"library","library":"","code":48,"ro_data":0,"rw_data":0,"zi_data":0,"rom":48,"ram":0,"stack":0},{"name":"cdrcmple.o","category":"Other","kind":"library","library":"","code":48,"ro_data":0,"rw_data":0,"zi_data":0,"rom":48,"ram":0,"stack":0},{"name":"dfixul.o","category":"Other","kind":"library","library":"","code":48,"ro_data":0,"rw_data":0,"zi_data":0,"rom":48,"ram":0,"stack":0},{"name":"uidiv.o","category":"Other","kind":"library","library":"","code":44,"ro_data":0,"rw_data":0,"zi_data":0,"rom":44,"ram":0,"stack":0},{"name":"stm32f4xx_it.o","category":"HAL/STM32","kind":"object","library":"","code":38,"ro_data":0,"rw_data":0,"zi_data":0,"rom":38,"ram":0,"stack":0},{"name":"llsshr.o","category":"Other","kind":"library","library":"","code":36,"ro_data":0,"rw_data":0,"zi_data":0,"rom":36,"ram":0,"stack":0},{"name":"memcpya.o","category":"Other","kind":"library","library":"","code":36,"ro_data":0,"rw_data":0,"zi_data":0,"rom":36,"ram":0,"stack":0},{"name":"memseta.o","category":"Other","kind":"library","library":"","code":36,"ro_data":0,"rw_data":0,"zi_data":0,"rom":36,"ram":0,"stack":0},{"name":"llushr.o","category":"Other","kind":"library","library":"","code":32,"ro_data":0,"rw_data":0,"zi_data":0,"rom":32,"ram":0,"stack":0},{"name":"handlers.o","category":"Other","kind":"library","library":"","code":30,"ro_data":0,"rw_data":0,"zi_data":0,"rom":30,"ram":0,"stack":0},{"name":"llshl.o","category":"Other","kind":"library","library":"","code":30,"ro_data":0,"rw_data":0,"zi_data":0,"rom":30,"ram":0,"stack":0},{"name":"strncmp.o","category":"Other","kind":"library","library":"","code":30,"ro_data":0,"rw_data":0,"zi_data":0,"rom":30,"ram":0,"stack":0},{"name":"memcmp.o","category":"Other","kind":"library","library":"","code":26,"ro_data":0,"rw_data":0,"zi_data":0,"rom":26,"ram":0,"stack":0},{"name":"rtt.o","category":"Logging/RTT","kind":"object","library":"","code":10,"ro_data":8,"rw_data":0,"zi_data":0,"rom":18,"ram":0,"stack":0},{"name":"strlen.o","category":"Other","kind":"library","library":"","code":14,"ro_data":0,"rw_data":0,"zi_data":0,"rom":14,"ram":0,"stack":0},{"name":"setting_rom_stub.o","category":"Flash/VFS","kind":"object","library":"","code":8,"ro_data":0,"rw_data":0,"zi_data":0,"rom":8,"ram":0,"stack":0},{"name":"entry2.o","category":"Other","kind":"library","library":"","code":8,"ro_data":0,"rw_data":0,"zi_data":0,"rom":8,"ram":0,"stack":0},{"name":"entry9a.o","category":"Other","kind":"library","library":"","code":8,"ro_data":0,"rw_data":0,"zi_data":0,"rom":8,"ram":0,"stack":0},{"name":"entry5.o","category":"Other","kind":"library","library":"","code":4,"ro_data":0,"rw_data":0,"zi_data":0,"rom":4,"ram":0,"stack":0},{"name":"entry.o","category":"Other","kind":"library","library":"","code":0,"ro_data":0,"rw_data":0,"zi_data":0,"rom":0,"ram":0,"stack":0},{"name":"entry10a.o","category":"Other","kind":"library","library":"","code":0,"ro_data":0,"rw_data":0,"zi_data":0,"rom":0,"ram":0,"stack":0},{"name":"entry11a.o","category":"Other","kind":"library","library":"","code":0,"ro_data":0,"rw_data":0,"zi_data":0,"rom":0,"ram":0,"stack":0},{"name":"entry7b.o","category":"Other","kind":"library","library":"","code":0,"ro_data":0,"rw_data":0,"zi_data":0,"rom":0,"ram":0,"stack":0},{"name":"entry8b.o","category":"Other","kind":"library","library":"","code":0,"ro_data":0,"rw_data":0,"zi_data":0,"rom":0,"ram":0,"stack":0},{"name":"iusefp.o","category":"Other","kind":"library","library":"","code":0,"ro_data":0,"rw_data":0,"zi_data":0,"rom":0,"ram":0,"stack":0}],"top_rom":[{"name":"dap.o","category":"DAP/Debug","kind":"object","library":"","code":9228,"ro_data":30,"rw_data":0,"zi_data":4,"rom":9258,"ram":4,"stack":0},{"name":"usbd_core.o","category":"USB","kind":"object","library":"","code":7000,"ro_data":8,"rw_data":0,"zi_data":4,"rom":7008,"ram":4,"stack":0},{"name":"usbd_msc.o","category":"USB","kind":"object","library":"","code":6168,"ro_data":0,"rw_data":12,"zi_data":0,"rom":6180,"ram":12,"stack":0},{"name":"swd_host.o","category":"DAP/Debug","kind":"object","library":"","code":5822,"ro_data":0,"rw_data":16,"zi_data":0,"rom":5838,"ram":16,"stack":0},{"name":"stm32f4xx_ll_usb.o","category":"HAL/STM32","kind":"object","library":"","code":5574,"ro_data":0,"rw_data":0,"zi_data":0,"rom":5574,"ram":0,"stack":0},{"name":"rtx_thread.o","category":"RTOS","kind":"object","library":"","code":5422,"ro_data":0,"rw_data":0,"zi_data":0,"rom":5422,"ram":0,"stack":0},{"name":"stm32f4xx_hal_pcd.o","category":"HAL/STM32","kind":"object","library":"","code":5300,"ro_data":0,"rw_data":0,"zi_data":0,"rom":5300,"ram":0,"stack":0},{"name":"usbd_app.o","category":"Application","kind":"object","library":"","code":2950,"ro_data":436,"rw_data":772,"zi_data":973,"rom":4158,"ram":1745,"stack":0},{"name":"vfs.o","category":"Flash/VFS","kind":"object","library":"","code":3028,"ro_data":624,"rw_data":0,"zi_data":4,"rom":3652,"ram":4,"stack":0},{"name":"hal_udc.o","category":"USB","kind":"object","library":"","code":3236,"ro_data":0,"rw_data":0,"zi_data":8,"rom":3236,"ram":8,"stack":0},{"name":"jtag_dp.o","category":"DAP/Debug","kind":"object","library":"","code":3026,"ro_data":0,"rw_data":0,"zi_data":0,"rom":3026,"ram":0,"stack":0},{"name":"rtx_msgqueue.o","category":"RTOS","kind":"object","library":"","code":2938,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2938,"ram":0,"stack":0},{"name":"stm32f4xx_hal_rcc.o","category":"HAL/STM32","kind":"object","library":"","code":2578,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2578,"ram":0,"stack":0},{"name":"flash_app.o","category":"Application","kind":"object","library":"","code":2034,"ro_data":468,"rw_data":0,"zi_data":1052,"rom":2502,"ram":1052,"stack":0},{"name":"sw_dp.o","category":"DAP/Debug","kind":"object","library":"","code":2472,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2472,"ram":0,"stack":0},{"name":"printfa.o","category":"Other","kind":"library","library":"","code":2352,"ro_data":0,"rw_data":0,"zi_data":0,"rom":2352,"ram":0,"stack":0},{"name":"vfs_app.o","category":"Application","kind":"object","library":"","code":1852,"ro_data":439,"rw_data":0,"zi_data":2292,"rom":2291,"ram":2292,"stack":0},{"name":"eventrecorder.o","category":"Logging/RTT","kind":"object","library":"","code":2248,"ro_data":24,"rw_data":0,"zi_data":1188,"rom":2272,"ram":1188,"stack":0},{"name":"target_flash.o","category":"Flash/VFS","kind":"object","library":"","code":2090,"ro_data":40,"rw_data":0,"zi_data":16,"rom":2130,"ram":16,"stack":0},{"name":"file_app.o","category":"Application","kind":"object","library":"","code":1994,"ro_data":40,"rw_data":0,"zi_data":40,"rom":2034,"ram":40,"stack":0}],"top_ram":[{"name":"rtx_lib.o","category":"RTOS","kind":"object","library":"","code":280,"ro_data":289,"rw_data":0,"zi_data":34148,"rom":569,"ram":34148,"stack":0},{"name":"vfs_app.o","category":"Application","kind":"object","library":"","code":1852,"ro_data":439,"rw_data":0,"zi_data":2292,"rom":2291,"ram":2292,"stack":0},{"name":"startup_stm32f407xx.o","category":"CMSIS/Startup","kind":"object","library":"","code":36,"ro_data":392,"rw_data":0,"zi_data":2048,"rom":428,"ram":2048,"stack":2048},{"name":"usbd_app.o","category":"Application","kind":"object","library":"","code":2950,"ro_data":436,"rw_data":772,"zi_data":973,"rom":4158,"ram":1745,"stack":0},{"name":"main.o","category":"Application","kind":"object","library":"","code":544,"ro_data":0,"rw_data":0,"zi_data":1292,"rom":544,"ram":1292,"stack":0},{"name":"segger_rtt.o","category":"Logging/RTT","kind":"object","library":"","code":856,"ro_data":26,"rw_data":0,"zi_data":1208,"rom":882,"ram":1208,"stack":0},{"name":"eventrecorder.o","category":"Logging/RTT","kind":"object","library":"","code":2248,"ro_data":24,"rw_data":0,"zi_data":1188,"rom":2272,"ram":1188,"stack":0},{"name":"flash_app.o","category":"Application","kind":"object","library":"","code":2034,"ro_data":468,"rw_data":0,"zi_data":1052,"rom":2502,"ram":1052,"stack":0},{"name":"usbd_config.o","category":"USB","kind":"object","library":"","code":562,"ro_data":0,"rw_data":448,"zi_data":0,"rom":1010,"ram":448,"stack":0},{"name":"target.o","category":"Other","kind":"object","library":"","code":0,"ro_data":453,"rw_data":428,"zi_data":0,"rom":881,"ram":428,"stack":0},{"name":"stream_app.o","category":"Application","kind":"object","library":"","code":1332,"ro_data":8,"rw_data":32,"zi_data":265,"rom":1372,"ram":297,"stack":0},{"name":"log.o","category":"Logging/RTT","kind":"object","library":"","code":722,"ro_data":135,"rw_data":0,"zi_data":264,"rom":857,"ram":264,"stack":0},{"name":"rtx_kernel.o","category":"RTOS","kind":"object","library":"","code":1470,"ro_data":11,"rw_data":164,"zi_data":0,"rom":1645,"ram":164,"stack":0},{"name":"app.o","category":"Application","kind":"object","library":"","code":756,"ro_data":155,"rw_data":0,"zi_data":126,"rom":911,"ram":126,"stack":0},{"name":"flash_decoder.o","category":"Flash/VFS","kind":"object","library":"","code":1520,"ro_data":0,"rw_data":0,"zi_data":68,"rom":1520,"ram":68,"stack":0},{"name":"intelhex.o","category":"Flash/VFS","kind":"object","library":"","code":1306,"ro_data":0,"rw_data":0,"zi_data":52,"rom":1306,"ram":52,"stack":0},{"name":"file_app.o","category":"Application","kind":"object","library":"","code":1994,"ro_data":40,"rw_data":0,"zi_data":40,"rom":2034,"ram":40,"stack":0},{"name":"usbd_cdc_acm.o","category":"USB","kind":"object","library":"","code":670,"ro_data":0,"rw_data":12,"zi_data":15,"rom":682,"ram":27,"stack":0},{"name":"target_family.o","category":"Flash/VFS","kind":"object","library":"","code":634,"ro_data":132,"rw_data":16,"zi_data":4,"rom":782,"ram":20,"stack":0},{"name":"swd_host.o","category":"DAP/Debug","kind":"object","library":"","code":5822,"ro_data":0,"rw_data":16,"zi_data":0,"rom":5838,"ram":16,"stack":0}],"top_stack":[{"name":"startup_stm32f407xx.o","category":"CMSIS/Startup","kind":"object","library":"","code":36,"ro_data":392,"rw_data":0,"zi_data":2048,"rom":428,"ram":2048,"stack":2048}],"regions":[{"name":"ER_ROM","exec_base":134217728,"size":103540,"max_size":1048576},{"name":"RW_NOINIT","exec_base":536870912,"size":1188,"max_size":131072},{"name":"RW_RAM","exec_base":536872104,"size":45864,"max_size":129880}]};
+
+    const COLORS = { code: '#3b82f6', ro: '#8b5cf6', rw: '#f97316', zi: '#22c55e' };
+    const CAT_COLORS = [
+      '#3b82f6','#8b5cf6','#f97316','#22c55e','#ef4444',
+      '#06b6d4','#eab308','#ec4899','#6366f1','#14b8a6','#a855f7'
+    ];
+
+    function fmtBytes(b) {
+      if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+      if (b >= 1024) return (b / 1024).toFixed(2) + ' kB';
+      return b + ' B';
+    }
+
+    function fmtNum(n) { return n.toLocaleString(); }
+
+    function pct(used, cap) {
+      return cap > 0 ? (used / cap * 100).toFixed(1) : '0.0';
+    }
+
+    function initHeader() {
+      const m = DATA.meta;
+      const s = DATA.summary;
+      document.getElementById('subtitle').textContent =
+        `${m.source_file} — ${m.component || 'Unknown'} — ${m.tool || ''}`;
+      document.getElementById('date').textContent = m.generated_at;
+      document.getElementById('source').textContent = m.source_file;
+    }
+
+    function initSummaryCards() {
+      const s = DATA.summary;
+      const cards = [
+        { label: 'Total ROM Usage', value: fmtBytes(s.total_rom) },
+        { label: 'Total RAM Usage', value: fmtBytes(s.total_ram) },
+        { label: 'CODE', value: fmtNum(s.code), unit: 'B' },
+        { label: 'RO DATA', value: fmtNum(s.ro_data), unit: 'B' },
+        { label: 'RW DATA', value: fmtNum(s.rw_data), unit: 'B' },
+        { label: 'ZI DATA', value: fmtNum(s.zi_data), unit: 'B' },
+      ];
+      document.getElementById('summary-cards').innerHTML = cards.map(c => `
+        <div class="card">
+          <div class="label">${c.label}</div>
+          <div class="value">${c.value}${c.unit ? ' <span class="unit">' + c.unit + '</span>' : ''}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderUsageCard(id, title, used, capacity, segments) {
+      const p = pct(used, capacity);
+      const remain = Math.max(0, capacity - used);
+      const total = segments.reduce((a, s) => a + s.value, 0) || 1;
+      document.getElementById(id).innerHTML = `
+        <div class="section-title">${title}</div>
+        <div class="progress-wrap">
+          <div class="progress-header">
+            <span>${p}% 已使用</span>
+            <span>${fmtBytes(used)} / ${fmtBytes(capacity)} (剩余 ${fmtBytes(remain)})</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width:${p}%;background:var(--code)"></div>
+          </div>
+          <div class="stacked-bar">
+            ${segments.map(s => `<div style="width:${s.value/total*100}%;background:${s.color}"></div>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function initUsageBars() {
+      const s = DATA.summary;
+      renderUsageCard('flash-card', 'Flash (ROM) 使用率', s.flash_used, s.flash_capacity, [
+        { value: s.code, color: COLORS.code },
+        { value: s.ro_data, color: COLORS.ro },
+        { value: s.rw_data, color: COLORS.rw },
+      ]);
+      renderUsageCard('ram-card', 'RAM 使用率', s.ram_used, s.ram_capacity, [
+        { value: s.rw_data, color: COLORS.rw },
+        { value: s.zi_data, color: COLORS.zi },
+      ]);
+    }
+
+    function makeDonut(elId, categories, field) {
+      const chart = echarts.init(document.getElementById(elId));
+      const data = categories
+        .filter(c => c[field] > 0)
+        .map((c, i) => ({ name: c.name, value: c[field], itemStyle: { color: CAT_COLORS[i % CAT_COLORS.length] } }));
+      chart.setOption({
+        tooltip: { trigger: 'item', formatter: p => `${p.name}<br/>${fmtBytes(p.value)} (${p.percent}%)` },
+        legend: { orient: 'vertical', right: 10, top: 'center', textStyle: { fontSize: 11 } },
+        series: [{
+          type: 'pie', radius: ['45%', '70%'], center: ['35%', '50%'],
+          data, label: { show: false },
+          emphasis: { label: { show: true, fontSize: 12, fontWeight: 'bold' } }
+        }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    function initDonuts() {
+      makeDonut('rom-donut', DATA.categories, 'rom');
+      makeDonut('ram-donut', DATA.categories, 'ram');
+    }
+
+    function initCategoryBar() {
+      const chart = echarts.init(document.getElementById('category-bar'));
+      const cats = DATA.categories.slice(0, 12);
+      chart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: params => {
+            let s = params[0].axisValue + '<br/>';
+            params.forEach(p => { s += `${p.marker} ${p.seriesName}: ${fmtBytes(p.value)}<br/>`; });
+            return s;
+          }
+        },
+        legend: { data: ['Code', 'RO Data', 'RW Data', 'ZI Data'], bottom: 0 },
+        grid: { left: 60, right: 20, top: 20, bottom: 50 },
+        xAxis: { type: 'category', data: cats.map(c => c.name), axisLabel: { rotate: 30, fontSize: 10 } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => (v / 1024).toFixed(0) + 'k' } },
+        series: [
+          { name: 'Code', type: 'bar', stack: 'total', data: cats.map(c => c.code), itemStyle: { color: COLORS.code } },
+          { name: 'RO Data', type: 'bar', stack: 'total', data: cats.map(c => c.ro_data), itemStyle: { color: COLORS.ro } },
+          { name: 'RW Data', type: 'bar', stack: 'total', data: cats.map(c => c.rw_data), itemStyle: { color: COLORS.rw } },
+          { name: 'ZI Data', type: 'bar', stack: 'total', data: cats.map(c => c.zi_data), itemStyle: { color: COLORS.zi } },
+        ]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    let currentTab = 'rom';
+    let sortKey = 'rom';
+    let sortAsc = false;
+
+    function getTableData() {
+      switch (currentTab) {
+        case 'ram': return DATA.top_ram;
+        case 'stack': return DATA.top_stack.length ? DATA.top_stack : [];
+        case 'all': return DATA.entries;
+        default: return DATA.top_rom;
+      }
+    }
+
+    function renderTable() {
+      const tbody = document.querySelector('#data-table tbody');
+      let rows = getTableData().map((e, i) => ({
+        ...e, rank: i + 1, total: e.rom + (currentTab === 'ram' ? 0 : 0),
+      }));
+
+      if (currentTab === 'stack') {
+        rows = rows.map((e, i) => ({ ...e, rank: i + 1, total: e.stack }));
+      } else {
+        rows = rows.map(e => ({ ...e, total: currentTab === 'ram' ? e.ram : e.rom }));
+      }
+
+      const maxTotal = Math.max(...rows.map(r => r.total), 1);
+
+      rows.sort((a, b) => {
+        const va = a[sortKey] ?? a.total, vb = b[sortKey] ?? b.total;
+        return sortAsc ? va - vb : vb - va;
+      });
+
+      tbody.innerHTML = rows.map((r, i) => {
+        const ci = DATA.categories.findIndex(c => c.name === r.category);
+        const color = CAT_COLORS[ci >= 0 ? ci % CAT_COLORS.length : 0];
+        const pctW = (r.total / maxTotal * 100).toFixed(0);
+        return `<tr>
+          <td>${i + 1}</td>
+          <td title="${r.name}">${r.name.length > 40 ? r.name.slice(0, 37) + '...' : r.name}</td>
+          <td><span class="tag" style="background:${color}22;color:${color}">${r.category}</span></td>
+          <td class="num">${fmtNum(r.code)}</td>
+          <td class="num">${fmtNum(r.ro_data)}</td>
+          <td class="num">${fmtNum(r.rw_data)}</td>
+          <td class="num">${fmtNum(r.zi_data)}</td>
+          <td class="num">${fmtNum(currentTab === 'stack' ? r.stack : r.total)}</td>
+          <td><span class="mini-bar"><span class="mini-bar-fill" style="width:${pctW}%"></span></span></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function initTable() {
+      document.querySelectorAll('#table-tabs .tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('#table-tabs .tab').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          currentTab = btn.dataset.tab;
+          sortKey = currentTab === 'ram' ? 'ram' : currentTab === 'stack' ? 'stack' : 'rom';
+          renderTable();
+        });
+      });
+
+      document.querySelectorAll('#data-table th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sort;
+          if (sortKey === key) sortAsc = !sortAsc;
+          else { sortKey = key; sortAsc = false; }
+          renderTable();
+        });
+      });
+
+      renderTable();
+    }
+
+    function initTop20Bar() {
+      const chart = echarts.init(document.getElementById('top20-bar'));
+      const items = DATA.top_rom.slice(0, 20).reverse();
+      chart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: params => {
+            let s = params[0].axisValue + '<br/>';
+            params.forEach(p => { s += `${p.marker} ${p.seriesName}: ${fmtBytes(p.value)}<br/>`; });
+            return s;
+          }
+        },
+        legend: { data: ['Code', 'RO Data', 'ZI Data'], top: 0 },
+        grid: { left: 180, right: 30, top: 30, bottom: 20 },
+        xAxis: { type: 'value', axisLabel: { formatter: v => (v / 1024).toFixed(1) + 'k' } },
+        yAxis: { type: 'category', data: items.map(e => e.name.length > 30 ? e.name.slice(0, 27) + '...' : e.name),
+          axisLabel: { fontSize: 10 } },
+        series: [
+          { name: 'Code', type: 'bar', stack: 'total', data: items.map(e => e.code), itemStyle: { color: COLORS.code } },
+          { name: 'RO Data', type: 'bar', stack: 'total', data: items.map(e => e.ro_data), itemStyle: { color: COLORS.ro } },
+          { name: 'ZI Data', type: 'bar', stack: 'total', data: items.map(e => e.zi_data), itemStyle: { color: COLORS.zi } },
+        ]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    initHeader();
+    initSummaryCards();
+    initUsageBars();
+    initDonuts();
+    initCategoryBar();
+    initTable();
+    initTop20Bar();
+  </script>
+</body>
+</html>

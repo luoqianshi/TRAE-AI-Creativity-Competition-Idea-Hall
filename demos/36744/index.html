@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>光之手 — 隔空绘画交互装置</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+  :root {
+    --neon-cyan: #00f0ff;
+    --neon-pink: #ff00aa;
+    --neon-purple: #aa00ff;
+    --neon-green: #00ff88;
+    --bg-dark: #0a0a1a;
+    --bg-card: rgba(15, 15, 35, 0.85);
+    --border-glow: rgba(0, 240, 255, 0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-dark);
+    color: #e0e0f0;
+    font-family: 'Noto Sans SC', sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  /* 背景动画 */
+  .bg-grid {
+    position: fixed; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(0,240,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,240,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    animation: gridMove 20s linear infinite;
+  }
+  @keyframes gridMove {
+    0% { transform: translate(0, 0); }
+    100% { transform: translate(40px, 40px); }
+  }
+
+  .glow-orb {
+    position: fixed; border-radius: 50%; filter: blur(80px); opacity: 0.15; z-index: 0;
+    animation: orbFloat 8s ease-in-out infinite alternate;
+  }
+  @keyframes orbFloat {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(30px, -20px) scale(1.1); }
+  }
+
+  /* 卡片样式 */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-glow);
+    border-radius: 16px;
+    backdrop-filter: blur(12px);
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .card:hover {
+    border-color: rgba(0, 240, 255, 0.5);
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.1);
+  }
+
+  /* 标题字体 */
+  .font-display { font-family: 'Orbitron', monospace; }
+
+  /* 霓虹文字 */
+  .neon-text {
+    color: var(--neon-cyan);
+    text-shadow: 0 0 10px rgba(0,240,255,0.5), 0 0 40px rgba(0,240,255,0.2);
+  }
+
+  /* 按钮 */
+  .btn-neon {
+    position: relative;
+    padding: 10px 24px;
+    border: 1px solid var(--neon-cyan);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--neon-cyan);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-family: 'Noto Sans SC', sans-serif;
+    font-size: 14px;
+  }
+  .btn-neon:hover {
+    background: rgba(0, 240, 255, 0.1);
+    box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
+  }
+  .btn-neon:disabled {
+    opacity: 0.4; cursor: not-allowed;
+  }
+  .btn-neon.active {
+    background: rgba(0, 240, 255, 0.2);
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+  }
+  .btn-pink { border-color: var(--neon-pink); color: var(--neon-pink); }
+  .btn-pink:hover { background: rgba(255,0,170,0.1); box-shadow: 0 0 15px rgba(255,0,170,0.3); }
+  .btn-pink.active { background: rgba(255,0,170,0.2); box-shadow: 0 0 20px rgba(255,0,170,0.4); }
+  .btn-green { border-color: var(--neon-green); color: var(--neon-green); }
+  .btn-green:hover { background: rgba(0,255,136,0.1); box-shadow: 0 0 15px rgba(0,255,136,0.3); }
+  .btn-green.active { background: rgba(0,255,136,0.2); box-shadow: 0 0 20px rgba(0,255,136,0.4); }
+
+  /* 摄像头容器 */
+  .camera-container {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid var(--border-glow);
+    box-shadow: 0 0 30px rgba(0, 240, 255, 0.1);
+  }
+  .camera-container video,
+  .camera-container canvas {
+    width: 100%;
+    display: block;
+    transform: scaleX(-1);
+  }
+  .camera-container canvas {
+    position: absolute;
+    top: 0; left: 0;
+  }
+
+  /* LED 矩阵预览 */
+  .led-matrix {
+    display: grid;
+    gap: 1px;
+    background: #111;
+    border-radius: 8px;
+    padding: 4px;
+    border: 1px solid var(--border-glow);
+  }
+  .led-pixel {
+    aspect-ratio: 1;
+    border-radius: 2px;
+    background: #1a1a2e;
+    transition: background 0.05s;
+  }
+
+  /* 状态指示器 */
+  .status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .status-dot.connected { background: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); }
+  .status-dot.disconnected { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
+  .status-dot.detecting { background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* 颜色选择器 */
+  .color-btn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .color-btn:hover { transform: scale(1.15); }
+  .color-btn.selected { border-color: white; box-shadow: 0 0 12px currentColor; transform: scale(1.1); }
+
+  /* 手势状态 */
+  .gesture-display {
+    font-size: 48px;
+    text-align: center;
+    min-height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 日志 */
+  .log-area {
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 12px;
+    font-family: 'Orbitron', monospace;
+    line-height: 1.6;
+  }
+  .log-area::-webkit-scrollbar { width: 4px; }
+  .log-area::-webkit-scrollbar-thumb { background: var(--neon-cyan); border-radius: 2px; }
+
+  /* Toast 通知 */
+  .toast {
+    position: fixed; top: 20px; right: 20px; z-index: 1000;
+    padding: 12px 24px;
+    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--neon-cyan);
+    color: var(--neon-cyan);
+    font-size: 14px;
+    transform: translateX(120%);
+    transition: transform 0.3s;
+    backdrop-filter: blur(12px);
+  }
+  .toast.show { transform: translateX(0); }
+
+  /* 语音波形动画 */
+  .voice-wave {
+    display: flex; align-items: center; gap: 3px; height: 24px;
+  }
+  .voice-wave span {
+    width: 3px; background: var(--neon-green); border-radius: 2px;
+    animation: wave 0.8s ease-in-out infinite;
+  }
+  .voice-wave span:nth-child(2) { animation-delay: 0.1s; }
+  .voice-wave span:nth-child(3) { animation-delay: 0.2s; }
+  .voice-wave span:nth-child(4) { animation-delay: 0.3s; }
+  .voice-wave span:nth-child(5) { animation-delay: 0.4s; }
+  @keyframes wave {
+    0%,100% { height: 6px; }
+    50% { height: 20px; }
+  }
+  .voice-wave.idle span { animation: none; height: 4px; opacity: 0.3; }
+</style>
+</head>
+<body>
+
+<!-- 背景效果 -->
+<div class="bg-grid"></div>
+<div class="glow-orb" style="width:400px;height:400px;background:var(--neon-cyan);top:-100px;left:-100px;"></div>
+<div class="glow-orb" style="width:300px;height:300px;background:var(--neon-pink);bottom:-50px;right:-50px;animation-delay:3s;"></div>
+<div class="glow-orb" style="width:250px;height:250px;background:var(--neon-purple);top:50%;left:50%;animation-delay:5s;"></div>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
+
+<!-- 主布局 -->
+<div class="relative z-10 min-h-screen p-4 md:p-6">
+
+  <!-- 顶部标题栏 -->
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="font-display text-2xl md:text-3xl font-black neon-text tracking-wider">LIGHT HAND</h1>
+      <p class="text-sm text-gray-400 mt-1">隔空绘画交互装置 — 手势 & 语音控制 LED 矩阵</p>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="status-dot disconnected" id="serialStatus"></span>
+        <span id="serialStatusText" class="text-gray-400">未连接</span>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <span class="status-dot disconnected" id="handStatus"></span>
+        <span id="handStatusText" class="text-gray-400">未检测</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容区 -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+
+    <!-- 左侧：摄像头 -->
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display text-sm tracking-wider neon-text">CAMERA FEED</h2>
+          <div class="flex gap-2">
+            <button class="btn-neon text-xs" id="btnStartCamera" onclick="startCamera()">启动摄像头</button>
+            <button class="btn-neon btn-pink text-xs" id="btnStopCamera" onclick="stopCamera()" disabled>停止</button>
+          </div>
+        </div>
+        <div class="camera-container" id="cameraContainer">
+          <video id="videoInput" playsinline style="background:#111;min-height:360px;"></video>
+          <canvas id="outputCanvas"></canvas>
+          <div id="cameraPlaceholder" class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm" style="transform:none;">
+            <div class="text-center">
+              <div class="text-4xl mb-2">📷</div>
+              <p>点击"启动摄像头"开始</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LED 矩阵预览 -->
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display text-sm tracking-wider neon-text">LED MATRIX PREVIEW</h2>
+          <span class="text-xs text-gray-500" id="matrixSize">16 x 16</span>
+        </div>
+        <div class="flex justify-center">
+          <div class="led-matrix" id="ledMatrix" style="grid-template-columns: repeat(16, 1fr); width: 100%; max-width: 480px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧：控制面板 -->
+    <div class="space-y-4">
+
+      <!-- 串口连接 -->
+      <div class="card p-4">
+        <h2 class="font-display text-sm tracking-wider neon-text mb-3">SERIAL CONNECTION</h2>
+        <div class="space-y-2">
+          <button class="btn-neon w-full" id="btnConnect" onclick="connectSerial()">连接 ESP32</button>
+          <button class="btn-neon btn-pink w-full" id="btnDisconnect" onclick="disconnectSerial()" disabled>断开连接</button>
+          <div class="flex gap-2">
+            <select id="baudRate" class="flex-1 bg-transparent border border-gray-600 rounded px-2 py-1 text-sm text-gray-300">
+              <option value="115200" selected>115200</option>
+              <option value="9600">9600</option>
+              <option value="57600">57600</option>
+              <option value="230400">230400</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 手势状态 -->
+      <div class="card p-4">
+        <h2 class="font-display text-sm tracking-wider neon-text mb-3">GESTURE STATUS</h2>
+        <div class="gesture-display" id="gestureDisplay">—</div>
+        <div class="text-center text-xs text-gray-500 mt-1" id="gestureLabel">等待手势输入</div>
+        <div class="mt-3 grid grid-cols-3 gap-2 text-xs text-center">
+          <div class="p-2 rounded bg-white/5">
+            <div class="text-lg">☝️</div>
+            <div class="text-gray-400">绘画</div>
+          </div>
+          <div class="p-2 rounded bg-white/5">
+            <div class="text-lg">✋</div>
+            <div class="text-gray-400">换色</div>
+          </div>
+          <div class="p-2 rounded bg-white/5">
+            <div class="text-lg">✊</div>
+            <div class="text-gray-400">擦除</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 颜色选择 -->
+      <div class="card p-4">
+        <h2 class="font-display text-sm tracking-wider neon-text mb-3">COLOR PALETTE</h2>
+        <div class="flex flex-wrap gap-2 justify-center" id="colorPalette"></div>
+        <div class="mt-3 flex items-center gap-2">
+          <input type="color" id="customColor" value="#00f0ff" class="w-10 h-10 rounded cursor-pointer bg-transparent border-0">
+          <span class="text-xs text-gray-400">自定义颜色</span>
+        </div>
+      </div>
+
+      <!-- 模式控制 -->
+      <div class="card p-4">
+        <h2 class="font-display text-sm tracking-wider neon-text mb-3">MODE CONTROL</h2>
+        <div class="grid grid-cols-2 gap-2">
+          <button class="btn-neon text-xs active" data-mode="draw" onclick="setMode('draw')">绘画</button>
+          <button class="btn-neon btn-pink text-xs" data-mode="rainbow" onclick="setMode('rainbow')">彩虹</button>
+          <button class="btn-neon btn-green text-xs" data-mode="breathe" onclick="setMode('breathe')">呼吸</button>
+          <button class="btn-neon text-xs" data-mode="snake" onclick="setMode('snake')">贪吃蛇</button>
+        </div>
+        <div class="mt-3">
+          <label class="text-xs text-gray-400">亮度</label>
+          <input type="range" id="brightness" min="10" max="255" value="128" class="w-full mt-1" oninput="setBrightness(this.value)">
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button class="btn-neon btn-pink text-xs flex-1" onclick="clearMatrix()">清空画布</button>
+          <button class="btn-neon btn-green text-xs flex-1" onclick="fillMatrix()">填充画布</button>
+        </div>
+      </div>
+
+      <!-- 语音控制 -->
+      <div class="card p-4">
+        <h2 class="font-display text-sm tracking-wider neon-text mb-3">VOICE CONTROL</h2>
+        <div class="flex items-center gap-3 mb-3">
+          <button class="btn-neon btn-green text-xs" id="btnVoice" onclick="toggleVoice()">启动语音</button>
+          <div class="voice-wave idle" id="voiceWave">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <div class="text-xs text-gray-400" id="voiceResult">语音识别结果将显示在这里</div>
+        <div class="mt-2 text-xs text-gray-500">
+          指令：换红色 / 换蓝色 / 清空 / 彩虹模式 / 呼吸模式 / 亮一点 / 暗一点
+        </div>
+      </div>
+
+      <!-- 通信日志 -->
+      <div class="card p-4">
+        <h2 class="font-display text-sm tracking-wider neon-text mb-3">SERIAL LOG</h2>
+        <div class="log-area" id="logArea">
+          <div class="text-gray-500">等待连接...</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 底部 -->
+  <footer class="mt-6 text-center text-xs text-gray-600">
+    光之手 — TRAE AI 创造力大赛 | 硬件交互赛道
+  </footer>
+</div>
+
+<script>
+// ==================== 全局状态 ====================
+const MATRIX_SIZE = 16;
+let ledState = Array.from({length: MATRIX_SIZE}, () => Array.from({length: MATRIX_SIZE}, () => [0,0,0]));
+let currentColor = [0, 240, 255]; // 默认霓虹青
+let currentMode = 'draw';
+let serialPort = null;
+let serialWriter = null;
+let serialReader = null;
+let handDetector = null;
+let cameraInstance = null;
+let isDrawing = false;
+let lastDrawPos = null;
+let voiceRecognition = null;
+let isVoiceActive = false;
+
+// ==================== 颜色调色板 ====================
+const COLORS = [
+  { name: '霓虹青', rgb: [0, 240, 255], hex: '#00f0ff' },
+  { name: '霓虹粉', rgb: [255, 0, 170], hex: '#ff00aa' },
+  { name: '霓虹紫', rgb: [170, 0, 255], hex: '#aa00ff' },
+  { name: '霓虹绿', rgb: [0, 255, 136], hex: '#00ff88' },
+  { name: '烈焰红', rgb: [255, 30, 30], hex: '#ff1e1e' },
+  { name: '琥珀橙', rgb: [255, 160, 0], hex: '#ffa000' },
+  { name: '阳光黄', rgb: [255, 240, 0], hex: '#fff000' },
+  { name: '纯白', rgb: [255, 255, 255], hex: '#ffffff' },
+];
+
+function initColorPalette() {
+  const container = document.getElementById('colorPalette');
+  COLORS.forEach((c, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'color-btn' + (i === 0 ? ' selected' : '');
+    btn.style.background = c.hex;
+    btn.style.color = c.hex;
+    btn.title = c.name;
+    btn.onclick = () => selectColor(i);
+    container.appendChild(btn);
+  });
+}
+
+function selectColor(index) {
+  currentColor = COLORS[index].rgb;
+  document.querySelectorAll('.color-btn').forEach((b, i) => {
+    b.classList.toggle('selected', i === index);
+  });
+  addLog(`颜色切换: ${COLORS[index].name}`);
+}
+
+document.getElementById('customColor').addEventListener('input', (e) => {
+  const hex = e.target.value;
+  const r = parseInt(hex.substr(1,2), 16);
+  const g = parseInt(hex.substr(3,2), 16);
+  const b = parseInt(hex.substr(5,2), 16);
+  currentColor = [r, g, b];
+  document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('selected'));
+  addLog(`自定义颜色: ${hex}`);
+});
+
+// ==================== LED 矩阵预览 ====================
+function initLedMatrix() {
+  const container = document.getElementById('ledMatrix');
+  container.innerHTML = '';
+  container.style.gridTemplateColumns = `repeat(${MATRIX_SIZE}, 1fr)`;
+  for (let y = 0; y < MATRIX_SIZE; y++) {
+    for (let x = 0; x < MATRIX_SIZE; x++) {
+      const pixel = document.createElement('div');
+      pixel.className = 'led-pixel';
+      pixel.id = `led-${x}-${y}`;
+      pixel.dataset.x = x;
+      pixel.dataset.y = y;
+      // 鼠标绘画支持
+      pixel.addEventListener('mousedown', (e) => { isDrawing = true; paintPixel(x, y); });
+      pixel.addEventListener('mouseenter', (e) => { if (isDrawing) paintPixel(x, y); });
+      pixel.addEventListener('touchstart', (e) => { e.preventDefault(); paintPixel(x, y); });
+      container.appendChild(pixel);
+    }
+  }
+  document.addEventListener('mouseup', () => { isDrawing = false; });
+}
+
+function paintPixel(x, y) {
+  setPixel(x, y, currentColor);
+  sendDrawCommand(x, y, currentColor);
+}
+
+function setPixel(x, y, rgb) {
+  if (x < 0 || x >= MATRIX_SIZE || y < 0 || y >= MATRIX_SIZE) return;
+  ledState[y][x] = [...rgb];
+  const pixel = document.getElementById(`led-${x}-${y}`);
+  if (pixel) {
+    pixel.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    pixel.style.boxShadow = `0 0 4px rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.6)`;
+  }
+}
+
+function clearMatrix() {
+  ledState = Array.from({length: MATRIX_SIZE}, () => Array.from({length: MATRIX_SIZE}, () => [0,0,0]));
+  for (let y = 0; y < MATRIX_SIZE; y++) {
+    for (let x = 0; x < MATRIX_SIZE; x++) {
+      const pixel = document.getElementById(`led-${x}-${y}`);
+      if (pixel) {
+        pixel.style.background = '#1a1a2e';
+        pixel.style.boxShadow = 'none';
+      }
+    }
+  }
+  sendCommand('C\n');
+  addLog('画布已清空');
+}
+
+function fillMatrix() {
+  for (let y = 0; y < MATRIX_SIZE; y++) {
+    for (let x = 0; x < MATRIX_SIZE; x++) {
+      setPixel(x, y, currentColor);
+    }
+  }
+  sendCommand(`F,${currentColor[0]},${currentColor[1]},${currentColor[2]}\n`);
+  addLog('画布已填充');
+}
+
+// ==================== Web Serial API ====================
+async function connectSerial() {
+  if (!('serial' in navigator)) {
+    showToast('浏览器不支持 Web Serial API，请使用 Chrome/Edge');
+    return;
+  }
+  try {
+    serialPort = await navigator.serial.requestPort();
+    const baudRate = parseInt(document.getElementById('baudRate').value);
+    await serialPort.open({ baudRate });
+    serialWriter = serialPort.writable.getWriter();
+    addLog(`已连接 (波特率: ${baudRate})`);
+    updateSerialStatus(true);
+    showToast('ESP32 已连接');
+
+    // 读取串口数据
+    readSerialData();
+  } catch (e) {
+    addLog(`连接失败: ${e.message}`);
+    showToast('连接失败');
+  }
+}
+
+async function disconnectSerial() {
+  try {
+    if (serialWriter) { serialWriter.releaseLock(); }
+    if (serialReader) { await serialReader.cancel(); serialReader.releaseLock(); }
+    if (serialPort) { await serialPort.close(); }
+    serialPort = null; serialWriter = null; serialReader = null;
+    updateSerialStatus(false);
+    addLog('已断开连接');
+    showToast('已断开');
+  } catch (e) {
+    addLog(`断开失败: ${e.message}`);
+  }
+}
+
+async function readSerialData() {
+  const decoder = new TextDecoderStream();
+  const readableStreamClosed = serialPort.readable.pipeTo(decoder.writable);
+  serialReader = decoder.readable.getReader();
+  try {
+    while (true) {
+      const { value, done } = await serialReader.read();
+      if (done) break;
+      if (value) addLog(`← ${value.trim()}`);
+    }
+  } catch (e) {
+    // 读取中断（断开连接时正常）
+  }
+}
+
+async function sendCommand(cmd) {
+  if (!serialWriter) return;
+  try {
+    const encoder = new TextEncoder();
+    await serialWriter.write(encoder.encode(cmd));
+    addLog(`→ ${cmd.trim()}`);
+  } catch (e) {
+    addLog(`发送失败: ${e.message}`);
+  }
+}
+
+function sendDrawCommand(x, y, rgb) {
+  sendCommand(`D,${x},${y},${rgb[0]},${rgb[1]},${rgb[2]}\n`);
+}
+
+function updateSerialStatus(connected) {
+  const dot = document.getElementById('serialStatus');
+  const text = document.getElementById('serialStatusText');
+  const btnConnect = document.getElementById('btnConnect');
+  const btnDisconnect = document.getElementById('btnDisconnect');
+  dot.className = `status-dot ${connected ? 'connected' : 'disconnected'}`;
+  text.textContent = connected ? '已连接' : '未连接';
+  text.className = connected ? 'text-green-400' : 'text-gray-400';
+  btnConnect.disabled = connected;
+  btnDisconnect.disabled = !connected;
+}
+
+// ==================== MediaPipe 手势识别 ====================
+async function startCamera() {
+  const video = document.getElementById('videoInput');
+  const canvas = document.getElementById('outputCanvas');
+  const ctx = canvas.getContext('2d');
+
+  try {
+    handDetector = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+    });
+
+    handDetector.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.5,
+    });
+
+    handDetector.onResults((results) => onHandResults(results, canvas, ctx));
+
+    cameraInstance = new Camera(video, {
+      onFrame: async () => {
+        await handDetector.send({ image: video });
+      },
+      width: 640,
+      height: 480,
+    });
+
+    await cameraInstance.start();
+    document.getElementById('cameraPlaceholder').style.display = 'none';
+    document.getElementById('btnStartCamera').disabled = true;
+    document.getElementById('btnStopCamera').disabled = false;
+    addLog('摄像头已启动');
+    showToast('摄像头已启动');
+  } catch (e) {
+    addLog(`摄像头启动失败: ${e.message}`);
+    showToast('摄像头启动失败');
+  }
+}
+
+function stopCamera() {
+  if (cameraInstance) {
+    cameraInstance.stop();
+    cameraInstance = null;
+  }
+  document.getElementById('cameraPlaceholder').style.display = 'flex';
+  document.getElementById('btnStartCamera').disabled = false;
+  document.getElementById('btnStopCamera').disabled = true;
+  updateHandStatus(false);
+  addLog('摄像头已停止');
+}
+
+function onHandResults(results, canvas, ctx) {
+  canvas.width = results.image.width;
+  canvas.height = results.image.height;
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const landmarks = results.multiHandLandmarks[0];
+    updateHandStatus(true);
+
+    // 绘制手部骨架
+    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, { color: 'rgba(0,240,255,0.4)', lineWidth: 2 });
+    drawLandmarks(ctx, landmarks, { color: 'rgba(255,0,170,0.6)', lineWidth: 1, radius: 3 });
+
+    // 识别手势
+    const gesture = recognizeGesture(landmarks);
+    updateGestureDisplay(gesture);
+
+    // 根据手势执行操作
+    if (currentMode === 'draw') {
+      handleDrawGesture(landmarks, gesture);
+    }
+  } else {
+    updateHandStatus(false);
+    updateGestureDisplay(null);
+    lastDrawPos = null;
+  }
+
+  ctx.restore();
+}
+
+function recognizeGesture(landmarks) {
+  // 获取关键点
+  const thumbTip = landmarks[4];
+  const indexTip = landmarks[8];
+  const middleTip = landmarks[12];
+  const ringTip = landmarks[16];
+  const pinkyTip = landmarks[20];
+
+  const indexMcp = landmarks[5];
+  const middleMcp = landmarks[9];
+  const ringMcp = landmarks[13];
+  const pinkyMcp = landmarks[17];
+  const wrist = landmarks[0];
+
+  // 判断手指是否伸展（指尖比指根更远离手腕）
+  function isExtended(tip, mcp) {
+    const tipDist = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+    const mcpDist = Math.hypot(mcp.x - wrist.x, mcp.y - wrist.y);
+    return tipDist > mcpDist * 1.1;
+  }
+
+  const indexExt = isExtended(indexTip, indexMcp);
+  const middleExt = isExtended(middleTip, middleMcp);
+  const ringExt = isExtended(ringTip, ringMcp);
+  const pinkyExt = isExtended(pinkyTip, pinkyMcp);
+
+  // 食指伸展，其他弯曲 → 绘画
+  if (indexExt && !middleExt && !ringExt && !pinkyExt) {
+    return 'draw';
+  }
+  // 所有手指伸展 → 换色
+  if (indexExt && middleExt && ringExt && pinkyExt) {
+    return 'color';
+  }
+  // 所有手指弯曲 → 擦除
+  if (!indexExt && !middleExt && !ringExt && !pinkyExt) {
+    return 'erase';
+  }
+  // 食指+中指伸展 → 移动（不绘画）
+  if (indexExt && middleExt && !ringExt && !pinkyExt) {
+    return 'move';
+  }
+
+  return 'unknown';
+}
+
+let colorCycleIndex = 0;
+let lastColorChangeTime = 0;
+
+function handleDrawGesture(landmarks, gesture) {
+  const indexTip = landmarks[8]; // 食指尖
+
+  // 将归一化坐标映射到矩阵（镜像翻转X轴）
+  const mx = Math.floor((1 - indexTip.x) * MATRIX_SIZE);
+  const my = Math.floor(indexTip.y * MATRIX_SIZE);
+
+  if (mx < 0 || mx >= MATRIX_SIZE || my < 0 || my >= MATRIX_SIZE) return;
+
+  if (gesture === 'draw') {
+    // 绘画模式 - 用当前颜色
+    setPixel(mx, my, currentColor);
+    // 插值填充（避免快速移动时断线）
+    if (lastDrawPos) {
+      interpolateLine(lastDrawPos[0], lastDrawPos[1], mx, my, currentColor);
+    }
+    lastDrawPos = [mx, my];
+    sendDrawCommand(mx, my, currentColor);
+  } else if (gesture === 'erase') {
+    // 擦除模式
+    const black = [0, 0, 0];
+    setPixel(mx, my, black);
+    if (lastDrawPos) {
+      interpolateLine(lastDrawPos[0], lastDrawPos[1], mx, my, black);
+    }
+    lastDrawPos = [mx, my];
+    sendDrawCommand(mx, my, black);
+  } else if (gesture === 'color') {
+    // 换色 - 限制频率
+    const now = Date.now();
+    if (now - lastColorChangeTime > 800) {
+      colorCycleIndex = (colorCycleIndex + 1) % COLORS.length;
+      selectColor(colorCycleIndex);
+      lastColorChangeTime = now;
+    }
+    lastDrawPos = null;
+  } else {
+    lastDrawPos = null;
+  }
+}
+
+function interpolateLine(x0, y0, x1, y1, rgb) {
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const steps = Math.max(dx, dy);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const x = Math.round(x0 + (x1 - x0) * t);
+    const y = Math.round(y0 + (y1 - y0) * t);
+    setPixel(x, y, rgb);
+    sendDrawCommand(x, y, rgb);
+  }
+}
+
+function updateHandStatus(detected) {
+  const dot = document.getElementById('handStatus');
+  const text = document.getElementById('handStatusText');
+  dot.className = `status-dot ${detected ? 'detecting' : 'disconnected'}`;
+  text.textContent = detected ? '手部检测中' : '未检测';
+  text.className = detected ? 'text-cyan-400' : 'text-gray-400';
+}
+
+function updateGestureDisplay(gesture) {
+  const display = document.getElementById('gestureDisplay');
+  const label = document.getElementById('gestureLabel');
+  const map = {
+    'draw': { icon: '☝️', label: '绘画模式' },
+    'color': { icon: '✋', label: '换色模式' },
+    'erase': { icon: '✊', label: '擦除模式' },
+    'move': { icon: '✌️', label: '移动模式' },
+    'unknown': { icon: '🤔', label: '未识别手势' },
+  };
+  if (!gesture) {
+    display.textContent = '—';
+    label.textContent = '等待手势输入';
+    return;
+  }
+  const info = map[gesture] || map.unknown;
+  display.textContent = info.icon;
+  label.textContent = info.label;
+}
+
+// ==================== 模式控制 ====================
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  sendCommand(`M,${mode}\n`);
+  addLog(`模式切换: ${mode}`);
+  showToast(`模式: ${mode}`);
+}
+
+function setBrightness(value) {
+  sendCommand(`B,${value}\n`);
+}
+
+// ==================== 语音控制 ====================
+function toggleVoice() {
+  if (isVoiceActive) {
+    stopVoice();
+  } else {
+    startVoice();
+  }
+}
+
+function startVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showToast('浏览器不支持语音识别');
+    return;
+  }
+
+  voiceRecognition = new SpeechRecognition();
+  voiceRecognition.lang = 'zh-CN';
+  voiceRecognition.continuous = true;
+  voiceRecognition.interimResults = true;
+
+  voiceRecognition.onresult = (event) => {
+    const result = event.results[event.results.length - 1];
+    const transcript = result[0].transcript.trim();
+    document.getElementById('voiceResult').textContent = `识别: ${transcript}`;
+
+    if (result.isFinal) {
+      processVoiceCommand(transcript);
+    }
+  };
+
+  voiceRecognition.onerror = (e) => {
+    addLog(`语音识别错误: ${e.error}`);
+    if (e.error !== 'no-speech') {
+      stopVoice();
+    }
+  };
+
+  voiceRecognition.onend = () => {
+    // 自动重启（如果仍激活）
+    if (isVoiceActive) {
+      try { voiceRecognition.start(); } catch(e) {}
+    }
+  };
+
+  try {
+    voiceRecognition.start();
+    isVoiceActive = true;
+    document.getElementById('btnVoice').textContent = '停止语音';
+    document.getElementById('btnVoice').classList.add('active');
+    document.getElementById('voiceWave').classList.remove('idle');
+    addLog('语音识别已启动');
+  } catch (e) {
+    addLog(`语音启动失败: ${e.message}`);
+  }
+}
+
+function stopVoice() {
+  if (voiceRecognition) {
+    voiceRecognition.stop();
+    voiceRecognition = null;
+  }
+  isVoiceActive = false;
+  document.getElementById('btnVoice').textContent = '启动语音';
+  document.getElementById('btnVoice').classList.remove('active');
+  document.getElementById('voiceWave').classList.add('idle');
+  addLog('语音识别已停止');
+}
+
+function processVoiceCommand(text) {
+  const t = text.toLowerCase();
+  addLog(`语音指令: ${text}`);
+
+  // 颜色指令
+  const colorMap = {
+    '红': [255, 30, 30], '蓝': [0, 100, 255], '绿': [0, 255, 136],
+    '黄': [255, 240, 0], '紫': [170, 0, 255], '白': [255, 255, 255],
+    '青': [0, 240, 255], '橙': [255, 160, 0], '粉': [255, 0, 170],
+  };
+  for (const [name, rgb] of Object.entries(colorMap)) {
+    if (t.includes(name)) {
+      currentColor = rgb;
+      document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('selected'));
+      addLog(`语音换色: ${name}`);
+      showToast(`颜色: ${name}`);
+      return;
+    }
+  }
+
+  // 模式指令
+  if (t.includes('彩虹')) { setMode('rainbow'); return; }
+  if (t.includes('呼吸')) { setMode('breathe'); return; }
+  if (t.includes('绘画') || t.includes('画')) { setMode('draw'); return; }
+  if (t.includes('贪吃蛇')) { setMode('snake'); return; }
+
+  // 操作指令
+  if (t.includes('清空') || t.includes('清除')) { clearMatrix(); return; }
+  if (t.includes('填充') || t.includes('填满')) { fillMatrix(); return; }
+
+  // 亮度指令
+  if (t.includes('亮') && !t.includes('暗')) {
+    const slider = document.getElementById('brightness');
+    slider.value = Math.min(255, parseInt(slider.value) + 40);
+    setBrightness(slider.value);
+    return;
+  }
+  if (t.includes('暗')) {
+    const slider = document.getElementById('brightness');
+    slider.value = Math.max(10, parseInt(slider.value) - 40);
+    setBrightness(slider.value);
+    return;
+  }
+}
+
+// ==================== 工具函数 ====================
+function addLog(msg) {
+  const area = document.getElementById('logArea');
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const div = document.createElement('div');
+  div.innerHTML = `<span class="text-gray-500">[${time}]</span> ${msg}`;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+  // 限制日志条数
+  while (area.children.length > 100) {
+    area.removeChild(area.firstChild);
+  }
+}
+
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+// ==================== 初始化 ====================
+window.addEventListener('DOMContentLoaded', () => {
+  initColorPalette();
+  initLedMatrix();
+  addLog('系统就绪 — 光之手 v1.0');
+});
+</script>
+
+</body>
+</html>

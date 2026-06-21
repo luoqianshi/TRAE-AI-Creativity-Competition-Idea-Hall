@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGL2 铜排折弯测试 - 三折弯</title>
+<style>
+body { margin: 0; background: #1e1e1e; color: #d4d4d4; font-family: "Microsoft YaHei", sans-serif; overflow: hidden; }
+#canvas { display: block; width: 100vw; height: 100vh; }
+#ui {
+  position: absolute; top: 10px; left: 10px; background: rgba(30,30,30,0.9);
+  border: 1px solid #444; border-radius: 6px; padding: 12px; width: 280px;
+}
+#ui h3 { margin: 0 0 6px 0; color: #569cd6; font-size: 14px; }
+#ui h4 { margin: 12px 0 4px 0; color: #dcdcaa; font-size: 12px; border-top: 1px solid #333; padding-top: 8px; }
+#ui label { display: block; font-size: 12px; margin: 6px 0 2px 0; color: #aaa; }
+#ui input[type=range] { width: 100%; }
+#ui .val { float: right; color: #4ec94e; font-size: 12px; }
+#info { position: absolute; bottom: 10px; left: 10px; font-size: 11px; color: #666; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+  <h3>折弯参数控制</h3>
+  <h4>折弯 1（左 1.5/6 处）</h4>
+  <label>角度 <span class="val" id="vAngle1">0°</span></label>
+  <input type="range" id="angle1" min="-180" max="180" value="0" step="1">
+  <label>半径 <span class="val" id="vRadius1">1</span></label>
+  <input type="range" id="radius1" min="0.1" max="5" value="1" step="0.1">
+
+  <h4>折弯 2（中 3/6 处）</h4>
+  <label>角度 <span class="val" id="vAngle2">0°</span></label>
+  <input type="range" id="angle2" min="-180" max="180" value="0" step="1">
+  <label>半径 <span class="val" id="vRadius2">1</span></label>
+  <input type="range" id="radius2" min="0.1" max="5" value="1" step="0.1">
+
+  <h4>折弯 3（右 4.5/6 处）</h4>
+  <label>角度 <span class="val" id="vAngle3">0°</span></label>
+  <input type="range" id="angle3" min="-180" max="180" value="0" step="1">
+  <label>半径 <span class="val" id="vRadius3">1</span></label>
+  <input type="range" id="radius3" min="0.1" max="5" value="1" step="0.1">
+</div>
+<button id="animBtn" style="position:absolute;top:10px;right:10px;background:#0e639c;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;">自动演示</button>
+<div id="info">拖动鼠标旋转视角 | 滚轮缩放</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl2', { antialias: true });
+if (!gl) { document.body.innerHTML = '<h2 style="color:#e74c3c;text-align:center;margin-top:40vh">浏览器不支持 WebGL2</h2>'; }
+
+// ===================== 数学工具 =====================
+// 矩阵缓冲区复用，避免每帧 new Float32Array
+const _proj = new Float32Array(16);
+const _view = new Float32Array(16);
+const _mvp  = new Float32Array(16);
+
+function mat4_perspective(fovy, aspect, near, far) {
+  const f = 1.0 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  _proj[0] = f / aspect; _proj[5] = f;
+  _proj[10] = (far + near) * nf; _proj[11] = -1;
+  _proj[14] = 2 * far * near * nf;
+  _proj[1]=_proj[2]=_proj[3]=_proj[4]=_proj[6]=_proj[7]=_proj[8]=_proj[9]=_proj[12]=_proj[13]=_proj[15]=0;
+  return _proj;
+}
+
+function mat4_lookAt(eye, center, up) {
+  let fx = center[0]-eye[0], fy = center[1]-eye[1], fz = center[2]-eye[2];
+  let len = Math.hypot(fx, fy, fz); fx/=len; fy/=len; fz/=len;
+  let sx = fy*up[2]-fz*up[1], sy = fz*up[0]-fx*up[2], sz = fx*up[1]-fy*up[0];
+  len = Math.hypot(sx, sy, sz); sx/=len; sy/=len; sz/=len;
+  let ux = sy*fz-sz*fy, uy = sz*fx-sx*fz, uz = sx*fy-sy*fx;
+  _view[0]=sx;  _view[1]=ux;  _view[2]=-fx;  _view[3]=0;
+  _view[4]=sy;  _view[5]=uy;  _view[6]=-fy;  _view[7]=0;
+  _view[8]=sz;  _view[9]=uz;  _view[10]=-fz; _view[11]=0;
+  _view[12]=-(sx*eye[0]+sy*eye[1]+sz*eye[2]);
+  _view[13]=-(ux*eye[0]+uy*eye[1]+uz*eye[2]);
+  _view[14]=-(-fx*eye[0]-fy*eye[1]-fz*eye[2]);
+  _view[15]=1;
+  return _view;
+}
+
+function mat4_mul(a, b) {
+  for (let i = 0; i < 4; i++)
+    for (let j = 0; j < 4; j++)
+      _mvp[j*4+i] = a[i]*b[j*4] + a[4+i]*b[j*4+1] + a[8+i]*b[j*4+2] + a[12+i]*b[j*4+3];
+  return _mvp;
+}
+
+// ===================== 长方体几何 =====================
+function createBox(w, h, d, segX, segY, segZ) {
+  const pos = [], nrm = [], idx = [];
+  const hw = w/2, hh = h/2, hd = d/2;
+
+  function addFace(origin, u, v, normal, su, sv) {
+    const base = pos.length / 3;
+    for (let iy = 0; iy <= sv; iy++) {
+      for (let ix = 0; ix <= su; ix++) {
+        const tu = ix / su, tv = iy / sv;
+        pos.push(origin[0]+u[0]*tu+v[0]*tv, origin[1]+u[1]*tu+v[1]*tv, origin[2]+u[2]*tu+v[2]*tv);
+        nrm.push(normal[0], normal[1], normal[2]);
+      }
+    }
+    for (let iy = 0; iy < sv; iy++) {
+      for (let ix = 0; ix < su; ix++) {
+        const a = base + iy*(su+1)+ix, b = a+1, c = a+(su+1), d = c+1;
+        idx.push(a, b, c, b, d, c);
+      }
+    }
+  }
+
+  addFace([-hw,-hh, hd], [ w, 0, 0], [0, h, 0], [ 0, 0, 1], segX, segY);
+  addFace([ hw,-hh,-hd], [-w, 0, 0], [0, h, 0], [ 0, 0,-1], segX, segY);
+  addFace([ hw,-hh, hd], [ 0, 0,-d], [0, h, 0], [ 1, 0, 0], segZ, segY);
+  addFace([-hw,-hh,-hd], [ 0, 0, d], [0, h, 0], [-1, 0, 0], segZ, segY);
+  addFace([-hw, hh, hd], [ w, 0, 0], [0, 0,-d], [ 0, 1, 0], segX, segZ);
+  addFace([-hw,-hh,-hd], [ w, 0, 0], [0, 0, d], [ 0,-1, 0], segX, segZ);
+
+  return { vertices: new Float32Array(pos), normals: new Float32Array(nrm), indices: new Uint16Array(idx) };
+}
+
+// ===================== 着色器（三折弯 · 变换链累乘） =====================
+const vsSource = `#version 300 es
+precision highp float;
+
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+
+uniform mat4 uMVP;
+uniform float uBend1Angle;
+uniform float uBend1Radius;
+uniform float uBend1Center;
+uniform float uBend2Angle;
+uniform float uBend2Radius;
+uniform float uBend2Center;
+uniform float uBend3Angle;
+uniform float uBend3Radius;
+uniform float uBend3Center;
+
+out vec3 vNormal;
+out vec3 vWorldPos;
+
+// 绕 Y 轴旋转（+X 转 +Z）
+vec3 rotY(vec3 v, float a) {
+  float c = cos(a), s = sin(a);
+  return vec3(v.x*c + v.z*s, v.y, -v.x*s + v.z*c);
+}
+
+// 在局部展开空间中折弯
+vec3 doBend(vec3 p, float origX, float centerX, float theta, float R) {
+  if (abs(theta) < 0.001) return p;
+  float absT = abs(theta);
+  float flipZ = theta < 0.0 ? -1.0 : 1.0;
+  float L  = R * absT;
+  float bs = centerX - L*0.5;
+  float be = centerX + L*0.5;
+  float pz = p.z * flipZ;
+
+  if (origX <= bs) {
+    return p;
+  } else if (origX <= be) {
+    float t = (origX - bs) / L;
+    float a = t * absT;
+    float sa = sin(a), ca = cos(a);
+    return vec3(bs + (R - pz)*sa, p.y, (R*(1.0-ca) + pz*ca)*flipZ);
+  } else {
+    float dx = origX - be;
+    float st = sin(absT), ct = cos(absT);
+    return vec3(bs + R*st + dx*ct - pz*st, p.y, (R*(1.0-ct) + dx*st + pz*ct)*flipZ);
+  }
+}
+
+vec3 doBendNormal(vec3 n, float origX, float centerX, float theta, float R) {
+  if (abs(theta) < 0.001) return n;
+  float absT = abs(theta);
+  float flipZ = theta < 0.0 ? -1.0 : 1.0;
+  float L  = R * absT;
+  float bs = centerX - L*0.5;
+  float be = centerX + L*0.5;
+  float nz = n.z * flipZ;
+  float alpha = 0.0;
+  if (origX <= bs) return n;
+  else if (origX <= be) { float t = (origX - bs)/L; alpha = t*absT; }
+  else alpha = absT;
+  float sa = sin(alpha), ca = cos(alpha);
+  return vec3(n.x*ca - nz*sa, n.y, (n.x*sa + nz*ca)*flipZ);
+}
+
+void main() {
+  vec3 p = aPos;
+  vec3 n = aNormal;
+  float ox = aPos.x;
+
+  float th1 = uBend1Angle, th2 = uBend2Angle, th3 = uBend3Angle;
+  float r1 = max(uBend1Radius, 0.01);
+  float r2 = max(uBend2Radius, 0.01);
+  float r3 = max(uBend3Radius, 0.01);
+  float c1 = uBend1Center, c2 = uBend2Center, c3 = uBend3Center;
+
+  // ---- 折弯 1（世界坐标系）----
+  float absT1 = abs(th1);
+  float flipZ1 = th1 < 0.0 ? -1.0 : 1.0;
+  float L1 = r1 * absT1;
+  float b1s = c1 - L1*0.5;
+  float b1e = c1 + L1*0.5;
+  vec3 arc1End = vec3(b1s + r1*sin(absT1), 0.0, r1*(1.0-cos(absT1))*flipZ1);
+
+  n = doBendNormal(n, ox, c1, th1, r1);
+  p = doBend(p, ox, c1, th1, r1);
+
+  // ---- 折弯 2（展开折弯1 → 施加折弯2 → 恢复折弯1）----
+  if (abs(th2) > 0.001) {
+    float L2 = r2 * abs(th2);
+    float b2s = c2 - L2*0.5;
+    if (ox > b2s) {
+      float oxLocal = ox - b1e;
+      float c2Local = c2 - b1e;
+      vec3 pLocal = rotY(p - arc1End, th1);
+      vec3 nLocal = rotY(n, th1);
+      pLocal = doBend(pLocal, oxLocal, c2Local, th2, r2);
+      nLocal = doBendNormal(nLocal, oxLocal, c2Local, th2, r2);
+      p = rotY(pLocal, -th1) + arc1End;
+      n = rotY(nLocal, -th1);
+    }
+  }
+
+  // ---- 折弯 3（全展开 → 施加折弯3 → 恢复）----
+  if (abs(th3) > 0.001) {
+    float absT3 = abs(th3);
+    float L3 = r3 * absT3;
+    float b3s = c3 - L3*0.5;
+    if (ox > b3s) {
+      // 步骤1：展开折弯1（世界→bend1展开空间）
+      vec3 pLocal1 = rotY(p - arc1End, th1);
+      vec3 nLocal1 = rotY(n, th1);
+
+      // 步骤2：展开折弯2（bend1展开空间→全平空间）
+      float absT2 = abs(th2);
+      float flipZ2 = th2 < 0.0 ? -1.0 : 1.0;
+      float L2 = r2 * absT2;
+      float c2Local = c2 - b1e;
+      float b2sLocal = c2Local - L2*0.5;
+      vec3 arc2LocalEnd = vec3(b2sLocal + r2*sin(absT2), 0.0, r2*(1.0-cos(absT2))*flipZ2);
+
+      vec3 pFlat = rotY(pLocal1 - arc2LocalEnd, th2);
+      vec3 nFlat = rotY(nLocal1, th2);
+
+      // 展开后尾部x = ox - c2 - L2/2，需偏移回原始坐标系使ox与x对齐
+      float xShift = c2 + L2*0.5;
+      pFlat.x += xShift;
+
+      // 步骤3：在全平空间中施加折弯3
+      pFlat = doBend(pFlat, ox, c3, th3, r3);
+      nFlat = doBendNormal(nFlat, ox, c3, th3, r3);
+
+      // 步骤4：撤销x偏移，恢复折弯2
+      pFlat.x -= xShift;
+      pLocal1 = rotY(pFlat, -th2) + arc2LocalEnd;
+      nLocal1 = rotY(nFlat, -th2);
+
+      // 步骤5：恢复折弯1
+      p = rotY(pLocal1, -th1) + arc1End;
+      n = rotY(nLocal1, -th1);
+    }
+  }
+
+  gl_Position = uMVP * vec4(p, 1.0);
+  vNormal = n;
+  vWorldPos = p;
+}
+`;
+
+const fsSource = `#version 300 es
+precision highp float;
+
+in vec3 vNormal;
+in vec3 vWorldPos;
+
+out vec4 fragColor;
+
+void main() {
+  vec3 lightDir = normalize(vec3(1.0, 2.0, 1.5));
+  vec3 N = normalize(vNormal);
+  float diff = max(dot(N, lightDir), 0.0);
+  float ambient = 0.25;
+  vec3 copper = vec3(0.72, 0.45, 0.20);
+  vec3 lit = copper * (ambient + diff * 0.75);
+  vec3 viewDir = normalize(-vWorldPos);
+  vec3 halfDir = normalize(lightDir + viewDir);
+  float spec = pow(max(dot(N, halfDir), 0.0), 48.0);
+  vec3 final = lit + vec3(1.0, 0.85, 0.5) * spec * 0.4;
+  fragColor = vec4(final, 1.0);
+}
+`;
+
+// ===================== 初始化 =====================
+function compileShader(src, type) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s));
+    return null;
+  }
+  return s;
+}
+
+const vs = compileShader(vsSource, gl.VERTEX_SHADER);
+const fs = compileShader(fsSource, gl.FRAGMENT_SHADER);
+const program = gl.createProgram();
+gl.attachShader(program, vs);
+gl.attachShader(program, fs);
+gl.linkProgram(program);
+gl.useProgram(program);
+
+const uMVP = gl.getUniformLocation(program, 'uMVP');
+const uBend1Angle = gl.getUniformLocation(program, 'uBend1Angle');
+const uBend1Radius = gl.getUniformLocation(program, 'uBend1Radius');
+const uBend1Center = gl.getUniformLocation(program, 'uBend1Center');
+const uBend2Angle = gl.getUniformLocation(program, 'uBend2Angle');
+const uBend2Radius = gl.getUniformLocation(program, 'uBend2Radius');
+const uBend2Center = gl.getUniformLocation(program, 'uBend2Center');
+const uBend3Angle = gl.getUniformLocation(program, 'uBend3Angle');
+const uBend3Radius = gl.getUniformLocation(program, 'uBend3Radius');
+const uBend3Center = gl.getUniformLocation(program, 'uBend3Center');
+
+// 创建几何体：长度 8→12（增加 1/2），分段 80→120
+const BOX_LEN = 12;
+const geo = createBox(BOX_LEN, 1, 0.3, 120, 8, 2);
+
+// 等间距三折弯：1.5/6、3/6、4.5/6
+// c1 = -6 + 12*1.5/6 = -3, c2 = -6 + 12*3/6 = 0, c3 = -6 + 12*4.5/6 = 3
+const BEND1_CENTER = -BOX_LEN/2 + BOX_LEN*1.5/6;
+const BEND2_CENTER = -BOX_LEN/2 + BOX_LEN*3/6;
+const BEND3_CENTER = -BOX_LEN/2 + BOX_LEN*4.5/6;
+
+// VAO
+const vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+
+const posBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.bufferData(gl.ARRAY_BUFFER, geo.vertices, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+
+const nrmBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+gl.bufferData(gl.ARRAY_BUFFER, geo.normals, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(1);
+gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+
+const idxBuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.indices, gl.STATIC_DRAW);
+
+gl.bindVertexArray(null);
+
+// 深度测试 + 背景色（一次设置即可）
+gl.enable(gl.DEPTH_TEST);
+gl.clearColor(0.12, 0.12, 0.14, 1);
+
+// 相机
+let camDist = 14, camYaw = 0.6, camPitch = 0.4;
+let dragging = false, lastX = 0, lastY = 0;
+canvas.addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', e => { dragging = false; canvas.releasePointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  camYaw += (e.clientX - lastX) * 0.01;
+  camPitch += (e.clientY - lastY) * 0.01;
+  camPitch = Math.max(-1.5, Math.min(1.5, camPitch));
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener('wheel', e => {
+  camDist *= Math.exp(e.deltaY * 0.002);
+  camDist = Math.max(1, Math.min(70, camDist));
+  e.preventDefault();
+}, { passive: false });
+
+// UI
+const elAngle1 = document.getElementById('angle1');
+const elRadius1 = document.getElementById('radius1');
+const elAngle2 = document.getElementById('angle2');
+const elRadius2 = document.getElementById('radius2');
+const elAngle3 = document.getElementById('angle3');
+const elRadius3 = document.getElementById('radius3');
+const vAngle1 = document.getElementById('vAngle1');
+const vRadius1 = document.getElementById('vRadius1');
+const vAngle2 = document.getElementById('vAngle2');
+const vRadius2 = document.getElementById('vRadius2');
+const vAngle3 = document.getElementById('vAngle3');
+const vRadius3 = document.getElementById('vRadius3');
+elRadius1.oninput = () => vRadius1.textContent = elRadius1.value;
+elRadius2.oninput = () => vRadius2.textContent = elRadius2.value;
+elRadius3.oninput = () => vRadius3.textContent = elRadius3.value;
+
+// 自动演示动画
+let animRunning = false;
+let animTimer = null;
+const animBtn = document.getElementById('animBtn');
+
+function stopAnim() {
+  animRunning = false;
+  if (animTimer) { clearTimeout(animTimer); animTimer = null; }
+  animBtn.textContent = '自动演示';
+  animBtn.style.background = '#0e639c';
+}
+
+async function runAnim() {
+  animRunning = true;
+  animBtn.textContent = '停止演示';
+  animBtn.style.background = '#b8860b';
+
+  while (animRunning) {
+    // 依次设置折弯角度 20°
+    await setAngle(elAngle1, vAngle1, 20, 500);
+    if (!animRunning) break;
+    await delay(1000);
+
+    await setAngle(elAngle2, vAngle2, 20, 500);
+    if (!animRunning) break;
+    await delay(1000);
+
+    await setAngle(elAngle3, vAngle3, 20, 500);
+    if (!animRunning) break;
+    await delay(1000);
+
+    // 等待 1 秒后，依次回零
+    await delay(500);
+
+    await setAngle(elAngle3, vAngle3, 0, 500);
+    if (!animRunning) break;
+    await delay(1000);
+
+    await setAngle(elAngle2, vAngle2, 0, 500);
+    if (!animRunning) break;
+    await delay(1000);
+
+    await setAngle(elAngle1, vAngle1, 0, 500);
+    if (!animRunning) break;
+    await delay(1000);
+  }
+}
+
+function delay(ms) {
+  return new Promise(resolve => { animTimer = setTimeout(resolve, ms); });
+}
+
+function setAngle(el, label, target, duration) {
+   return new Promise(resolve => {
+     const start = parseFloat(el.value);
+     const startTime = performance.now();
+     function step() {
+       const t = Math.min(1, (performance.now() - startTime) / duration);
+       const eased = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; // easeInOutQuad
+       const val = start + (target - start) * eased;
+       el.value = val;
+       label.textContent = val.toFixed(0) + '°';
+       needUniformUpdate = true;
+       if (t < 1) {
+         animTimer = requestAnimationFrame(step);
+       } else {
+         el.value = target;
+         label.textContent = target + '°';
+         needUniformUpdate = true;
+         resolve();
+       }
+     }
+     animTimer = requestAnimationFrame(step);
+   });
+ }
+
+animBtn.onclick = () => {
+  if (animRunning) {
+    stopAnim();
+  } else {
+    runAnim();
+  }
+};
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.floor(canvas.clientWidth * dpr);
+  const h = Math.floor(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+resize();
+window.addEventListener('resize', resize);
+
+// 渲染循环（性能优化版）
+const TO_RAD = Math.PI / 180;
+// 缓存当前值，避免每帧 parseFloat
+let curAngle1 = 0, curAngle2 = 0, curAngle3 = 0;
+let curRad1 = 1, curRad2 = 1, curRad3 = 1;
+let needUniformUpdate = true;
+
+elAngle1.oninput = () => { needUniformUpdate = true; if (animRunning) stopAnim(); vAngle1.textContent = elAngle1.value + '°'; };
+elAngle2.oninput = () => { needUniformUpdate = true; if (animRunning) stopAnim(); vAngle2.textContent = elAngle2.value + '°'; };
+elAngle3.oninput = () => { needUniformUpdate = true; if (animRunning) stopAnim(); vAngle3.textContent = elAngle3.value + '°'; };
+
+function syncAngles() {
+  curAngle1 = parseFloat(elAngle1.value);
+  curAngle2 = parseFloat(elAngle2.value);
+  curAngle3 = parseFloat(elAngle3.value);
+  curRad1   = parseFloat(elRadius1.value);
+  curRad2   = parseFloat(elRadius2.value);
+  curRad3   = parseFloat(elRadius3.value);
+  needUniformUpdate = false;
+}
+
+function frame() {
+  resize();
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const eyeX = camDist * Math.cos(camPitch) * Math.sin(camYaw);
+  const eyeY = camDist * Math.sin(camPitch);
+  const eyeZ = camDist * Math.cos(camPitch) * Math.cos(camYaw);
+
+  const proj = mat4_perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
+  const view = mat4_lookAt([eyeX, eyeY, eyeZ], [0, 0, 0], [0, 1, 0]);
+  const mvp = mat4_mul(proj, view);
+
+  gl.useProgram(program);
+  gl.uniformMatrix4fv(uMVP, false, mvp);
+
+  if (needUniformUpdate) syncAngles();
+
+  gl.uniform1f(uBend1Angle, curAngle1 * TO_RAD);
+  gl.uniform1f(uBend1Radius, curRad1);
+  gl.uniform1f(uBend1Center, BEND1_CENTER);
+  gl.uniform1f(uBend2Angle, curAngle2 * TO_RAD);
+  gl.uniform1f(uBend2Radius, curRad2);
+  gl.uniform1f(uBend2Center, BEND2_CENTER);
+  gl.uniform1f(uBend3Angle, curAngle3 * TO_RAD);
+  gl.uniform1f(uBend3Radius, curRad3);
+  gl.uniform1f(uBend3Center, BEND3_CENTER);
+
+  gl.bindVertexArray(vao);
+  gl.drawElements(gl.TRIANGLES, geo.indices.length, gl.UNSIGNED_SHORT, 0);
+  gl.bindVertexArray(null);
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

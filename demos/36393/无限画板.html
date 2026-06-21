@@ -1,0 +1,2746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>无限画布</title>
+<!-- Three.js import map: 解决ES模块bare specifier问题 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{overflow:hidden;width:100%;height:100%}
+body{background:#f0f0f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;user-select:none;-webkit-user-select:none}
+
+#viewport{
+  width:100%;height:100%;position:relative;overflow:hidden;cursor:default;
+  background:linear-gradient(160deg,#ffffff 0%,#f2f2f7 35%,#e5e5ec 70%,#d8d8e0 100%);
+  background-color:#f0f0f5;
+}
+#viewport::before{
+  content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:radial-gradient(circle,rgba(0,0,0,.04) 1px,transparent 1px);
+  background-size:var(--gs,40px) var(--gs,40px);
+  background-position:var(--gpx,0px) var(--gpy,0px);
+}
+#canvas-layer{position:absolute;top:0;left:0;width:0;height:0;transform-origin:0 0;will-change:transform;contain:layout style;z-index:1}
+#sel-overlay{position:absolute;inset:0;pointer-events:none;z-index:9998}
+#box-sel-rect{position:absolute;border:1.5px dashed rgba(232,134,58,.7);background:rgba(232,134,58,.06);pointer-events:none;z-index:9997;display:none;border-radius:2px}
+
+.sel-box{position:absolute;border:1.5px solid rgba(232,134,58,.7);pointer-events:none;box-shadow:0 0 0 1px rgba(232,134,58,.12)}
+.rh{position:absolute;width:9px;height:9px;background:#fff;border:1.5px solid #e8863a;border-radius:2px;pointer-events:all;z-index:9999;transition:transform .12s ease;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.rh:hover{transform:scale(1.35);background:#fff5ec}
+.rh-nw{cursor:nw-resize}.rh-ne{cursor:ne-resize}.rh-sw{cursor:sw-resize}.rh-se{cursor:se-resize}
+.rh-n{cursor:n-resize}.rh-s{cursor:s-resize}.rh-w{cursor:w-resize}.rh-e{cursor:e-resize}
+
+.ci{position:absolute;cursor:default}
+.ci-img{border-radius:4px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.12)}
+.ci-img img{width:100%;height:100%;display:block;pointer-events:none;object-fit:fill}
+.ci-video{border-radius:4px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.12)}
+.ci-video video{width:100%;height:100%;display:block;object-fit:fill}
+.ci-txt{
+  min-width:30px;min-height:1.4em;outline:none;
+  white-space:pre-wrap;word-break:break-word;line-height:1.45;
+  padding:4px 8px;border-radius:3px;
+  border:1.5px solid transparent;
+  transition:border-color .15s,background .15s,box-shadow .15s;
+}
+.ci-txt.editing{
+  border-color:rgba(232,134,58,.35);
+  background:rgba(255,160,60,.03);
+  cursor:text;user-select:text;-webkit-user-select:text;
+  box-shadow:0 0 0 3px rgba(232,134,58,.08);
+}
+.ci-txt:not(.editing):hover{border-color:rgba(232,134,58,.15)}
+
+.glass{
+  background:linear-gradient(135deg,rgba(255,255,255,.38) 0%,rgba(255,255,255,.22) 40%,rgba(255,245,232,.18) 100%);
+  backdrop-filter:blur(48px) saturate(220%) brightness(1.15);
+  -webkit-backdrop-filter:blur(48px) saturate(220%) brightness(1.15);
+  border:1px solid rgba(255,255,255,.45);
+  box-shadow:0 0 28px rgba(255,160,60,.1),0 8px 32px rgba(0,0,0,.04),inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 -1px 0 rgba(0,0,0,.015);
+}
+.toolbar{position:fixed;top:14px;left:50%;transform:translateX(-50%) translateY(-10px);display:flex;align-items:center;gap:5px;padding:7px 14px;border-radius:16px;z-index:10001;color:rgba(30,30,30,.82);font-size:11.5px;letter-spacing:.01em;opacity:0;pointer-events:none;transition:opacity .35s ease,transform .35s ease}
+.toolbar.visible{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+.toolbar .sep{width:1px;height:20px;background:rgba(0,0,0,.06);flex-shrink:0}
+.toolbar button{background:linear-gradient(135deg,rgba(255,255,255,.35),rgba(255,255,255,.18));border:1px solid rgba(255,255,255,.4);color:rgba(30,30,30,.8);padding:5px 9px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:500;transition:background .2s ease,box-shadow .2s ease,transform .15s cubic-bezier(.34,1.56,.64,1);white-space:nowrap;font-family:inherit;box-shadow:0 1px 6px rgba(0,0,0,.03),inset 0 1px 0 rgba(255,255,255,.6)}
+.toolbar button:hover{background:linear-gradient(135deg,rgba(255,255,255,.5),rgba(255,255,255,.3));border-color:rgba(255,255,255,.55);transform:scale(1.05);box-shadow:0 3px 14px rgba(255,160,60,.1),0 1px 4px rgba(0,0,0,.04),inset 0 1px 0 rgba(255,255,255,.7)}
+.toolbar button:active{transform:scale(.95);background:linear-gradient(135deg,rgba(255,255,255,.25),rgba(255,255,255,.12));box-shadow:0 0 4px rgba(0,0,0,.03),inset 0 1px 0 rgba(255,255,255,.4);transition-duration:.08s}
+.toolbar button.active{background:linear-gradient(135deg,rgba(255,170,80,.3),rgba(255,130,50,.18));border-color:rgba(255,160,60,.45);color:rgba(30,30,30,.9);box-shadow:0 0 16px rgba(255,160,60,.15),inset 0 1px 0 rgba(255,255,255,.45)}
+.toolbar label{display:flex;align-items:center;gap:3px;color:rgba(60,60,60,.6);font-size:10.5px}
+.toolbar input[type=range]{width:68px;accent-color:#e8863a;height:3px;cursor:pointer}
+.sz-v{min-width:20px;text-align:center;color:rgba(30,30,30,.78);font-variant-numeric:tabular-nums;font-size:10.5px}
+.cdot{width:17px;height:17px;border-radius:50%;border:2px solid rgba(255,255,255,.45);cursor:pointer;padding:0;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease,transform .15s cubic-bezier(.34,1.56,.64,1);flex-shrink:0;box-shadow:0 1px 4px rgba(0,0,0,.05),inset 0 1px 0 rgba(255,255,255,.5)}
+.cdot:hover{border-color:rgba(255,255,255,.75);transform:scale(1.15);box-shadow:0 2px 10px rgba(0,0,0,.07),inset 0 1px 0 rgba(255,255,255,.6)}
+.cdot:active{transform:scale(.9);transition-duration:.08s}
+.cdot.active{border-color:#e8863a;box-shadow:0 0 0 2px rgba(232,134,58,.35),0 0 10px rgba(255,160,60,.15)}
+
+.mode-badge{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);padding:6px 16px;border-radius:10px;color:rgba(30,30,30,.78);font-size:11.5px;z-index:10001;display:none;letter-spacing:.01em}
+.zoom-badge{position:fixed;bottom:26px;right:22px;padding:4px 10px;border-radius:8px;color:rgba(60,60,60,.6);font-size:10.5px;z-index:10001;font-variant-numeric:tabular-nums}
+.shortcuts-panel{position:fixed;bottom:16px;left:16px;padding:8px 12px;border-radius:12px;z-index:10001;font-size:9.5px;line-height:1.85;color:rgba(60,60,60,.5);max-width:230px;transition:opacity .28s ease,transform .32s cubic-bezier(.34,1.56,.64,1)}
+.shortcuts-panel.hidden{opacity:0;transform:translateY(10px) scale(.94);pointer-events:none}
+.shortcuts-panel .sk-row{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.shortcuts-panel .sk-key{display:inline-block;padding:1px 5px;border-radius:4px;font-size:8.5px;background:linear-gradient(135deg,rgba(255,255,255,.4),rgba(255,255,255,.2));border:1px solid rgba(255,255,255,.4);color:rgba(30,30,30,.6);font-family:inherit;letter-spacing:.02em;box-shadow:0 1px 2px rgba(0,0,0,.03),inset 0 .5px 0 rgba(255,255,255,.5)}
+.shortcuts-panel .sk-desc{color:rgba(60,60,60,.45);font-size:9px}
+.drop-zone{position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center;pointer-events:none;background:rgba(232,134,58,.04);border:2.5px dashed rgba(232,134,58,.3)}
+.drop-zone.show{display:flex}
+.drop-zone span{color:rgba(30,30,30,.65);font-size:16px;background:linear-gradient(135deg,rgba(255,255,255,.4),rgba(255,255,255,.22));backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);padding:16px 32px;border-radius:14px;border:1px solid rgba(255,255,255,.4);box-shadow:0 0 20px rgba(255,160,60,.1),0 8px 30px rgba(0,0,0,.04),inset 0 1px 0 rgba(255,255,255,.6)}
+.export-toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:12px 24px;border-radius:12px;color:rgba(30,30,30,.8);font-size:13px;z-index:10002;display:none}
+.loading-toast{position:fixed;top:20px;right:22px;padding:10px 16px;border-radius:12px;color:rgba(30,30,30,.82);font-size:12px;z-index:10002;display:none;max-width:300px;transition:opacity .25s ease,transform .25s cubic-bezier(.34,1.56,.64,1)}
+
+.ci-3d{border-radius:4px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.12);background:linear-gradient(135deg,#f8f8fa,#e8e8ec)}
+.ci-3d canvas{width:100%;height:100%;display:block;pointer-events:none}
+.ci-3d.interactive canvas{pointer-events:auto}
+.ci-3d .badge-3d{position:absolute;top:4px;left:4px;padding:2px 6px;background:rgba(0,0,0,.45);color:#fff;font-size:8px;border-radius:3px;pointer-events:none;z-index:2;letter-spacing:.02em}
+
+.alt-menu{position:fixed;z-index:10003;display:flex;gap:4px;padding:5px;border-radius:12px;opacity:0;transform:scale(.82) translateY(6px);pointer-events:none;transition:opacity .18s ease,transform .26s cubic-bezier(.34,1.56,.64,1)}
+.alt-menu.show{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}
+.alt-menu button{background:linear-gradient(135deg,rgba(255,255,255,.35),rgba(255,255,255,.18));border:1px solid rgba(255,255,255,.4);color:rgba(30,30,30,.8);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:500;white-space:nowrap;font-family:inherit;transition:background .2s ease,transform .15s cubic-bezier(.34,1.56,.64,1);box-shadow:0 1px 6px rgba(0,0,0,.03),inset 0 1px 0 rgba(255,255,255,.6)}
+.alt-menu button:hover{background:linear-gradient(135deg,rgba(255,255,255,.5),rgba(255,255,255,.3));transform:scale(1.08)}
+.alt-menu button:active{transform:scale(.92);transition-duration:.06s}
+.cutout-threshold{display:flex;align-items:center;gap:4px;padding:4px 8px;background:linear-gradient(135deg,rgba(255,255,255,.25),rgba(255,255,255,.12));border:1px solid rgba(255,255,255,.35);border-radius:8px;font-size:10px;color:rgba(30,30,30,.75)}
+.ct-label{white-space:nowrap;font-weight:500}
+.ct-range{-webkit-appearance:none;appearance:none;width:60px;height:3px;background:rgba(30,30,30,.2);border-radius:2px;outline:none;cursor:pointer}
+.ct-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;background:linear-gradient(135deg,rgba(232,134,58,.9),rgba(255,160,60,.8));border-radius:50%;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.ct-range::-moz-range-thumb{width:12px;height:12px;background:linear-gradient(135deg,rgba(232,134,58,.9),rgba(255,160,60,.8));border-radius:50%;cursor:pointer;border:none}
+.ct-val{min-width:22px;text-align:center;font-variant-numeric:tabular-nums;font-weight:600}
+
+.mask-overlay{position:fixed;inset:0;z-index:10004;display:none;cursor:crosshair;background:rgba(0,0,0,.3)}
+.mask-overlay canvas{position:absolute;inset:0;width:100%;height:100%}
+.mask-toolbar{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10005;display:flex;align-items:center;gap:10px;padding:8px 16px;border-radius:12px;font-size:12px;color:rgba(30,30,30,.7)}
+.mask-toolbar button{background:linear-gradient(135deg,rgba(255,170,80,.3),rgba(255,130,50,.18));border:1px solid rgba(255,160,60,.45);color:rgba(30,30,30,.9);padding:5px 14px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:500;font-family:inherit;transition:transform .15s cubic-bezier(.34,1.56,.64,1)}
+.mask-toolbar button:hover{transform:scale(1.05)}
+.mask-toolbar button:active{transform:scale(.95)}
+.mask-toolbar button.secondary{background:linear-gradient(135deg,rgba(255,255,255,.35),rgba(255,255,255,.18));border-color:rgba(255,255,255,.4)}
+
+.cutout-overlay{position:fixed;inset:0;z-index:10004;display:none;cursor:crosshair;background:rgba(0,0,0,.45)}
+.cutout-overlay canvas{position:absolute;inset:0;width:100%;height:100%}
+.cutout-toolbar{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10005;display:flex;align-items:center;gap:10px;padding:8px 16px;border-radius:12px;font-size:12px;color:rgba(30,30,30,.7);flex-wrap:wrap;justify-content:center;max-width:90vw}
+.cutout-toolbar button{background:linear-gradient(135deg,rgba(255,170,80,.3),rgba(255,130,50,.18));border:1px solid rgba(255,160,60,.45);color:rgba(30,30,30,.9);padding:5px 14px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:500;font-family:inherit;transition:transform .15s cubic-bezier(.34,1.56,.64,1)}
+.cutout-toolbar button:hover{transform:scale(1.05)}
+.cutout-toolbar button:active{transform:scale(.95)}
+.cutout-toolbar button.secondary{background:linear-gradient(135deg,rgba(255,255,255,.35),rgba(255,255,255,.18));border-color:rgba(255,255,255,.4)}
+
+.group-sel-box{position:absolute;border:1.5px solid rgba(232,134,58,.5);pointer-events:none;box-shadow:0 0 0 1px rgba(232,134,58,.08)}
+
+</style>
+</head>
+<body>
+
+<div id="viewport">
+  <div id="canvas-layer"></div>
+  <div id="sel-overlay"></div>
+  <div id="box-sel-rect"></div>
+</div>
+
+<div class="toolbar glass" id="toolbar">
+  <button id="btn-file" title="添加文件">+ 文件</button>
+  <div class="sep"></div>
+  <button id="btn-txt" title="文字模式 (T)">T 文字</button>
+  <div class="sep"></div>
+  <label>大小 <input type="range" id="rng-sz" min="12" max="128" value="28"><span class="sz-v" id="sz-v">28</span></label>
+  <div class="sep"></div>
+  <button class="cdot" data-c="#000000" style="background:#000;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)"></button>
+  <button class="cdot" data-c="#ffffff" style="background:#fff"></button>
+  <button class="cdot" data-c="#ff3b30" style="background:#ff3b30"></button>
+  <button class="cdot" data-c="#007aff" style="background:#007aff"></button>
+  <button class="cdot" data-c="#34c759" style="background:#34c759"></button>
+  <div class="sep"></div>
+  <button id="btn-b" title="粗体" style="font-weight:900"><b>加</b> 粗</button>
+  <div class="sep"></div>
+  <button id="btn-exp" title="导出PNG">⤓ 导出</button>
+</div>
+
+<div class="mode-badge glass" id="mode-badge">文字模式 — 点击画布放置文字 &nbsp;|&nbsp; ESC 退出</div>
+<div class="zoom-badge glass" id="zoom-badge">100%</div>
+<div class="shortcuts-panel glass" id="shortcuts-panel"></div>
+<div class="drop-zone" id="drop-zone"><span>释放以添加文件</span></div>
+<div class="export-toast glass" id="export-toast">正在导出…</div>
+<div class="loading-toast glass" id="loading-toast">正在渲染文件…</div>
+<div class="alt-menu glass" id="alt-menu">
+  <button id="btn-cutout">抠图</button>
+  <button id="btn-watermark">去水印</button>
+</div>
+<div class="mask-overlay" id="mask-overlay">
+  <canvas id="mask-canvas"></canvas>
+  <div class="mask-toolbar glass">
+    <span>用红色画笔涂抹要去除的区域</span>
+    <button id="btn-apply-mask">去除</button>
+    <button id="btn-apply-all" style="display:none">应用所有</button>
+    <button id="btn-cancel-mask" class="secondary">取消</button>
+  </div>
+</div>
+<div class="cutout-overlay" id="cutout-overlay">
+  <canvas id="cutout-canvas"></canvas>
+  <div class="cutout-toolbar glass">
+    <span id="cutout-hint">点击图片选择要保留的对象（左键保留，右键排除）</span>
+    <div class="cutout-threshold" id="cutout-threshold" title="抠图阈值：越大保留越少，越小保留越多">
+      <span class="ct-label">阈值</span>
+      <input type="range" id="cutout-threshold-range" min="0" max="100" value="50" class="ct-range">
+      <span class="ct-val" id="cutout-threshold-val">50</span>
+    </div>
+    <button id="btn-apply-cutout">应用</button>
+    <button id="btn-reset-cutout" class="secondary">重置</button>
+    <button id="btn-cancel-cutout" class="secondary">取消</button>
+  </div>
+</div>
+<input type="file" id="file-in" multiple accept="image/*,.pdf,.docx,.doc,.pptx,.ppt,.psd,.txt,video/*,.mp4,.glb,.gltf,.obj,.stl,.ply,.fbx,.3dm" style="display:none">
+
+<script>
+(function(){
+'use strict';
+
+const S={
+  scale:1,ox:0,oy:0,
+  items:[],nid:1,nzi:1,
+  selIds:new Set(),
+  textMode:false,
+  spaceDown:false,ctrlDown:false,shiftDown:false,altDown:false,
+  panning:false,dragging:false,resizing:false,
+  panSX:0,panSY:0,panSOX:0,panSOY:0,
+  dragSX:0,dragSY:0,dragStarts:null,
+  rDir:'',rSX:0,rSY:0,rRect:null,
+  boxSel:false,boxSX:0,boxSY:0,altBoxSel:false,
+  fontSize:28,fontColor:'#000000',fontBold:false,
+  rafPending:false
+};
+
+const $=id=>document.getElementById(id);
+const vp=$('viewport'),cl=$('canvas-layer'),so=$('sel-overlay'),bsr=$('box-sel-rect');
+const mb=$('mode-badge'),zb=$('zoom-badge'),dz=$('drop-zone'),et=$('export-toast'),lt=$('loading-toast'),fi=$('file-in');
+const btnTxt=$('btn-txt'),btnB=$('btn-b'),btnExp=$('btn-exp'),btnFile=$('btn-file');
+const toolbar=$('toolbar'),sp=$('shortcuts-panel');
+const altMenu=$('alt-menu'),maskOv=$('mask-overlay'),maskCv=$('mask-canvas');
+const btnCutout=$('btn-cutout'),btnWm=$('btn-watermark'),btnApplyMask=$('btn-apply-mask'),btnApplyAll=$('btn-apply-all'),btnCancelMask=$('btn-cancel-mask');
+const cutoutOv=$('cutout-overlay'),cutoutCv=$('cutout-canvas'),cutoutHint=$('cutout-hint');
+const btnApplyCutout=$('btn-apply-cutout'),btnResetCutout=$('btn-reset-cutout'),btnCancelCutout=$('btn-cancel-cutout');
+const ctRange=$('cutout-threshold-range'),ctVal=$('cutout-threshold-val');
+const rngSz=$('rng-sz'),szV=$('sz-v');
+const cdots=document.querySelectorAll('.cdot');
+
+// ═══════ Undo System (Ctrl+Z) + Redo (Ctrl+Shift+Z) ═══════
+const _undoStack=[];
+const _redoStack=[];
+const _MAX_UNDO=40;
+// 蒙版笔画撤销栈（去水印模式专用）
+let _maskUndoStack=[];
+let _maskRedoStack=[];
+function snapshotState(){
+  return S.items.map(it=>{
+    const d={id:it.id,type:it.type,x:it.x,y:it.y,width:it.width,height:it.height,z:parseInt(it.el.style.zIndex)||1};
+    if(it.type==='image')d.src=it.imgSrc||(it.el.querySelector('img')?it.el.querySelector('img').src:'');
+    else if(it.type==='video')d.src=it.videoSrc||(it.el.querySelector('video')?it.el.querySelector('video').src:'');
+    else if(it.type==='3d'){d.src=it.modelData;d.buffer=it.modelBuffer;d.ext=it.modelExt}
+    else if(it.type==='text'){d.content=it.el.innerText||'';d.fontSize=it.fontSize;d.color=it.color;d.bold=it.bold}
+    return d;
+  });
+}
+function pushUndo(){
+  _undoStack.push(snapshotState());
+  if(_undoStack.length>_MAX_UNDO)_undoStack.shift();
+  _redoStack.length=0; // 新操作清空redo
+}
+function restoreFromSnapshot(snap){
+  // Clean up current items (3D renderers, intervals, etc.)
+  S.items.forEach(it=>{
+    if(it.dispose3D)it.dispose3D();
+    it.el.remove();
+  });
+  S.items=[];S.selIds.clear();clrSelOv();
+  // Recreate items
+  snap.forEach(d=>{
+    const el=document.createElement('div');
+    el.className='ci ci-'+(d.type==='image'?'img':(d.type==='video'?'video':(d.type==='3d'?'3d':'txt')));
+    el.dataset.id=d.id;el.style.left=d.x+'px';el.style.top=d.y+'px';
+    el.style.width=d.width+'px';el.style.height=d.height+'px';el.style.zIndex=d.z||S.nzi++;
+    const item={id:d.id,type:d.type,x:d.x,y:d.y,width:d.width,height:d.height,el};
+    if(d.id>=S.nid)S.nid=d.id+1;
+    if(d.type==='image'){
+      const img=document.createElement('img');img.src=d.src;img.draggable=false;
+      el.appendChild(img);item.imgSrc=d.src;
+    }else if(d.type==='video'){
+      const v=document.createElement('video');v.src=d.src;v.controls=true;v.style.width='100%';v.style.height='100%';
+      el.appendChild(v);item.videoSrc=d.src;
+    }else if(d.type==='3d'){
+      item.modelData=d.src;item.modelBuffer=d.buffer;item.modelExt=d.ext;
+      const badge=document.createElement('div');badge.className='badge-3d';badge.textContent='3D · '+d.ext.toUpperCase();el.appendChild(badge);
+      ensureThree().then(M=>init3DViewer(item,M)).catch(e=>console.error('3D restore error:',e));
+    }else if(d.type==='text'){
+      el.style.fontSize=d.fontSize+'px';el.style.color=d.color;el.style.fontWeight=d.bold?'bold':'normal';
+      el.style.fontFamily='-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+      el.innerText=d.content;item.fontSize=d.fontSize;item.color=d.color;item.bold=d.bold;
+    }
+    S.items.push(item);cl.appendChild(el);
+  });
+  updSelOv();
+}
+function undo(){
+  if(_maskState){
+    // 去水印模式：撤销蒙版笔画
+    undoMaskStroke();
+    return;
+  }
+  if(_undoStack.length===0)return;
+  _redoStack.push(snapshotState());
+  const snap=_undoStack.pop();
+  restoreFromSnapshot(snap);
+}
+function redo(){
+  if(_maskState){
+    // 去水印模式：回退蒙版笔画
+    redoMaskStroke();
+    return;
+  }
+  if(_redoStack.length===0)return;
+  _undoStack.push(snapshotState());
+  const snap=_redoStack.pop();
+  restoreFromSnapshot(snap);
+}
+// 蒙版笔画撤销：保存每次笔画前的mask canvas快照
+function pushMaskStroke(){
+  if(!_maskState||!_maskState.maskCanvas)return;
+  const snap=_maskState.maskCtx.getImageData(0,0,_maskState.maskCanvas.width,_maskState.maskCanvas.height);
+  _maskUndoStack.push(snap);
+  if(_maskUndoStack.length>_MAX_UNDO)_maskUndoStack.shift();
+  _maskRedoStack.length=0;
+}
+function undoMaskStroke(){
+  if(_maskUndoStack.length===0)return;
+  const cur=_maskState.maskCtx.getImageData(0,0,_maskState.maskCanvas.width,_maskState.maskCanvas.height);
+  _maskRedoStack.push(cur);
+  const snap=_maskUndoStack.pop();
+  _maskState.maskCtx.putImageData(snap,0,0);
+  redrawMaskDisplay();
+}
+function redoMaskStroke(){
+  if(_maskRedoStack.length===0)return;
+  const cur=_maskState.maskCtx.getImageData(0,0,_maskState.maskCanvas.width,_maskState.maskCanvas.height);
+  _maskUndoStack.push(cur);
+  const snap=_maskRedoStack.pop();
+  _maskState.maskCtx.putImageData(snap,0,0);
+  redrawMaskDisplay();
+}
+
+const _lc={};
+function loadScript(url){
+  if(_lc[url])return Promise.resolve();
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');s.src=url;
+    s.onload=()=>{_lc[url]=1;res()};s.onerror=()=>rej(new Error('Load fail: '+url));
+    document.head.appendChild(s);
+  });
+}
+
+function s2w(sx,sy){return{x:(sx-S.ox)/S.scale,y:(sy-S.oy)/S.scale}}
+function clamp(v,lo,hi){return v<lo?lo:v>hi?hi:v}
+function isEditing(){return document.activeElement&&document.activeElement.classList.contains('editing')}
+
+// 节流更新选择框，避免拖拽时频繁重建DOM
+let _selOvPending=false;
+function throttledUpdSelOv(){
+  if(_selOvPending)return;
+  _selOvPending=true;
+  requestAnimationFrame(()=>{updSelOv();_selOvPending=false});
+}
+
+function scheduleUpd(){
+  if(S.rafPending)return;S.rafPending=true;
+  requestAnimationFrame(()=>{applyTf();updBg();updSelOv();S.rafPending=false});
+}
+function applyTf(){
+  cl.style.transform='translate3d('+S.ox+'px,'+S.oy+'px,0) scale('+S.scale+')';
+  zb.textContent=Math.round(S.scale*100)+'%';
+}
+function updBg(){
+  const sz=40*S.scale;
+  const px=((S.ox%sz)+sz)%sz,py=((S.oy%sz)+sz)%sz;
+  vp.style.setProperty('--gs',sz+'px');vp.style.setProperty('--gpx',px+'px');vp.style.setProperty('--gpy',py+'px');
+}
+
+// ═══════ Items ═══════
+function mkItem(type,x,y,w,h,extra){
+  const id=S.nid++;
+  const el=document.createElement('div');
+  el.className='ci ci-'+(type==='image'?'img':(type==='video'?'video':(type==='3d'?'3d':'txt')));
+  el.dataset.id=id;
+  el.style.left=x+'px';el.style.top=y+'px';el.style.width=w+'px';el.style.height=h+'px';
+  el.style.zIndex=S.nzi++;
+  const item={id,type,x,y,width:w,height:h,el,...extra};
+  S.items.push(item);cl.appendChild(el);return item;
+}
+function getIt(id){return S.items.find(i=>i.id===id)}
+function itByEl(el){const e=el&&el.closest('.ci');if(!e)return null;return getIt(+e.dataset.id)}
+function rmItem(id){
+  const i=S.items.findIndex(it=>it.id===id);if(i<0)return;
+  const it=S.items[i];
+  if(it.dispose3D)it.dispose3D(); // 释放WebGL资源
+  it.el.remove();S.items.splice(i,1);S.selIds.delete(id);updSelOv();
+}
+function rmSelItems(){
+  const ids=[...S.selIds];S.selIds.clear();
+  ids.forEach(id=>{const i=S.items.findIndex(it=>it.id===id);if(i>=0){const it=S.items[i];if(it.dispose3D)it.dispose3D();it.el.remove();S.items.splice(i,1)}});
+  clrSelOv();
+}
+
+// ═══════ Selection ═══════
+function selItem(id,additive){
+  if(!additive){
+    S.selIds.forEach(sid=>{const it=getIt(sid);if(it&&it.type==='text'&&it.el.classList.contains('editing'))stopEdit(it)});
+    S.selIds.clear();
+  }
+  if(id!=null){S.selIds.add(id);const it=getIt(id);if(it)it.el.style.zIndex=S.nzi++}
+  updSelOv();
+  if(id!=null){const it=getIt(id);if(it)syncTb(it)}
+}
+function desel(){
+  S.selIds.forEach(sid=>{const it=getIt(sid);if(it&&it.type==='text'&&it.el.classList.contains('editing'))stopEdit(it)});
+  S.selIds.clear();clrSelOv();
+}
+function syncTb(it){
+  if(it.type==='text'){
+    S.fontSize=it.fontSize||28;S.fontColor=it.color||'#000000';S.fontBold=!!it.bold;
+    rngSz.value=S.fontSize;szV.textContent=S.fontSize;syncCdots();syncBbtn();
+  }
+}
+
+// ═══════ Selection Overlay ═══════
+function clrSelOv(){so.innerHTML=''}
+function updSelOv(){
+  clrSelOv();if(S.selIds.size===0)return;const hs=9;
+  S.selIds.forEach(id=>{
+    const it=getIt(id);if(!it)return;
+    const sx=it.x*S.scale+S.ox,sy=it.y*S.scale+S.oy,sw=it.width*S.scale,sh=it.height*S.scale;
+    const box=document.createElement('div');box.className='sel-box';
+    box.style.cssText='left:'+sx+'px;top:'+sy+'px;width:'+sw+'px;height:'+sh+'px';
+    so.appendChild(box);
+  });
+  if(S.selIds.size===1){
+    const it=getIt([...S.selIds][0]);if(!it)return;
+    const sx=it.x*S.scale+S.ox,sy=it.y*S.scale+S.oy,sw=it.width*S.scale,sh=it.height*S.scale;
+    [['nw',sx-hs/2,sy-hs/2],['ne',sx+sw-hs/2,sy-hs/2],['sw',sx-hs/2,sy+sh-hs/2],['se',sx+sw-hs/2,sy+sh-hs/2],
+     ['n',sx+sw/2-hs/2,sy-hs/2],['s',sx+sw/2-hs/2,sy+sh-hs/2],['w',sx-hs/2,sy+sh/2-hs/2],['e',sx+sw-hs/2,sy+sh/2-hs/2]]
+      .forEach(([d,hx,hy])=>{const h=document.createElement('div');h.className='rh rh-'+d;h.style.cssText='left:'+hx+'px;top:'+hy+'px;width:'+hs+'px;height:'+hs+'px';h.dataset.dir=d;so.appendChild(h)});
+  }else if(S.selIds.size>1){
+    // Group bounding box with corner handles for batch resize
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    S.selIds.forEach(id=>{const it=getIt(id);if(!it)return;minX=Math.min(minX,it.x);minY=Math.min(minY,it.y);maxX=Math.max(maxX,it.x+it.width);maxY=Math.max(maxY,it.y+it.height)});
+    const gsx=minX*S.scale+S.ox,gsy=minY*S.scale+S.oy,gsw=(maxX-minX)*S.scale,gsh=(maxY-minY)*S.scale;
+    const gbox=document.createElement('div');gbox.className='group-sel-box';
+    gbox.style.cssText='left:'+gsx+'px;top:'+gsy+'px;width:'+gsw+'px;height:'+gsh+'px';
+    so.appendChild(gbox);
+    [['nw',gsx-hs/2,gsy-hs/2],['ne',gsx+gsw-hs/2,gsy-hs/2],['sw',gsx-hs/2,gsy+gsh-hs/2],['se',gsx+gsw-hs/2,gsy+gsh-hs/2]]
+      .forEach(([d,hx,hy])=>{const h=document.createElement('div');h.className='rh rh-'+d;h.style.cssText='left:'+hx+'px;top:'+hy+'px;width:'+hs+'px;height:'+hs+'px';h.dataset.dir=d;so.appendChild(h)});
+  }
+}
+
+// ═══════ Text ═══════
+function addText(wx,wy){
+  const initH=S.fontSize*1.45+10;
+  const it=mkItem('text',wx,wy,240,initH);
+  it.el.style.fontSize=S.fontSize+'px';it.el.style.color=S.fontColor;
+  it.el.style.fontWeight=S.fontBold?'bold':'normal';
+  it.el.style.fontFamily='-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+  it.fontSize=S.fontSize;it.color=S.fontColor;it.bold=S.fontBold;
+  it.el.textContent='';
+  selItem(it.id);
+  // Use setTimeout to ensure focus after DOM updates from selItem/updSelOv
+  setTimeout(()=>startEdit(it),0);
+  return it;
+}
+function startEdit(it){
+  it.el.contentEditable='true';it.el.classList.add('editing');it.el.focus();
+  try{const r=document.createRange();r.selectNodeContents(it.el);r.collapse(false);const s=window.getSelection();s.removeAllRanges();s.addRange(r)}catch(e){}
+}
+function stopEdit(it){
+  it.el.contentEditable='false';it.el.classList.remove('editing');
+  if((it.el.innerText||'').trim()===''){rmItem(it.id);return}autoH(it);
+}
+function autoH(it){
+  it.el.style.height='auto';
+  const h=Math.max(it.el.scrollHeight,parseFloat(it.el.style.fontSize||28)*1.45+10);
+  it.el.style.height=h+'px';it.height=h;updSelOv();
+}
+
+// ═══════ Images ═══════
+// 高效canvas转URL：优先用toBlob（异步非阻塞），回退toDataURL
+function canvasToURL(cvs){
+  return new Promise(res=>{
+    try{
+      cvs.toBlob(blob=>{
+        if(blob)res(URL.createObjectURL(blob));
+        else res(cvs.toDataURL('image/png'));
+      },'image/png',0.92);
+    }catch(e){res(cvs.toDataURL('image/png'))}
+  });
+}
+function addImg(src,nw,nh){
+  const gap=24,maxW=500;let w=Math.min(nw,maxW),h=nh*(w/nw);let cx,sy;
+  if(_dropPos){cx=_dropPos.x-w/2;sy=_dropPos.y;_dropPos.y+=h+gap}
+  else{const c=s2w(window.innerWidth/2,window.innerHeight/2);cx=c.x-w/2;sy=c.y-h/2}
+  const it=mkItem('image',cx,sy,w,h);
+  const img=document.createElement('img');img.src=src;img.draggable=false;
+  it.el.appendChild(img);it.imgSrc=src;it.natW=nw;it.natH=nh;return it;
+}
+
+function addVideo(src,vw,vh){
+  const gap=24,maxW=500;let w=Math.min(vw,maxW),h=vh*(w/vw);let cx,sy;
+  if(_dropPos){cx=_dropPos.x-w/2;sy=_dropPos.y;_dropPos.y+=h+gap}
+  else{const c=s2w(window.innerWidth/2,window.innerHeight/2);cx=c.x-w/2;sy=c.y-h/2}
+  const it=mkItem('video',cx,sy,w,h);
+  const video=document.createElement('video');video.src=src;video.controls=true;video.style.width='100%';video.style.height='100%';
+  it.el.appendChild(video);it.videoSrc=src;it.natW=vw;it.natH=vh;return it;
+}
+
+// ═══════ 3D Models ═══════
+let _threeReady=null;
+let _rhinoMod=null;
+async function ensureThree(){
+  if(_threeReady)return _threeReady;
+  _threeReady=(async()=>{
+    // 使用import map中的bare specifier
+    const T=await import('three');
+    const mod=await import('three/addons/controls/OrbitControls.js');
+    const gl=await import('three/addons/loaders/GLTFLoader.js');
+    const ol=await import('three/addons/loaders/OBJLoader.js');
+    const sl=await import('three/addons/loaders/STLLoader.js');
+    const pl=await import('three/addons/loaders/PLYLoader.js');
+    let mtl=null;try{mtl=await import('three/addons/loaders/MTLLoader.js')}catch(e){console.warn('MTLLoader load failed:',e)}
+    let fbx=null;try{fbx=await import('three/addons/loaders/FBXLoader.js')}catch(e){console.warn('FBXLoader load failed:',e)}
+    let draco=null;try{
+      const dl=await import('three/addons/loaders/DRACOLoader.js');
+      draco=dl.DRACOLoader;
+    }catch(e){console.warn('DRACOLoader load failed:',e)}
+    let ktx=null;try{const k=await import('three/addons/loaders/KTX2Loader.js');ktx=k.KTX2Loader}catch(e){}
+    let r3dm=null;try{const r=await import('three/addons/loaders/3DMLoader.js');r3dm=r.Rhino3dmLoader}catch(e){console.warn('3DMLoader load failed:',e)}
+    return{THREE:T,OrbitControls:mod.OrbitControls,GLTFLoader:gl.GLTFLoader,OBJLoader:ol.OBJLoader,MTLLoader:mtl?mtl.MTLLoader:null,STLLoader:sl.STLLoader,PLYLoader:pl.PLYLoader,FBXLoader:fbx?fbx.FBXLoader:null,DRACOLoader:draco,KTX2Loader:ktx,Rhino3dmLoader:r3dm};
+  })();
+  return _threeReady;
+}
+async function ensureRhino(){
+  if(_rhinoMod)return _rhinoMod;
+  await loadScript('https://cdn.jsdelivr.net/npm/rhino3dm@8.17.0/rhino3dm.min.js');
+  // rhino3dm()是全局函数，返回Promise<Module>
+  if(typeof rhino3dm==='function'){
+    _rhinoMod=await rhino3dm();
+  }else if(window.rhino3dm){
+    _rhinoMod=await window.rhino3dm();
+  }else{
+    throw new Error('rhino3dm not available');
+  }
+  return _rhinoMod;
+}
+// 将data URL转为Uint8Array（比fetch更可靠）
+function dataURLToUint8(dataUrl){
+  const base64=dataUrl.split(',')[1]||'';
+  const bin=atob(base64);const arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+  return arr;
+}
+
+function add3DModel(buffer,ext){
+  const gap=24,w=500,h=400;let cx,sy;
+  if(_dropPos){cx=_dropPos.x-w/2;sy=_dropPos.y;_dropPos.y+=h+gap}
+  else{const c=s2w(window.innerWidth/2,window.innerHeight/2);cx=c.x-w/2;sy=c.y-h/2}
+  const it=mkItem('3d',cx,sy,w,h);
+  it.modelBuffer=buffer; // 原始ArrayBuffer，用于快速加载
+  it.modelExt=ext;
+  // 异步生成data URL用于项目保存（不阻塞模型加载）
+  const blob=new Blob([buffer]);
+  const rd=new FileReader();
+  rd.onload=e=>{it.modelData=e.target.result};
+  rd.readAsDataURL(blob);
+  const badge=document.createElement('div');badge.className='badge-3d';badge.textContent='3D · '+ext.toUpperCase();it.el.appendChild(badge);
+  ensureThree().then(M=>init3DViewer(it,M)).catch(e=>console.error('3D init error:',e));
+  return it;
+}
+
+function init3DViewer(it,M){
+  const T=M.THREE,w=it.width,h=it.height;
+  const scene=new T.Scene();
+  const camera=new T.PerspectiveCamera(60,w/h,0.1,1000);camera.position.set(0,0,5);
+  // 性能优化：降低pixelRatio上限，使用高性能GPU，低DPI时开启抗锯齿
+  const renderer=new T.WebGLRenderer({antialias:window.devicePixelRatio<2,alpha:true,powerPreference:'high-performance'});
+  renderer.setSize(w,h);renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.5));
+  it.el.appendChild(renderer.domElement);
+  scene.add(new T.AmbientLight(0xffffff,0.65));
+  const dl=new T.DirectionalLight(0xffffff,0.85);dl.position.set(1,1,1);scene.add(dl);
+  const dl2=new T.DirectionalLight(0xffffff,0.4);dl2.position.set(-1,-1,-1);scene.add(dl2);
+  const controls=new M.OrbitControls(camera,renderer.domElement);
+  controls.enableDamping=true;controls.dampingFactor=0.08;
+  controls.update(); // 初始更新避免首帧抖动
+
+  function finalizeModel(model){
+    // Auto-center and scale
+    const box=new T.Box3().setFromObject(model);
+    const center=box.getCenter(new T.Vector3());
+    const size=box.getSize(new T.Vector3());
+    const maxDim=Math.max(size.x,size.y,size.z,0.001);
+    const sc=3/maxDim;model.scale.setScalar(sc);model.position.sub(center.multiplyScalar(sc));
+    // 检查是否有纹理/顶点色；若无则应用白色材质
+    let hasTexture=false,hasVertexColor=false;
+    model.traverse(child=>{
+      if(child.isMesh){
+        const mats=Array.isArray(child.material)?child.material:[child.material];
+        mats.forEach(m=>{if(m&&m.map)hasTexture=true});
+        if(child.geometry&&child.geometry.attributes&&child.geometry.attributes.color)hasVertexColor=true;
+      }
+    });
+    if(!hasTexture&&!hasVertexColor){
+      model.traverse(child=>{
+        if(child.isMesh){
+          child.material=new T.MeshStandardMaterial({color:0xffffff,roughness:0.7,metalness:0.1});
+        }
+      });
+    }
+    scene.add(model);
+    renderOnce(); // 模型加载后触发渲染
+  }
+
+  // Load model based on format
+  const ext=it.modelExt;
+
+  if(ext==='3dm'){
+    // 使用 Three.js 官方 Rhino3dmLoader（自动处理 rhino3dm WASM 加载和所有几何体类型）
+    if(M.Rhino3dmLoader){
+      const loader=new M.Rhino3dmLoader();
+      loader.setLibraryPath('https://cdn.jsdelivr.net/npm/rhino3dm@8.17.0/');
+      const data=it.modelBuffer?new Uint8Array(it.modelBuffer):dataURLToUint8(it.modelData);
+      const blob=new Blob([data]);
+      const url=URL.createObjectURL(blob);
+      loader.load(url,(result)=>{
+        URL.revokeObjectURL(url);
+        finalizeModel(result);
+      },undefined,(err)=>{
+        URL.revokeObjectURL(url);
+        console.error('3DM load error:',err);
+      });
+    }else{
+      console.error('Rhino3dmLoader not available');
+    }
+  }else{
+    let loader;
+    if(ext==='glb'||ext==='gltf'){
+      loader=new M.GLTFLoader();
+      // DRACOLoader for compressed models
+      if(M.DRACOLoader){
+        const dracoLoader=new M.DRACOLoader();
+        dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/');
+        loader.setDRACOLoader(dracoLoader);
+      }
+      // KTX2 texture support
+      if(M.KTX2Loader){
+        try{loader.setKTX2Loader(new M.KTX2Loader().detectSupport(renderer))}catch(e){}
+      }
+    }
+    else if(ext==='obj')loader=new M.OBJLoader();
+    else if(ext==='stl')loader=new M.STLLoader();
+    else if(ext==='ply')loader=new M.PLYLoader();
+    else if(ext==='fbx'&&M.FBXLoader)loader=new M.FBXLoader();
+    if(!loader){console.warn('Unsupported 3D format:',ext);return}
+
+    // 优先使用原始ArrayBuffer（来自文件导入），否则回退到data URL解码
+    const dataUrl=it.modelData||'';
+    const isDataUrl=dataUrl.startsWith('data:');
+    const hasBuffer=!!it.modelBuffer;
+    function handleResult(result){
+      let model;
+      if(ext==='glb'||ext==='gltf')model=result.scene;
+      else if(ext==='stl'||ext==='ply'){
+        model=new T.Mesh(result,new T.MeshStandardMaterial({color:0xffffff,roughness:0.7,metalness:0.1}));
+      }else{
+        model=result;
+      }
+      finalizeModel(model);
+    }
+    function handleError(err){console.error('3D load error:',ext,err)}
+
+    if(ext==='obj'){
+      try{
+        let text;
+        if(hasBuffer){
+          text=new TextDecoder().decode(it.modelBuffer);
+        }else if(isDataUrl){
+          const base64=dataUrl.split(',')[1]||'';
+          text=decodeURIComponent(escape(atob(base64)));
+        }else{
+          text=dataUrl;
+        }
+        const result=loader.parse(text);
+        handleResult(result);
+      }catch(e){handleError(e)}
+    }else if(ext==='stl'||ext==='ply'){
+      try{
+        let buf;
+        if(hasBuffer){
+          buf=it.modelBuffer;
+        }else if(isDataUrl){
+          const base64=dataUrl.split(',')[1]||'';
+          const bin=atob(base64);buf=new ArrayBuffer(bin.length);
+          const view=new Uint8Array(buf);
+          for(let i=0;i<bin.length;i++)view[i]=bin.charCodeAt(i);
+        }else{
+          buf=dataUrl;
+        }
+        const result=loader.parse(buf);
+        handleResult(result);
+      }catch(e){handleError(e)}
+    }else if(hasBuffer&&(ext==='glb'||ext==='gltf'||ext==='fbx')){
+      // GLB/GLTF/FBX: 从ArrayBuffer创建Blob URL加载
+      const blob=new Blob([it.modelBuffer]);
+      const url=URL.createObjectURL(blob);
+      loader.load(url,result=>{URL.revokeObjectURL(url);handleResult(result)},undefined,err=>{URL.revokeObjectURL(url);handleError(err)});
+    }else{
+      loader.load(dataUrl,handleResult,undefined,handleError);
+    }
+  }
+
+  // 按需渲染：仅在交互/阻尼/可见性变化时渲染，大幅降低CPU占用
+  let rafId=null,isVisible=true;
+  function renderOnce(){
+    if(rafId)return;
+    rafId=requestAnimationFrame(()=>{
+      rafId=null;
+      if(!it.el.isConnected||!isVisible)return;
+      controls.update(); // 阻尼时若相机仍在变化会触发'change'→自动续帧
+      renderer.render(scene,camera);
+    });
+  }
+  controls.addEventListener('change',renderOnce);
+  function checkVisibility(){
+    const r=it.el.getBoundingClientRect();
+    const wasVisible=isVisible;
+    isVisible=r.right>0&&r.bottom>0&&r.left<window.innerWidth&&r.top<window.innerHeight;
+    if(isVisible&&!wasVisible)renderOnce();
+  }
+  renderOnce(); // 首帧
+  const visTimer=setInterval(checkVisibility,500);
+
+  it.viewer3D={scene,camera,renderer,controls};
+  it.resize3D=()=>{camera.aspect=it.width/it.height;camera.updateProjectionMatrix();renderer.setSize(it.width,it.height);renderOnce()};
+  it.dispose3D=()=>{
+    clearInterval(visTimer);cancelAnimationFrame(rafId);
+    try{
+      scene.traverse(child=>{
+        if(child.isMesh){
+          if(child.geometry)child.geometry.dispose();
+          if(child.material){
+            const mats=Array.isArray(child.material)?child.material:[child.material];
+            mats.forEach(m=>{if(m.map)m.map.dispose();m.dispose()});
+          }
+        }
+      });
+      renderer.dispose();
+    }catch(e){}
+  };
+  // 3D interaction: click on element to enter interactive mode, click outside to exit
+  it.el.addEventListener('mousedown',e=>{
+    if(S.ctrlDown||S.spaceDown||S.shiftDown||S.altDown){
+      // Modifier keys: exit interactive mode, let viewport handle selection/drag
+      it.el.classList.remove('interactive');controls.enabled=false;
+      return; // Don't stop propagation - let viewport handle it
+    }
+    // No modifiers: enter/maintain interactive mode
+    it.el.classList.add('interactive');controls.enabled=true;
+    e.stopPropagation(); // Prevent viewport from also processing
+    // Select the 3D item
+    if(!S.selIds.has(it.id)){
+      S.selIds.forEach(sid=>{const t=getIt(sid);if(t&&t.type==='text'&&t.el.classList.contains('editing'))stopEdit(t)});
+      S.selIds.clear();S.selIds.add(it.id);it.el.style.zIndex=S.nzi++;updSelOv();
+    }
+  });
+}
+
+// Convert rhino mesh to Three.js Mesh
+function rhinoMeshToThree(rhinoMesh,T){
+  try{
+    const verts=rhinoMesh.vertices();
+    const faces=rhinoMesh.faces();
+    const normals=rhinoMesh.normals();
+    const positions=new Float32Array(verts.count*3);
+    for(let i=0;i<verts.count;i++){
+      const v=verts.get(i);
+      positions[i*3]=v[0];positions[i*3+1]=v[1];positions[i*3+2]=v[2];
+    }
+    const indices=[];
+    for(let i=0;i<faces.count;i++){
+      const f=faces.get(i);
+      // f is [a,b,c] or [a,b,c,d] (quad)
+      indices.push(f[0],f[1],f[2]);
+      if(f.length>3&&f[3]!==f[0])indices.push(f[0],f[2],f[3]);
+    }
+    const geo=new T.BufferGeometry();
+    geo.setAttribute('position',new T.BufferAttribute(positions,3));
+    if(normals&&normals.count>0){
+      const nrm=new Float32Array(normals.count*3);
+      for(let i=0;i<normals.count;i++){
+        const n=normals.get(i);
+        nrm[i*3]=n[0];nrm[i*3+1]=n[1];nrm[i*3+2]=n[2];
+      }
+      geo.setAttribute('normal',new T.BufferAttribute(nrm,3));
+    }else{
+      geo.computeVertexNormals();
+    }
+    geo.setIndex(indices);
+    const mat=new T.MeshStandardMaterial({color:0xffffff,roughness:0.7,metalness:0.1,side:T.DoubleSide});
+    return new T.Mesh(geo,mat);
+  }catch(e){console.error('rhinoMeshToThree error:',e);return null}
+}
+
+// ═══════ File Processing ═══════
+let _dropPos=null; // {x,y} in world coords, or null
+let _lastMouseWorld={x:0,y:0}; // track mouse for paste positioning
+
+function getExt(name){return(name||'').split('.').pop().toLowerCase()}
+
+function loadFiles(files,screenX,screenY){
+  pushUndo(); // 撤销支持
+  // Each batch captures its own position — no shared state pollution
+  let batchPos=null;
+  if(screenX!==undefined&&screenY!==undefined){
+    const w=s2w(screenX,screenY);batchPos={x:w.x,y:w.y};
+  }
+  const arr=Array.from(files);
+  (async()=>{
+    for(const f of arr){
+      _dropPos=batchPos; // set before each file
+      await processFile(f);
+      if(batchPos)batchPos=_dropPos; // capture updated position after
+      await new Promise(r=>setTimeout(r,0)); // 文件间让步UI，避免批量导入卡顿
+    }
+    _dropPos=null;
+  })();
+}
+
+async function processFile(file){
+  const ext=getExt(file.name);
+  try{
+    // 惰性读取 arrayBuffer：仅对需要的格式读取，避免图片/视频的无效全量读取
+    if(ext==='pdf'){const ab=await file.arrayBuffer();await renderPDF(ab)}
+    else if(ext==='docx'||ext==='doc'){const ab=await file.arrayBuffer();await renderDOCX(ab)}
+    else if(ext==='psd'){const ab=await file.arrayBuffer();await renderPSD(ab)}
+    else if(ext==='pptx'||ext==='ppt'){const ab=await file.arrayBuffer();await renderPPTX(ab)}
+    else if(ext==='txt')await renderTXT(file);
+    else if(file.type.startsWith('image/'))await renderImage(file);
+    else if(file.type.startsWith('video/')||ext==='mp4')await renderVideo(file);
+    else if(['glb','gltf','obj','stl','ply','fbx','3dm'].includes(ext))await render3D(file,ext);
+  }catch(err){console.error('File render error:',err)}
+}
+
+async function renderImage(file){
+  lt.style.display='block';lt.textContent='正在导入图片…';
+  try{
+    // 使用 createImageBitmap 在主线程外解码，避免 readAsDataURL 的 base64 编码阻塞UI
+    const bmp=await createImageBitmap(file);
+    let nw=bmp.width,nh=bmp.height;
+    // 大图降采样（最大边4096），保证清晰度同时控制内存与data URL体积
+    const maxSide=4096;
+    const cvs=document.createElement('canvas');
+    if(nw>maxSide||nh>maxSide){
+      const sc=Math.min(maxSide/nw,maxSide/nh);
+      nw=Math.round(nw*sc);nh=Math.round(nh*sc);
+    }
+    cvs.width=nw;cvs.height=nh;
+    cvs.getContext('2d').drawImage(bmp,0,0,nw,nh);
+    bmp.close&&bmp.close();
+    // 保留原始格式：JPEG用JPEG(更小)，其他用PNG(保留透明通道)
+    const isJPEG=file.type==='image/jpeg';
+    const url=cvs.toDataURL(isJPEG?'image/jpeg':'image/png',isJPEG?0.92:undefined);
+    addImg(url,nw,nh);
+    await new Promise(r=>setTimeout(r,0)); // 让步UI
+  }catch(e){
+    console.warn('createImageBitmap failed, fallback:',e);
+    // 回退到 FileReader 方案
+    await new Promise(res=>{const rd=new FileReader();rd.onload=ev=>{const im=new Image();im.onload=()=>{addImg(ev.target.result,im.naturalWidth,im.naturalHeight);res()};im.onerror=res;im.src=ev.target.result};rd.readAsDataURL(file)});
+  }finally{
+    lt.style.display='none';lt.textContent='正在渲染文件…';
+  }
+}
+
+async function renderVideo(file){
+  lt.style.display='block';lt.textContent='正在导入视频…';
+  try{
+    // 使用 URL.createObjectURL 零拷贝引用，避免 readAsDataURL 对大视频的 base64 编码阻塞
+    const url=URL.createObjectURL(file);
+    const dims=await new Promise(res=>{
+      const v=document.createElement('video');
+      v.onloadedmetadata=()=>res({w:v.videoWidth||640,h:v.videoHeight||360});
+      v.onerror=()=>res({w:640,h:360});
+      v.src=url;
+      setTimeout(()=>res({w:640,h:360}),3000); // 超时兜底
+    });
+    addVideo(url,dims.w,dims.h);
+    await new Promise(r=>setTimeout(r,0)); // 让步UI
+  }finally{
+    lt.style.display='none';lt.textContent='正在渲染文件…';
+  }
+}
+
+function render3D(file,ext){
+  return new Promise(res=>{
+    const rd=new FileReader();
+    rd.onload=e=>{add3DModel(e.target.result,ext);res()};
+    rd.onerror=res;
+    rd.readAsArrayBuffer(file); // 直接读ArrayBuffer，跳过base64编码/解码
+  });
+}
+
+async function renderTXT(file){
+  const text=await file.text();
+  const lines=text.split('\n');
+  const fs=16,lh=fs*1.6,pad=40,width=794;
+  const totalH=Math.max(pad*2+lines.length*lh,200);
+  const cvs=document.createElement('canvas');cvs.width=width*2;cvs.height=totalH*2;
+  const ctx=cvs.getContext('2d');ctx.scale(2,2);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,totalH);
+  ctx.font=fs+'px monospace';ctx.fillStyle='#000000';ctx.textBaseline='top';
+  let y=pad;
+  for(const line of lines){
+    if(y>totalH-pad)break;
+    const chars=[...line];let cur='';
+    for(const ch of chars){
+      const test=cur+ch;
+      if(ctx.measureText(test).width>width-pad*2&&cur!==''){ctx.fillText(cur,pad,y);cur=ch;y+=lh}
+      else{cur=test}
+    }
+    if(cur){ctx.fillText(cur,pad,y);y+=lh}
+  }
+  addImg(cvs.toDataURL('image/png'),width,totalH);
+}
+
+// ═══════ PDF ═══════
+async function renderPDF(ab){
+  lt.style.display='block';
+  try{
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf=await pdfjsLib.getDocument({data:new Uint8Array(ab)}).promise;
+    for(let i=1;i<=pdf.numPages;i++){
+      const page=await pdf.getPage(i);
+      const sc=1.5; // 降低缩放比例提升速度，仍保持清晰
+      const vp2=page.getViewport({scale:sc});
+      const cvs=document.createElement('canvas');cvs.width=vp2.width;cvs.height=vp2.height;
+      const ctx=cvs.getContext('2d');await page.render({canvasContext:ctx,viewport:vp2}).promise;
+      const url=await canvasToURL(cvs);
+      addImg(url,vp2.width/sc,vp2.height/sc);
+      // 每页之间yield，保持UI响应
+      if(i<pdf.numPages)await new Promise(r=>setTimeout(r,0));
+    }
+  }finally{lt.style.display='none'}
+}
+
+// ═══════ DOCX ═══════
+async function renderDOCX(ab){
+  lt.style.display='block';
+  try{
+    await loadScript('https://cdn.jsdelivr.net/npm/docx-preview@0.3.3/dist/docx-preview.min.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
+    const container=document.createElement('div');
+    container.style.cssText='position:fixed;left:-9999px;top:0;width:816px;background:#fff;z-index:-1;';
+    document.body.appendChild(container);
+    await docx.renderAsync(ab,container,null,{
+      className:'docx',inWrapper:true,ignoreWidth:false,ignoreHeight:false,
+      breakPages:true,useBase64URL:true,renderHeaders:true,renderFooters:true,
+      renderFootnotes:true,renderEndnotes:true
+    });
+    await new Promise(r=>setTimeout(r,50)); // 缩短等待时间
+    // Capture each page section
+    const pages=container.querySelectorAll('section.docx-wrapper');
+    if(pages.length>0){
+      for(let pi=0;pi<pages.length;pi++){
+        const page=pages[pi];
+        const cvs=await html2canvas(page,{scale:1.5,backgroundColor:'#ffffff',logging:false,useCORS:true});
+        const url=await canvasToURL(cvs);
+        addImg(url,cvs.width/1.5,cvs.height/1.5);
+        // 每页之间yield
+        if(pi<pages.length-1)await new Promise(r=>setTimeout(r,0));
+      }
+    }else{
+      // Fallback: capture entire container
+      const cvs=await html2canvas(container,{scale:1.5,backgroundColor:'#ffffff',logging:false,useCORS:true});
+      const url=await canvasToURL(cvs);
+      addImg(url,cvs.width/1.5,cvs.height/1.5);
+    }
+    document.body.removeChild(container);
+  }catch(e){
+    console.error('DOCX docx-preview error, trying mammoth fallback:',e);
+    // Fallback to mammoth
+    try{await renderDOCXFallback(ab)}catch(e2){console.error('DOCX fallback error:',e2)}
+  }
+  finally{lt.style.display='none'}
+}
+
+async function renderDOCXFallback(ab){
+  await loadScript('https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js');
+  await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
+  const result=await mammoth.convertToHtml({arrayBuffer:ab},{
+    convertImage:mammoth.images.imgElement(function(image){
+      return image.read("base64").then(function(imageBuffer){
+        return{src:"data:"+image.contentType+";base64,"+imageBuffer};
+      });
+    })
+  });
+  const div=document.createElement('div');
+  div.innerHTML=result.value;
+  div.style.cssText='position:fixed;left:-9999px;top:0;width:794px;padding:48px 56px;background:#fff;font-family:"Times New Roman",serif;font-size:12pt;line-height:1.6;color:#000;word-wrap:break-word;';
+  const st=document.createElement('style');
+  st.textContent='p{margin:0 0 12px 0}h1{font-size:24pt;margin:24px 0 12px 0}h2{font-size:18pt;margin:18px 0 12px 0}h3{font-size:14pt;margin:14px 0 12px 0}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 8px}img{max-width:100%}ul,ol{margin:0 0 12px 0;padding-left:24px}';
+  div.appendChild(st);document.body.appendChild(div);
+  await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+  const cvs=await html2canvas(div,{scale:2,useCORS:true,backgroundColor:'#ffffff',logging:false});
+  document.body.removeChild(div);
+  addImg(cvs.toDataURL('image/png'),cvs.width/2,cvs.height/2);
+}
+
+// ═══════ PSD (custom parser) ═══════
+async function renderPSD(ab){
+  lt.style.display='block';
+  try{
+    // Try thumbnail extraction first (most reliable)
+    const thumb=await extractPSDThumbnailAsync(ab);
+    if(thumb){addImg(thumb.url,thumb.width,thumb.height);return}
+    // Fallback to composite image data
+    const r=parsePSD(ab);
+    if(r)addImg(r.url,r.width,r.height);
+  }catch(e){
+    console.error('PSD error:',e);
+    const cvs=document.createElement('canvas');cvs.width=400;cvs.height=300;
+    const ctx=cvs.getContext('2d');ctx.fillStyle='#f5f5f5';ctx.fillRect(0,0,400,300);
+    ctx.fillStyle='#999';ctx.font='14px sans-serif';ctx.textAlign='center';
+    ctx.fillText('PSD preview unavailable',200,150);
+    addImg(cvs.toDataURL('image/png'),400,300);
+  }
+  finally{lt.style.display='none'}
+}
+
+async function extractPSDThumbnailAsync(ab){
+  try{
+    const v=new DataView(ab);
+    let off=26;
+    off+=4+v.getUint32(off); // color mode data
+    const imgResLen=v.getUint32(off);off+=4;
+    const imgResEnd=off+imgResLen;
+    while(off<imgResEnd-12){
+      // Resource block: 4-byte signature "8BIM" or "8B64"
+      if(v.getUint8(off)!==0x38||v.getUint8(off+1)!==0x42||v.getUint8(off+2)!==0x49||v.getUint8(off+3)!==0x4D){
+        if(v.getUint8(off)!==0x38||v.getUint8(off+1)!==0x42||v.getUint8(off+2)!==0x36||v.getUint8(off+3)!==0x34){
+          off++;continue;
+        }
+      }
+      off+=4; // skip signature
+      const id=v.getUint16(off);off+=2;
+      const nameLen=v.getUint8(off);off+=1;
+      const namePad=nameLen%2===0?1:0;
+      off+=nameLen+namePad;
+      if(off>=imgResEnd)break;
+      const resLen=v.getUint32(off);off+=4;
+      if(id===1036&&resLen>28&&off+resLen<=ab.byteLength){
+        // JPEG thumbnail: skip 28-byte JFIF header
+        const jpgStart=off+28;const jpgLen=resLen-28;
+        const jpgBytes=new Uint8Array(ab,jpgStart,jpgLen);
+        const blob=new Blob([jpgBytes],{type:'image/jpeg'});
+        const url=URL.createObjectURL(blob);
+        const im=await loadImg(url);
+        const cvs=document.createElement('canvas');cvs.width=im.width;cvs.height=im.height;
+        cvs.getContext('2d').drawImage(im,0,0);
+        URL.revokeObjectURL(url);
+        return{url:cvs.toDataURL('image/png'),width:im.width,height:im.height};
+      }
+      off+=resLen+(resLen%2); // pad to even
+    }
+  }catch(e){console.warn('PSD thumbnail extraction failed:',e)}
+  return null;
+}
+
+function parsePSD(ab){
+  const v=new DataView(ab);
+  if(v.getUint8(0)!==0x38||v.getUint8(1)!==0x42||v.getUint8(2)!==0x50||v.getUint8(3)!==0x53)
+    throw new Error('Not a PSD file');
+  const channels=v.getUint16(12),height=v.getUint32(14),width=v.getUint32(18),depth=v.getUint16(22),colorMode=v.getUint16(24);
+  if(depth!==8)throw new Error('Only 8-bit PSD supported (got '+depth+')');
+  if(width>30000||height>30000)throw new Error('PSD too large');
+  let off=26;
+  off+=4+v.getUint32(off); // color mode data
+  off+=4+v.getUint32(off); // image resources
+  off+=4+v.getUint32(off); // layer and mask info
+  const compression=v.getUint16(off);off+=2;
+  const cvs=document.createElement('canvas');cvs.width=width;cvs.height=height;
+  const ctx=cvs.getContext('2d');const imgData=ctx.createImageData(width,height);const px=imgData.data;
+  const u8=new Uint8Array(ab);
+
+  // Channel mapping based on color mode
+  // RGB(3): ch0=R,ch1=G,ch2=B,[ch3=A]
+  // Grayscale(1): ch0=Gray
+  // CMYK(4): ch0=C,ch1=M,ch2=Y,ch3=K → need conversion
+  const isGray=colorMode===1;
+  const isCMYK=colorMode===4;
+
+  if(compression===0){
+    for(let c=0;c<Math.min(channels,4);c++){
+      for(let i=0;i<width*height;i++){
+        const si=off+c*width*height+i;if(si>=ab.byteLength)break;
+        const idx=i*4;const val=u8[si];
+        if(isGray){px[idx]=val;px[idx+1]=val;px[idx+2]=val}
+        else if(isCMYK){
+          if(c===0)px[idx]=255-val;else if(c===1)px[idx+1]=255-val;else if(c===2)px[idx+2]=255-val;else px[idx+3]=val
+        }else{
+          if(c===0)px[idx]=val;else if(c===1)px[idx+1]=val;else if(c===2)px[idx+2]=val;else px[idx+3]=val
+        }
+      }
+    }
+  }else if(compression===1){
+    const counts=[];
+    for(let c=0;c<channels;c++){counts[c]=[];for(let y=0;y<height;y++){counts[c][y]=v.getUint16(off);off+=2}}
+    for(let c=0;c<Math.min(channels,4);c++){
+      for(let y=0;y<height;y++){
+        const line=decompressPSDRLE(u8,off,counts[c][y]);off+=counts[c][y];
+        for(let x=0;x<width&&x<line.length;x++){
+          const idx=(y*width+x)*4;const val=line[x];
+          if(isGray){px[idx]=val;px[idx+1]=val;px[idx+2]=val}
+          else if(isCMYK){
+            if(c===0)px[idx]=255-val;else if(c===1)px[idx+1]=255-val;else if(c===2)px[idx+2]=255-val;else px[idx+3]=val
+          }else{
+            if(c===0)px[idx]=val;else if(c===1)px[idx+1]=val;else if(c===2)px[idx+2]=val;else px[idx+3]=val
+          }
+        }
+      }
+    }
+  }else{throw new Error('Unsupported PSD compression: '+compression)}
+  if(channels<4||(isGray&&channels<2)||(isCMYK&&channels<5)){for(let i=0;i<width*height;i++)px[i*4+3]=255}
+  ctx.putImageData(imgData,0,0);
+  return{url:cvs.toDataURL('image/png'),width,height};
+}
+
+function extractPSDThumbnail(v,start,end){
+  try{
+    let off=start;
+    while(off<end-12){
+      const sig=v.getUint16(off);off+=2; // resource signature (should be 0x8B04 for "8BIM")
+      if(sig!==0x8B04&&sig!==0x8B64){off++;continue}
+      const id=v.getUint16(off);off+=2;
+      // Pascal string name (padded to even)
+      const nameLen=v.getUint8(off);off+=1;
+      off+=(nameLen+1+((nameLen%2===0)?1:0)); // pad to even
+      const resLen=v.getUint32(off);off+=4;
+      if(id===1036&&resLen>0&&resLen<50000000){
+        // JPEG thumbnail - skip 28 bytes of JFIF header
+        const jpgStart=off+28;
+        const jpgLen=resLen-28;
+        if(jpgLen>0&&jpgStart+jpgLen<=v.byteLength){
+          const jpgBytes=new Uint8Array(v.buffer,jpgStart,jpgLen);
+          const blob=new Blob([jpgBytes],{type:'image/jpeg'});
+          const url=URL.createObjectURL(blob);
+          // We need to load it to get dimensions
+          return new Promise(()=>{}); // Can't do sync, return null and handle below
+        }
+      }
+      off+=resLen+(resLen%2); // pad to even
+    }
+  }catch(e){}
+  return null;
+}
+
+function decompressPSDRLE(data,start,len){
+  const r=[];let o=start;const end=start+len;
+  while(o<end){
+    const raw=data[o++];
+    const n=raw>127?raw-256:raw; // Convert unsigned byte to signed
+    if(n>=0){for(let i=0;i<=n&&o<end;i++)r.push(data[o++])}
+    else if(n>=-127){if(o>=end)break;const val=data[o++];for(let i=0;i<1-n;i++)r.push(val)}
+    // n===-128: no-op
+  }
+  return r;
+}
+
+// ═══════ PPTX ═══════
+// Namespace-agnostic helpers for robust XML parsing
+function findByLN(parent,ln){const r=[];const all=parent.getElementsByTagName('*');for(let i=0;i<all.length;i++){if(all[i].localName===ln)r.push(all[i])}return r}
+function find1ByLN(parent,ln){const all=parent.getElementsByTagName('*');for(let i=0;i<all.length;i++){if(all[i].localName===ln)return all[i]}return null}
+function getAttrAny(el,ln){for(let i=0;i<el.attributes.length;i++){if(el.attributes[i].localName===ln)return el.attributes[i].value}return el.getAttribute(ln)}
+
+const schemeClrMap={tx1:'#000000',tx2:'#44546A',bg1:'#FFFFFF',bg2:'#E7E6E6',accent1:'#4472C4',accent2:'#ED7D31',accent3:'#A5A5A5',accent4:'#FFC000',accent5:'#5B9BD5',accent6:'#70AD47',dk1:'#000000',dk2:'#44546A',lt1:'#FFFFFF',lt2:'#E7E6E6'};
+const PPTX_FONT='-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif';
+
+async function loadThemeColors(zip){
+  const colors={...schemeClrMap};
+  try{
+    const themeFile=zip.file('ppt/theme/theme1.xml');if(!themeFile)return colors;
+    const xml=await themeFile.async('string');
+    const doc=new DOMParser().parseFromString(xml,'text/xml');
+    const clrScheme=find1ByLN(doc,'clrScheme');if(!clrScheme)return colors;
+    // Map: dk1→tx1, lt1→bg1, dk2→tx2, lt2→bg2, accent1-6 stay
+    const map={dk1:'tx1',lt1:'bg1',dk2:'tx2',lt2:'bg2',accent1:'accent1',accent2:'accent2',accent3:'accent3',accent4:'accent4',accent5:'accent5',accent6:'accent6',hlink:'hlink',folHlink:'folHlink'};
+    for(let i=0;i<clrScheme.children.length;i++){
+      const child=clrScheme.children[i];const ln=child.localName;
+      const target=map[ln];if(!target)continue;
+      const srgb=find1ByLN(child,'srgbClr');
+      const sys=find1ByLN(child,'sysClr');
+      if(srgb)colors[target]='#'+srgb.getAttribute('val');
+      else if(sys)colors[target]='#'+sys.getAttribute('lastClr');
+    }
+  }catch(e){}
+  return colors;
+}
+
+function resolveColor(fillEl,themeColors){
+  if(!fillEl)return null;
+  const sr=find1ByLN(fillEl,'srgbClr');
+  if(sr)return'#'+sr.getAttribute('val');
+  const sc=find1ByLN(fillEl,'schemeClr');
+  if(sc)return themeColors[sc.getAttribute('val')]||'#000000';
+  return null;
+}
+
+async function renderPPTX(ab){
+  lt.style.display='block';
+  try{
+    if(typeof JSZip==='undefined')await loadScript('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+    const zip=await JSZip.loadAsync(ab);
+    const slides=[];
+    zip.forEach((path,entry)=>{const m=path.match(/^ppt\/slides\/slide(\d+)\.xml$/);if(m)slides.push({num:+m[1],entry})});
+    slides.sort((a,b)=>a.num-b.num);
+    if(slides.length===0){lt.style.display='none';return}
+    let slideW=9144000,slideH=6858000;
+    try{
+      const pXml=await zip.file('ppt/presentation.xml').async('string');
+      const pDoc=new DOMParser().parseFromString(pXml,'text/xml');
+      const sldSz=find1ByLN(pDoc,'sldSz');
+      if(sldSz){slideW=parseInt(sldSz.getAttribute('cx'))||slideW;slideH=parseInt(sldSz.getAttribute('cy'))||slideH}
+    }catch(e){}
+    // Balanced resolution for clarity + performance (1280px wide)
+    const pxW=1280,pxH=Math.round(pxW*slideH/slideW);
+    const fontScale=pxW/(slideW/914400)/72;
+    const themeColors=await loadThemeColors(zip);
+    // 预加载所有幻灯片关系和XML（并行加速）
+    const slideData=[];
+    for(let si=0;si<slides.length;si++){
+      const sf=slides[si];
+      const [xmlStr,relImages]=await Promise.all([sf.entry.async('string'),loadSlideRels(zip,sf.num)]);
+      slideData.push({xmlStr,relImages});
+      if(si<slides.length-1)await new Promise(r=>setTimeout(r,0));
+    }
+
+    for(let si=0;si<slideData.length;si++){
+      const{xmlStr,relImages}=slideData[si];
+      const doc=new DOMParser().parseFromString(xmlStr,'text/xml');
+      const cvs=document.createElement('canvas');cvs.width=pxW;cvs.height=pxH;
+      const ctx=cvs.getContext('2d');
+      ctx.fillStyle='#ffffff';ctx.fillRect(0,0,pxW,pxH);
+      ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+      const spTree=find1ByLN(doc,'spTree');
+      if(spTree)await processPPTXShapes(ctx,spTree,relImages,pxW,pxH,slideW,slideH,fontScale,themeColors);
+      const url=await canvasToURL(cvs);
+      addImg(url,pxW/2,pxH/2);
+      // 性能优化：每页之间yield，避免阻塞UI
+      if(si<slideData.length-1)await new Promise(r=>setTimeout(r,0));
+    }
+  }catch(e){console.error('PPTX error:',e)}
+  finally{lt.style.display='none'}
+}
+
+async function processPPTXShapes(ctx,parent,relImages,pxW,pxH,slideW,slideH,fontScale,themeColors){
+  const children=parent.children;
+  for(let i=0;i<children.length;i++){
+    const child=children[i];const ln=child.localName;
+    if(ln==='grpSp'){await processPPTXShapes(ctx,child,relImages,pxW,pxH,slideW,slideH,fontScale,themeColors)}
+    else if(ln==='pic'){await renderPPTXPic(ctx,child,relImages,pxW,pxH,slideW,slideH)}
+    else if(ln==='sp'){renderPPTXSp(ctx,child,pxW,pxH,slideW,slideH,fontScale,themeColors)}
+  }
+}
+
+async function renderPPTXPic(ctx,picEl,relImages,pxW,pxH,slideW,slideH){
+  const xfrm=getXfrm(picEl,pxW,pxH,slideW,slideH);if(!xfrm)return;
+  const blip=find1ByLN(picEl,'blip');if(!blip)return;
+  const embedId=getAttrAny(blip,'embed');
+  if(!embedId||!relImages[embedId])return;
+  try{
+    const im=await loadImg(relImages[embedId]);
+    ctx.save();
+    if(xfrm.rot){
+      ctx.translate(xfrm.x+xfrm.w/2,xfrm.y+xfrm.h/2);
+      ctx.rotate(xfrm.rot);
+      ctx.drawImage(im,-xfrm.w/2,-xfrm.h/2,xfrm.w,xfrm.h);
+    }else{
+      ctx.drawImage(im,xfrm.x,xfrm.y,xfrm.w,xfrm.h);
+    }
+    ctx.restore();
+  }catch(e){}
+}
+
+function renderPPTXSp(ctx,spEl,pxW,pxH,slideW,slideH,fontScale,themeColors){
+  const xfrm=getXfrm(spEl,pxW,pxH,slideW,slideH);if(!xfrm)return;
+  const spPr=find1ByLN(spEl,'spPr');
+  const rot=xfrm.rot||0; // rotation in radians
+  const cx=xfrm.x+xfrm.w/2,cy=xfrm.y+xfrm.h/2;
+
+  // Helper: apply rotation transform centered on shape
+  function applyRot(){
+    if(rot){
+      ctx.translate(cx,cy);ctx.rotate(rot);ctx.translate(-xfrm.w/2,-xfrm.h/2);
+    }
+  }
+  // Local coordinates: if rotated, draw relative to (0,0); else use xfrm.x/y
+  const lx=rot?0:xfrm.x, ly=rot?0:xfrm.y;
+
+  // Draw shape fill (background)
+  if(spPr){
+    const solidFill=find1ByLN(spPr,'solidFill');
+    if(solidFill){
+      const fillColor=resolveColor(solidFill,themeColors);
+      if(fillColor){
+        ctx.save();applyRot();
+        const prstGeom=find1ByLN(spPr,'prstGeom');
+        let isRound=false,adjVal=0;
+        if(prstGeom&&prstGeom.getAttribute('prst')==='roundRect'){
+          isRound=true;
+          const avLst=find1ByLN(prstGeom,'avLst');
+          if(avLst){const gd=find1ByLN(avLst,'gd');if(gd){const fmla=gd.getAttribute('fmla');if(fmla){const m=fmla.match(/val (\d+)/);if(m)adjVal=parseInt(m[1])/100000}}}
+        }
+        const r=isRound?Math.min(xfrm.w,xfrm.h)*adjVal:0;
+        ctx.fillStyle=fillColor;
+        ctx.beginPath();
+        if(r>0){
+          ctx.moveTo(lx+r,ly);
+          ctx.arcTo(lx+xfrm.w,ly,lx+xfrm.w,ly+xfrm.h,r);
+          ctx.arcTo(lx+xfrm.w,ly+xfrm.h,lx,ly+xfrm.h,r);
+          ctx.arcTo(lx,ly+xfrm.h,lx,ly,r);
+          ctx.arcTo(lx,ly,lx+xfrm.w,ly,r);
+          ctx.closePath();
+        }else{
+          ctx.rect(lx,ly,xfrm.w,xfrm.h);
+        }
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+    // Draw shape outline
+    const ln=find1ByLN(spPr,'ln');
+    if(ln){
+      const lnFill=find1ByLN(ln,'solidFill');
+      if(lnFill){
+        const lnColor=resolveColor(lnFill,themeColors);
+        const lnW=parseFloat(ln.getAttribute('w'))||9525;
+        if(lnColor){
+          ctx.save();applyRot();
+          ctx.strokeStyle=lnColor;
+          ctx.lineWidth=lnW/914400*pxW/(slideW/914400);
+          ctx.strokeRect(lx,ly,xfrm.w,xfrm.h);
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  // Render text
+  const txBody=find1ByLN(spEl,'txBody');
+  if(!txBody)return;
+  const bodyPr=find1ByLN(txBody,'bodyPr');
+  const anchor=bodyPr?bodyPr.getAttribute('anchor'):'t';
+  let autoFontScale=1;
+  if(bodyPr){
+    const normAutofit=find1ByLN(bodyPr,'normAutofit');
+    if(normAutofit){const fs=normAutofit.getAttribute('fontScale');if(fs)autoFontScale=parseInt(fs)/100000}
+    const spAutoFit=find1ByLN(bodyPr,'spAutoFit');
+    if(spAutoFit)autoFontScale=Math.min(autoFontScale,1);
+  }
+  let lIns=91440*0.5,tIns=45720*0.5,rIns=91440*0.5,bIns=45720*0.5;
+  if(bodyPr){
+    const li=parseInt(bodyPr.getAttribute('lIns'));if(!isNaN(li))lIns=li;
+    const ti=parseInt(bodyPr.getAttribute('tIns'));if(!isNaN(ti))tIns=ti;
+    const ri=parseInt(bodyPr.getAttribute('rIns'));if(!isNaN(ri))rIns=ri;
+    const bi=parseInt(bodyPr.getAttribute('bIns'));if(!isNaN(bi))bIns=bi;
+  }
+  const padL=lIns/914400*pxW/(slideW/914400);
+  const padT=tIns/914400*pxH/(slideH/914400);
+  const padR=rIns/914400*pxW/(slideW/914400);
+  const padB=bIns/914400*pxH/(slideH/914400);
+  const textW=Math.max(xfrm.w-padL-padR,20);
+  const paras=findByLN(txBody,'p');
+
+  ctx.save();applyRot();
+  // 裁剪到形状边界
+  ctx.beginPath();ctx.rect(lx,ly,xfrm.w,xfrm.h);ctx.clip();
+
+  // Calculate total text height for vertical anchoring
+  const paraLayouts=[];
+  let totalH=0;
+  for(const p of paras){
+    let defaultFs=18*fontScale*autoFontScale;
+    const pPr=find1ByLN(p,'pPr');
+    let align='l',spaceBefore=0,spaceAfter=0,lineSpcMul=1.2;
+    let bullet=null; // {char, font}
+    if(pPr){
+      align=pPr.getAttribute('algn')||'l';
+      const spcBefEl=find1ByLN(pPr,'spcBef');
+      if(spcBefEl){const spcPts=find1ByLN(spcBefEl,'spcPts');if(spcPts){spaceBefore=parseInt(spcPts.getAttribute('val'))/100*fontScale}}
+      const spcAftEl=find1ByLN(pPr,'spcAft');
+      if(spcAftEl){const spcPts=find1ByLN(spcAftEl,'spcPts');if(spcPts){spaceAfter=parseInt(spcPts.getAttribute('val'))/100*fontScale}}
+      // 行距 lnSpc: spcPct=百分比(1/1000), spcPts=固定点数
+      const lnSpcEl=find1ByLN(pPr,'lnSpc');
+      if(lnSpcEl){
+        const spcPct=find1ByLN(lnSpcEl,'spcPct');
+        const spcPts2=find1ByLN(lnSpcEl,'spcPts');
+        if(spcPct){lineSpcMul=parseInt(spcPct.getAttribute('val'))/100000}
+        else if(spcPts2){lineSpcMul=-parseInt(spcPts2.getAttribute('val'))/100*fontScale} // 负值=固定行高
+      }
+      const defRPr=find1ByLN(pPr,'defRPr');
+      if(defRPr){const sz=defRPr.getAttribute('sz');if(sz)defaultFs=parseInt(sz)/100*fontScale*autoFontScale}
+      // 项目符号
+      const buChar=find1ByLN(pPr,'buChar');
+      const buFont=find1ByLN(pPr,'buFont');
+      if(buChar){bullet={char:buChar.getAttribute('char')||'•'};if(buFont)bullet.font=buFont.getAttribute('typeface')}
+      const buNone=find1ByLN(pPr,'buNone');
+      if(buNone)bullet=null;
+    }
+    const runs=findByLN(p,'r');
+    // 构建带格式的文本段
+    const segments=[];
+    if(runs.length===0){
+      segments.push({text:'',fs:defaultFs,bold:false,color:'#000000',italic:false});
+    }else{
+      for(const r of runs){
+        let fs=defaultFs,bold=false,color='#000000',italic=false;
+        const rPr=find1ByLN(r,'rPr');
+        if(rPr){
+          const sz=rPr.getAttribute('sz');if(sz)fs=parseInt(sz)/100*fontScale*autoFontScale;
+          const b=rPr.getAttribute('b');if(b==='1'||b==='true')bold=true;
+          const i=rPr.getAttribute('i');if(i==='1'||i==='true')italic=true;
+          const solidFill=find1ByLN(rPr,'solidFill');
+          if(solidFill)color=resolveColor(solidFill,themeColors)||color;
+        }
+        const t=find1ByLN(r,'t');
+        if(!t||t.textContent==null)continue;
+        segments.push({text:t.textContent,fs,bold,color,italic});
+      }
+    }
+    // 多run合并换行：将所有段拼接后按宽度换行，保留每行格式段
+    const lines=buildWrappedLines(ctx,segments,textW);
+    // 计算行高
+    const lineHs=lines.map(line=>{
+      const maxFs=line.length>0?Math.max(...line.map(s=>s.fs)):defaultFs;
+      return lineSpcMul>0?maxFs*lineSpcMul:-lineSpcMul; // 正=倍数, 负=固定值
+    });
+    const lineH=lineHs.reduce((s,h)=>s+h,0);
+    const paraH=lineH+spaceBefore+spaceAfter;
+    paraLayouts.push({lines,align,paraH,lineHs,spaceBefore,spaceAfter,bullet});
+    totalH+=paraH;
+  }
+
+  // Vertical anchor offset
+  let ty=ly+padT;
+  if(anchor==='ctr')ty=ly+padT+Math.max(0,(xfrm.h-padT-padB-totalH)/2);
+  else if(anchor==='b')ty=ly+xfrm.h-padB-totalH;
+
+  // Render each paragraph
+  for(const pl of paraLayouts){
+    ty+=pl.spaceBefore;
+    for(let li=0;li<pl.lines.length;li++){
+      const line=pl.lines[li];
+      const lineH=pl.lineHs[li];
+      if(line.length>0&&line[0].text!==''){
+        // 项目符号
+        let bulletOff=0;
+        if(pl.bullet){
+          const bc=pl.bullet.char;
+          const fs=line[0].fs;
+          ctx.font=(line[0].bold?'bold ':'')+(line[0].italic?'italic ':'')+fs+'px '+PPTX_FONT;
+          ctx.fillStyle=line[0].color;
+          ctx.textBaseline='top';
+          ctx.fillText(bc,lx+padL,ty);
+          bulletOff=fs*0.6;
+        }
+        // 计算行宽（所有段的总和）
+        let lineW=0;
+        for(const seg of line){
+          ctx.font=(seg.bold?'bold ':'')+(seg.italic?'italic ':'')+seg.fs+'px '+PPTX_FONT;
+          lineW+=ctx.measureText(seg.text).width;
+        }
+        let tx=lx+padL+bulletOff;
+        if(pl.align==='ctr')tx=lx+padL+(textW-lineW)/2;
+        else if(pl.align==='r')tx=lx+xfrm.w-padR-lineW;
+        // 渲染每段
+        for(const seg of line){
+          ctx.font=(seg.bold?'bold ':'')+(seg.italic?'italic ':'')+seg.fs+'px '+PPTX_FONT;
+          ctx.fillStyle=seg.color;
+          ctx.textBaseline='top';
+          ctx.fillText(seg.text,tx,ty);
+          tx+=ctx.measureText(seg.text).width;
+        }
+      }
+      ty+=lineH;
+    }
+    ty+=pl.spaceAfter;
+  }
+  ctx.restore();
+}
+
+// 多run合并换行：将所有格式段拼接后按宽度换行，保留每行格式段
+function buildWrappedLines(ctx,segments,maxW){
+  if(maxW<=0)return[segments];
+  const lines=[];
+  let curLine=[];
+  let curW=0;
+  for(const seg of segments){
+    ctx.font=(seg.bold?'bold ':'')+(seg.italic?'italic ':'')+seg.fs+'px '+PPTX_FONT;
+    const chars=[...seg.text];
+    let buf='';
+    for(let i=0;i<chars.length;i++){
+      const ch=chars[i];
+      // 换行符
+      if(ch==='\n'){
+        if(buf)curLine.push({...seg,text:buf});
+        lines.push(curLine);curLine=[];curW=0;buf='';
+        continue;
+      }
+      const test=buf+ch;
+      const testW=ctx.measureText(test).width;
+      if(testW>maxW&&buf!==''){
+        curLine.push({...seg,text:buf});
+        lines.push(curLine);curLine=[];curW=0;
+        buf=ch;
+        if(ctx.measureText(ch).width>maxW){
+          lines.push([{...seg,text:ch}]);buf='';
+        }
+      }else{
+        buf=test;
+      }
+    }
+    if(buf){curLine.push({...seg,text:buf});curW+=ctx.measureText(buf).width}
+  }
+  if(curLine.length>0)lines.push(curLine);
+  return lines.length>0?lines:[[]];
+}
+
+function getXfrm(el,pxW,pxH,slideW,slideH){
+  const spPr=find1ByLN(el,'spPr');if(!spPr)return null;
+  const xfrm=find1ByLN(spPr,'xfrm');if(!xfrm)return null;
+  const off=find1ByLN(xfrm,'off');const ext=find1ByLN(xfrm,'ext');
+  if(!off||!ext)return null;
+  const rotDeg=parseFloat(xfrm.getAttribute('rot'))||0; // 1/60000 of a degree
+  return{
+    x:(parseInt(off.getAttribute('x'))||0)/slideW*pxW,
+    y:(parseInt(off.getAttribute('y'))||0)/slideH*pxH,
+    w:(parseInt(ext.getAttribute('cx'))||0)/slideW*pxW,
+    h:(parseInt(ext.getAttribute('cy'))||0)/slideH*pxH,
+    rot:rotDeg?rotDeg/60000*Math.PI/180:0 // radians
+  };
+}
+
+async function loadSlideRels(zip,slideNum){
+  const images={};
+  try{
+    const relsPath='ppt/slides/_rels/slide'+slideNum+'.xml.rels';
+    const relsFile=zip.file(relsPath);if(!relsFile)return images;
+    const relsXml=await relsFile.async('string');
+    const doc=new DOMParser().parseFromString(relsXml,'text/xml');
+    const rels=doc.getElementsByTagName('Relationship');
+    for(let i=0;i<rels.length;i++){
+      const target=rels[i].getAttribute('Target');
+      const rId=rels[i].getAttribute('Id');
+      if(target&&/\.(png|jpg|jpeg|gif|bmp|emf|wmf|tiff?)$/i.test(target)){
+        const imgPath='ppt/slides/'+target.replace(/^\.\//,'');
+        const altPath=target.replace(/^\.\.\//,'ppt/');
+        const imgFile=zip.file(imgPath)||zip.file(altPath);
+        if(imgFile){const blob=await imgFile.async('blob');images[rId]=URL.createObjectURL(blob)}
+      }
+    }
+  }catch(e){}
+  return images;
+}
+
+function loadImg(src){return new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=src})}
+
+
+// ═══════ Resize ═══════
+function startResize(dir,e){
+  if(S.selIds.size===0)return;
+  pushUndo(); // 撤销支持
+  spBusy();
+  S.resizing=true;S.rDir=dir;S.rSX=e.clientX;S.rSY=e.clientY;
+  if(S.selIds.size===1){
+    const id=[...S.selIds][0];const it=getIt(id);if(!it)return;
+    if(it.type==='text'&&it.el.classList.contains('editing'))stopEdit(it);
+    S.rRect={x:it.x,y:it.y,w:it.width,h:it.height};S.rGroup=null;
+  }else{
+    // Group resize: record bounding box and each item's relative position
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    S.rGroup=[];
+    S.selIds.forEach(id=>{const it=getIt(id);if(!it)return;minX=Math.min(minX,it.x);minY=Math.min(minY,it.y);maxX=Math.max(maxX,it.x+it.width);maxY=Math.max(maxY,it.y+it.height);S.rGroup.push({id,x:it.x,y:it.y,w:it.width,h:it.height})});
+    S.rRect={x:minX,y:minY,w:maxX-minX,h:maxY-minY};
+  }
+}
+function doResize(e){
+  if(!S.resizing)return;
+  const dx=(e.clientX-S.rSX)/S.scale,dy=(e.clientY-S.rSY)/S.scale;
+  const r=S.rRect,d=S.rDir;let nx=r.x,ny=r.y,nw=r.w,nh=r.h;
+  if(d.includes('e'))nw=Math.max(30,r.w+dx);
+  if(d.includes('w')){const dd=clamp(dx,-(r.w-30),r.w-30);nx=r.x+dd;nw=r.w-dd}
+  if(d.includes('s'))nh=Math.max(20,r.h+dy);
+  if(d.includes('n')){const dd=clamp(dy,-(r.h-20),r.h-20);ny=r.y+dd;nh=r.h-dd}
+  if(S.rGroup){
+    // Group resize: 等比例缩放（不允许改变长宽比）
+    const ar=r.w/r.h;
+    if(d==='e'){nh=nw/ar;ny=r.y}
+    else if(d==='w'){nh=nw/ar;ny=r.y+r.h-nh}
+    else if(d==='s'){nw=nh*ar;nx=r.x}
+    else if(d==='n'){nw=nh*ar;nx=r.x+r.w-nw}
+    else{
+      // 角拖动：选择变化更大的轴作为主导
+      if(Math.abs(nw-r.w)>=Math.abs(nh-r.h)){nh=nw/ar}else{nw=nh*ar}
+      if(d==='nw'){nx=r.x+r.w-nw;ny=r.y+r.h-nh}
+      else if(d==='ne'){ny=r.y+r.h-nh}
+      else if(d==='sw'){nx=r.x+r.w-nw}
+    }
+    const s=nw/r.w; // 统一缩放比例
+    S.rGroup.forEach(ri=>{const it=getIt(ri.id);if(!it)return;
+      it.x=nx+(ri.x-r.x)*s;it.y=ny+(ri.y-r.y)*s;it.width=ri.w*s;it.height=ri.h*s;
+      it.el.style.left=it.x+'px';it.el.style.top=it.y+'px';it.el.style.width=it.width+'px';it.el.style.height=it.height+'px';
+      if(it.type==='3d'&&it.resize3D)it.resize3D();
+    });
+    throttledUpdSelOv();return;
+  }
+  const id=[...S.selIds][0];const it=getIt(id);if(!it)return;
+  // image/video/3d: 等比例缩放（边和角都保持长宽比）；text 可自由调整
+  if(it.type==='image'||it.type==='video'||it.type==='3d'){
+    const ar=r.w/r.h;
+    if(d==='e'){nh=nw/ar;ny=r.y}
+    else if(d==='w'){nh=nw/ar;ny=r.y+r.h-nh}
+    else if(d==='s'){nw=nh*ar;nx=r.x}
+    else if(d==='n'){nw=nh*ar;nx=r.x+r.w-nw}
+    else{
+      if(Math.abs(nw-r.w)>=Math.abs(nh-r.h)){nh=nw/ar}else{nw=nh*ar}
+      if(d==='nw'){nx=r.x+r.w-nw;ny=r.y+r.h-nh}
+      else if(d==='ne'){ny=r.y+r.h-nh}
+      else if(d==='sw'){nx=r.x+r.w-nw}
+    }
+  }
+  it.x=nx;it.y=ny;it.width=nw;it.height=nh;
+  it.el.style.left=nx+'px';it.el.style.top=ny+'px';it.el.style.width=nw+'px';it.el.style.height=nh+'px';
+  if(it.type==='3d'&&it.resize3D)it.resize3D();
+  throttledUpdSelOv();
+}
+
+// ═══════ Drag (multi) ═══════
+function startDrag(e){
+  pushUndo(); // 撤销支持
+  spBusy();
+  S.dragging=true;S.dragSX=e.clientX;S.dragSY=e.clientY;
+  S.dragStarts=new Map();S.selIds.forEach(id=>{const it=getIt(id);if(it)S.dragStarts.set(id,{x:it.x,y:it.y})});
+}
+function doDrag(e){
+  if(!S.dragStarts)return;
+  const dx=(e.clientX-S.dragSX)/S.scale,dy=(e.clientY-S.dragSY)/S.scale;
+  S.dragStarts.forEach((start,id)=>{const it=getIt(id);if(!it)return;it.x=start.x+dx;it.y=start.y+dy;it.el.style.left=it.x+'px';it.el.style.top=it.y+'px'});
+  throttledUpdSelOv();
+}
+
+// ═══════ Box Select ═══════
+function startBoxSel(e,isAlt){
+  S.boxSel=true;S.altBoxSel=!!isAlt;S.boxSX=e.clientX;S.boxSY=e.clientY;
+  spBusy();
+  bsr.style.display='block';bsr.style.left=e.clientX+'px';bsr.style.top=e.clientY+'px';bsr.style.width='0px';bsr.style.height='0px';
+  if(isAlt)bsr.style.borderColor='rgba(0,180,120,.7)';
+}
+function doBoxSel(e){
+  if(!S.boxSel)return;
+  const x1=Math.min(S.boxSX,e.clientX),y1=Math.min(S.boxSY,e.clientY),x2=Math.max(S.boxSX,e.clientX),y2=Math.max(S.boxSY,e.clientY);
+  bsr.style.left=x1+'px';bsr.style.top=y1+'px';bsr.style.width=(x2-x1)+'px';bsr.style.height=(y2-y1)+'px';
+}
+function endBoxSel(e){
+  S.boxSel=false;bsr.style.display='none';bsr.style.borderColor='';
+  const x1=Math.min(S.boxSX,e.clientX),y1=Math.min(S.boxSY,e.clientY),x2=Math.max(S.boxSX,e.clientX),y2=Math.max(S.boxSY,e.clientY);
+  if(x2-x1<5&&y2-y1<5){S.altBoxSel=false;return}
+  const wl=s2w(x1,y1),wr=s2w(x2,y2);S.selIds.clear();
+  S.items.forEach(it=>{if(it.x+it.width>wl.x&&it.x<wr.x&&it.y+it.height>wl.y&&it.y<wr.y)S.selIds.add(it.id)});
+  updSelOv();
+  if(S.altBoxSel){
+    S.altBoxSel=false;
+    // Only keep image items selected for alt operations
+    const imgIds=[...S.selIds].filter(id=>{const it=getIt(id);return it&&it.type==='image'});
+    if(imgIds.length>0){
+      S.selIds.clear();imgIds.forEach(id=>S.selIds.add(id));updSelOv();
+      showAltMenu(e.clientX,e.clientY);
+    }else{
+      S.selIds.clear();updSelOv();
+    }
+  }
+}
+
+// ═══════ Alt Menu (抠图/去水印) — 按住Alt悬停弹出，松开Alt消失 ═══════
+let _altHoverTimer=null;
+let _altHideTimer=null;
+let _altMenuPinned=false; // 菜单已弹出，保持显示直到Alt松开
+function showAltMenu(x,y){
+  if(!S.altDown)return; // Alt已松开则不弹出
+  const imgItems=getSelImgItems();
+  if(imgItems.length===0)return;
+  clearTimeout(_altHideTimer);
+  altMenu.classList.add('show');
+  _altMenuPinned=true;
+  // 定位到光标附近，保持在视口内
+  altMenu.style.left='0px';altMenu.style.top='0px'; // 先重置以获取准确尺寸
+  const mw=altMenu.offsetWidth||120,mh=altMenu.offsetHeight||40;
+  let px=x+14,py=y+14;
+  if(px+mw>window.innerWidth)px=x-mw-14;
+  if(py+mh>window.innerHeight)py=y-mh-14;
+  // 确保不超出视口
+  px=Math.max(8,Math.min(px,window.innerWidth-mw-8));
+  py=Math.max(8,Math.min(py,window.innerHeight-mh-8));
+  altMenu.style.left=px+'px';altMenu.style.top=py+'px';
+}
+function hideAltMenu(){clearTimeout(_altHideTimer);clearTimeout(_altHoverTimer);_altHideTimer=setTimeout(()=>{altMenu.classList.remove('show');_altMenuPinned=false},120)}
+function hideAltMenuNow(){clearTimeout(_altHideTimer);clearTimeout(_altHoverTimer);altMenu.classList.remove('show');_altMenuPinned=false}
+function getSelImgItems(){
+  return[...S.selIds].map(id=>getIt(id)).filter(it=>it&&it.type==='image');
+}
+// Alt+hover检测：按住Alt时光标移到图片上自动弹出菜单
+// 菜单弹出后保持显示（不随光标移动），可点击；松开Alt消失
+function checkAltHover(e){
+  if(!S.altDown){hideAltMenu();return}
+  if(_maskState)return; // 蒙版模式不弹菜单
+  if(_cutoutState)return; // 抠图交互模式不弹菜单
+  // 菜单已弹出且光标在菜单上：保持显示，不重新定位
+  if(_altMenuPinned&&altMenu.contains(e.target))return;
+  // 菜单已弹出：保持显示，不因光标离开图片而隐藏（只有松开Alt才隐藏）
+  if(_altMenuPinned)return;
+  const itEl=e.target.closest?e.target.closest('.ci'):null;
+  if(itEl){
+    const it=itByEl(e.target);
+    if(it&&it.type==='image'){
+      // 若该图片已在多选中，保留全部选中；否则只选此图
+      if(!S.selIds.has(it.id)){
+        S.selIds.forEach(sid=>{const t=getIt(sid);if(t&&t.type==='text'&&t.el.classList.contains('editing'))stopEdit(t)});
+        S.selIds.clear();S.selIds.add(it.id);updSelOv();
+      }
+      clearTimeout(_altHoverTimer);
+      _altHoverTimer=setTimeout(()=>showAltMenu(e.clientX,e.clientY),120);
+      return;
+    }
+  }
+  // 光标不在图片上且菜单未弹出：取消待弹出定时器
+  clearTimeout(_altHoverTimer);
+}
+
+// ═══════ Cutout (抠图) — 基于 SAM 的交互式点选分割 ═══════
+// 使用 transformers.js + Xenova/sam-vit-base 模型实现万物分割
+// 交互流程：点击"抠图" → 进入交互模式 → 点选对象 → 实时预览蒙版 → 调阈值 → 应用
+let _samMod=null;       // {model, processor, Tensor, RawImage}
+async function ensureSAM(){
+  if(_samMod)return _samMod;
+  showCutoutProgress('正在加载 SAM 分割模型（首次约 90MB，请耐心等待）…');
+  try{
+    // transformers.js v3 + 官方推荐的 Xenova/sam-vit-base 模型（确认存在且有 ONNX 权重）
+    const tr=await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2');
+    const model_id='Xenova/sam-vit-base';
+    // 使用默认配置（WASM 后端），不强制 WebGPU/fp32，确保最大兼容性
+    const model=await tr.SamModel.from_pretrained(model_id);
+    const processor=await tr.AutoProcessor.from_pretrained(model_id);
+    _samMod={model,processor,Tensor:tr.Tensor,RawImage:tr.RawImage};
+    hideCutoutProgress();
+    return _samMod;
+  }catch(e){
+    console.error('SAM 模型加载失败:',e);
+    hideCutoutProgress();
+    throw new Error('SAM 模型加载失败：'+(e.message||e));
+  }
+}
+// 抠图进度提示（右上角玻璃态）
+function showCutoutProgress(msg){
+  lt.textContent=msg;lt.style.display='block';
+}
+function hideCutoutProgress(){
+  lt.style.display='none';lt.textContent='正在渲染文件…';
+}
+
+// 交互式抠图状态
+let _cutoutState=null;
+// {
+//   items: [...],          // 选中的图片项
+//   currentIdx: 0,         // 当前处理的图片索引
+//   isBatch: bool,         // 是否批量
+//   imgCanvas: canvas,     // 原图全分辨率画布
+//   imgW, imgH: number,    // 原图尺寸
+//   dispW, dispH: number,  // 显示尺寸（适配屏幕）
+//   imgX, imgY: number,    // 图片在画布上的偏移
+//   scale: number,         // 显示缩放比
+//   imageEmbeddings: {},   // SAM 图像嵌入（缓存）
+//   imageInputs: {},       // SAM 处理后的输入
+//   points: [],            // 用户点击的点 [{x,y,label}] label:1=前景,0=背景
+//   currentMask: Uint8Array, // 当前蒙版数据（0/1）
+//   maskScore: number,     // 蒙置信度
+// }
+
+// 启动交互式抠图
+async function doCutout(){
+  const items=getSelImgItems();if(items.length===0)return;
+  hideAltMenu();
+  pushUndo(); // 撤销支持
+  _cutoutState={items,currentIdx:0,isBatch:items.length>1,points:[],currentMask:null,maskScore:0};
+  await loadCutoutImage(0);
+  updateShortcuts();
+}
+// 加载某张图片到抠图交互模式
+async function loadCutoutImage(idx){
+  const it=_cutoutState.items[idx];if(!it){closeCutout();return}
+  const img=it.el.querySelector('img');if(!img||!img.src){closeCutout();return}
+  // 准备全分辨率原图画布
+  const nw=img.naturalWidth||img.width,nh=img.naturalHeight||img.height;
+  const imgCanvas=document.createElement('canvas');
+  imgCanvas.width=nw;imgCanvas.height=nh;
+  imgCanvas.getContext('2d').drawImage(img,0,0);
+  // 计算适配屏幕的显示尺寸
+  const maxW=window.innerWidth-80,maxH=window.innerHeight-120;
+  let dw=nw,dh=nh;
+  if(dw>maxW){dh=dh*(maxW/dw);dw=maxW}
+  if(dh>maxH){dw=dw*(maxH/dh);dh=maxH}
+  const scale=dw/nw;
+  const imgX=(window.innerWidth-dw)/2,imgY=(window.innerHeight-dh)/2+10;
+  _cutoutState.imgCanvas=imgCanvas;
+  _cutoutState.imgW=nw;_cutoutState.imgH=nh;
+  _cutoutState.dispW=dw;_cutoutState.dispH=dh;
+  _cutoutState.imgX=imgX;_cutoutState.imgY=imgY;
+  _cutoutState.scale=scale;
+  _cutoutState.points=[];
+  _cutoutState.currentMask=null;
+  _cutoutState.maskScore=0;
+  _cutoutState.imageEmbeddings=null;_cutoutState.imageInputs=null;
+  // 显示遮罩层
+  cutoutOv.style.display='block';
+  cutoutCv.width=window.innerWidth;cutoutCv.height=window.innerHeight;
+  drawCutoutCanvas();
+  // 异步加载模型并计算图像嵌入
+  cutoutHint.textContent='正在加载 SAM 分割模型…';
+  try{
+    const sam=await ensureSAM();
+    cutoutHint.textContent='正在分析图片…';
+    const rawImg=sam.RawImage.fromCanvas(imgCanvas);
+    const inputs=await sam.processor(rawImg);
+    const embeddings=await sam.model.get_image_embeddings(inputs);
+    _cutoutState.imageEmbeddings=embeddings;
+    _cutoutState.imageInputs=inputs;
+    cutoutHint.textContent='点击图片选择要保留的对象（左键保留，右键排除）';
+  }catch(e){
+    console.error('SAM init error:',e);
+    cutoutHint.textContent='模型加载失败，请点"取消"退出后重试，或检查网络连接';
+  }
+}
+// 绘制抠图画布：原图 + 蒙版预览 + 点击点
+function drawCutoutCanvas(){
+  const cs=_cutoutState;
+  if(!cs||!cs.imgCanvas)return;
+  const ctx=cutoutCv.getContext('2d');
+  ctx.clearRect(0,0,cutoutCv.width,cutoutCv.height);
+  // 半透明背景
+  ctx.fillStyle='rgba(0,0,0,.45)';
+  ctx.fillRect(0,0,cutoutCv.width,cutoutCv.height);
+  // 绘制原图
+  ctx.drawImage(cs.imgCanvas,cs.imgX,cs.imgY,cs.dispW,cs.dispH);
+  // 绘制蒙版预览（绿色半透明）
+  if(cs.currentMask){
+    const mw=cs.imgW,mh=cs.imgH;
+    const maskCvs=document.createElement('canvas');
+    maskCvs.width=mw;maskCvs.height=mh;
+    const mctx=maskCvs.getContext('2d');
+    const mImg=mctx.createImageData(mw,mh);
+    const md=mImg.data;
+    // 阈值控制：0-100，默认50，越大保留越少
+    const threshold=ctRange?parseInt(ctRange.value):50;
+    // mask 值 0-1，根据阈值二值化
+    const t=threshold/100;
+    for(let i=0;i<cs.currentMask.length;i++){
+      const v=cs.currentMask[i];
+      const keep=v>t?1:0;
+      const idx=i*4;
+      md[idx]=80;md[idx+1]=220;md[idx+2]=120;md[idx+3]=keep*140;
+    }
+    mctx.putImageData(mImg,0,0);
+    ctx.drawImage(maskCvs,cs.imgX,cs.imgY,cs.dispW,cs.dispH);
+  }
+  // 绘制点击点
+  for(const p of cs.points){
+    const px=cs.imgX+p.x*cs.dispW,py=cs.imgY+p.y*cs.dispH;
+    ctx.beginPath();
+    ctx.arc(px,py,8,0,Math.PI*2);
+    ctx.fillStyle=p.label===1?'rgba(80,220,120,.95)':'rgba(240,80,80,.95)';
+    ctx.fill();
+    ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();
+  }
+}
+// 处理点击：添加点并重新分割
+async function handleCutoutClick(e){
+  if(!_cutoutState||!_cutoutState.imageEmbeddings)return;
+  e.preventDefault();
+  const rect=cutoutCv.getBoundingClientRect();
+  const sx=e.clientX-rect.left,sy=e.clientY-rect.top;
+  const cs=_cutoutState;
+  // 检查点击是否在图片范围内
+  if(sx<cs.imgX||sx>cs.imgX+cs.dispW||sy<cs.imgY||sy>cs.imgY+cs.dispH)return;
+  // 转换为归一化坐标 (0-1)
+  const nx=(sx-cs.imgX)/cs.dispW,ny=(sy-cs.imgY)/cs.dispH;
+  const label=e.button===2?0:1; // 右键=背景(0)，左键=前景(1)
+  cs.points.push({x:nx,y:ny,label});
+  drawCutoutCanvas();
+  // 运行 SAM 分割
+  cutoutHint.textContent='正在分割…';
+  try{
+    const sam=_samMod;
+    // 构建输入点张量：形状 [1,1,N,2]，坐标为像素值
+    const pts=[];
+    const labels=[];
+    for(const p of cs.points){
+      pts.push(p.x*cs.imgW,p.y*cs.imgH);
+      labels.push(p.label);
+    }
+    const inputPoints=new sam.Tensor('float32',pts,[1,1,cs.points.length,2]);
+    const inputLabels=new sam.Tensor('int64',labels.map(BigInt),[1,1,cs.points.length]);
+    const {pred_masks,iou_scores}=await sam.model({
+      ...cs.imageEmbeddings,
+      input_points:inputPoints,
+      input_labels:inputLabels,
+    });
+    // 后处理蒙版到原始尺寸
+    const masks=await sam.processor.post_process_masks(pred_masks,cs.imageInputs.original_sizes,cs.imageInputs.reshaped_input_sizes);
+    // 选择 IoU 最高的蒙版
+    const scores=iou_scores.data;
+    let bestIdx=0,bestScore=-1;
+    for(let i=0;i<scores.length;i++){if(scores[i]>bestScore){bestScore=scores[i];bestIdx=i}}
+    const mask=masks[0][bestIdx]; // Tensor, bool 类型
+    // 转为 0-1 浮点数组（兼容 bool/uint8/int8 等不同后端返回类型）
+    const maskData=mask.data;
+    const maskArr=new Float32Array(maskData.length);
+    for(let i=0;i<maskData.length;i++){maskArr[i]=maskData[i]?1:0}
+    cs.currentMask=maskArr;
+    cs.maskScore=bestScore;
+    drawCutoutCanvas();
+    cutoutHint.textContent='已选中对象（置信度 '+(bestScore*100).toFixed(0)+'%），可继续点选调整，或点"应用"完成';
+  }catch(err){
+    console.error('SAM segment error:',err);
+    cutoutHint.textContent='分割失败，请重试或使用回退抠图';
+  }
+}
+// 应用抠图：将蒙版外区域设为透明
+function applyCutout(){
+  if(!_cutoutState||!_cutoutState.currentMask){closeCutout();return}
+  const cs=_cutoutState;
+  const it=cs.items[cs.currentIdx];if(!it){closeCutout();return}
+  const img=it.el.querySelector('img');if(!img){closeCutout();return}
+  showCutoutProgress('正在应用抠图…');
+  setTimeout(()=>{
+    try{
+      const w=cs.imgW,h=cs.imgH;
+      const cvs=document.createElement('canvas');cvs.width=w;cvs.height=h;
+      const ctx=cvs.getContext('2d');
+      ctx.drawImage(cs.imgCanvas,0,0);
+      const imgData=ctx.getImageData(0,0,w,h);
+      const d=imgData.data;
+      // 阈值控制
+      const threshold=ctRange?parseInt(ctRange.value):50;
+      const t=threshold/100;
+      // currentMask 经 post_process_masks 后已还原到原图尺寸，长度应等于 w*h
+      for(let i=0;i<w*h&&i<cs.currentMask.length;i++){
+        const keep=cs.currentMask[i]>t;
+        if(!keep)d[i*4+3]=0; // 蒙版外区域透明
+      }
+      ctx.putImageData(imgData,0,0);
+      // 边缘精修：羽化 + 孔洞填充
+      const refinedUrl=refineCutoutEdges(cvs);
+      img.src=refinedUrl;it.imgSrc=refinedUrl;it.natW=w;it.natH=h;
+      updSelOv();
+      hideCutoutProgress();
+      // 批量模式：处理下一张
+      if(cs.isBatch&&cs.currentIdx<cs.items.length-1){
+        cs.currentIdx++;
+        loadCutoutImage(cs.currentIdx);
+      }else{
+        closeCutout();
+      }
+    }catch(e){console.error('Apply cutout error:',e);hideCutoutProgress();closeCutout()}
+  },20);
+}
+// 重置当前图片的点选
+function resetCutout(){
+  if(!_cutoutState)return;
+  _cutoutState.points=[];
+  _cutoutState.currentMask=null;
+  _cutoutState.maskScore=0;
+  drawCutoutCanvas();
+  cutoutHint.textContent='点击图片选择要保留的对象（左键保留，右键排除）';
+}
+// 关闭抠图交互模式
+function closeCutout(){
+  _cutoutState=null;
+  cutoutOv.style.display='none';
+  updateShortcuts();
+}
+// 边缘精修：填充小孔洞 + alpha边缘羽化，提升复杂场景（毛发等）效果
+function refineCutoutEdges(cvs){
+  try{
+    const w=cvs.width,h=cvs.height;
+    if(w>4096||h>4096){
+      return cvs.toDataURL('image/png');
+    }
+    const ctx=cvs.getContext('2d');
+    const imgData=ctx.getImageData(0,0,w,h);const d=imgData.data;
+    // 1. 填充小孔洞：若像素完全透明但周围多数不透明，则恢复
+    const tmp=new Uint8ClampedArray(d);
+    for(let y=1;y<h-1;y++){
+      for(let x=1;x<w-1;x++){
+        const idx=(y*w+x)*4;
+        if(tmp[idx+3]<20){
+          let opaque=0,total=0,r=0,g=0,b=0;
+          for(let dy=-1;dy<=1;dy++){for(let dx=-1;dx<=1;dx++){
+            if(dx===0&&dy===0)continue;
+            const nidx=((y+dy)*w+(x+dx))*4;total++;
+            if(tmp[nidx+3]>128){opaque++;r+=tmp[nidx];g+=tmp[nidx+1];b+=tmp[nidx+2]}
+          }}
+          if(opaque>=6){d[idx]=r/opaque;d[idx+1]=g/opaque;d[idx+2]=b/opaque;d[idx+3]=180}
+        }
+      }
+    }
+    // 2. 边缘羽化：对半透明边缘像素做轻微平滑
+    for(let y=1;y<h-1;y++){
+      for(let x=1;x<w-1;x++){
+        const idx=(y*w+x)*4;
+        const a=d[idx+3];
+        if(a>20&&a<235){
+          let sa=0,cnt=0;
+          for(let dy=-1;dy<=1;dy++){for(let dx=-1;dx<=1;dx++){
+            if(dx===0&&dy===0)continue;
+            sa+=d[((y+dy)*w+(x+dx))*4+3];cnt++;
+          }}
+          d[idx+3]=Math.round((a*0.6+sa/cnt*0.4));
+        }
+      }
+    }
+    ctx.putImageData(imgData,0,0);
+    return cvs.toDataURL('image/png');
+  }catch(e){console.warn('Edge refine skipped:',e);return cvs.toDataURL('image/png')}
+}
+
+// ═══════ Watermark Removal (去水印) ═══════
+let _maskState=null;
+function startWatermarkMask(){
+  const items=getSelImgItems();if(items.length===0)return;
+  hideAltMenu();
+  _maskUndoStack=[];_maskRedoStack=[]; // 清空蒙版撤销栈
+  _maskState={items,currentIdx:0,isBatch:items.length>1,isDrawing:false,lastX:0,lastY:0};
+  btnApplyAll.style.display=items.length>1?'':'none';
+  loadMaskImage(0);
+  updateShortcuts(); // 切换到蒙版模式快捷键
+}
+function loadMaskImage(idx){
+  const it=_maskState.items[idx];if(!it){closeMask();return}
+  const img=it.el.querySelector('img');if(!img){closeMask();return}
+  // Image canvas at natural resolution
+  const imgCvs=document.createElement('canvas');
+  const iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height;
+  imgCvs.width=iw;imgCvs.height=ih;
+  imgCvs.getContext('2d').drawImage(img,0,0);
+  _maskState.imgCanvas=imgCvs;
+  // Mask canvas at natural resolution (black=keep, red=remove)
+  const maskCvs=document.createElement('canvas');
+  maskCvs.width=iw;maskCvs.height=ih;
+  _maskState.maskCanvas=maskCvs;
+  _maskState.maskCtx=maskCvs.getContext('2d');
+  // Fit to screen
+  maskOv.style.display='block';
+  const sw=window.innerWidth,sh=window.innerHeight;
+  const scale=Math.min(sw*0.8/iw,sh*0.7/ih,1);
+  _maskState.scale=scale;
+  _maskState.imgX=(sw-iw*scale)/2;_maskState.imgY=(sh-ih*scale)/2;
+  _maskState.imgW=iw*scale;_maskState.imgH=ih*scale;
+  maskCv.width=sw;maskCv.height=sh;
+  _maskState.dispCtx=maskCv.getContext('2d');
+  redrawMaskDisplay();
+  // Update toolbar text
+  const span=_maskState.isBatch?document.querySelector('.mask-toolbar span'):null;
+  if(span)span.textContent='涂抹要去除的水印区域 ('+(idx+1)+'/'+_maskState.items.length+')  —  去除处理当前  |  应用所有处理全部';
+}
+function redrawMaskDisplay(){
+  const ctx=_maskState.dispCtx;
+  ctx.clearRect(0,0,maskCv.width,maskCv.height);
+  ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,0,maskCv.width,maskCv.height);
+  ctx.drawImage(_maskState.imgCanvas,_maskState.imgX,_maskState.imgY,_maskState.imgW,_maskState.imgH);
+  // Draw red mask overlay
+  ctx.save();
+  ctx.beginPath();ctx.rect(_maskState.imgX,_maskState.imgY,_maskState.imgW,_maskState.imgH);ctx.clip();
+  ctx.globalAlpha=0.45;ctx.drawImage(_maskState.maskCanvas,_maskState.imgX,_maskState.imgY,_maskState.imgW,_maskState.imgH);
+  ctx.restore();
+}
+function paintMaskAt(sx,sy){
+  const sc=_maskState.scale;
+  const ix=(sx-_maskState.imgX)/sc,iy=(sy-_maskState.imgY)/sc;
+  const brushR=Math.max(8/sc,15/sc);
+  // Paint on natural-res mask canvas
+  _maskState.maskCtx.strokeStyle='#ff0000';
+  _maskState.maskCtx.lineWidth=brushR*2;
+  _maskState.maskCtx.lineCap='round';_maskState.maskCtx.lineJoin='round';
+  _maskState.maskCtx.beginPath();
+  _maskState.maskCtx.moveTo((_maskState.lastX-_maskState.imgX)/sc,(_maskState.lastY-_maskState.imgY)/sc);
+  _maskState.maskCtx.lineTo(ix,iy);
+  _maskState.maskCtx.stroke();
+  _maskState.lastX=sx;_maskState.lastY=sy;
+  redrawMaskDisplay();
+}
+function inpaintCanvas(imgCvs,maskCvs){
+  const w=imgCvs.width,h=imgCvs.height;
+  const ctx=imgCvs.getContext('2d');
+  // 保存原始全分辨率图像数据（非蒙版区域保持原始清晰度）
+  const origImgData=ctx.getImageData(0,0,w,h);
+  const origData=origImgData.data;
+  // 大图降采样处理以提速（最大边1536），但仅影响蒙版区域
+  let procW=w,procH=h,scale=1;
+  const maxSide=1536;
+  if(w>maxSide||h>maxSide){scale=Math.min(maxSide/w,maxSide/h);procW=Math.round(w*scale);procH=Math.round(h*scale)}
+  // 准备处理尺寸的画布
+  let procImg=imgCvs,procMask=maskCvs;
+  if(scale<1){
+    procImg=document.createElement('canvas');procImg.width=procW;procImg.height=procH;
+    procImg.getContext('2d').drawImage(imgCvs,0,0,procW,procH);
+    procMask=document.createElement('canvas');procMask.width=procW;procMask.height=procH;
+    procMask.getContext('2d').drawImage(maskCvs,0,0,procW,procH);
+  }
+  const pctx=procImg.getContext('2d');
+  const imgData=pctx.getImageData(0,0,procW,procH);const data=imgData.data;
+  const mctx=procMask.getContext('2d');
+  const maskData=mctx.getImageData(0,0,procW,procH);const mask=maskData.data;
+  // needs[i]=1 表示该像素需要填充（蒙版区域）
+  const needs=new Uint8Array(procW*procH);
+  let needCount=0;
+  for(let i=0;i<procW*procH;i++){if(mask[i*4]>128){needs[i]=1;needCount++}}
+  if(needCount===0)return; // 无蒙版区域，无需处理
+
+  // 改进的修复算法：多轮扩散填充
+  // Pass 1: 从边界向内扩散填充，使用更大的邻域（5x5）和距离加权
+  // 每轮处理所有"有已知邻居"的未知像素，直到全部填充
+  const filled=new Uint8Array(procW*procH); // 已填充标记
+  const inQueue=new Uint8Array(procW*procH); // 队列去重标记
+  let remaining=needCount;
+  // 预分配两个队列交替使用，避免每轮new
+  const queueA=new Int32Array(procW*procH),queueB=new Int32Array(procW*procH);
+  let qHead=0,qTail=0;
+  // 初始化：找出有已知（非蒙版）邻居的蒙版像素
+  for(let y=0;y<procH;y++){
+    for(let x=0;x<procW;x++){
+      const idx=y*procW+x;
+      if(!needs[idx])continue;
+      for(let dy=-1;dy<=1;dy++){for(let dx=-1;dx<=1;dx++){
+        if(dx===0&&dy===0)continue;
+        const nx=x+dx,ny=y+dy;
+        if(nx<0||nx>=procW||ny<0||ny>=procH)continue;
+        if(!needs[ny*procW+nx]){queueA[qTail++]=idx;inQueue[idx]=1;break}
+      }}
+    }
+  }
+  let curQ=queueA,nextQ=queueB;
+  // BFS扩散填充：使用5x5邻域，距离加权平均，已知像素权重高
+  while(qHead<qTail&&remaining>0){
+    let newTail=0;
+    const batchSize=qTail-qHead;
+    for(let b=0;b<batchSize;b++){
+      const idx=curQ[qHead++];
+      if(filled[idx])continue;
+      const x=idx%procW,y=(idx-x)/procW;
+      let r=0,g=0,bl=0,tw=0;
+      // 使用5x5邻域获取更多上下文
+      for(let dy=-2;dy<=2;dy++){for(let dx=-2;dx<=2;dx++){
+        if(dx===0&&dy===0)continue;
+        const nx=x+dx,ny=y+dy;
+        if(nx<0||nx>=procW||ny<0||ny>=procH)continue;
+        const nidx=ny*procW+nx;
+        // 只使用已知像素（非蒙版或已填充）
+        if(!needs[nidx]||filled[nidx]){
+          const nr=data[nidx*4],ng=data[nidx*4+1],nb=data[nidx*4+2];
+          // 距离权重：越近权重越高
+          const dist=Math.sqrt(dx*dx+dy*dy);
+          const wt=1/dist;
+          r+=nr*wt;g+=ng*wt;bl+=nb*wt;tw+=wt;
+        }
+      }}
+      if(tw>0){
+        data[idx*4]=r/tw;data[idx*4+1]=g/tw;data[idx*4+2]=bl/tw;data[idx*4+3]=255;
+        filled[idx]=1;remaining--;
+        // 将未知邻居加入下一轮（去重）
+        for(let dy=-1;dy<=1;dy++){for(let dx=-1;dx<=1;dx++){
+          if(dx===0&&dy===0)continue;
+          const nx=x+dx,ny=y+dy;
+          if(nx<0||nx>=procW||ny<0||ny>=procH)continue;
+          const nidx=ny*procW+nx;
+          if(needs[nidx]&&!filled[nidx]&&!inQueue[nidx]){nextQ[newTail++]=nidx;inQueue[nidx]=1}
+        }}
+      }
+    }
+    // 交换队列，重置去重标记
+    for(let i=0;i<newTail;i++)inQueue[nextQ[i]]=0;
+    const tmp=curQ;curQ=nextQ;nextQ=tmp;
+    qHead=0;qTail=newTail;
+  }
+  pctx.putImageData(imgData,0,0);
+
+  // Pass 2: 多轮边界平滑，消除填充痕迹（对蒙版区域做3x3高斯模糊）
+  // 复用已读取的mask数据，避免重复getImageData
+  let out=null;
+  for(let pass=0;pass<3;pass++){
+    const smoothed=pctx.getImageData(0,0,procW,procH);const sd=smoothed.data;
+    if(!out||out.length!==sd.length)out=new Uint8ClampedArray(sd);
+    else out.set(sd);
+    for(let y=1;y<procH-1;y++){
+      for(let x=1;x<procW-1;x++){
+        const idx=y*procW+x;
+        if(!needs[idx])continue;
+        // 3x3高斯加权平均（包含已知和已填充像素）
+        let r=0,g=0,bl=0,tw=0;
+        for(let dy=-1;dy<=1;dy++){for(let dx=-1;dx<=1;dx++){
+          const nx=x+dx,ny=y+dy;
+          if(nx<0||nx>=procW||ny<0||ny>=procH)continue;
+          const nidx=(ny*procW+nx)*4;
+          // 高斯权重：中心4，正交2，对角1
+          const wt=(dx===0&&dy===0)?4:((dx===0||dy===0)?2:1);
+          r+=sd[nidx]*wt;g+=sd[nidx+1]*wt;bl+=sd[nidx+2]*wt;tw+=wt;
+        }}
+        out[idx*4]=r/tw;out[idx*4+1]=g/tw;out[idx*4+2]=bl/tw;
+      }
+    }
+    smoothed.data.set(out);
+    pctx.putImageData(smoothed,0,0);
+  }
+  // 合并结果：仅蒙版区域使用inpaint结果，非蒙版区域保持原始清晰度
+  // 使用羽化混合，避免蒙版边界出现明显接缝
+  if(scale<1){
+    // 创建全分辨率结果画布（高质量放大inpaint结果）
+    const resultCvs=document.createElement('canvas');resultCvs.width=w;resultCvs.height=h;
+    const rctx=resultCvs.getContext('2d');
+    rctx.imageSmoothingEnabled=true;rctx.imageSmoothingQuality='high';
+    rctx.drawImage(procImg,0,0,w,h);
+    const rd=rctx.getImageData(0,0,w,h).data;
+    // 全分辨率蒙版（maskCvs本身就是原始尺寸）
+    const fullMaskCvs=document.createElement('canvas');fullMaskCvs.width=w;fullMaskCvs.height=h;
+    const fmctx=fullMaskCvs.getContext('2d');
+    fmctx.drawImage(maskCvs,0,0);
+    const fullMask=fmctx.getImageData(0,0,w,h).data;
+    // 逐像素合并：蒙版区域用inpaint结果，非蒙版区域保持origData原始清晰度
+    // 蒙版强度作为混合权重，边界羽化平滑过渡
+    const len=origData.length;
+    for(let i=0;i<len;i+=4){
+      const m=fullMask[i];
+      if(m>0){
+        const t=m/255;
+        origData[i]=origData[i]*(1-t)+rd[i]*t;
+        origData[i+1]=origData[i+1]*(1-t)+rd[i+1]*t;
+        origData[i+2]=origData[i+2]*(1-t)+rd[i+2]*t;
+      }
+    }
+    ctx.putImageData(origImgData,0,0);
+  }
+}
+function updateItemImage(it,cvs){
+  const url=cvs.toDataURL('image/png');
+  const img=it.el.querySelector('img');img.src=url;it.imgSrc=url;
+  it.natW=cvs.width;it.natH=cvs.height;
+}
+function applyMaskCurrent(){
+  if(!_maskState)return;
+  // 检查是否有蒙版内容
+  const mc=_maskState.maskCtx.getImageData(0,0,_maskState.maskCanvas.width,_maskState.maskCanvas.height).data;
+  let hasMask=false;
+  for(let i=0;i<mc.length;i+=4){if(mc[i]>128){hasMask=true;break}}
+  if(!hasMask){closeMask();return} // 无蒙版内容，直接关闭
+  pushUndo(); // 撤销支持
+  // 异步处理，避免阻塞UI
+  showCutoutProgress('正在去除水印…');
+  setTimeout(()=>{
+    try{
+      inpaintCanvas(_maskState.imgCanvas,_maskState.maskCanvas);
+      updateItemImage(_maskState.items[_maskState.currentIdx],_maskState.imgCanvas);
+      hideCutoutProgress();
+      // Move to next if batch
+      if(_maskState.isBatch&&_maskState.currentIdx<_maskState.items.length-1){
+        _maskState.currentIdx++;
+        _maskUndoStack=[];_maskRedoStack=[]; // 切换图片时清空蒙版撤销栈
+        loadMaskImage(_maskState.currentIdx);
+      }else{
+        closeMask();
+      }
+    }catch(e){console.error('Inpaint error:',e);hideCutoutProgress();closeMask()}
+  },20);
+}
+function applyMaskToAll(){
+  if(!_maskState||!_maskState.isBatch)return;
+  // 检查是否有蒙版内容
+  const mc=_maskState.maskCtx.getImageData(0,0,_maskState.maskCanvas.width,_maskState.maskCanvas.height).data;
+  let hasMask=false;
+  for(let i=0;i<mc.length;i+=4){if(mc[i]>128){hasMask=true;break}}
+  if(!hasMask){closeMask();return}
+  pushUndo(); // 撤销支持
+  const maskCvs=_maskState.maskCanvas;
+  const origIdx=_maskState.currentIdx;
+  showCutoutProgress('正在批量去除水印…');
+  setTimeout(()=>{
+    try{
+      // Apply to current first
+      inpaintCanvas(_maskState.imgCanvas,maskCvs);
+      updateItemImage(_maskState.items[origIdx],_maskState.imgCanvas);
+      // Apply scaled mask to all others
+      for(let i=0;i<_maskState.items.length;i++){
+        if(i===origIdx)continue;
+        const it=_maskState.items[i];const img=it.el.querySelector('img');if(!img)continue;
+        const iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height;
+        const ic=document.createElement('canvas');ic.width=iw;ic.height=ih;
+        ic.getContext('2d').drawImage(img,0,0);
+        const mc2=document.createElement('canvas');mc2.width=iw;mc2.height=ih;
+        mc2.getContext('2d').drawImage(maskCvs,0,0,iw,ih);
+        inpaintCanvas(ic,mc2);
+        updateItemImage(it,ic);
+      }
+      hideCutoutProgress();
+      closeMask();
+    }catch(e){console.error('Batch inpaint error:',e);hideCutoutProgress();closeMask()}
+  },20);
+}
+function closeMask(){
+  _maskState=null;maskOv.style.display='none';
+  updateShortcuts(); // 恢复默认快捷键
+}
+
+// Mask canvas drawing events
+maskCv.addEventListener('mousedown',e=>{
+  if(!_maskState)return;e.preventDefault();
+  pushMaskStroke(); // 记录笔画前状态用于撤销
+  _maskState.isDrawing=true;_maskState.lastX=e.clientX;_maskState.lastY=e.clientY;
+  paintMaskAt(e.clientX,e.clientY);
+});
+document.addEventListener('mousemove',e=>{
+  if(!_maskState||!_maskState.isDrawing)return;
+  paintMaskAt(e.clientX,e.clientY);
+});
+document.addEventListener('mouseup',()=>{
+  if(_maskState)_maskState.isDrawing=false;
+});
+
+// Button handlers
+btnCutout.addEventListener('click',doCutout);
+btnWm.addEventListener('click',startWatermarkMask);
+btnApplyMask.addEventListener('click',applyMaskCurrent);
+btnApplyAll.addEventListener('click',applyMaskToAll);
+btnCancelMask.addEventListener('click',closeMask);
+// 抠图交互按钮
+btnApplyCutout.addEventListener('click',applyCutout);
+btnResetCutout.addEventListener('click',resetCutout);
+btnCancelCutout.addEventListener('click',closeCutout);
+// Alt菜单按钮需要阻止mousedown默认行为，避免触发viewport的Alt逻辑
+[btnCutout,btnWm].forEach(btn=>{
+  btn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation()});
+});
+// 阈值滑块：阻止mousedown冒泡（避免触发Alt逻辑），实时更新显示值并重绘预览
+if(ctRange){
+  ctRange.addEventListener('mousedown',e=>{e.stopPropagation()});
+  ctRange.addEventListener('input',()=>{
+    if(ctVal)ctVal.textContent=ctRange.value;
+    // 抠图模式下实时重绘蒙版预览（阈值变化影响二值化结果）
+    if(_cutoutState&&_cutoutState.currentMask)drawCutoutCanvas();
+  });
+}
+// 蒙版工具栏按钮也需要阻止mousedown冒泡，避免触发maskCv的绘制
+[btnApplyMask,btnApplyAll,btnCancelMask].forEach(btn=>{
+  btn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation()});
+});
+// 抠图工具栏按钮阻止mousedown冒泡
+[btnApplyCutout,btnResetCutout,btnCancelCutout].forEach(btn=>{
+  btn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation()});
+});
+// 抠图画布点击事件：左键添加前景点，右键添加背景点
+cutoutCv.addEventListener('mousedown',e=>{
+  if(!_cutoutState)return;
+  e.preventDefault();
+  handleCutoutClick(e);
+});
+// 阻止右键菜单（抠图模式下右键用于添加背景点）
+cutoutCv.addEventListener('contextmenu',e=>{if(_cutoutState)e.preventDefault()});
+
+// ═══════ Pan ═══════
+function startPan(e){S.panning=true;S.panSX=e.clientX;S.panSY=e.clientY;S.panSOX=S.ox;S.panSOY=S.oy;vp.style.cursor='grabbing';spBusy()}
+function doPan(e){S.ox=S.panSOX+(e.clientX-S.panSX);S.oy=S.panSOY+(e.clientY-S.panSY);scheduleUpd()}
+
+// ═══════ Zoom ═══════
+function doZoom(e){
+  e.preventDefault();if(!S.ctrlDown)return;
+  spBusy();
+  const mx=e.clientX,my=e.clientY,wb=s2w(mx,my);
+  const f=e.deltaY<0?1.08:1/1.08;S.scale=clamp(S.scale*f,0.05,10);
+  S.ox=mx-wb.x*S.scale;S.oy=my-wb.y*S.scale;scheduleUpd();
+  clearTimeout(_zoomSpTimer);_zoomSpTimer=setTimeout(spIdle,400);
+}
+let _zoomSpTimer=null;
+
+// ═══════ Toolbar ═══════
+function syncCdots(){cdots.forEach(d=>d.classList.toggle('active',d.dataset.c===S.fontColor))}
+function syncBbtn(){btnB.classList.toggle('active',S.fontBold)}
+rngSz.addEventListener('input',()=>{S.fontSize=+rngSz.value;szV.textContent=S.fontSize;if(S.selIds.size===1){const it=getIt([...S.selIds][0]);if(it&&it.type==='text'){it.fontSize=S.fontSize;it.el.style.fontSize=S.fontSize+'px';autoH(it)}}});
+cdots.forEach(d=>d.addEventListener('click',()=>{S.fontColor=d.dataset.c;syncCdots();if(S.selIds.size===1){const it=getIt([...S.selIds][0]);if(it&&it.type==='text'){it.color=S.fontColor;it.el.style.color=S.fontColor}}}));
+btnB.addEventListener('click',()=>{S.fontBold=!S.fontBold;syncBbtn();if(S.selIds.size===1){const it=getIt([...S.selIds][0]);if(it&&it.type==='text'){it.bold=S.fontBold;it.el.style.fontWeight=S.fontBold?'bold':'normal';autoH(it)}}});
+btnTxt.addEventListener('click',toggleTextMode);
+btnFile.addEventListener('click',()=>fi.click());
+fi.addEventListener('change',()=>{if(fi.files.length)loadFiles(fi.files);fi.value=''});
+btnExp.addEventListener('click',exportPNG);
+
+function toggleTextMode(){S.textMode=!S.textMode;btnTxt.classList.toggle('active',S.textMode);mb.style.display=S.textMode?'block':'none';vp.style.cursor=S.textMode?'text':'default'}
+
+// ═══════ Copy ═══════
+async function copySelected(){
+  if(S.selIds.size===0)return;
+  const id=[...S.selIds][0];const it=getIt(id);if(!it)return;
+  try{
+    if(it.type==='image'||it.type==='video'){
+      const media=it.type==='image'?it.el.querySelector('img'):it.el.querySelector('video');
+      if(!media||!media.src)return;
+      const resp=await fetch(media.src);const blob=await resp.blob();
+      if(navigator.clipboard&&navigator.clipboard.write){
+        await navigator.clipboard.write([new ClipboardItem({[blob.type]:blob})]);
+      }
+    }else if(it.type==='text'){
+      const text=it.el.innerText||'';
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(text);
+      }
+    }
+  }catch(e){console.warn('Copy failed:',e)}
+}
+
+// ═══════ Save Project (Ctrl+S) — 保存完整可编辑HTML ═══════
+function saveProject(){
+  if(S.items.length===0)return;
+  var data={items:[],scale:S.scale,ox:S.ox,oy:S.oy};
+  S.items.forEach(function(it){
+    var d={type:it.type,x:it.x,y:it.y,width:it.width,height:it.height};
+    if(it.type==='image')d.src=it.imgSrc||(it.el.querySelector('img')?it.el.querySelector('img').src:'');
+    else if(it.type==='video')d.src=it.videoSrc||(it.el.querySelector('video')?it.el.querySelector('video').src:'');
+    else if(it.type==='3d'){
+      d.ext=it.modelExt;
+      // 优先使用已生成的data URL；若异步未完成则从buffer同步生成
+      if(it.modelData)d.src=it.modelData;
+      else if(it.modelBuffer){
+        const bytes=new Uint8Array(it.modelBuffer);let bin='';const ch=8192;
+        for(let i=0;i<bytes.length;i+=ch)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+ch));
+        d.src='data:application/octet-stream;base64,'+btoa(bin);
+      }
+    }
+    else if(it.type==='text'){d.content=it.el.innerText||'';d.fontSize=it.fontSize;d.color=it.color;d.bold=it.bold}
+    data.items.push(d);
+  });
+  // 克隆文档，清理动态内容，保留原始脚本（完整功能）
+  var clone=document.documentElement.cloneNode(true);
+  var ccl=clone.querySelector('#canvas-layer');if(ccl)ccl.innerHTML='';
+  var cso=clone.querySelector('#sel-overlay');if(cso)cso.innerHTML='';
+  var cbsr=clone.querySelector('#box-sel-rect');if(cbsr)cbsr.style.display='none';
+  // 在主脚本前插入保存数据
+  var jsonStr=JSON.stringify(data);
+  var dataScript=document.createElement('script');
+  dataScript.textContent='window._savedData='+jsonStr+';';
+  clone.querySelector('body').insertBefore(dataScript,clone.querySelector('body script'));
+  var html='<!DOCTYPE html>\n'+clone.outerHTML;
+  var blob=new Blob([html],{type:'text/html'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');a.href=url;a.download='canvas-'+Date.now()+'.html';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ═══════ Keyboard ═══════
+document.addEventListener('keydown',e=>{
+  if((e.key==='c'||e.key==='C')&&(e.ctrlKey||e.metaKey)){if(!isEditing()&&S.selIds.size>0){e.preventDefault();copySelected()}return}
+  if((e.key==='s'||e.key==='S')&&(e.ctrlKey||e.metaKey)){e.preventDefault();saveProject();return}
+  // Ctrl+Z 撤销 / Ctrl+Shift+Z 回退
+  if((e.key==='z'||e.key==='Z')&&(e.ctrlKey||e.metaKey)){
+    if(!isEditing()){e.preventDefault();if(e.shiftKey){redo()}else{undo()}}
+    return;
+  }
+  if(e.code==='Space'){if(isEditing())return;e.preventDefault();S.spaceDown=true;if(!S.textMode)vp.style.cursor='grab';sp.style.opacity='0';return}
+  if(e.key==='Control'||e.key==='Meta'){S.ctrlDown=true;return}
+  if(e.key==='Shift'){S.shiftDown=true;return}
+  if(e.key==='Alt'){S.altDown=true;return}
+  if((e.key==='t'||e.key==='T')&&!e.ctrlKey&&!e.metaKey){if(isEditing())return;e.preventDefault();toggleTextMode();return}
+  if(e.key==='Escape'){
+    if(_maskState){closeMask();updateShortcuts();return}
+    if(_cutoutState){closeCutout();return}
+    S.textMode=false;btnTxt.classList.remove('active');mb.style.display='none';vp.style.cursor='default';desel();return;
+  }
+  if(e.key==='Delete'||e.key==='Backspace'){if(isEditing())return;if(S.selIds.size>0){e.preventDefault();pushUndo();rmSelItems()}}
+});
+document.addEventListener('keyup',e=>{
+  if(e.code==='Space'){S.spaceDown=false;if(!S.panning&&!S.textMode)vp.style.cursor='default';sp.style.opacity=''}
+  if(e.key==='Control'||e.key==='Meta')S.ctrlDown=false;
+  if(e.key==='Shift')S.shiftDown=false;
+  if(e.key==='Alt'){S.altDown=false;hideAltMenuNow()}
+});
+
+// ═══════ Toolbar auto-hide ═══════
+let _tbTimer=null;
+function showTb(){clearTimeout(_tbTimer);toolbar.classList.add('visible')}
+function hideTb(){clearTimeout(_tbTimer);_tbTimer=setTimeout(function(){if(!toolbar.matches(':hover'))toolbar.classList.remove('visible')},300)}
+document.addEventListener('mousemove',e=>{if(e.clientY<50)showTb();else hideTb()});
+toolbar.addEventListener('mouseenter',showTb);
+toolbar.addEventListener('mouseleave',hideTb);
+
+// ═══════ Dynamic Shortcuts Panel (上下文感知 + 操作时自动隐藏) ═══════
+let _spHideTimer=null;
+let _spHoverImg=false; // 光标是否在图片上
+function skRow(key,desc){return '<div class="sk-row"><span class="sk-key">'+key+'</span><span class="sk-desc">'+desc+'</span></div>'}
+function updateShortcuts(){
+  if(_maskState){
+    // 去水印蒙版模式
+    sp.innerHTML=skRow('Ctrl+Z','撤销笔画')+skRow('Ctrl+⇧+Z','回退笔画')+skRow('涂抹','标记水印')+skRow('Esc','退出');
+    sp.style.maxWidth='200px';
+    return;
+  }
+  if(_cutoutState){
+    // 抠图交互模式
+    sp.innerHTML=skRow('左键','保留对象')+skRow('右键','排除区域')+skRow('Esc','退出');
+    sp.style.maxWidth='200px';
+    return;
+  }
+  if(_spHoverImg){
+    // 仅在光标停在图片上时显示 Alt 抠图/去水印提示
+    let rows=skRow('Alt','悬停弹出 抠图/去水印')+skRow('Ctrl+拖','移动');
+    if(S.selIds.size>1)rows+=skRow('四角拖动','等比缩放');
+    else rows+=skRow('四角拖动','缩放');
+    sp.innerHTML=rows;
+    sp.style.maxWidth='220px';
+    return;
+  }
+  // 画布默认：不显示 Alt 抠图提示
+  sp.innerHTML=skRow('T','添加文字')+skRow('Ctrl+拖动','移动元素')+skRow('Ctrl+滚轮','缩放画布')+skRow('Space+拖动','平移')+skRow('Shift+拖动','框选多个');
+  sp.style.maxWidth='230px';
+}
+function hideSp(){clearTimeout(_spHideTimer);_spHideTimer=setTimeout(()=>sp.classList.add('hidden'),180)}
+function showSp(){clearTimeout(_spHideTimer);sp.classList.remove('hidden')}
+// 操作时隐藏快捷键面板
+function spBusy(){hideSp()}
+function spIdle(){showSp();updateShortcuts()}
+// 检测光标是否在图片上
+document.addEventListener('mousemove',e=>{
+  const itEl=e.target.closest?e.target.closest('.ci-img'):null;
+  const wasHover=_spHoverImg;
+  _spHoverImg=!!itEl;
+  if(wasHover!==_spHoverImg)updateShortcuts();
+});
+updateShortcuts();
+
+// ═══════ Mouse ═══════
+vp.addEventListener('mousedown',e=>{
+  if(e.button!==0)return;
+  if(e.target.classList.contains('rh')){e.preventDefault();startResize(e.target.dataset.dir,e);return}
+  if(S.spaceDown){e.preventDefault();startPan(e);return}
+  // Remove 3D interactivity when clicking outside 3D elements
+  if(!e.target.closest('.ci-3d')){
+    S.items.forEach(it=>{
+      if(it.type==='3d'&&it.el.classList.contains('interactive')){
+        it.el.classList.remove('interactive');
+        if(it.viewer3D)it.viewer3D.controls.enabled=false;
+      }
+    });
+  }
+  // Alt+click on image 已改为 Alt+hover 自动弹出（见 checkAltHover）
+  if(S.altDown){
+    // 如果点击的是Alt菜单本身，让按钮点击正常触发
+    if(altMenu.contains(e.target))return;
+    e.preventDefault();
+    const itEl=e.target.closest('.ci');
+    if(!itEl){
+      // Alt+drag on empty: start alt box select
+      startBoxSel(e,true);return;
+    }else{
+      // Alt+点击图片：若已在多选中则对全部操作，否则只选此图并弹出菜单
+      const it=itByEl(e.target);
+      if(it&&it.type==='image'){
+        if(!S.selIds.has(it.id)){
+          S.selIds.forEach(sid=>{const t=getIt(sid);if(t&&t.type==='text'&&t.el.classList.contains('editing'))stopEdit(t)});
+          S.selIds.clear();S.selIds.add(it.id);it.el.style.zIndex=S.nzi++;updSelOv();
+        }
+        showAltMenu(e.clientX,e.clientY);
+        return;
+      }
+    }
+  }
+  if(S.shiftDown&&!e.target.closest('.ci')){e.preventDefault();startBoxSel(e);return}
+  const itEl=e.target.closest('.ci');
+  if(S.textMode&&!itEl){
+    e.preventDefault(); // CRITICAL: prevent browser from stealing focus
+    pushUndo(); // 撤销支持
+    const w=s2w(e.clientX,e.clientY);addText(w.x,w.y);
+    S.textMode=false;btnTxt.classList.remove('active');mb.style.display='none';vp.style.cursor='default';return;
+  }
+  if(itEl){
+    if(S.textMode){S.textMode=false;btnTxt.classList.remove('active');mb.style.display='none';vp.style.cursor='default'}
+    const it=itByEl(e.target);if(!it)return;
+    if(S.shiftDown){if(S.selIds.has(it.id)){S.selIds.delete(it.id)}else{S.selIds.add(it.id);it.el.style.zIndex=S.nzi++}updSelOv();return}
+    if(S.ctrlDown){
+      if(!S.selIds.has(it.id)){S.selIds.add(it.id);it.el.style.zIndex=S.nzi++;updSelOv()}
+      S.selIds.forEach(sid=>{const t=getIt(sid);if(t&&t.type==='text'&&t.el.classList.contains('editing'))stopEdit(t)});
+      e.preventDefault();startDrag(e);
+    }else{
+      selItem(it.id);
+      if(it.type==='text'){
+        if(!it.el.classList.contains('editing')){setTimeout(()=>startEdit(it),0)}
+        else if(document.activeElement!==it.el){setTimeout(()=>it.el.focus(),0)}
+      }
+    }
+    return;
+  }
+  desel();
+});
+
+document.addEventListener('mousemove',e=>{
+  if(S.resizing){doResize(e);return}if(S.panning){doPan(e);return}if(S.dragging){doDrag(e);return}if(S.boxSel){doBoxSel(e);return}
+  // Alt+hover 自动弹出抠图/去水印菜单
+  if(S.altDown&&!_maskState){checkAltHover(e)}
+  if(S.spaceDown)vp.style.cursor='grab';else if(S.textMode)vp.style.cursor='text';else if(S.altDown)vp.style.cursor='crosshair';else if(S.shiftDown)vp.style.cursor='crosshair';
+  else{const itEl=e.target.closest('.ci');vp.style.cursor=(itEl&&S.ctrlDown)?'move':'default'}
+});
+
+document.addEventListener('mouseup',e=>{
+  if(S.resizing){S.resizing=false;if(S.selIds.size===1){const it=getIt([...S.selIds][0]);if(it&&it.type==='text')autoH(it)}spIdle()}
+  if(S.panning){S.panning=false;vp.style.cursor=S.spaceDown?'grab':(S.textMode?'text':'default');spIdle()}
+  if(S.dragging){S.dragging=false;S.dragStarts=null;spIdle()}
+  if(S.boxSel){endBoxSel(e);spIdle()}
+});
+
+vp.addEventListener('wheel',doZoom,{passive:false});
+
+// ═══════ Drag & Drop ═══════
+let dc=0;
+vp.addEventListener('dragenter',e=>{e.preventDefault();dc++;dz.classList.add('show')});
+vp.addEventListener('dragover',e=>e.preventDefault());
+vp.addEventListener('dragleave',e=>{e.preventDefault();dc--;if(dc<=0){dc=0;dz.classList.remove('show')}});
+vp.addEventListener('drop',e=>{e.preventDefault();dc=0;dz.classList.remove('show');if(e.dataTransfer.files.length)loadFiles(e.dataTransfer.files,e.clientX,e.clientY)});
+
+// ═══════ Paste ═══════
+document.addEventListener('paste',e=>{
+  if(isEditing())return;
+  const cd=e.clipboardData;if(!cd)return;
+  // Check for images first
+  const items=cd.items;
+  if(items){
+    for(let i=0;i<items.length;i++){
+      if(items[i].type.indexOf('image')!==-1){
+        const blob=items[i].getAsFile();
+        pushUndo(); // 撤销支持
+        _dropPos={x:_lastMouseWorld.x,y:_lastMouseWorld.y};
+        processFile(blob);return;
+      }
+    }
+  }
+  // Check for text
+  const text=cd.getData('text/plain');
+  if(text&&text.trim()){
+    pushUndo(); // 撤销支持
+    const it=mkItem('text',_lastMouseWorld.x,_lastMouseWorld.y,240,40);
+    it.el.style.fontSize=S.fontSize+'px';it.el.style.color=S.fontColor;
+    it.el.style.fontWeight=S.fontBold?'bold':'normal';
+    it.el.style.fontFamily='-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+    it.fontSize=S.fontSize;it.color=S.fontColor;it.bold=S.fontBold;
+    it.el.innerText=text;
+    autoH(it);selItem(it.id);
+  }
+});
+
+// Track mouse position for paste placement
+vp.addEventListener('mousemove',e=>{_lastMouseWorld=s2w(e.clientX,e.clientY)});
+
+// ═══════ Text input auto-height ═══════
+cl.addEventListener('input',e=>{const itEl=e.target.closest('.ci-txt');if(!itEl)return;const it=getIt(+itEl.dataset.id);if(it)autoH(it)});
+
+// ═══════ Export PNG ═══════
+function exportPNG(){
+  if(S.items.length===0)return;et.style.display='block';
+  setTimeout(()=>{try{_doExport()}catch(err){console.error(err);et.style.display='none'}},60);
+}
+function _doExport(){
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  S.items.forEach(it=>{minX=Math.min(minX,it.x);minY=Math.min(minY,it.y);maxX=Math.max(maxX,it.x+it.width);maxY=Math.max(maxY,it.y+it.height)});
+  const pad=80;minX-=pad;minY-=pad;maxX+=pad;maxY+=pad;
+  const cw=maxX-minX,ch=maxY-minY,ex=Math.min(3,12000/Math.max(cw,ch,1));
+  const cvs=document.createElement('canvas');cvs.width=Math.ceil(cw*ex);cvs.height=Math.ceil(ch*ex);
+  const ctx=cvs.getContext('2d');ctx.scale(ex,ex);ctx.fillStyle='#ffffff';ctx.fillRect(0,0,cw,ch);
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  S.items.forEach(it=>{
+    const ix=it.x-minX,iy=it.y-minY;
+    if(it.type==='image'){const img=it.el.querySelector('img');if(img&&img.complete&&img.naturalWidth>0)ctx.drawImage(img,ix,iy,it.width,it.height)}
+    else if(it.type==='video'){const video=it.el.querySelector('video');if(video&&video.readyState>=2){try{ctx.drawImage(video,ix,iy,it.width,it.height)}catch(e){}}}
+    else if(it.type==='3d'){if(it.viewer3D&&it.viewer3D.renderer){try{ctx.drawImage(it.viewer3D.renderer.domElement,ix,iy,it.width,it.height)}catch(e){}}}
+    else if(it.type==='text')_renderTxt(ctx,it,ix,iy);
+  });
+  cvs.toBlob(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='canvas-'+Date.now()+'.png';document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);et.style.display='none'},'image/png');
+}
+function _renderTxt(ctx,it,ox,oy){
+  const fs=it.fontSize||28,bold=it.bold?'bold ':'';
+  const ff='-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.font=bold+fs+'px '+ff;ctx.fillStyle=it.color||'#000000';ctx.textBaseline='top';
+  const lh=fs*1.45,px=8,py=4,maxW=it.width-px*2;if(maxW<=0)return;
+  const text=it.el.innerText||it.el.textContent||'';const paras=text.split('\n');let cy=oy+py;
+  paras.forEach(para=>{if(para===''){cy+=lh;return}const chars=[...para];let line='';
+    for(let i=0;i<chars.length;i++){const ch=chars[i];const test=line+ch;if(ctx.measureText(test).width>maxW&&line!==''){ctx.fillText(line,ox+px,cy);line=ch;cy+=lh}else{line=test}}
+    if(line){ctx.fillText(line,ox+px,cy);cy+=lh}
+  });
+}
+
+// ═══════ Init ═══════
+function init(){
+  S.ox=window.innerWidth/2;S.oy=window.innerHeight/2;applyTf();updBg();
+  // 从保存的数据恢复
+  if(window._savedData&&window._savedData.items){
+    const d=window._savedData;
+    S.scale=d.scale||1;S.ox=d.ox||S.ox;S.oy=d.oy||S.oy;
+    applyTf();updBg();
+    d.items.forEach(item=>{
+      const el=document.createElement('div');
+      el.className='ci ci-'+(item.type==='image'?'img':(item.type==='video'?'video':(item.type==='3d'?'3d':'txt')));
+      const id=S.nid++;el.dataset.id=id;
+      el.style.left=item.x+'px';el.style.top=item.y+'px';
+      el.style.width=item.width+'px';el.style.height=item.height+'px';el.style.zIndex=S.nzi++;
+      const it={id,type:item.type,x:item.x,y:item.y,width:item.width,height:item.height,el};
+      if(item.type==='image'){
+        const img=document.createElement('img');img.src=item.src;img.draggable=false;
+        el.appendChild(img);it.imgSrc=item.src;
+      }else if(item.type==='video'){
+        const v=document.createElement('video');v.src=item.src;v.controls=true;v.style.width='100%';v.style.height='100%';
+        el.appendChild(v);it.videoSrc=item.src;
+      }else if(item.type==='3d'){
+        it.modelData=item.src;it.modelExt=item.ext;
+        const badge=document.createElement('div');badge.className='badge-3d';badge.textContent='3D · '+item.ext.toUpperCase();el.appendChild(badge);
+        ensureThree().then(M=>init3DViewer(it,M)).catch(e=>console.error('3D restore error:',e));
+      }else if(item.type==='text'){
+        el.style.fontSize=item.fontSize+'px';el.style.color=item.color;el.style.fontWeight=item.bold?'bold':'normal';
+        el.style.fontFamily='-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+        el.innerText=item.content;it.fontSize=item.fontSize;it.color=item.color;it.bold=item.bold;
+      }
+      S.items.push(it);cl.appendChild(el);
+    });
+  }
+}
+init();window.addEventListener('resize',()=>{
+  updBg();updSelOv();
+  // 抠图交互模式：重新计算图片显示尺寸并重绘
+  if(_cutoutState&&_cutoutState.imgCanvas){
+    const cs=_cutoutState;
+    const nw=cs.imgW,nh=cs.imgH;
+    const maxW=window.innerWidth-80,maxH=window.innerHeight-120;
+    let dw=nw,dh=nh;
+    if(dw>maxW){dh=dh*(maxW/dw);dw=maxW}
+    if(dh>maxH){dw=dw*(maxH/dh);dh=maxH}
+    cs.dispW=dw;cs.dispH=dh;
+    cs.imgX=(window.innerWidth-dw)/2;cs.imgY=(window.innerHeight-dh)/2+10;
+    cs.scale=dw/nw;
+    cutoutCv.width=window.innerWidth;cutoutCv.height=window.innerHeight;
+    drawCutoutCanvas();
+  }
+});
+
+})();
+</script>
+</body>
+</html>

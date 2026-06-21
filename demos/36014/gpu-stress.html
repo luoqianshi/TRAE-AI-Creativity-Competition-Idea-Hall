@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPU STRESS — WebGL 显卡性能跑分工具</title>
+<style>
+:root{
+  --bg:#06070d;--bg2:#0a0c14;--panel:rgba(10,12,20,.82);--panel-solid:#0c0e16;
+  --border:rgba(0,240,255,.1);--border-hi:rgba(0,240,255,.35);
+  --accent:#00f0ff;--accent2:#00ff88;--warn:#ff9500;--danger:#ff3366;--magenta:#ff00aa;
+  --text:#e8eef5;--dim:#6b7a8f;--faint:#3a4456;
+  --mono:'JetBrains Mono','SF Mono','Roboto Mono',Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px}
+canvas{display:block}
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+
+/* === TOPBAR === */
+#topbar{height:52px;display:flex;align-items:center;gap:24px;padding:0 20px;
+  background:linear-gradient(180deg,rgba(6,7,13,.95),rgba(6,7,13,.7));
+  border-bottom:1px solid var(--border);z-index:10;backdrop-filter:blur(12px)}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:2px}
+.logo .dot{width:10px;height:10px;border-radius:50%;background:var(--accent2);
+  box-shadow:0 0 12px var(--accent2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.logo span{color:var(--accent)}
+.gpu-name{font-family:var(--mono);font-size:12px;color:var(--dim);
+  padding:4px 12px;border:1px solid var(--border);border-radius:4px;
+  max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status{margin-left:auto;display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.status .ind{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.status.running .ind{background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 1s infinite}
+.status.done .ind{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+/* === MAIN === */
+#main{flex:1;display:flex;overflow:hidden}
+#viewport{flex:1;position:relative;overflow:hidden}
+#three-canvas{position:absolute;inset:0}
+#viewport::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,240,255,.015) 2px,rgba(0,240,255,.015) 4px)}
+
+/* viewport overlays */
+.vp-overlay{position:absolute;pointer-events:none;z-index:5}
+#vp-topleft{top:16px;left:16px}
+#vp-topleft .test-label{font-family:var(--mono);font-size:11px;color:var(--dim);
+  text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}
+#vp-topleft .test-name{font-size:24px;font-weight:700;color:var(--text);text-shadow:0 0 20px rgba(0,240,255,.3)}
+#vp-topleft .test-desc{font-size:12px;color:var(--dim);margin-top:4px}
+
+#vp-topright{top:16px;right:16px;text-align:right}
+#vp-topright .fps-big{font-family:var(--mono);font-size:48px;font-weight:700;
+  line-height:1;color:var(--accent2);text-shadow:0 0 30px rgba(0,255,136,.4)}
+#vp-topright .fps-label{font-family:var(--mono);font-size:11px;color:var(--dim);
+  text-transform:uppercase;letter-spacing:2px}
+
+#vp-center{top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:auto}
+#start-btn{padding:16px 48px;font-size:16px;font-weight:700;letter-spacing:2px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#000;
+  border-radius:8px;cursor:pointer;text-transform:uppercase;
+  box-shadow:0 0 40px rgba(0,240,255,.3);transition:all .3s}
+#start-btn:hover{transform:scale(1.05);box-shadow:0 0 60px rgba(0,240,255,.5)}
+#start-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+#vp-center .hint{margin-top:16px;font-size:13px;color:var(--dim)}
+#vp-center .sub-hint{margin-top:8px;font-size:11px;color:var(--faint);font-family:var(--mono)}
+
+#vp-bottom{bottom:16px;left:16px;right:16px}
+.progress-bar{height:4px;background:rgba(255,255,255,.05);border-radius:2px;overflow:hidden}
+.progress-bar .fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
+  width:0%;transition:width .3s;box-shadow:0 0 12px var(--accent)}
+.progress-info{display:flex;justify-content:space-between;margin-top:6px;
+  font-family:var(--mono);font-size:11px;color:var(--dim)}
+
+/* === SIDEBAR === */
+#sidebar{width:300px;background:var(--panel);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow-y:auto;backdrop-filter:blur(12px);z-index:10}
+#sidebar::-webkit-scrollbar{width:4px}
+#sidebar::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:2px}
+.sb-section{padding:16px;border-bottom:1px solid var(--border)}
+.sb-title{font-family:var(--mono);font-size:10px;color:var(--faint);
+  text-transform:uppercase;letter-spacing:2px;margin-bottom:12px}
+
+/* GPU info */
+.gpu-info-row{display:flex;justify-content:space-between;align-items:center;
+  padding:5px 0;font-size:12px}
+.gpu-info-row .label{color:var(--dim)}
+.gpu-info-row .val{font-family:var(--mono);color:var(--text);max-width:180px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+
+/* stats grid */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat-card{background:rgba(255,255,255,.02);border:1px solid var(--border);
+  border-radius:6px;padding:10px}
+.stat-card .sv{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--accent)}
+.stat-card .sl{font-size:10px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:1px;margin-top:2px}
+.stat-card.green .sv{color:var(--accent2)}
+.stat-card.warn .sv{color:var(--warn)}
+.stat-card.mag .sv{color:var(--magenta)}
+
+/* test buttons */
+.test-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;
+  margin-bottom:6px;background:rgba(255,255,255,.02);border:1px solid var(--border);
+  border-radius:6px;color:var(--text);font-size:12px;cursor:pointer;
+  transition:all .2s;font-family:var(--sans)}
+.test-btn:hover{border-color:var(--border-hi);background:rgba(0,240,255,.05)}
+.test-btn:disabled{opacity:.3;cursor:not-allowed}
+.test-btn .icon{width:28px;height:28px;border-radius:6px;display:flex;
+  align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.test-btn .info{flex:1;text-align:left}
+.test-btn .info .tn{font-weight:600}
+.test-btn .info .td{font-size:10px;color:var(--dim);margin-top:1px}
+.test-btn .score{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent)}
+.test-btn.running{border-color:var(--accent2);background:rgba(0,255,136,.08)}
+.test-btn.done{border-color:var(--accent);background:rgba(0,240,255,.05)}
+
+/* resolution slider */
+.res-control{display:flex;align-items:center;gap:10px}
+.res-control input{flex:1;accent-color:var(--accent)}
+.res-control .val{font-family:var(--mono);font-size:12px;color:var(--accent);min-width:36px;text-align:right}
+
+/* === BOTTOM BAR (FPS graph) === */
+#bottombar{height:110px;background:var(--panel);border-top:1px solid var(--border);
+  display:flex;align-items:stretch;z-index:10;backdrop-filter:blur(12px)}
+#graph-canvas{flex:1;height:100%}
+.graph-labels{width:120px;padding:12px;display:flex;flex-direction:column;
+  justify-content:center;border-right:1px solid var(--border)}
+.graph-labels .gl{display:flex;justify-content:space-between;font-family:var(--mono);
+  font-size:11px;margin-bottom:4px}
+.graph-labels .gl .l{color:var(--dim)}
+.graph-labels .gl .v{color:var(--text)}
+
+/* === RESULTS MODAL === */
+#results{position:fixed;inset:0;background:rgba(6,7,13,.92);z-index:100;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+#results.show{display:flex;animation:fadeIn .4s}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.results-panel{width:680px;max-width:90vw;max-height:90vh;overflow-y:auto;
+  background:var(--panel-solid);border:1px solid var(--border-hi);border-radius:16px;
+  padding:40px;box-shadow:0 0 80px rgba(0,240,255,.1)}
+.results-panel::-webkit-scrollbar{width:4px}
+.results-panel::-webkit-scrollbar-thumb{background:var(--border-hi)}
+.rp-header{text-align:center;margin-bottom:32px}
+.rp-header .grade{display:inline-block;padding:4px 20px;border-radius:6px;
+  font-family:var(--mono);font-size:14px;font-weight:700;letter-spacing:2px;margin-bottom:12px}
+.rp-header .score{font-family:var(--mono);font-size:72px;font-weight:800;
+  line-height:1;background:linear-gradient(135deg,var(--accent),var(--accent2));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.rp-header .score-label{font-family:var(--mono);font-size:12px;color:var(--dim);
+  text-transform:uppercase;letter-spacing:3px;margin-top:8px}
+.rp-header .gpu{font-family:var(--mono);font-size:13px;color:var(--dim);margin-top:12px}
+.rp-breakdown{margin-bottom:24px}
+.rp-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
+.rp-row .rn{flex:1;font-size:13px;font-weight:600}
+.rp-row .rv{font-family:var(--mono);font-size:13px;color:var(--dim);min-width:80px;text-align:right}
+.rp-row .rs{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--accent);min-width:80px;text-align:right}
+.rp-row .bar{flex:1;height:6px;background:rgba(255,255,255,.05);border-radius:3px;overflow:hidden;max-width:120px}
+.rp-row .bar .bf{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px}
+.rp-actions{display:flex;gap:12px;justify-content:center;margin-top:24px}
+.rp-btn{padding:12px 32px;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;border:none;transition:all .2s}
+.rp-btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#000}
+.rp-btn.primary:hover{box-shadow:0 0 30px rgba(0,240,255,.4)}
+.rp-btn.secondary{background:rgba(255,255,255,.05);color:var(--text);border:1px solid var(--border)}
+.rp-btn.secondary:hover{border-color:var(--border-hi)}
+
+/* grade colors */
+.grade-S\+{background:rgba(255,0,170,.15);color:var(--magenta);border:1px solid var(--magenta)}
+.grade-S{background:rgba(0,240,255,.15);color:var(--accent);border:1px solid var(--accent)}
+.grade-A{background:rgba(0,255,136,.15);color:var(--accent2);border:1px solid var(--accent2)}
+.grade-B{background:rgba(255,149,0,.15);color:var(--warn);border:1px solid var(--warn)}
+.grade-C{background:rgba(255,51,102,.15);color:var(--danger);border:1px solid var(--danger)}
+.grade-D{background:rgba(107,122,143,.15);color:var(--dim);border:1px solid var(--dim)}
+
+/* error */
+#error-screen{position:fixed;inset:0;background:var(--bg);z-index:200;
+  display:none;align-items:center;justify-content:center;flex-direction:column;gap:16px}
+#error-screen.show{display:flex}
+#error-screen h2{color:var(--danger);font-size:24px}
+#error-screen p{color:var(--dim);font-size:14px;max-width:400px;text-align:center}
+
+@media(max-width:900px){
+  #sidebar{width:240px}
+  #vp-topright .fps-big{font-size:32px}
+  #vp-topleft .test-name{font-size:18px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <div class="logo"><div class="dot"></div>GPU<span>STRESS</span></div>
+    <div class="gpu-name" id="gpu-name">检测中...</div>
+    <div class="status" id="status"><div class="ind"></div><span id="status-text">就绪</span></div>
+  </div>
+
+  <!-- MAIN -->
+  <div id="main">
+    <div id="viewport">
+      <canvas id="three-canvas"></canvas>
+      <div class="vp-overlay" id="vp-topleft">
+        <div class="test-label">当前场景</div>
+        <div class="test-name" id="scene-name">待机预览</div>
+        <div class="test-desc" id="scene-desc">点击开始跑分</div>
+      </div>
+      <div class="vp-overlay" id="vp-topright">
+        <div class="fps-big" id="fps-big">0</div>
+        <div class="fps-label">FPS</div>
+      </div>
+      <div class="vp-overlay" id="vp-center">
+        <button id="start-btn">开始跑分</button>
+        <div class="hint">四大场景压力测试 · 综合性能评分</div>
+        <div class="sub-hint">PARTICLES · GEOMETRY · SHADER · POST-FX</div>
+      </div>
+      <div class="vp-overlay" id="vp-bottom" style="display:none">
+        <div class="progress-bar"><div class="fill" id="prog-fill"></div></div>
+        <div class="progress-info">
+          <span id="prog-test">--</span>
+          <span id="prog-time">0s / 0s</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SIDEBAR -->
+    <div id="sidebar">
+      <div class="sb-section">
+        <div class="sb-title">GPU 信息</div>
+        <div class="gpu-info-row"><span class="label">厂商</span><span class="val" id="gi-vendor">--</span></div>
+        <div class="gpu-info-row"><span class="label">型号</span><span class="val" id="gi-renderer">--</span></div>
+        <div class="gpu-info-row"><span class="label">WebGL</span><span class="val" id="gi-version">--</span></div>
+        <div class="gpu-info-row"><span class="label">GLSL</span><span class="val" id="gi-glsl">--</span></div>
+        <div class="gpu-info-row"><span class="label">分辨率</span><span class="val" id="gi-res">--</span></div>
+      </div>
+
+      <div class="sb-section">
+        <div class="sb-title">实时监测</div>
+        <div class="stats-grid">
+          <div class="stat-card green"><div class="sv" id="s-fps">0</div><div class="sl">FPS</div></div>
+          <div class="stat-card"><div class="sv" id="s-ft">0.0</div><div class="sl">帧时间 ms</div></div>
+          <div class="stat-card warn"><div class="sv" id="s-tri">0</div><div class="sl">三角面</div></div>
+          <div class="stat-card mag"><div class="sv" id="s-dc">0</div><div class="sl">Draw Calls</div></div>
+          <div class="stat-card"><div class="sv" id="s-geo">0</div><div class="sl">几何体</div></div>
+          <div class="stat-card green"><div class="sv" id="s-tex">0</div><div class="sl">纹理</div></div>
+        </div>
+      </div>
+
+      <div class="sb-section">
+        <div class="sb-title">渲染分辨率</div>
+        <div class="res-control">
+          <input type="range" id="res-slider" min="0.5" max="2" step="0.1" value="1">
+          <span class="val" id="res-val">1.0x</span>
+        </div>
+      </div>
+
+      <div class="sb-section" style="flex:1">
+        <div class="sb-title">测试场景</div>
+        <button class="test-btn" data-test="particle">
+          <div class="icon" style="background:rgba(0,240,255,.15)">✦</div>
+          <div class="info"><div class="tn">粒子风暴</div><div class="td">80万粒子 · 顶点吞吐</div></div>
+          <div class="score" id="score-particle">--</div>
+        </button>
+        <button class="test-btn" data-test="geometry">
+          <div class="icon" style="background:rgba(0,255,136,.15)">◆</div>
+          <div class="info"><div class="tn">几何洪流</div><div class="td">3000实例 · 顶点处理</div></div>
+          <div class="score" id="score-geometry">--</div>
+        </button>
+        <button class="test-btn" data-test="shader">
+          <div class="icon" style="background:rgba(255,0,170,.15)">◉</div>
+          <div class="info"><div class="tn">着色器熔炉</div><div class="td">光线步进 · 片元计算</div></div>
+          <div class="score" id="score-shader">--</div>
+        </button>
+        <button class="test-btn" data-test="postfx">
+          <div class="icon" style="background:rgba(255,149,0,.15)">☀</div>
+          <div class="info"><div class="tn">后处理炼狱</div><div class="td">泛光特效 · 带宽压力</div></div>
+          <div class="score" id="score-postfx">--</div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM BAR -->
+  <div id="bottombar">
+    <div class="graph-labels">
+      <div class="gl"><span class="l">平均 FPS</span><span class="v" id="g-avg">0</span></div>
+      <div class="gl"><span class="l">1% Low</span><span class="v" id="g-low">0</span></div>
+      <div class="gl"><span class="l">帧时间</span><span class="v" id="g-ft">0ms</span></div>
+    </div>
+    <canvas id="graph-canvas"></canvas>
+  </div>
+</div>
+
+<!-- RESULTS MODAL -->
+<div id="results">
+  <div class="results-panel">
+    <div class="rp-header">
+      <div class="grade" id="r-grade">--</div>
+      <div class="score" id="r-score">0</div>
+      <div class="score-label">综合跑分</div>
+      <div class="gpu" id="r-gpu">--</div>
+    </div>
+    <div class="rp-breakdown" id="r-breakdown"></div>
+    <div class="rp-actions">
+      <button class="rp-btn secondary" id="r-copy">复制结果</button>
+      <button class="rp-btn primary" id="r-retry">重新跑分</button>
+    </div>
+  </div>
+</div>
+
+<!-- ERROR SCREEN -->
+<div id="error-screen">
+  <h2>WebGL 不可用</h2>
+  <p id="error-msg">你的浏览器或显卡不支持 WebGL，无法运行 GPU 跑分工具。请使用支持 WebGL 2.0 的现代浏览器。</p>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ===== CONFIG =====
+const CFG = {
+  testDuration: 10000,
+  particleCount: 800000,
+  instanceCount: 3000,
+  graphPoints: 240,
+};
+
+const TESTS = [
+  { id:'particle', name:'粒子风暴', desc:'80万粒子螺旋星系 · 顶点吞吐量测试', icon:'✦' },
+  { id:'geometry', name:'几何洪流', desc:'3000个晶体实例 · 顶点处理与实例化', icon:'◆' },
+  { id:'shader', name:'着色器熔炉', desc:'Mandelbulb光线步进 · 片元着色器计算', icon:'◉' },
+  { id:'postfx', name:'后处理炼狱', desc:'泛光后处理 · 填充率与带宽', icon:'☀' },
+];
+
+// ===== STATE =====
+const S = {
+  mode: 'idle',
+  testIdx: 0,
+  results: [],
+  frameTimes: [],
+  fpsHistory: [],
+  graphData: [],
+  currentScene: null,
+  useComposer: false,
+  resScale: 1.0,
+  testStartTime: 0,
+  testFrameTimes: [],
+  clock: new THREE.Clock(),
+};
+
+// ===== DOM =====
+const $ = id => document.getElementById(id);
+const canvas = $('three-canvas');
+const graphCanvas = $('graph-canvas');
+
+// ===== RENDERER =====
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth - 300, window.innerHeight - 52 - 110);
+} catch(e) {
+  $('error-screen').classList.add('show');
+  throw e;
+}
+
+// ===== GPU DETECTION =====
+function detectGPU() {
+  const gl = renderer.getContext();
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  const vendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : '受保护';
+  const renderer_str = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '受保护';
+  const version = gl.getParameter(gl.VERSION);
+  const glsl = gl.getParameter(gl.SHADING_LANGUAGE_VERSION);
+
+  $('gi-vendor').textContent = vendor;
+  $('gi-renderer').textContent = renderer_str;
+  $('gi-version').textContent = version.split(' ').slice(-1)[0];
+  $('gi-glsl').textContent = glsl.split(' ').slice(-1)[0];
+  $('gi-res').textContent = `${window.innerWidth - 300}×${window.innerHeight - 162}`;
+
+  // Shorten GPU name for topbar
+  let shortName = renderer_str;
+  if (shortName === '受保护') shortName = 'GPU 信息受保护';
+  else {
+    // Clean up ANGLE prefix
+    shortName = shortName.replace(/^ANGLE \(/, '').replace(/\)$/, '');
+    // Extract main GPU name
+    const match = shortName.match(/(?:NVIDIA|AMD|Intel|Apple|Mali|Adreno|PowerVR)[^,]*/i);
+    if (match) shortName = match[0].trim();
+  }
+  $('gpu-name').textContent = shortName;
+  return { vendor, renderer: renderer_str };
+}
+
+const gpuInfo = detectGPU();
+
+// ===== SCENE BUILDERS =====
+function makeCamera(fov=60) {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const cam = new THREE.PerspectiveCamera(fov, w/h, 0.1, 500);
+  return cam;
+}
+
+// --- Scene 1: Particle Storm ---
+function buildParticleScene() {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x06070d);
+  const count = CFG.particleCount;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  const phases = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const radius = Math.pow(Math.random(), 0.5) * 45 + 3;
+    const branch = (i % 4) * (Math.PI * 2 / 4);
+    const spin = radius * 0.25;
+    const angle = branch + spin;
+    const rand = Math.pow(Math.random(), 3) * (Math.random() < 0.5 ? 1 : -1) * 3;
+    positions[i*3]   = Math.cos(angle) * radius + rand;
+    positions[i*3+1] = rand * 0.4;
+    positions[i*3+2] = Math.sin(angle) * radius + rand;
+
+    const t = Math.min(radius / 48, 1);
+    colors[i*3]   = 0.1 + t * 0.9;
+    colors[i*3+1] = 0.8 - t * 0.3;
+    colors[i*3+2] = 1.0 - t * 0.2;
+    sizes[i] = Math.random() * 2.5 + 0.5;
+    phases[i] = Math.random() * Math.PI * 2;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `
+      attribute float aSize; attribute vec3 aColor; attribute float aPhase;
+      varying vec3 vColor; varying float vAlpha;
+      uniform float uTime;
+      void main(){
+        vColor = aColor;
+        vec3 pos = position;
+        float r = length(pos.xz);
+        float ang = uTime * 0.15 + r * 0.02;
+        float c = cos(ang), s = sin(ang);
+        pos.x = position.x * c - position.z * s;
+        pos.z = position.x * s + position.z * c;
+        pos.y += sin(uTime * 0.8 + aPhase) * 1.5;
+        vAlpha = 0.6 + 0.4 * sin(uTime * 2.0 + aPhase);
+        vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+        gl_PointSize = aSize * (180.0 / max(-mv.z, 0.1));
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying vec3 vColor; varying float vAlpha;
+      void main(){
+        float d = length(gl_PointCoord - vec2(0.5));
+        if (d > 0.5) discard;
+        float a = smoothstep(0.5, 0.0, d) * vAlpha;
+        gl_FragColor = vec4(vColor * (1.0 + a * 0.5), a);
+      }`,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+
+  const points = new THREE.Points(geo, mat);
+  scene.add(points);
+  const cam = makeCamera(60);
+  cam.position.set(0, 25, 55);
+  cam.lookAt(0, 0, 0);
+
+  return {
+    scene, camera: cam, useComposer: false,
+    update: (dt, t) => {
+      mat.uniforms.uTime.value = t;
+      cam.position.x = Math.cos(t * 0.05) * 55;
+      cam.position.z = Math.sin(t * 0.05) * 55;
+      cam.lookAt(0, 0, 0);
+    },
+    dispose: () => { geo.dispose(); mat.dispose(); }
+  };
+}
+
+// --- Scene 2: Geometry Flood ---
+function buildGeometryScene() {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x06070d);
+  scene.fog = new THREE.Fog(0x06070d, 40, 120);
+
+  const baseGeo = new THREE.IcosahedronGeometry(1, 2);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x00f0ff, metalness: 0.9, roughness: 0.15,
+    emissive: 0x002030, flatShading: true,
+  });
+
+  const count = CFG.instanceCount;
+  const mesh = new THREE.InstancedMesh(baseGeo, mat, count);
+  const dummy = new THREE.Object3D();
+  const data = [];
+  for (let i = 0; i < count; i++) {
+    data.push({
+      pos: new THREE.Vector3((Math.random()-0.5)*70, (Math.random()-0.5)*70, (Math.random()-0.5)*70),
+      rot: new THREE.Vector3(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI),
+      rotSpd: new THREE.Vector3((Math.random()-0.5)*1.5, (Math.random()-0.5)*1.5, (Math.random()-0.5)*1.5),
+      scale: Math.random() * 0.8 + 0.4,
+      offset: Math.random() * Math.PI * 2,
+    });
+    dummy.position.copy(data[i].pos);
+    dummy.rotation.copy(data[i].rot);
+    dummy.scale.setScalar(data[i].scale);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(i, dummy.matrix);
+  }
+  scene.add(mesh);
+
+  scene.add(new THREE.AmbientLight(0x303048, 0.5));
+  const l1 = new THREE.PointLight(0x00f0ff, 3, 120); l1.position.set(25, 25, 25); scene.add(l1);
+  const l2 = new THREE.PointLight(0xff00aa, 3, 120); l2.position.set(-25, -15, 25); scene.add(l2);
+  const l3 = new THREE.DirectionalLight(0xffffff, 0.3); l3.position.set(0, 50, 0); scene.add(l3);
+
+  const cam = makeCamera(60);
+  cam.position.set(0, 15, 55);
+  cam.lookAt(0, 0, 0);
+
+  return {
+    scene, camera: cam, useComposer: false,
+    update: (dt, t) => {
+      for (let i = 0; i < count; i++) {
+        const d = data[i];
+        d.rot.x += d.rotSpd.x * dt;
+        d.rot.y += d.rotSpd.y * dt;
+        d.rot.z += d.rotSpd.z * dt;
+        dummy.position.copy(d.pos);
+        dummy.position.y += Math.sin(t + d.offset) * 2;
+        dummy.rotation.set(d.rot.x, d.rot.y, d.rot.z);
+        dummy.scale.setScalar(d.scale);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      l1.position.x = Math.cos(t * 0.5) * 30;
+      l1.position.z = Math.sin(t * 0.5) * 30;
+      l2.position.x = Math.cos(t * 0.5 + Math.PI) * 30;
+      l2.position.z = Math.sin(t * 0.5 + Math.PI) * 30;
+      cam.position.x = Math.cos(t * 0.03) * 55;
+      cam.position.z = Math.sin(t * 0.03) * 55;
+      cam.lookAt(0, 0, 0);
+    },
+    dispose: () => { baseGeo.dispose(); mat.dispose(); mesh.dispose(); }
+  };
+}
+
+// --- Scene 3: Shader Forge (Ray Marching) ---
+function buildShaderScene() {
+  const scene = new THREE.Scene();
+  const geo = new THREE.PlaneGeometry(2, 2);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uRes: { value: new THREE.Vector2(canvas.clientWidth, canvas.clientHeight) },
+    },
+    vertexShader: `
+      void main(){ gl_Position = vec4(position, 1.0); }`,
+    fragmentShader: `
+      precision highp float;
+      uniform float uTime; uniform vec2 uRes;
+      float DE(vec3 pos){
+        vec3 z = pos; float dr = 1.0; float r = 0.0;
+        float pwr = 8.0 + sin(uTime * 0.15) * 1.5;
+        for (int i = 0; i < 8; i++){
+          r = length(z);
+          if (r > 2.0) break;
+          float theta = acos(z.z / max(r, 0.001));
+          float phi = atan(z.y, z.x);
+          dr = pow(r, pwr - 1.0) * pwr * dr + 1.0;
+          float zr = pow(r, pwr);
+          theta *= pwr; phi *= pwr;
+          z = zr * vec3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta));
+          z += pos;
+        }
+        return 0.5 * log(max(r, 0.001)) * r / max(dr, 0.001);
+      }
+      vec3 getNormal(vec3 p){
+        vec2 e = vec2(0.0015, 0.0);
+        return normalize(vec3(
+          DE(p+e.xyy)-DE(p-e.xyy), DE(p+e.yxy)-DE(p-e.yxy), DE(p+e.yyx)-DE(p-e.yyx)));
+      }
+      void main(){
+        vec2 uv = (gl_FragCoord.xy - 0.5*uRes) / uRes.y;
+        vec3 ro = vec3(0.0, 0.0, -3.2);
+        vec3 rd = normalize(vec3(uv, 1.2));
+        float a = uTime * 0.12;
+        mat2 R = mat2(cos(a), -sin(a), sin(a), cos(a));
+        ro.xz = R * ro.xz; rd.xz = R * rd.xz;
+        float t = 0.0; float minD = 1.0; bool hit = false;
+        for (int i = 0; i < 80; i++){
+          vec3 p = ro + rd * t;
+          float d = DE(p);
+          if (d < 0.0008){ hit = true; break; }
+          if (t > 8.0) break;
+          t += d; minD = min(minD, d);
+        }
+        vec3 col = vec3(0.0);
+        if (hit){
+          vec3 p = ro + rd * t;
+          vec3 n = getNormal(p);
+          vec3 ld = normalize(vec3(0.8, 0.6, -0.5));
+          float diff = max(dot(n, ld), 0.0);
+          float spec = pow(max(dot(reflect(-ld, n), -rd), 0.0), 32.0);
+          float fr = pow(1.0 - max(dot(-rd, n), 0.0), 4.0);
+          vec3 c1 = vec3(0.0, 0.75, 1.0);
+          vec3 c2 = vec3(1.0, 0.15, 0.55);
+          col = c1 * diff + c2 * fr * 0.6 + vec3(1.0) * spec * 0.3;
+          col += vec3(0.01, 0.03, 0.06) * (1.0 - diff);
+        } else {
+          col = vec3(0.0, 0.25, 0.45) * (1.0 - minD) * 0.4;
+          col += vec3(0.008, 0.012, 0.025);
+        }
+        col = pow(col, vec3(0.4545));
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  });
+  const quad = new THREE.Mesh(geo, mat);
+  scene.add(quad);
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  return {
+    scene, camera: cam, useComposer: false,
+    update: (dt, t) => { mat.uniforms.uTime.value = t; },
+    dispose: () => { geo.dispose(); mat.dispose(); }
+  };
+}
+
+// --- Scene 4: Post-Processing ---
+function buildPostFXScene() {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05050a);
+
+  const group = new THREE.Group();
+  const colors = [0x00f0ff, 0x00ff88, 0xff00aa, 0xff9500, 0x9d00ff];
+  const spheres = [];
+  const sphereCount = 150;
+  for (let i = 0; i < sphereCount; i++) {
+    const r = Math.random() * 1.5 + 0.5;
+    const geo = new THREE.SphereGeometry(r, 24, 16);
+    const col = colors[i % colors.length];
+    const mat = new THREE.MeshBasicMaterial({ color: col });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set((Math.random()-0.5)*50, (Math.random()-0.5)*30, (Math.random()-0.5)*50);
+    m.userData = {
+      origPos: m.position.clone(),
+      speed: Math.random() * 0.5 + 0.2,
+      offset: Math.random() * Math.PI * 2,
+      rotSpeed: new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5),
+    };
+    spheres.push(m);
+    group.add(m);
+  }
+  scene.add(group);
+
+  // Grid floor
+  const gridHelper = new THREE.GridHelper(80, 40, 0x00f0ff, 0x0a1a2a);
+  gridHelper.position.y = -18;
+  scene.add(gridHelper);
+
+  const cam = makeCamera(70);
+  cam.position.set(0, 5, 30);
+  cam.lookAt(0, 0, 0);
+
+  // Composer
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, cam));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 1.4, 0.5, 0.82);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+
+  return {
+    scene, camera: cam, useComposer: true, composer,
+    update: (dt, t) => {
+      spheres.forEach(s => {
+        const d = s.userData;
+        s.position.y = d.origPos.y + Math.sin(t * d.speed + d.offset) * 5;
+        s.rotation.x += d.rotSpeed.x * dt;
+        s.rotation.y += d.rotSpeed.y * dt;
+      });
+      group.rotation.y = t * 0.05;
+      cam.position.x = Math.cos(t * 0.04) * 30;
+      cam.position.z = Math.sin(t * 0.04) * 30;
+      cam.lookAt(0, 0, 0);
+    },
+    dispose: () => {
+      spheres.forEach(s => { s.geometry.dispose(); s.material.dispose(); });
+      gridHelper.geometry.dispose(); gridHelper.material.dispose();
+      composer.dispose();
+    }
+  };
+}
+
+const SCENE_BUILDERS = {
+  particle: buildParticleScene,
+  geometry: buildGeometryScene,
+  shader: buildShaderScene,
+  postfx: buildPostFXScene,
+};
+
+// ===== SCENE MANAGEMENT =====
+let composer = null;
+
+function loadScene(testId) {
+  if (S.currentScene) {
+    S.currentScene.dispose();
+    S.currentScene = null;
+  }
+  composer = null;
+  const builder = SCENE_BUILDERS[testId];
+  if (!builder) return;
+  S.currentScene = builder();
+  S.useComposer = S.currentScene.useComposer || false;
+  if (S.useComposer) composer = S.currentScene.composer;
+  // reset renderer info
+  renderer.info.reset();
+}
+
+// ===== MONITORING =====
+let lastFrameTime = performance.now();
+let fpsAccum = 0, fpsCount = 0, displayFPS = 0;
+let smoothFPS = 0;
+
+function updateMonitor() {
+  const now = performance.now();
+  const dt = now - lastFrameTime;
+  lastFrameTime = now;
+
+  const instantFPS = 1000 / Math.max(dt, 0.1);
+  smoothFPS = smoothFPS === 0 ? instantFPS : smoothFPS * 0.9 + instantFPS * 0.1;
+
+  S.fpsHistory.push(smoothFPS);
+  if (S.fpsHistory.length > CFG.graphPoints) S.fpsHistory.shift();
+
+  if (S.mode === 'benchmarking') {
+    S.testFrameTimes.push(dt);
+  }
+
+  // Update UI
+  $('s-fps').textContent = Math.round(smoothFPS);
+  $('s-ft').textContent = dt.toFixed(1);
+  $('fps-big').textContent = Math.round(smoothFPS);
+
+  const info = renderer.info;
+  $('s-tri').textContent = formatNum(info.render.triangles);
+  $('s-dc').textContent = info.render.calls;
+  $('s-geo').textContent = info.memory.geometries;
+  $('s-tex').textContent = info.memory.textures;
+
+  // Graph stats
+  if (S.fpsHistory.length > 10) {
+    const avg = S.fpsHistory.reduce((a,b)=>a+b,0) / S.fpsHistory.length;
+    $('g-avg').textContent = Math.round(avg);
+    const sorted = [...S.fpsHistory].sort((a,b)=>a-b);
+    const lowIdx = Math.floor(sorted.length * 0.01);
+    $('g-low').textContent = Math.round(sorted[lowIdx] || 0);
+    $('g-ft').textContent = (1000 / Math.max(avg, 1)).toFixed(1) + 'ms';
+  }
+}
+
+function formatNum(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+
+// ===== FPS GRAPH =====
+const gctx = graphCanvas.getContext('2d');
+function resizeGraph() {
+  const dpr = window.devicePixelRatio || 1;
+  graphCanvas.width = graphCanvas.clientWidth * dpr;
+  graphCanvas.height = graphCanvas.clientHeight * dpr;
+  gctx.scale(dpr, dpr);
+}
+
+function drawGraph() {
+  const w = graphCanvas.clientWidth, h = graphCanvas.clientHeight;
+  gctx.clearRect(0, 0, w, h);
+
+  // Grid
+  gctx.strokeStyle = 'rgba(0,240,255,0.05)';
+  gctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = (h / 4) * i;
+    gctx.beginPath(); gctx.moveTo(0, y); gctx.lineTo(w, y); gctx.stroke();
+  }
+
+  // 60fps line
+  const maxFPS = 120;
+  const y60 = h - (60 / maxFPS) * h;
+  gctx.strokeStyle = 'rgba(0,255,136,0.2)';
+  gctx.setLineDash([4, 4]);
+  gctx.beginPath(); gctx.moveTo(0, y60); gctx.lineTo(w, y60); gctx.stroke();
+  gctx.setLineDash([]);
+
+  // FPS line
+  if (S.fpsHistory.length > 1) {
+    const step = w / CFG.graphPoints;
+    // Fill
+    gctx.beginPath();
+    gctx.moveTo(0, h);
+    S.fpsHistory.forEach((fps, i) => {
+      const x = i * step;
+      const y = h - Math.min(fps / maxFPS, 1) * h;
+      gctx.lineTo(x, y);
+    });
+    gctx.lineTo((S.fpsHistory.length - 1) * step, h);
+    gctx.closePath();
+    const grad = gctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(0,240,255,0.25)');
+    grad.addColorStop(1, 'rgba(0,240,255,0)');
+    gctx.fillStyle = grad;
+    gctx.fill();
+
+    // Line
+    gctx.beginPath();
+    S.fpsHistory.forEach((fps, i) => {
+      const x = i * step;
+      const y = h - Math.min(fps / maxFPS, 1) * h;
+      if (i === 0) gctx.moveTo(x, y); else gctx.lineTo(x, y);
+    });
+    gctx.strokeStyle = '#00f0ff';
+    gctx.lineWidth = 1.5;
+    gctx.stroke();
+  }
+}
+
+// ===== BENCHMARK RUNNER =====
+async function runBenchmark() {
+  S.mode = 'benchmarking';
+  S.results = [];
+  S.testIdx = 0;
+  $('start-btn').disabled = true;
+  $('vp-center').style.display = 'none';
+  $('vp-bottom').style.display = 'block';
+  $('status').className = 'status running';
+  $('status-text').textContent = '跑分中...';
+  document.querySelectorAll('.test-btn').forEach(b => {
+    b.disabled = true; b.classList.remove('done', 'running');
+    b.querySelector('.score').textContent = '--';
+  });
+
+  for (let i = 0; i < TESTS.length; i++) {
+    const test = TESTS[i];
+    S.testIdx = i;
+    $('scene-name').textContent = test.name;
+    $('scene-desc').textContent = test.desc;
+    $('prog-test').textContent = `(${i+1}/${TESTS.length}) ${test.name}`;
+    document.querySelector(`[data-test="${test.id}"]`).classList.add('running');
+
+    loadScene(test.id);
+    S.testFrameTimes = [];
+    S.testStartTime = performance.now();
+    S.fpsHistory = [];
+
+    await new Promise(resolve => {
+      const check = () => {
+        const elapsed = performance.now() - S.testStartTime;
+        const pct = Math.min(elapsed / CFG.testDuration, 1) * 100;
+        $('prog-fill').style.width = pct + '%';
+        $('prog-time').textContent = (elapsed/1000).toFixed(1) + 's / ' + (CFG.testDuration/1000) + 's';
+        if (elapsed >= CFG.testDuration) { resolve(); }
+        else { requestAnimationFrame(check); }
+      };
+      check();
+    });
+
+    // Calculate results
+    const fts = S.testFrameTimes.filter(f => f > 0);
+    const avgFT = fts.reduce((a,b)=>a+b,0) / fts.length;
+    const avgFPS = 1000 / avgFT;
+    const sorted = [...fts].sort((a,b)=>a-b);
+    const low1pIdx = Math.floor(sorted.length * 0.01);
+    const low1pFT = sorted.slice(0, Math.max(low1pIdx, 1)).reduce((a,b)=>a+b,0) / Math.max(low1pIdx, 1);
+    const low1pFPS = 1000 / low1pFT;
+    const score = Math.round(avgFPS * 50);
+
+    S.results.push({ ...test, avgFPS, low1pFPS, avgFT, score });
+    $('score-' + test.id).textContent = score;
+    document.querySelector(`[data-test="${test.id}"]`).classList.remove('running');
+    document.querySelector(`[data-test="${test.id}"]`).classList.add('done');
+
+    // Brief pause between tests
+    await sleep(500);
+  }
+
+  // Show results
+  S.mode = 'results';
+  $('status').className = 'status done';
+  $('status-text').textContent = '完成';
+  $('vp-bottom').style.display = 'none';
+  showResults();
+  document.querySelectorAll('.test-btn').forEach(b => b.disabled = false);
+  $('start-btn').disabled = false;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ===== RESULTS =====
+function showResults() {
+  const total = S.results.reduce((a, r) => a + r.score, 0);
+  const grade = getGrade(total);
+
+  $('r-gpu').textContent = gpuInfo.renderer === '受保护' ? 'GPU 信息受保护' : gpuInfo.renderer;
+
+  // Grade badge
+  const gradeEl = $('r-grade');
+  gradeEl.textContent = grade + ' 级';
+  gradeEl.className = 'grade grade-' + grade;
+
+  // Animated score
+  animateNumber($('r-score'), 0, total, 1500);
+
+  // Breakdown
+  const maxScore = Math.max(...S.results.map(r => r.score), 1);
+  $('r-breakdown').innerHTML = S.results.map(r => `
+    <div class="rp-row">
+      <div class="rn">${r.icon} ${r.name}</div>
+      <div class="bar"><div class="bf" style="width:${(r.score/maxScore*100).toFixed(0)}%"></div></div>
+      <div class="rv">${r.avgFPS.toFixed(1)} FPS</div>
+      <div class="rs">${r.score}</div>
+    </div>
+  `).join('');
+
+  $('results').classList.add('show');
+}
+
+function getGrade(score) {
+  if (score >= 20000) return 'S+';
+  if (score >= 15000) return 'S';
+  if (score >= 10000) return 'A';
+  if (score >= 6000) return 'B';
+  if (score >= 3000) return 'C';
+  return 'D';
+}
+
+function animateNumber(el, from, to, duration) {
+  const start = performance.now();
+  const step = () => {
+    const elapsed = performance.now() - start;
+    const pct = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - pct, 3);
+    el.textContent = Math.round(from + (to - from) * eased).toLocaleString();
+    if (pct < 1) requestAnimationFrame(step);
+  };
+  step();
+}
+
+// ===== SINGLE TEST MODE =====
+async function runSingleTest(testId) {
+  if (S.mode === 'benchmarking') return;
+  const test = TESTS.find(t => t.id === testId);
+  if (!test) return;
+
+  S.mode = 'monitoring';
+  $('vp-center').style.display = 'none';
+  $('scene-name').textContent = test.name;
+  $('scene-desc').textContent = test.desc;
+  $('status').className = 'status running';
+  $('status-text').textContent = '监测中...';
+  document.querySelectorAll('.test-btn').forEach(b => b.disabled = true);
+
+  loadScene(testId);
+  S.fpsHistory = [];
+
+  // Run for 15 seconds in monitoring mode
+  await sleep(15000);
+
+  document.querySelectorAll('.test-btn').forEach(b => b.disabled = false);
+  $('status').className = 'status';
+  $('status-text').textContent = '就绪';
+  S.mode = 'idle';
+}
+
+// ===== ANIMATION LOOP =====
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = S.clock.getDelta();
+  const t = S.clock.getElapsedTime();
+
+  if (S.currentScene) {
+    S.currentScene.update(dt, t);
+    if (S.useComposer && composer) {
+      composer.render();
+    } else {
+      renderer.render(S.currentScene.scene, S.currentScene.camera);
+    }
+  }
+
+  updateMonitor();
+  drawGraph();
+}
+
+// ===== RESIZE =====
+function onResize() {
+  const w = window.innerWidth - 300;
+  const h = window.innerHeight - 52 - 110;
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio * S.resScale, 2));
+  if (S.currentScene && S.currentScene.camera.isPerspectiveCamera) {
+    S.currentScene.camera.aspect = w / h;
+    S.currentScene.camera.updateProjectionMatrix();
+  }
+  if (composer) composer.setSize(w, h);
+  $('gi-res').textContent = `${w}×${h}`;
+  resizeGraph();
+}
+window.addEventListener('resize', onResize);
+
+// ===== EVENT LISTENERS =====
+$('start-btn').addEventListener('click', () => {
+  if (S.mode === 'idle' || S.mode === 'results') runBenchmark();
+});
+
+document.querySelectorAll('.test-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    runSingleTest(btn.dataset.test);
+  });
+});
+
+$('res-slider').addEventListener('input', (e) => {
+  S.resScale = parseFloat(e.target.value);
+  $('res-val').textContent = S.resScale.toFixed(1) + 'x';
+  onResize();
+});
+
+$('r-retry').addEventListener('click', () => {
+  $('results').classList.remove('show');
+  runBenchmark();
+});
+
+$('r-copy').addEventListener('click', () => {
+  const total = S.results.reduce((a, r) => a + r.score, 0);
+  const grade = getGrade(total);
+  let text = `GPU STRESS 跑分结果\n`;
+  text += `GPU: ${gpuInfo.renderer}\n`;
+  text += `综合得分: ${total} (${grade}级)\n\n`;
+  S.results.forEach(r => {
+    text += `${r.name}: ${r.avgFPS.toFixed(1)} FPS (得分 ${r.score})\n`;
+  });
+  navigator.clipboard.writeText(text).then(() => {
+    $('r-copy').textContent = '已复制!';
+    setTimeout(() => $('r-copy').textContent = '复制结果', 2000);
+  });
+});
+
+// ===== INIT =====
+loadScene('particle');
+$('scene-name').textContent = '待机预览';
+$('scene-desc').textContent = '粒子风暴场景预览中';
+resizeGraph();
+onResize();
+animate();
+</script>
+</body>
+</html>

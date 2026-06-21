@@ -1,0 +1,2059 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>作品画布</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#f5f5f7;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+canvas{display:block;cursor:grab}
+canvas.grabbing{cursor:grabbing}
+canvas.pointer{cursor:pointer}
+canvas.crosshair{cursor:crosshair}
+canvas.move{cursor:move}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// ============ UTILS ============
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function elasticOut(t) { return Math.pow(2, -10 * t) * Math.sin((t - 0.075) * (2 * Math.PI) / 0.3) + 1; }
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+// ============ CAMERA ============
+const camera = { x: 0, y: 0, zoom: 1, targetZoom: 1, targetX: 0, targetY: 0 };
+const MIN_ZOOM = 0.2, MAX_ZOOM = 3;
+function screenToWorld(sx, sy) { return { x: (sx - W / 2) / camera.zoom + camera.x, y: (sy - H / 2) / camera.zoom + camera.y }; }
+function worldToScreen(wx, wy) { return { x: (wx - camera.x) * camera.zoom + W / 2, y: (wy - camera.y) * camera.zoom + H / 2 }; }
+
+// ============ CONSTANTS ============
+const CARD_W = 220, CARD_H = 160, CARD_R = 12;
+const TYPE_COLORS = { image: '#ec4899', novel: '#a855f7', video: '#f59e0b', skill: '#22c55e' };
+const TYPE_LABELS = { image: '图片', novel: '文字', video: '视频', skill: '技能' };
+const ROW_SPACING = 280;
+const NODE_SPACING_X = 260;
+const NODE_SPACING_Y = 240;
+const EXPAND_IMG_MAX_W = 500;
+const EXPAND_IMG_MAX_H = 400;
+const EXPAND_IMG_MIN_H = CARD_H;
+
+// ============ STATE ============
+let nodes = [];
+let groups = {}; // groupId -> { type, nodeIds:[], isRowGroup: bool }
+let particles = [];
+let bloomParticles = [];
+let welcomeNode = null;
+let hoveredNode = null;
+let selectedNode = null;
+let draggingNode = null;
+let dragOffsetX = 0, dragOffsetY = 0;
+let dragStartScreenX = 0, dragStartScreenY = 0; // mousedown screen position
+let dragStartTime = 0; // mousedown timestamp
+let dragConfirmed = false; // true when moved beyond threshold
+const DRAG_THRESHOLD_PX = 5; // pixels to move before drag starts
+const DRAG_THRESHOLD_MS = 120; // max ms for a click (shorter = faster click detection)
+let isPanning = false;
+let panStartX = 0, panStartY = 0;
+let panCamStartX = 0, panCamStartY = 0;
+let spaceDown = false;
+let mouseWorldX = 0, mouseWorldY = 0;
+let mouseScreenX = 0, mouseScreenY = 0;
+let contextMenu = null;
+let autoLayoutAnimating = false;
+let autoLayoutStart = 0;
+let autoLayoutDuration = 500;
+let autoLayoutTargets = [];
+let dirty = false;
+let autoSaveTimer = null;
+let welcomeVisible = true;
+let bloomActive = false;
+let bloomTime = 0;
+let scrollOffset = {}; // nodeId -> scrollY for novels
+let _baselineSnapshot = null; // saved before first expand, restored on last collapse
+
+// ============ INDEXEDDB ============
+const DB_NAME = 'PortfolioCanvasDB';
+const DB_VER = 1;
+let db = null;
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = e => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('nodes')) d.createObjectStore('nodes', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('blobs')) d.createObjectStore('blobs', { keyPath: 'id' });
+    };
+    req.onsuccess = e => { db = e.target.result; resolve(db); };
+    req.onerror = e => reject(e);
+  });
+}
+function saveNode(node) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('nodes', 'readwrite');
+    tx.objectStore('nodes').put(node);
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+}
+function saveBlob(id, blob) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('blobs', 'readwrite');
+    tx.objectStore('blobs').put({ id, blob });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+}
+function getBlob(id) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('blobs', 'readonly');
+    const req = tx.objectStore('blobs').get(id);
+    req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+    req.onerror = reject;
+  });
+}
+function getAllNodes() {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('nodes', 'readonly');
+    const req = tx.objectStore('nodes').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = reject;
+  });
+}
+function deleteNodeDB(id) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['nodes', 'blobs'], 'readwrite');
+    tx.objectStore('nodes').delete(id);
+    tx.objectStore('blobs').delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+}
+function clearAllDB() {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['nodes', 'blobs'], 'readwrite');
+    tx.objectStore('nodes').clear();
+    tx.objectStore('blobs').clear();
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+}
+function markDirty() {
+  dirty = true;
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(async () => {
+    if (!dirty) return;
+    for (const n of nodes) {
+      const saveData = { ...n };
+      if (saveData._imgObj) delete saveData._imgObj;
+      if (saveData._videoEl) delete saveData._videoEl;
+      await saveNode(saveData);
+    }
+    dirty = false;
+  }, 5000);
+}
+
+// ============ PARTICLE SYSTEM ============
+function initParticles() {
+  particles = [];
+  for (let i = 0; i < 40; i++) {
+    particles.push({
+      x: (Math.random() - 0.5) * 3000,
+      y: (Math.random() - 0.5) * 3000,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.3,
+      r: Math.random() * 2 + 1,
+      alpha: Math.random() * 0.3 + 0.05
+    });
+  }
+}
+function updateParticles() {
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    const dx = p.x - mouseWorldX;
+    const dy = p.y - mouseWorldY;
+    const d = Math.hypot(dx, dy);
+    if (d < 150 && d > 0) {
+      const force = (150 - d) / 150 * 0.15;
+      p.vx += (dx / d) * force;
+      p.vy += (dy / d) * force;
+    }
+    p.vx *= 0.98;
+    p.vy *= 0.98;
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    const s = worldToScreen(p.x, p.y);
+    if (s.x < -20 || s.x > W + 20 || s.y < -20 || s.y > H + 20) continue;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, p.r * camera.zoom, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(79,70,229,${p.alpha})`;
+    ctx.fill();
+  }
+}
+
+// ============ BLOOM PARTICLES ============
+function spawnBloom(cx, cy) {
+  bloomActive = true;
+  bloomTime = 0;
+  bloomParticles = [];
+  for (let i = 0; i < 60; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = Math.random() * 4 + 2;
+    bloomParticles.push({
+      x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: Math.random() * 4 + 2,
+      life: 1,
+      decay: Math.random() * 0.015 + 0.008,
+      color: ['#ec4899', '#a855f7', '#f59e0b', '#22c55e', '#4f46e5'][Math.floor(Math.random() * 5)]
+    });
+  }
+}
+function updateBloom() {
+  if (!bloomActive) return;
+  bloomTime += 1 / 60;
+  let alive = false;
+  for (const p of bloomParticles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.05;
+    p.life -= p.decay;
+    if (p.life > 0) alive = true;
+  }
+  if (!alive) bloomActive = false;
+}
+function drawBloom() {
+  if (!bloomActive) return;
+  for (const p of bloomParticles) {
+    if (p.life <= 0) continue;
+    const s = worldToScreen(p.x, p.y);
+    ctx.globalAlpha = p.life;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, p.r * camera.zoom, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============ NODE CREATION ============
+function createNode(type, data = {}, existingId = null) {
+  const id = existingId || uid();
+  const node = {
+    id, type,
+    title: data.title || TYPE_LABELS[type],
+    description: data.description || '',
+    tags: data.tags || [],
+    year: data.year || new Date().getFullYear(),
+    weight: data.weight || 3,
+    x: data.x || 0,
+    y: data.y || 0,
+    width: data.width || CARD_W,
+    height: data.height || CARD_H,
+    groupId: data.groupId || null,
+    expanded: data.expanded || false,
+    content: data.content || '',
+    locked: data.locked || false,
+    _animScale: existingId ? 1 : 0,
+    _animTime: 0,
+    _imgObj: null,
+    _videoEl: null,
+    _videoPlaying: false,
+    _hoverScale: 1,
+    _targetHoverScale: 1
+  };
+  if (data.content && type === 'image') {
+    const img = new Image();
+    img.onload = () => { node._imgObj = img; };
+    img.src = data.content;
+  }
+  if (data.content && type === 'video') {
+    const vid = document.createElement('video');
+    vid.src = data.content;
+    vid.preload = 'auto';
+    vid.muted = false;
+    node._videoEl = vid;
+  }
+  nodes.push(node);
+  scrollOffset[id] = 0;
+  markDirty();
+  return node;
+}
+
+// ============ GROUP SYSTEM ============
+function rebuildGroups() {
+  groups = {};
+  for (const n of nodes) {
+    if (!n.groupId) continue;
+    if (!groups[n.groupId]) groups[n.groupId] = { type: n.type, nodeIds: [], isRowGroup: false };
+    groups[n.groupId].nodeIds.push(n.id);
+  }
+}
+function getGroupNodes(groupId) {
+  if (!groups[groupId]) return [];
+  return groups[groupId].nodeIds.map(id => nodes.find(n => n.id === id)).filter(Boolean);
+}
+function getGroupBounds(groupId) {
+  const gNodes = getGroupNodes(groupId);
+  if (gNodes.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of gNodes) {
+    const hw = n.width / 2, hh = n.height / 2;
+    if (n.x - hw < minX) minX = n.x - hw;
+    if (n.y - hh < minY) minY = n.y - hh;
+    if (n.x + hw > maxX) maxX = n.x + hw;
+    if (n.y + hh > maxY) maxY = n.y + hh;
+  }
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY };
+}
+function addToGroup(node) {
+  const sameType = nodes.filter(n => n.type === node.type && n.id !== node.id && n.groupId);
+  if (sameType.length === 0) {
+    const gid = uid();
+    node.groupId = gid;
+    groups[gid] = { type: node.type, nodeIds: [node.id], isRowGroup: false };
+    return;
+  }
+  const nearest = sameType.reduce((best, n) => {
+    const d = dist(n.x, n.y, node.x, node.y);
+    return d < best.d ? { n, d } : best;
+  }, { n: sameType[0], d: Infinity });
+  node.groupId = nearest.n.groupId;
+  if (groups[node.groupId]) groups[node.groupId].nodeIds.push(node.id);
+  arrangeGroup(node.groupId);
+}
+function removeFromGroup(node) {
+  if (!node.groupId) return;
+  const gid = node.groupId;
+  node.groupId = null;
+  if (groups[gid]) {
+    groups[gid].nodeIds = groups[gid].nodeIds.filter(id => id !== node.id);
+    if (groups[gid].nodeIds.length <= 1) {
+      const remaining = groups[gid].nodeIds.map(id => nodes.find(n => n.id === id)).filter(Boolean);
+      remaining.forEach(n => n.groupId = null);
+      delete groups[gid];
+    } else {
+      arrangeGroup(gid);
+    }
+  }
+}
+function disbandGroup(gid) {
+  if (!groups[gid]) return;
+  const gNodes = getGroupNodes(gid);
+  gNodes.forEach(n => n.groupId = null);
+  delete groups[gid];
+}
+function disbandAllGroups() {
+  for (const n of nodes) n.groupId = null;
+  groups = {};
+}
+function arrangeGroup(gid) {
+  const gNodes = getGroupNodes(gid);
+  if (gNodes.length === 0) return;
+  gNodes.sort((a, b) => a.weight - b.weight);
+  const baseX = gNodes[0].x;
+  const baseY = gNodes[0].y;
+  gNodes.forEach((n, i) => {
+    n.x = baseX + i * 30;
+    n.y = baseY + i * 15;
+  });
+}
+
+// ============ ROW GROUPING (after auto-layout) ============
+function groupRowsAfterLayout() {
+  // First, disband all existing row groups
+  for (const gid in groups) {
+    if (groups[gid].isRowGroup) {
+      const gNodes = getGroupNodes(gid);
+      gNodes.forEach(n => n.groupId = null);
+      delete groups[gid];
+    }
+  }
+  // Group nodes of same type into row groups
+  const types = ['image', 'novel', 'video', 'skill'];
+  for (const type of types) {
+    const typeNodes = nodes.filter(n => n.type === type);
+    if (typeNodes.length <= 1) continue;
+    const gid = uid();
+    for (const n of typeNodes) {
+      n.groupId = gid;
+    }
+    groups[gid] = { type, nodeIds: typeNodes.map(n => n.id), isRowGroup: true };
+  }
+  rebuildGroups();
+  markDirty();
+}
+
+// ============ AUTO LAYOUT ============
+function computeAutoLayout() {
+  const types = ['image', 'novel', 'video', 'skill'];
+  const targets = [];
+  let rowIdx = 0;
+  for (const type of types) {
+    const typeNodes = nodes.filter(n => n.type === type);
+    if (typeNodes.length === 0) continue;
+    typeNodes.sort((a, b) => b.weight - a.weight);
+    const rowY = rowIdx * ROW_SPACING;
+    const totalW = typeNodes.length * NODE_SPACING_X;
+    const startX = -totalW / 2 + NODE_SPACING_X / 2;
+    typeNodes.forEach((n, i) => {
+      targets.push({ id: n.id, x: startX + i * NODE_SPACING_X, y: rowY });
+    });
+    rowIdx++;
+  }
+  return targets;
+}
+function startAutoLayout() {
+  autoLayoutTargets = computeAutoLayout();
+  autoLayoutAnimating = true;
+  autoLayoutStart = performance.now();
+}
+function updateAutoLayout() {
+  if (!autoLayoutAnimating) return;
+  const elapsed = performance.now() - autoLayoutStart;
+  const t = clamp(elapsed / autoLayoutDuration, 0, 1);
+  const e = easeOutCubic(t);
+  for (const target of autoLayoutTargets) {
+    const node = nodes.find(n => n.id === target.id);
+    if (!node) continue;
+    const prev = { x: node._layoutStartX || node.x, y: node._layoutStartY || node.y };
+    node.x = lerp(prev.x, target.x, e);
+    node.y = lerp(prev.y, target.y, e);
+  }
+  if (t >= 1) {
+    autoLayoutAnimating = false;
+    for (const target of autoLayoutTargets) {
+      const node = nodes.find(n => n.id === target.id);
+      if (node) { node.x = target.x; node.y = target.y; }
+    }
+    // After layout completes, group same-type nodes into row groups
+    groupRowsAfterLayout();
+  }
+}
+
+// ============ COLLISION ============
+function handleCollisions() {
+  const pad = 10;
+  const processed = new Set();
+
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      if (a === draggingNode || b === draggingNode) continue;
+
+      let aMinX, aMinY, aMaxX, aMaxY, aCX, aCY;
+      let bMinX, bMinY, bMaxX, bMaxY, bCX, bCY;
+      let aGroupNodes = [], bGroupNodes = [];
+      let keyA, keyB;
+
+      if (a.groupId) {
+        const gb = getGroupBounds(a.groupId);
+        if (!gb) continue;
+        aMinX = gb.minX - pad; aMinY = gb.minY - pad; aMaxX = gb.maxX + pad; aMaxY = gb.maxY + pad;
+        aCX = gb.cx; aCY = gb.cy;
+        aGroupNodes = getGroupNodes(a.groupId);
+        keyA = 'g:' + a.groupId;
+      } else {
+        const hw = a.width / 2 + pad, hh = a.height / 2 + pad;
+        aMinX = a.x - hw; aMinY = a.y - hh; aMaxX = a.x + hw; aMaxY = a.y + hh;
+        aCX = a.x; aCY = a.y;
+        keyA = 'n:' + a.id;
+      }
+
+      if (b.groupId) {
+        const gb = getGroupBounds(b.groupId);
+        if (!gb) continue;
+        bMinX = gb.minX - pad; bMinY = gb.minY - pad; bMaxX = gb.maxX + pad; bMaxY = gb.maxY + pad;
+        bCX = gb.cx; bCY = gb.cy;
+        bGroupNodes = getGroupNodes(b.groupId);
+        keyB = 'g:' + b.groupId;
+      } else {
+        const hw = b.width / 2 + pad, hh = b.height / 2 + pad;
+        bMinX = b.x - hw; bMinY = b.y - hh; bMaxX = b.x + hw; bMaxY = b.y + hh;
+        bCX = b.x; bCY = b.y;
+        keyB = 'n:' + b.id;
+      }
+
+      if (a.groupId && b.groupId && a.groupId === b.groupId) continue;
+
+      const pairKey = [keyA, keyB].sort().join('|');
+      if (processed.has(pairKey)) continue;
+      processed.add(pairKey);
+
+      const ox = Math.min(aMaxX, bMaxX) - Math.max(aMinX, bMinX);
+      const oy = Math.min(aMaxY, bMaxY) - Math.max(aMinY, bMinY);
+      if (ox > 0 && oy > 0) {
+        if (a.type === b.type && !a.groupId && !b.groupId) {
+          addToGroup(b);
+        } else if (a.type !== b.type) {
+          const pushX = ox / 2;
+          const pushY = oy / 2;
+          const pushTargetsA = aGroupNodes.length > 0 ? aGroupNodes : [a];
+          const pushTargetsB = bGroupNodes.length > 0 ? bGroupNodes : [b];
+          pushTargetsA.forEach(n => { n.x -= pushX * 0.1; n.y -= pushY * 0.1; });
+          pushTargetsB.forEach(n => { n.x += pushX * 0.1; n.y += pushY * 0.1; });
+        }
+      }
+    }
+  }
+}
+
+// ============ DRAWING HELPERS ============
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+function truncateText(text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + '...').width > maxW) t = t.slice(0, -1);
+  return t + '...';
+}
+function drawStars(x, y, weight, size) {
+  for (let i = 0; i < 5; i++) {
+    ctx.fillStyle = i < weight ? '#f59e0b' : '#e5e5ea';
+    ctx.font = `${size}px sans-serif`;
+    ctx.fillText('\u2605', x + i * (size + 2), y);
+  }
+}
+
+// ============ DRAW ROW GROUP CONNECTOR ============
+function drawRowGroupConnectors() {
+  for (const gid in groups) {
+    const g = groups[gid];
+    if (!g.isRowGroup || g.nodeIds.length < 2) continue;
+    const gNodes = getGroupNodes(gid);
+    if (gNodes.length < 2) continue;
+    // Sort by x position
+    gNodes.sort((a, b) => a.x - b.x);
+    // Draw a subtle connecting line behind the nodes
+    const first = gNodes[0];
+    const last = gNodes[gNodes.length - 1];
+    const s1 = worldToScreen(first.x, first.y);
+    const s2 = worldToScreen(last.x, last.y);
+    const lineY = s1.y + (CARD_H / 2 + 6) * camera.zoom;
+    ctx.save();
+    ctx.strokeStyle = TYPE_COLORS[g.type] + '30'; // 30 = ~19% alpha in hex
+    ctx.lineWidth = 3 * camera.zoom;
+    ctx.setLineDash([8 * camera.zoom, 6 * camera.zoom]);
+    ctx.beginPath();
+    ctx.moveTo(s1.x, lineY);
+    ctx.lineTo(s2.x, lineY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Draw subtle background tint behind row
+    const padding = 20 * camera.zoom;
+    const topY = Math.min(...gNodes.map(n => worldToScreen(n.x, n.y).y)) - (CARD_H / 2) * camera.zoom - padding;
+    const botY = Math.max(...gNodes.map(n => worldToScreen(n.x, n.y).y)) + (CARD_H / 2) * camera.zoom + padding;
+    const leftX = s1.x - (CARD_W / 2) * camera.zoom - padding;
+    const rightX = s2.x + (CARD_W / 2) * camera.zoom + padding;
+    roundRect(leftX, topY, rightX - leftX, botY - topY, 12 * camera.zoom);
+    ctx.fillStyle = TYPE_COLORS[g.type] + '08'; // very subtle
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ============ DRAW NODE ============
+function drawNode(node) {
+  const s = worldToScreen(node.x - node.width / 2, node.y - node.height / 2);
+  const sw = node.width * camera.zoom;
+  const sh = node.height * camera.zoom;
+  if (s.x + sw < -50 || s.x > W + 50 || s.y + sh < -50 || s.y > H + 50) return;
+
+  // Animation scale
+  if (node._animScale < 1) {
+    node._animTime += 1 / 60;
+    node._animScale = elasticOut(clamp(node._animTime / 0.5, 0, 1));
+  }
+  // Hover scale
+  node._hoverScale = lerp(node._hoverScale, node._targetHoverScale, 0.15);
+
+  const scale = node._animScale * node._hoverScale;
+  const cx = s.x + sw / 2;
+  const cy = s.y + sh / 2;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-cx, -cy);
+
+  // Shadow
+  const isSelected = selectedNode === node;
+  const isHovered = hoveredNode === node;
+  const shadowBlur = isHovered ? 20 : 10;
+  const shadowAlpha = isHovered ? 0.12 : 0.06;
+  ctx.shadowColor = `rgba(0,0,0,${shadowAlpha})`;
+  ctx.shadowBlur = shadowBlur;
+  ctx.shadowOffsetY = isHovered ? 4 : 2;
+
+  // Card background
+  roundRect(s.x, s.y, sw, sh, CARD_R * camera.zoom);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+
+  // Border
+  roundRect(s.x, s.y, sw, sh, CARD_R * camera.zoom);
+  if (isSelected) {
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 2 * camera.zoom;
+  } else {
+    ctx.strokeStyle = '#e5e5ea';
+    ctx.lineWidth = 1 * camera.zoom;
+  }
+  ctx.stroke();
+
+  // Type dot
+  const dotR = 5 * camera.zoom;
+  ctx.beginPath();
+  ctx.arc(s.x + 14 * camera.zoom, s.y + 14 * camera.zoom, dotR, 0, Math.PI * 2);
+  ctx.fillStyle = TYPE_COLORS[node.type];
+  ctx.fill();
+
+  // Title
+  ctx.fillStyle = '#1d1d1f';
+  ctx.font = `bold ${13 * camera.zoom}px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  const titleText = truncateText(node.title, sw - 70 * camera.zoom);
+  ctx.fillText(titleText, s.x + 26 * camera.zoom, s.y + 18 * camera.zoom);
+
+  // Weight stars
+  drawStars(s.x + sw - 60 * camera.zoom, s.y + 18 * camera.zoom, node.weight, 10 * camera.zoom);
+
+  // Type-specific content
+  let contentX, contentY, contentW, contentH;
+  if (node.expanded && (node.type === 'image' || node.type === 'video')) {
+    // Expanded image/video: content fills entire card edge-to-edge, no padding
+    contentX = s.x;
+    contentY = s.y;
+    contentW = sw;
+    contentH = sh;
+  } else if (node.expanded && node.type === 'novel') {
+    contentX = s.x + 12 * camera.zoom;
+    contentY = s.y + 30 * camera.zoom;
+    contentW = sw - 24 * camera.zoom;
+    contentH = sh - 42 * camera.zoom;
+  } else {
+    contentX = s.x + 12 * camera.zoom;
+    contentY = s.y + 30 * camera.zoom;
+    contentW = sw - 24 * camera.zoom;
+    contentH = sh - 42 * camera.zoom;
+  }
+
+  if (node.type === 'image') {
+    if (node._imgObj) {
+      const img = node._imgObj;
+      const aspect = img.naturalWidth / img.naturalHeight;
+      let dw = contentW, dh = contentH;
+      // Cover fill: expand to cover entire content area, no letterboxing
+      if (aspect > dw / dh) { dw = dh * aspect; } else { dh = dw / aspect; }
+      const dx = contentX + (contentW - dw) / 2;
+      const dy = contentY + (contentH - dh) / 2;
+      ctx.save();
+      roundRect(contentX, contentY, contentW, contentH, node.expanded ? CARD_R * camera.zoom : 6 * camera.zoom);
+      ctx.clip();
+      ctx.drawImage(img, dx, dy, dw, dh);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#f5f5f7';
+      roundRect(contentX, contentY, contentW, contentH, 6 * camera.zoom);
+      ctx.fill();
+      ctx.fillStyle = '#6e6e73';
+      ctx.font = `${12 * camera.zoom}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.fillText('暂无图片', contentX + contentW / 2, contentY + contentH / 2 + 4 * camera.zoom);
+      ctx.textAlign = 'left';
+    }
+  } else if (node.type === 'novel') {
+    if (node.expanded && node.content) {
+      ctx.save();
+      roundRect(contentX, contentY, contentW, contentH, 6 * camera.zoom);
+      ctx.clip();
+      ctx.fillStyle = '#fafafa';
+      ctx.fillRect(contentX, contentY, contentW, contentH);
+      ctx.fillStyle = '#1d1d1f';
+      ctx.font = `${12 * camera.zoom}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
+      const lineH = 18 * camera.zoom;
+      const maxLines = Math.floor(contentH / lineH);
+      const lines = node.content.split('\n');
+      const scrollY = scrollOffset[node.id] || 0;
+      const startLine = Math.floor(scrollY / lineH);
+      for (let i = startLine; i < Math.min(startLine + maxLines + 1, lines.length); i++) {
+        const ly = contentY + (i - startLine) * lineH - (scrollY % lineH) + lineH;
+        if (ly < contentY - lineH || ly > contentY + contentH) continue;
+        const lineText = truncateText(lines[i], contentW - 10 * camera.zoom);
+        ctx.fillText(lineText, contentX + 5 * camera.zoom, ly);
+      }
+      ctx.restore();
+    } else {
+      // Book icon
+      ctx.fillStyle = '#a855f7';
+      ctx.font = `${28 * camera.zoom}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('\uD83D\uDCD6', contentX + contentW / 2, contentY + contentH / 2 + 4 * camera.zoom);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#6e6e73';
+      ctx.font = `${11 * camera.zoom}px system-ui`;
+      ctx.fillText(node.description || '点击展开阅读', contentX + 8 * camera.zoom, contentY + contentH - 8 * camera.zoom);
+    }
+  } else if (node.type === 'video') {
+    if (node._videoEl) {
+      const vid = node._videoEl;
+      // Use actual video aspect ratio if metadata loaded, else 16:9
+      let aspect = 16 / 9;
+      if (vid.readyState >= 1 && vid.videoWidth > 0 && vid.videoHeight > 0) {
+        aspect = vid.videoWidth / vid.videoHeight;
+      }
+      let dw = contentW, dh = contentH;
+      // Cover fill: expand to cover entire content area, no letterboxing
+      if (aspect > dw / dh) { dw = dh * aspect; } else { dh = dw / aspect; }
+      const dx = contentX + (contentW - dw) / 2;
+      const dy = contentY + (contentH - dh) / 2;
+      ctx.save();
+      roundRect(contentX, contentY, contentW, contentH, node.expanded ? CARD_R * camera.zoom : 6 * camera.zoom);
+      ctx.clip();
+      if (vid.readyState >= 2) {
+        ctx.drawImage(vid, dx, dy, dw, dh);
+      } else {
+        ctx.fillStyle = '#1d1d1f';
+        ctx.fillRect(dx, dy, dw, dh);
+      }
+      if (node.expanded) {
+        // Play/pause overlay
+        if (!node._videoPlaying) {
+          ctx.fillStyle = 'rgba(0,0,0,0.4)';
+          ctx.fillRect(dx, dy, dw, dh);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = `bold ${24 * camera.zoom}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText('\u25B6', dx + dw / 2, dy + dh / 2 + 8 * camera.zoom);
+          ctx.textAlign = 'left';
+        }
+        // Seek bar
+        const barY = dy + dh - 6 * camera.zoom;
+        const barH = 4 * camera.zoom;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        roundRect(dx + 4 * camera.zoom, barY, dw - 8 * camera.zoom, barH, 2 * camera.zoom);
+        ctx.fill();
+        const progress = vid.duration ? vid.currentTime / vid.duration : 0;
+        ctx.fillStyle = '#4f46e5';
+        roundRect(dx + 4 * camera.zoom, barY, (dw - 8 * camera.zoom) * progress, barH, 2 * camera.zoom);
+        ctx.fill();
+      } else {
+        // Collapsed: show play overlay
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(dx, dy, dw, dh);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${20 * camera.zoom}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText('\u25B6', dx + dw / 2, dy + dh / 2 + 6 * camera.zoom);
+        ctx.textAlign = 'left';
+      }
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#f5f5f7';
+      roundRect(contentX, contentY, contentW, contentH, 6 * camera.zoom);
+      ctx.fill();
+      ctx.fillStyle = '#6e6e73';
+      ctx.font = `${12 * camera.zoom}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.fillText('暂无视频', contentX + contentW / 2, contentY + contentH / 2 + 4 * camera.zoom);
+      ctx.textAlign = 'left';
+    }
+  } else if (node.type === 'skill') {
+    // Circular progress ring
+    const ringCx = contentX + contentW / 2;
+    const ringCy = contentY + contentH / 2 - 5 * camera.zoom;
+    const ringR = Math.min(contentW, contentH) / 2 - 10 * camera.zoom;
+    const progress = node.weight / 5;
+    // Background ring
+    ctx.beginPath();
+    ctx.arc(ringCx, ringCy, ringR, 0, Math.PI * 2);
+    ctx.strokeStyle = '#e5e5ea';
+    ctx.lineWidth = 8 * camera.zoom;
+    ctx.stroke();
+    // Progress ring
+    ctx.beginPath();
+    ctx.arc(ringCx, ringCy, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+    ctx.strokeStyle = TYPE_COLORS.skill;
+    ctx.lineWidth = 8 * camera.zoom;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+    // Percentage text
+    ctx.fillStyle = '#1d1d1f';
+    ctx.font = `bold ${16 * camera.zoom}px system-ui`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`${Math.round(progress * 100)}%`, ringCx, ringCy + 5 * camera.zoom);
+    // Skill name
+    ctx.fillStyle = '#6e6e73';
+    ctx.font = `${11 * camera.zoom}px system-ui`;
+    ctx.fillText(node.title, ringCx, ringCy + ringR + 16 * camera.zoom);
+    ctx.textAlign = 'left';
+  }
+
+  // Tags
+  if (node.tags && node.tags.length > 0 && !node.expanded) {
+    ctx.font = `${9 * camera.zoom}px system-ui`;
+    let tagX = contentX;
+    const tagY = s.y + sh - 12 * camera.zoom;
+    for (const tag of node.tags.slice(0, 3)) {
+      const tw = ctx.measureText(tag).width + 8 * camera.zoom;
+      roundRect(tagX, tagY - 10 * camera.zoom, tw, 14 * camera.zoom, 4 * camera.zoom);
+      ctx.fillStyle = '#f0f0ff';
+      ctx.fill();
+      ctx.fillStyle = '#4f46e5';
+      ctx.fillText(tag, tagX + 4 * camera.zoom, tagY);
+      tagX += tw + 4 * camera.zoom;
+    }
+  }
+
+  // Year
+  ctx.fillStyle = '#6e6e73';
+  ctx.font = `${10 * camera.zoom}px system-ui`;
+  ctx.fillText(`${node.year}`, s.x + sw - 40 * camera.zoom, s.y + sh - 8 * camera.zoom);
+
+  // Hover: unlock button for grouped nodes
+  if (isHovered && node.groupId) {
+    const btnX = s.x + sw - 28 * camera.zoom;
+    const btnY = s.y + 4 * camera.zoom;
+    ctx.fillStyle = '#f5f5f7';
+    roundRect(btnX, btnY, 24 * camera.zoom, 20 * camera.zoom, 4 * camera.zoom);
+    ctx.fill();
+    ctx.strokeStyle = '#e5e5ea';
+    ctx.lineWidth = 1;
+    roundRect(btnX, btnY, 24 * camera.zoom, 20 * camera.zoom, 4 * camera.zoom);
+    ctx.stroke();
+    ctx.fillStyle = '#6e6e73';
+    ctx.font = `${12 * camera.zoom}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('\uD83D\uDD17', btnX + 12 * camera.zoom, btnY + 14 * camera.zoom);
+    ctx.textAlign = 'left';
+  }
+  // Hover: group button for ungrouped nodes
+  if (isHovered && !node.groupId) {
+    const sameTypeGrouped = nodes.filter(n => n.type === node.type && n.groupId);
+    if (sameTypeGrouped.length > 0) {
+      const btnX = s.x + sw - 28 * camera.zoom;
+      const btnY = s.y + 4 * camera.zoom;
+      ctx.fillStyle = '#f0f0ff';
+      roundRect(btnX, btnY, 24 * camera.zoom, 20 * camera.zoom, 4 * camera.zoom);
+      ctx.fill();
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1;
+      roundRect(btnX, btnY, 24 * camera.zoom, 20 * camera.zoom, 4 * camera.zoom);
+      ctx.stroke();
+      ctx.fillStyle = '#4f46e5';
+      ctx.font = `${12 * camera.zoom}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('\uD83D\uDDC9', btnX + 12 * camera.zoom, btnY + 14 * camera.zoom);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  ctx.restore();
+}
+
+// ============ WELCOME NODE ============
+function drawWelcomeNode() {
+  if (!welcomeVisible || nodes.length > 0) { welcomeVisible = false; return; }
+  const wx = 0, wy = 0;
+  const ww = 300, wh = 180;
+  const s = worldToScreen(wx - ww / 2, wy - wh / 2);
+  const sw = ww * camera.zoom;
+  const sh = wh * camera.zoom;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(79,70,229,0.15)';
+  ctx.shadowBlur = 30 * camera.zoom;
+  roundRect(s.x, s.y, sw, sh, 16 * camera.zoom);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  roundRect(s.x, s.y, sw, sh, 16 * camera.zoom);
+  ctx.strokeStyle = '#c7d2fe';
+  ctx.lineWidth = 2 * camera.zoom;
+  ctx.setLineDash([6 * camera.zoom, 4 * camera.zoom]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#4f46e5';
+  ctx.font = `bold ${16 * camera.zoom}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('\uD83C\uDFA8 \u62D6\u653E\u6587\u4EF6\u5230\u6B64\u5904', s.x + sw / 2, s.y + sh / 2 - 10 * camera.zoom);
+  ctx.fillStyle = '#6e6e73';
+  ctx.font = `${12 * camera.zoom}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  ctx.fillText('\u6216\u53F3\u952E\u70B9\u51FB\u6DFB\u52A0\u4F5C\u54C1', s.x + sw / 2, s.y + sh / 2 + 14 * camera.zoom);
+  ctx.textAlign = 'left';
+  ctx.restore();
+}
+
+// ============ CONTEXT MENU ============
+function drawContextMenu() {
+  if (!contextMenu) return;
+  const items = contextMenu.items;
+  const itemH = 36;
+  const menuW = 200;
+  const menuH = items.length * itemH + 12;
+  let mx = contextMenu.x;
+  let my = contextMenu.y;
+  if (mx + menuW > W) mx = W - menuW - 10;
+  if (my + menuH > H) my = H - menuH - 10;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.12)';
+  ctx.shadowBlur = 16;
+  roundRect(mx, my, menuW, menuH, 8);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  roundRect(mx, my, menuW, menuH, 8);
+  ctx.strokeStyle = '#e5e5ea';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  items.forEach((item, i) => {
+    const iy = my + 6 + i * itemH;
+    const isHover = contextMenu.hoverIndex === i;
+    if (isHover) {
+      roundRect(mx + 4, iy, menuW - 8, itemH - 2, 4);
+      ctx.fillStyle = '#f0f0ff';
+      ctx.fill();
+    }
+    ctx.fillStyle = isHover ? '#4f46e5' : '#1d1d1f';
+    ctx.font = `${13}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    ctx.fillText(item.label, mx + 14, iy + 22);
+  });
+  ctx.restore();
+}
+
+// ============ TOP BAR ============
+function drawTopBar() {
+  const barH = 48;
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillRect(0, 0, W, barH);
+  ctx.fillStyle = '#e5e5ea';
+  ctx.fillRect(0, barH - 1, W, 1);
+
+  // Title
+  ctx.fillStyle = '#1d1d1f';
+  ctx.font = 'bold 16px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.fillText('\uD83C\uDFA8 \u4F5C\u54C1\u753B\u5E03', 16, 30);
+
+  // Auto arrange button
+  const btnW = 100, btnH = 32;
+  const btnX = W / 2 - btnW / 2;
+  const btnY = (barH - btnH) / 2;
+  roundRect(btnX, btnY, btnW, btnH, 6);
+  ctx.fillStyle = '#4f46e5';
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '12px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u81EA\u52A8\u6392\u5217', btnX + btnW / 2, btnY + 20);
+  ctx.textAlign = 'left';
+
+  // Export button
+  const expBtnW = 70, expBtnX = W - 160;
+  roundRect(expBtnX, btnY, expBtnW, btnH, 6);
+  ctx.fillStyle = '#f5f5f7';
+  ctx.fill();
+  ctx.strokeStyle = '#e5e5ea';
+  ctx.lineWidth = 1;
+  roundRect(expBtnX, btnY, expBtnW, btnH, 6);
+  ctx.stroke();
+  ctx.fillStyle = '#1d1d1f';
+  ctx.font = '12px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u5BFC\u51FA', expBtnX + expBtnW / 2, btnY + 20);
+
+  // Import button
+  const impBtnX = W - 82;
+  roundRect(impBtnX, btnY, expBtnW, btnH, 6);
+  ctx.fillStyle = '#f5f5f7';
+  ctx.fill();
+  ctx.strokeStyle = '#e5e5ea';
+  ctx.lineWidth = 1;
+  roundRect(impBtnX, btnY, expBtnW, btnH, 6);
+  ctx.stroke();
+  ctx.fillStyle = '#1d1d1f';
+  ctx.font = '12px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u5BFC\u5165', impBtnX + expBtnW / 2, btnY + 20);
+  ctx.textAlign = 'left';
+
+  ctx.restore();
+}
+
+// ============ DOT GRID ============
+function drawGrid() {
+  const baseSpacing = 30;
+  let spacing = baseSpacing * camera.zoom;
+  while (spacing < 15) spacing *= 2;
+  while (spacing > 60) spacing /= 2;
+
+  const startX = (W / 2 - camera.x * camera.zoom) % spacing;
+  const startY = (H / 2 - camera.y * camera.zoom) % spacing;
+
+  ctx.fillStyle = '#d1d1d6';
+  for (let x = startX; x < W; x += spacing) {
+    for (let y = startY; y < H; y += spacing) {
+      ctx.beginPath();
+      ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// ============ HIT TEST ============
+function hitTestNode(wx, wy) {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    const hw = n.width / 2, hh = n.height / 2;
+    if (wx >= n.x - hw && wx <= n.x + hw && wy >= n.y - hh && wy <= n.y + hh) {
+      return n;
+    }
+  }
+  return null;
+}
+function hitTestButton(wx, wy, node) {
+  if (!node) return null;
+  const hw = node.width / 2, hh = node.height / 2;
+  const btnX = node.x + hw - 28;
+  const btnY = node.y - hh + 4;
+  if (wx >= btnX && wx <= btnX + 24 && wy >= btnY && wy <= btnY + 20) {
+    return node.groupId ? 'unlock' : 'group';
+  }
+  return null;
+}
+function hitTestTopBar(sx, sy) {
+  if (sy > 48) return null;
+  const btnW = 100, btnH = 32;
+  const btnX = W / 2 - btnW / 2;
+  const btnY = (48 - btnH) / 2;
+  if (sx >= btnX && sx <= btnX + btnW && sy >= btnY && sy <= btnY + btnH) return 'autoArrange';
+  const expBtnW = 70;
+  const expBtnX = W - 160;
+  if (sx >= expBtnX && sx <= expBtnX + expBtnW && sy >= btnY && sy <= btnY + btnH) return 'export';
+  const impBtnX = W - 82;
+  if (sx >= impBtnX && sx <= impBtnX + expBtnW && sy >= btnY && sy <= btnY + btnH) return 'import';
+  return null;
+}
+
+// ============ MAIN LOOP ============
+function frame() {
+  // Camera smooth
+  camera.zoom = lerp(camera.zoom, camera.targetZoom, 0.12);
+  camera.x = lerp(camera.x, camera.targetX, 0.12);
+  camera.y = lerp(camera.y, camera.targetY, 0.12);
+
+  updateAutoLayout();
+  updateParticles();
+  updateBloom();
+
+  // Lerp pushed nodes to target positions (300ms animation)
+  const now = performance.now();
+  for (const n of nodes) {
+    if (n._targetX !== undefined && n._pushAnimStart !== undefined) {
+      const elapsed = now - n._pushAnimStart;
+      const t = Math.min(elapsed / 300, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      n.x = lerp(n.x, n._targetX, eased);
+      n.y = lerp(n.y, n._targetY, eased);
+      if (t >= 1) {
+        n.x = n._targetX;
+        n.y = n._targetY;
+        delete n._targetX;
+        delete n._targetY;
+        delete n._pushAnimStart;
+      }
+    }
+  }
+
+  // Update video frames
+  for (const n of nodes) {
+    if (n.type === 'video' && n._videoEl && n._videoPlaying) {
+      if (n._videoEl.ended) { n._videoPlaying = false; n._videoEl.pause(); }
+    }
+  }
+
+  // Draw
+  ctx.fillStyle = '#f5f5f7';
+  ctx.fillRect(0, 0, W, H);
+  drawGrid();
+  drawParticles();
+  drawBloom();
+  drawWelcomeNode();
+
+  // Draw row group connectors (behind nodes)
+  drawRowGroupConnectors();
+
+  // Draw groups first (back cards)
+  const drawnIds = new Set();
+  for (const gid in groups) {
+    const gNodes = getGroupNodes(gid);
+    for (let i = 0; i < gNodes.length - 1; i++) {
+      drawNode(gNodes[i]);
+      drawnIds.add(gNodes[i].id);
+    }
+  }
+  // Draw remaining nodes
+  for (const n of nodes) {
+    if (!drawnIds.has(n.id)) drawNode(n);
+  }
+
+  drawTopBar();
+  drawContextMenu();
+
+  requestAnimationFrame(frame);
+}
+
+// ============ INPUT HANDLERS ============
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  const newZoom = clamp(camera.targetZoom * delta, MIN_ZOOM, MAX_ZOOM);
+  // Zoom towards mouse
+  const wx = mouseWorldX, wy = mouseWorldY;
+  camera.targetZoom = newZoom;
+  const ratio = newZoom / camera.zoom;
+  camera.targetX = wx - (wx - camera.targetX) / ratio;
+  camera.targetY = wy - (wy - camera.targetY) / ratio;
+}, { passive: false });
+
+canvas.addEventListener('mousemove', e => {
+  mouseScreenX = e.clientX;
+  mouseScreenY = e.clientY;
+  const w = screenToWorld(e.clientX, e.clientY);
+  mouseWorldX = w.x;
+  mouseWorldY = w.y;
+
+  if (isPanning) {
+    const dx = (e.clientX - panStartX) / camera.zoom;
+    const dy = (e.clientY - panStartY) / camera.zoom;
+    camera.targetX = panCamStartX - dx;
+    camera.targetY = panCamStartY - dy;
+    camera.x = camera.targetX;
+    camera.y = camera.targetY;
+    return;
+  }
+
+  if (draggingNode) {
+    // Check if drag threshold is met
+    if (!dragConfirmed) {
+      const movedPx = Math.hypot(e.clientX - dragStartScreenX, e.clientY - dragStartScreenY);
+      const elapsedMs = performance.now() - dragStartTime;
+      // Confirm drag if moved beyond pixel threshold OR held long enough
+      if (movedPx < DRAG_THRESHOLD_PX && elapsedMs < DRAG_THRESHOLD_MS) {
+        // Still within click range, don't move anything yet
+        return;
+      }
+      dragConfirmed = true;
+      canvas.className = 'move';
+    }
+    draggingNode.x = w.x - dragOffsetX;
+    draggingNode.y = w.y - dragOffsetY;
+    // Move group
+    if (draggingNode.groupId) {
+      const gNodes = getGroupNodes(draggingNode.groupId);
+      const dx = draggingNode.x - draggingNode._prevDragX;
+      const dy = draggingNode.y - draggingNode._prevDragY;
+      gNodes.forEach(n => {
+        if (n !== draggingNode) { n.x += dx; n.y += dy; }
+      });
+    }
+    draggingNode._prevDragX = draggingNode.x;
+    draggingNode._prevDragY = draggingNode.y;
+    // Push overlapping nodes apart during drag
+    pushNodesApart(draggingNode);
+    markDirty();
+    return;
+  }
+
+  // Hover detection
+  const hit = hitTestNode(w.x, w.y);
+  hoveredNode = hit;
+  for (const n of nodes) n._targetHoverScale = 1;
+  if (hit) {
+    hit._targetHoverScale = 1.03;
+    canvas.className = 'pointer';
+  } else {
+    canvas.className = spaceDown ? 'crosshair' : '';
+  }
+
+  // Context menu hover
+  if (contextMenu) {
+    const mx = e.clientX, my = e.clientY;
+    const itemH = 36;
+    const menuW = 200;
+    const menuH = contextMenu.items.length * itemH + 12;
+    let cmx = contextMenu.x, cmy = contextMenu.y;
+    if (cmx + menuW > W) cmx = W - menuW - 10;
+    if (cmy + menuH > H) cmy = H - menuH - 10;
+    if (mx >= cmx && mx <= cmx + menuW && my >= cmy && my <= cmy + menuH) {
+      contextMenu.hoverIndex = Math.floor((my - cmy - 6) / itemH);
+    } else {
+      contextMenu.hoverIndex = -1;
+    }
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  const w = screenToWorld(e.clientX, e.clientY);
+
+  // Context menu click
+  if (contextMenu) {
+    const itemH = 36;
+    const menuW = 200;
+    const menuH = contextMenu.items.length * itemH + 12;
+    let cmx = contextMenu.x, cmy = contextMenu.y;
+    if (cmx + menuW > W) cmx = W - menuW - 10;
+    if (cmy + menuH > H) cmy = H - menuH - 10;
+    if (e.clientX >= cmx && e.clientX <= cmx + menuW && e.clientY >= cmy && e.clientY <= cmy + menuH) {
+      const idx = Math.floor((e.clientY - cmy - 6) / itemH);
+      if (idx >= 0 && idx < contextMenu.items.length) {
+        contextMenu.items[idx].action();
+      }
+    }
+    contextMenu = null;
+    return;
+  }
+
+  // Top bar
+  const barAction = hitTestTopBar(e.clientX, e.clientY);
+  if (barAction) {
+    if (barAction === 'autoArrange') {
+      nodes.forEach(n => { n._layoutStartX = n.x; n._layoutStartY = n.y; });
+      startAutoLayout();
+    } else if (barAction === 'export') {
+      exportData();
+    } else if (barAction === 'import') {
+      importData();
+    }
+    return;
+  }
+
+  // Middle click or space+click for pan
+  if (e.button === 1 || (e.button === 0 && spaceDown)) {
+    isPanning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panCamStartX = camera.targetX;
+    panCamStartY = camera.targetY;
+    canvas.className = 'grabbing';
+    e.preventDefault();
+    return;
+  }
+
+  if (e.button !== 0) return;
+
+  const hit = hitTestNode(w.x, w.y);
+  if (hit) {
+    // Check button hit
+    const btnHit = hitTestButton(w.x, w.y, hit);
+    if (btnHit === 'unlock') {
+      removeFromGroup(hit);
+      markDirty();
+      return;
+    }
+    if (btnHit === 'group') {
+      addToGroup(hit);
+      markDirty();
+      return;
+    }
+
+    selectedNode = hit;
+    // Don't start drag immediately; record start pos/time and wait for threshold
+    draggingNode = hit;
+    dragConfirmed = false;
+    dragStartScreenX = e.clientX;
+    dragStartScreenY = e.clientY;
+    dragStartTime = performance.now();
+    dragOffsetX = w.x - hit.x;
+    dragOffsetY = w.y - hit.y;
+    hit._prevDragX = hit.x;
+    hit._prevDragY = hit.y;
+    // Don't set cursor to 'move' yet; wait for drag confirmation
+  } else {
+    selectedNode = null;
+  }
+});
+
+canvas.addEventListener('dblclick', e => {
+  const w = screenToWorld(e.clientX, e.clientY);
+  const hit = hitTestNode(w.x, w.y);
+  if (hit) {
+    toggleExpand(hit);
+  } else {
+    // Double-click on empty canvas: collapse all expanded nodes
+    collapseAllExpanded();
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (isPanning) {
+    isPanning = false;
+    canvas.className = spaceDown ? 'crosshair' : '';
+    return;
+  }
+  if (draggingNode) {
+    const wasDrag = dragConfirmed;
+    draggingNode = null;
+    dragConfirmed = false;
+    canvas.className = hoveredNode ? 'pointer' : '';
+    // Only run collision/group logic if this was an actual drag, not a click
+    if (wasDrag) {
+      handleCollisions();
+      rebuildGroups();
+    }
+    markDirty();
+  }
+});
+
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const w = screenToWorld(e.clientX, e.clientY);
+  const hit = hitTestNode(w.x, w.y);
+
+  if (hit) {
+    selectedNode = hit;
+    const items = [
+      { label: hit.expanded ? '\u6536\u8D77' : '\u5C55\u5F00', action: () => toggleExpand(hit) },
+    ];
+
+    // Weight items with star display
+    const starLabels = ['\u2605', '\u2605\u2605', '\u2605\u2605\u2605', '\u2605\u2605\u2605\u2605', '\u2605\u2605\u2605\u2605\u2605'];
+    for (let w = 1; w <= 5; w++) {
+      const weightVal = w;
+      items.push({ label: `\u8BBE\u4E3A\u6743\u91CD ${starLabels[w - 1]}`, action: () => { hit.weight = weightVal; markDirty(); } });
+    }
+
+    // Row group actions
+    if (hit.groupId) {
+      items.push({ label: '\u8131\u79BB\u884C\u6392\u5217', action: () => { removeFromGroup(hit); markDirty(); } });
+      // If this is a row group, show disband option
+      if (groups[hit.groupId] && groups[hit.groupId].isRowGroup) {
+        items.push({ label: '\u89E3\u6563\u6B64\u884C', action: () => { disbandGroup(hit.groupId); markDirty(); } });
+      }
+      items.push({ label: '\u4ECE\u5206\u7EC4\u79FB\u9664', action: () => { removeFromGroup(hit); markDirty(); } });
+    }
+
+    items.push({ label: '\u5220\u9664', action: () => deleteNode(hit) });
+    contextMenu = { x: e.clientX, y: e.clientY, items, hoverIndex: -1 };
+  } else {
+    contextMenu = {
+      x: e.clientX, y: e.clientY, hoverIndex: -1,
+      items: [
+        { label: '\u6DFB\u52A0\u56FE\u7247', action: () => addImageNode() },
+        { label: '\u6DFB\u52A0\u6587\u5B57', action: () => addNovelNode() },
+        { label: '\u6DFB\u52A0\u89C6\u9891', action: () => addVideoNode() },
+        { label: '\u6DFB\u52A0\u6280\u80FD', action: () => addSkillNode() },
+        { label: '\u5BFC\u5165\u6587\u4EF6', action: () => triggerFileImport() },
+        { label: '\u5168\u90E8\u91CD\u65B0\u6392\u5217', action: () => {
+          nodes.forEach(n => { n._layoutStartX = n.x; n._layoutStartY = n.y; });
+          startAutoLayout();
+        }},
+        { label: '\u89E3\u6563\u6240\u6709\u5206\u7EC4', action: () => { disbandAllGroups(); markDirty(); } },
+        { label: '\u6E05\u9664\u5168\u90E8', action: () => clearAll() },
+      ]
+    };
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { spaceDown = true; canvas.className = 'crosshair'; e.preventDefault(); }
+  if (e.code === 'Escape') {
+    contextMenu = null;
+    nodes.forEach(n => { if (n.expanded) collapseNode(n); });
+    selectedNode = null;
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space') { spaceDown = false; canvas.className = ''; }
+});
+
+// ============ EXPAND / COLLAPSE ============
+function toggleExpand(node) {
+  if (node.expanded) {
+    collapseNode(node);
+  } else {
+    expandNode(node);
+  }
+}
+function expandNode(node) {
+  // Save global baseline snapshot before any node is expanded
+  // This snapshot captures the "no expanded nodes" state for restoration on collapse
+  const anyExpanded = nodes.some(n => n.expanded);
+  if (!anyExpanded) {
+    _baselineSnapshot = nodes.map(n => ({ id: n.id, x: n.x, y: n.y, w: n.width, h: n.height }));
+  }
+
+  node.expanded = true;
+  if (node.type === 'image' && node._imgObj) {
+    const img = node._imgObj;
+    const natW = img.naturalWidth || img.width;
+    const natH = img.naturalHeight || img.height;
+    const aspect = natW / natH;
+    // Calculate width and height maintaining aspect ratio
+    // Max width = 500, max height = 400, min height = CARD_H
+    let w = EXPAND_IMG_MAX_W;
+    let h = w / aspect;
+    if (h > EXPAND_IMG_MAX_H) {
+      h = EXPAND_IMG_MAX_H;
+      w = h * aspect;
+    }
+    if (h < EXPAND_IMG_MIN_H) {
+      h = EXPAND_IMG_MIN_H;
+      w = h * aspect;
+    }
+    node.width = w;
+    node.height = h;
+  } else if (node.type === 'image') {
+    // No image loaded yet, use default expanded size
+    node.width = CARD_W + 60;
+    node.height = CARD_H + 40;
+  } else if (node.type === 'video') {
+    // Use actual video aspect ratio if metadata loaded
+    let aspect = 16 / 9; // fallback
+    if (node._videoEl && node._videoEl.readyState >= 1 && node._videoEl.videoWidth > 0 && node._videoEl.videoHeight > 0) {
+      aspect = node._videoEl.videoWidth / node._videoEl.videoHeight;
+    }
+    node.width = CARD_W + 80;
+    node.height = node.width / aspect;
+    // Clamp height
+    if (node.height > 500) node.height = 500;
+    if (node.height < CARD_H) node.height = CARD_H;
+    if (node._videoEl) {
+      node._videoPlaying = true;
+      node._videoEl.currentTime = 0;
+      node._videoEl.play().catch(() => {});
+    }
+  } else if (node.type === 'novel') {
+    node.width = CARD_W + 60;
+    node.height = 280;
+    scrollOffset[node.id] = 0;
+  }
+  // Simple expand push: treat all nodes as individuals, ignore groups
+  // This prevents group-aware logic from causing runaway cascading pushes
+  const pad = 20;
+  for (let iter = 0; iter < 8; iter++) {
+    let anyPushed = false;
+    for (const n of nodes) {
+      if (n === node) continue;
+      const hw1 = node.width / 2 + pad, hh1 = node.height / 2 + pad;
+      const hw2 = n.width / 2 + pad, hh2 = n.height / 2 + pad;
+      const ox = Math.min(node.x + hw1, n.x + hw2) - Math.max(node.x - hw1, n.x - hw2);
+      const oy = Math.min(node.y + hh1, n.y + hh2) - Math.max(node.y - hh1, n.y - hh2);
+      if (ox > 0 && oy > 0) {
+        anyPushed = true;
+        const dx = n.x - node.x;
+        const dy = n.y - node.y;
+        if (Math.abs(dx) > Math.abs(dy)) {
+          n.x += dx >= 0 ? ox : -ox;
+        } else {
+          n.y += dy >= 0 ? oy : -oy;
+        }
+      }
+    }
+    // Also resolve overlaps between displaced nodes (simple pairwise)
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        if (a === node || b === node) continue;
+        const hw1 = a.width / 2 + pad, hh1 = a.height / 2 + pad;
+        const hw2 = b.width / 2 + pad, hh2 = b.height / 2 + pad;
+        const ox = Math.min(a.x + hw1, b.x + hw2) - Math.max(a.x - hw1, b.x - hw2);
+        const oy = Math.min(a.y + hh1, b.y + hh2) - Math.max(a.y - hh1, b.y - hh2);
+        if (ox > 0 && oy > 0) {
+          anyPushed = true;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          if (Math.abs(dx) > Math.abs(dy)) {
+            const push = ox / 2;
+            a.x += dx >= 0 ? -push : push;
+            b.x += dx >= 0 ? push : -push;
+          } else {
+            const push = oy / 2;
+            a.y += dy >= 0 ? -push : push;
+            b.y += dy >= 0 ? push : -push;
+          }
+        }
+      }
+    }
+    if (!anyPushed) break;
+  }
+}
+// ============ PUSH NODES APART ============
+function pushNodesApart(sourceNode, immediate) {
+  const pad = 20;
+  const now = performance.now();
+  const useImmediate = immediate || !!draggingNode; // During drag, apply directly (no animation)
+  let anyPushed = false;
+
+  // Determine source bounds: group or individual
+  let srcBounds;
+  let srcGroupNodes = [];
+  if (sourceNode.groupId) {
+    srcGroupNodes = getGroupNodes(sourceNode.groupId);
+    const gb = getGroupBounds(sourceNode.groupId);
+    if (!gb) return false;
+    srcBounds = { minX: gb.minX - pad, minY: gb.minY - pad, maxX: gb.maxX + pad, maxY: gb.maxY + pad, cx: gb.cx, cy: gb.cy };
+  } else {
+    const hw = sourceNode.width / 2 + pad, hh = sourceNode.height / 2 + pad;
+    srcBounds = { minX: sourceNode.x - hw, minY: sourceNode.y - hh, maxX: sourceNode.x + hw, maxY: sourceNode.y + hh, cx: sourceNode.x, cy: sourceNode.y };
+  }
+
+  // Collect target groups/nodes already processed to avoid duplicate pushes
+  const processedGroupIds = new Set();
+  const processedNodeIds = new Set();
+
+  for (const n of nodes) {
+    if (n === sourceNode) continue;
+    if (srcGroupNodes.includes(n)) continue; // Skip nodes in source's own group
+
+    // If target node is in a group, check group bounds
+    if (n.groupId) {
+      if (processedGroupIds.has(n.groupId)) continue;
+      processedGroupIds.add(n.groupId);
+
+      const tgtBounds = getGroupBounds(n.groupId);
+      if (!tgtBounds) continue;
+
+      // Check AABB overlap between source bounds and target group bounds (with padding)
+      const tgtPad = { minX: tgtBounds.minX - pad, minY: tgtBounds.minY - pad, maxX: tgtBounds.maxX + pad, maxY: tgtBounds.maxY + pad };
+      const overlapX = Math.min(srcBounds.maxX, tgtPad.maxX) - Math.max(srcBounds.minX, tgtPad.minX);
+      const overlapY = Math.min(srcBounds.maxY, tgtPad.maxY) - Math.max(srcBounds.minY, tgtPad.minY);
+
+      if (overlapX > 0 && overlapY > 0) {
+        anyPushed = true;
+        // Calculate push vector
+        const dx = tgtBounds.cx - srcBounds.cx;
+        const dy = tgtBounds.cy - srcBounds.cy;
+        const escapeX = (srcBounds.maxX - srcBounds.minX + tgtPad.maxX - tgtPad.minX) / 2 - Math.abs(dx);
+        const escapeY = (srcBounds.maxY - srcBounds.minY + tgtPad.maxY - tgtPad.minY) / 2 - Math.abs(dy);
+
+        let pushX = 0, pushY = 0;
+        if (escapeX < escapeY) {
+          pushX = dx >= 0 ? Math.max(escapeX, overlapX) : -Math.max(escapeX, overlapX);
+        } else {
+          pushY = dy >= 0 ? Math.max(escapeY, overlapY) : -Math.max(escapeY, overlapY);
+        }
+
+        // Push ALL nodes in target group
+        const tgtGroupNodes = getGroupNodes(n.groupId);
+        for (const tn of tgtGroupNodes) {
+          if (useImmediate) {
+            // Direct position update during drag (no animation)
+            tn.x += pushX;
+            tn.y += pushY;
+            delete tn._targetX;
+            delete tn._targetY;
+            delete tn._pushAnimStart;
+          } else {
+            tn._targetX = tn.x + pushX;
+            tn._targetY = tn.y + pushY;
+            tn._pushAnimStart = now;
+          }
+        }
+      }
+    } else {
+      // Individual node
+      if (processedNodeIds.has(n.id)) continue;
+      processedNodeIds.add(n.id);
+
+      const bhw = n.width / 2 + pad, bhh = n.height / 2 + pad;
+      const bx = n.x, by = n.y;
+
+      const overlapX = Math.min(srcBounds.maxX, bx + bhw) - Math.max(srcBounds.minX, bx - bhw);
+      const overlapY = Math.min(srcBounds.maxY, by + bhh) - Math.max(srcBounds.minY, by - bhh);
+
+      if (overlapX > 0 && overlapY > 0) {
+        anyPushed = true;
+        const dx = bx - srcBounds.cx;
+        const dy = by - srcBounds.cy;
+        const escapeX = ((srcBounds.maxX - srcBounds.minX) / 2 + bhw) - Math.abs(dx);
+        const escapeY = ((srcBounds.maxY - srcBounds.minY) / 2 + bhh) - Math.abs(dy);
+
+        let pushX = 0, pushY = 0;
+        if (escapeX < escapeY) {
+          pushX = dx >= 0 ? Math.max(escapeX, overlapX) : -Math.max(escapeX, overlapX);
+        } else {
+          pushY = dy >= 0 ? Math.max(escapeY, overlapY) : -Math.max(escapeY, overlapY);
+        }
+
+        if (useImmediate) {
+          n.x += pushX;
+          n.y += pushY;
+          delete n._targetX;
+          delete n._targetY;
+          delete n._pushAnimStart;
+        } else {
+          n._targetX = n.x + pushX;
+          n._targetY = n.y + pushY;
+          n._pushAnimStart = now;
+        }
+      }
+    }
+  }
+  return anyPushed;
+}
+
+function collapseNode(node) {
+  node.expanded = false;
+  node.width = CARD_W;
+  node.height = CARD_H;
+  if (node.type === 'video' && node._videoEl) {
+    node._videoPlaying = false;
+    node._videoEl.pause();
+  }
+
+  // If this was the last expanded node, restore baseline positions
+  const anyStillExpanded = nodes.some(n => n.expanded);
+  if (!anyStillExpanded && _baselineSnapshot) {
+    for (const snap of _baselineSnapshot) {
+      const n = nodes.find(nd => nd.id === snap.id);
+      if (n) {
+        n.x = snap.x;
+        n.y = snap.y;
+        n.width = snap.w;
+        n.height = snap.h;
+        delete n._targetX;
+        delete n._targetY;
+        delete n._pushAnimStart;
+      }
+    }
+    _baselineSnapshot = null;
+  }
+}
+
+function collapseAllExpanded() {
+  // Find all expanded nodes and collapse them
+  const expandedNodes = nodes.filter(n => n.expanded);
+  if (expandedNodes.length === 0) return;
+
+  for (const node of expandedNodes) {
+    node.expanded = false;
+    node.width = CARD_W;
+    node.height = CARD_H;
+    if (node.type === 'video' && node._videoEl) {
+      node._videoPlaying = false;
+      node._videoEl.pause();
+    }
+  }
+
+  // Restore baseline positions if snapshot exists
+  if (_baselineSnapshot) {
+    for (const snap of _baselineSnapshot) {
+      const n = nodes.find(nd => nd.id === snap.id);
+      if (n) {
+        n.x = snap.x;
+        n.y = snap.y;
+        n.width = snap.w;
+        n.height = snap.h;
+        delete n._targetX;
+        delete n._targetY;
+        delete n._pushAnimStart;
+      }
+    }
+    _baselineSnapshot = null;
+  }
+
+  markDirty();
+}
+
+// ============ NODE ACTIONS ============
+function addImageNode() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const node = createNode('image', {
+        title: file.name.replace(/\.[^.]+$/, ''),
+        content: reader.result,
+        x: mouseWorldX, y: mouseWorldY
+      });
+      triggerBloomIfNeeded(node);
+      autoArrangeIfNeeded();
+    };
+    reader.readAsDataURL(file);
+  };
+  input.click();
+}
+function addNovelNode() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.txt,.md,.text,.markdown';
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const node = createNode('novel', {
+        title: file.name.replace(/\.[^.]+$/, ''),
+        content: reader.result,
+        description: `${reader.result.length} \u5B57`,
+        x: mouseWorldX, y: mouseWorldY
+      });
+      triggerBloomIfNeeded(node);
+      autoArrangeIfNeeded();
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+function addVideoNode() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'video/*';
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const node = createNode('video', {
+      title: file.name.replace(/\.[^.]+$/, ''),
+      content: url,
+      x: mouseWorldX, y: mouseWorldY
+    });
+    // Save blob to IndexedDB
+    saveBlob(node.id, file);
+    triggerBloomIfNeeded(node);
+    autoArrangeIfNeeded();
+  };
+  input.click();
+}
+function addSkillNode() {
+  const name = '\u65B0\u6280\u80FD';
+  const node = createNode('skill', {
+    title: name,
+    x: mouseWorldX, y: mouseWorldY
+  });
+  triggerBloomIfNeeded(node);
+  autoArrangeIfNeeded();
+}
+function triggerFileImport() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = 'image/*,video/*,.txt,.md,.text,.markdown';
+  input.onchange = () => {
+    Array.from(input.files).forEach(file => {
+      const ext = file.name.split('.').pop().toLowerCase();
+      const reader = new FileReader();
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        reader.onload = () => {
+          const node = createNode('image', {
+            title: file.name.replace(/\.[^.]+$/, ''),
+            content: reader.result,
+            x: mouseWorldX + (Math.random() - 0.5) * 100,
+            y: mouseWorldY + (Math.random() - 0.5) * 100
+          });
+          triggerBloomIfNeeded(node);
+          autoArrangeIfNeeded();
+        };
+        reader.readAsDataURL(file);
+      } else if (['mp4', 'webm'].includes(ext)) {
+        reader.onload = () => {
+          const url = URL.createObjectURL(file);
+          const node = createNode('video', {
+            title: file.name.replace(/\.[^.]+$/, ''),
+            content: url,
+            x: mouseWorldX + (Math.random() - 0.5) * 100,
+            y: mouseWorldY + (Math.random() - 0.5) * 100
+          });
+          saveBlob(node.id, file);
+          triggerBloomIfNeeded(node);
+          autoArrangeIfNeeded();
+        };
+        reader.readAsArrayBuffer(file);
+      } else if (['txt', 'md', 'text', 'markdown'].includes(ext)) {
+        reader.onload = () => {
+          const node = createNode('novel', {
+            title: file.name.replace(/\.[^.]+$/, ''),
+            content: reader.result,
+            description: `${reader.result.length} \u5B57`,
+            x: mouseWorldX + (Math.random() - 0.5) * 100,
+            y: mouseWorldY + (Math.random() - 0.5) * 100
+          });
+          triggerBloomIfNeeded(node);
+          autoArrangeIfNeeded();
+        };
+        reader.readAsText(file);
+      }
+    });
+  };
+  input.click();
+}
+function deleteNode(node) {
+  if (node.groupId) removeFromGroup(node);
+  if (node._videoEl) { node._videoEl.pause(); node._videoEl.src = ''; }
+  nodes = nodes.filter(n => n.id !== node.id);
+  delete scrollOffset[node.id];
+  deleteNodeDB(node.id);
+  selectedNode = null;
+  hoveredNode = null;
+  markDirty();
+}
+function clearAll() {
+  if (!confirm('\u786E\u5B9A\u8981\u6E05\u9664\u6240\u6709\u4F5C\u54C1\u5417\uFF1F')) return;
+  nodes.forEach(n => {
+    if (n._videoEl) { n._videoEl.pause(); n._videoEl.src = ''; }
+  });
+  nodes = [];
+  groups = {};
+  scrollOffset = {};
+  selectedNode = null;
+  hoveredNode = null;
+  welcomeVisible = true;
+  clearAllDB();
+}
+
+let firstDrop = true;
+function triggerBloomIfNeeded(node) {
+  if (firstDrop) {
+    spawnBloom(0, 0);
+    welcomeVisible = false;
+    firstDrop = false;
+  }
+}
+function autoArrangeIfNeeded() {
+  if (nodes.length <= 1) return;
+  nodes.forEach(n => { n._layoutStartX = n.x; n._layoutStartY = n.y; });
+  startAutoLayout();
+}
+
+// ============ DRAG & DROP ============
+canvas.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+canvas.addEventListener('drop', e => {
+  e.preventDefault();
+  const files = e.dataTransfer.files;
+  if (!files.length) return;
+  const dropW = screenToWorld(e.clientX, e.clientY);
+  Array.from(files).forEach((file, idx) => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const reader = new FileReader();
+    const offsetX = (Math.random() - 0.5) * 80;
+    const offsetY = idx * 60;
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+      reader.onload = () => {
+        const node = createNode('image', {
+          title: file.name.replace(/\.[^.]+$/, ''),
+          content: reader.result,
+          x: dropW.x + offsetX,
+          y: dropW.y + offsetY
+        });
+        triggerBloomIfNeeded(node);
+        autoArrangeIfNeeded();
+      };
+      reader.readAsDataURL(file);
+    } else if (['mp4', 'webm'].includes(ext)) {
+      reader.onload = () => {
+        const url = URL.createObjectURL(file);
+        const node = createNode('video', {
+          title: file.name.replace(/\.[^.]+$/, ''),
+          content: url,
+          x: dropW.x + offsetX,
+          y: dropW.y + offsetY
+        });
+        saveBlob(node.id, file);
+        triggerBloomIfNeeded(node);
+        autoArrangeIfNeeded();
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (['txt', 'md', 'text', 'markdown'].includes(ext)) {
+      reader.onload = () => {
+        const node = createNode('novel', {
+          title: file.name.replace(/\.[^.]+$/, ''),
+          content: reader.result,
+          description: `${reader.result.length} \u5B57`,
+          x: dropW.x + offsetX,
+          y: dropW.y + offsetY
+        });
+        triggerBloomIfNeeded(node);
+        autoArrangeIfNeeded();
+      };
+      reader.readAsText(file);
+    }
+  });
+});
+
+// ============ EXPORT / IMPORT ============
+async function exportData() {
+  const exportNodes = [];
+  for (const n of nodes) {
+    const data = { ...n };
+    delete data._imgObj;
+    delete data._videoEl;
+    delete data._videoPlaying;
+    delete data._animScale;
+    delete data._animTime;
+    delete data._hoverScale;
+    delete data._targetHoverScale;
+    delete data._prevDragX;
+    delete data._prevDragY;
+    delete data._layoutStartX;
+    delete data._layoutStartY;
+    exportNodes.push(data);
+  }
+  const json = JSON.stringify({ nodes: exportNodes, version: 1 });
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `\u4F5C\u54C1\u753B\u5E03_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+async function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data.nodes || !Array.isArray(data.nodes)) throw new Error('Invalid format');
+        // Clear existing
+        nodes.forEach(n => { if (n._videoEl) { n._videoEl.pause(); n._videoEl.src = ''; } });
+        nodes = [];
+        groups = {};
+        scrollOffset = {};
+        // Load nodes
+        for (const nd of data.nodes) {
+          const node = createNode(nd.type, {
+            title: nd.title,
+            description: nd.description,
+            tags: nd.tags,
+            year: nd.year,
+            weight: nd.weight,
+            x: nd.x,
+            y: nd.y,
+            content: nd.content,
+          });
+          node.width = nd.width || CARD_W;
+          node.height = nd.height || CARD_H;
+          node.groupId = nd.groupId;
+          node.expanded = false;
+          node._animScale = 1;
+        }
+        rebuildGroups();
+        welcomeVisible = false;
+        firstDrop = false;
+        nodes.forEach(n => { n._layoutStartX = n.x; n._layoutStartY = n.y; });
+        startAutoLayout();
+      } catch (err) {
+        alert('\u5BFC\u5165\u5931\u8D25\uFF1A\u6587\u4EF6\u683C\u5F0F\u65E0\u6548');
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ============ NOVEL SCROLL ============
+canvas.addEventListener('wheel', e => {
+  if (!selectedNode || selectedNode.type !== 'novel' || !selectedNode.expanded) return;
+  const w = screenToWorld(e.clientX, e.clientY);
+  const hw = selectedNode.width / 2, hh = selectedNode.height / 2;
+  if (w.x >= selectedNode.x - hw && w.x <= selectedNode.x + hw &&
+      w.y >= selectedNode.y - hh && w.y <= selectedNode.y + hh) {
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = e.deltaY > 0 ? 30 : -30;
+    scrollOffset[selectedNode.id] = (scrollOffset[selectedNode.id] || 0) + delta;
+  }
+}, { passive: false, capture: true });
+
+// ============ INIT ============
+async function init() {
+  await openDB();
+  initParticles();
+
+  // Clear in-memory state before loading from DB to prevent duplicates on refresh
+  nodes = [];
+  groups = {};
+  scrollOffset = {};
+
+  // Load saved data
+  try {
+    const saved = await getAllNodes();
+    if (saved.length > 0) {
+      welcomeVisible = false;
+      firstDrop = false;
+      for (const nd of saved) {
+        const node = createNode(nd.type, {
+          title: nd.title,
+          description: nd.description,
+          tags: nd.tags || [],
+          year: nd.year,
+          weight: nd.weight,
+          x: nd.x,
+          y: nd.y,
+          content: nd.content,
+          width: nd.width,
+          height: nd.height,
+          groupId: nd.groupId,
+          expanded: nd.expanded,
+          locked: nd.locked,
+        }, nd.id);
+        node._animScale = 1;
+      }
+      rebuildGroups();
+      // Restore blobs for videos
+      for (const n of nodes) {
+        if (n.type === 'video' && n.content) {
+          const blob = await getBlob(n.id);
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const vid = document.createElement('video');
+            vid.src = url;
+            vid.preload = 'auto';
+            vid.muted = false;
+            n._videoEl = vid;
+            n.content = url;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load saved data:', err);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+init();
+</script>
+</body>
+</html>

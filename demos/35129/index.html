@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>灵犀笔记 - 语音速记助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #f5f7fa;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            padding: 2rem 1rem;
+            min-height: 100vh;
+        }
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.06);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #1a1a2e;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        h1 span { background: #eef2ff; padding: 0.2rem 0.8rem; border-radius: 40px; font-size: 0.9rem; color: #4f46e5; }
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 0.8rem 1.8rem;
+            border: none;
+            border-radius: 60px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .btn-primary {
+            background: #4f46e5;
+            color: white;
+            box-shadow: 0 8px 16px rgba(79,70,229,0.25);
+        }
+        .btn-primary:hover { background: #4338ca; }
+        .btn-primary:disabled {
+            background: #a5b4fc;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+        .btn-outline {
+            background: white;
+            color: #4f46e5;
+            border: 2px solid #e0e7ff;
+        }
+        .btn-outline:hover { background: #eef2ff; }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            color: #64748b;
+        }
+        .rec-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #cbd5e1;
+            display: inline-block;
+        }
+        .recording .rec-indicator {
+            background: #ef4444;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+            70% { box-shadow: 0 0 0 10px rgba(239,68,68,0); }
+            100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+        }
+        .notes-area {
+            background: #f8fafc;
+            border-radius: 16px;
+            padding: 1.2rem;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+            white-space: pre-wrap;
+            font-size: 1rem;
+            line-height: 1.6;
+            color: #1e293b;
+        }
+        .notes-area:empty::before {
+            content: "点击「开始录音」后，对着麦克风说话，文字会出现在这里…";
+            color: #94a3b8;
+        }
+        .footer {
+            margin-top: 0.5rem;
+            color: #94a3b8;
+            font-size: 0.75rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎧 灵犀笔记 <span>语音速记</span></h1>
+        <div class="btn-group">
+            <button class="btn btn-primary" id="startBtn">🎤 开始录音</button>
+            <button class="btn btn-outline" id="stopBtn" disabled>⏹️ 停止录音</button>
+            <button class="btn btn-outline" id="exportBtn">📥 导出笔记</button>
+        </div>
+        <div class="status" id="statusArea">
+            <span class="rec-indicator"></span> 就绪，等待录音
+        </div>
+        <div class="notes-area" id="notesBox" contenteditable="false"></div>
+        <div class="footer">
+            * 请使用 Chrome 浏览器，并允许麦克风权限。语音识别结果会实时显示，支持手动编辑。
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // 检查浏览器支持
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                alert('当前浏览器不支持语音识别，请使用最新版 Chrome 浏览器。');
+                return;
+            }
+
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;        // 持续识别
+            recognition.interimResults = true;    // 显示中间结果
+            recognition.lang = 'zh-CN';           // 中文普通话
+
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const exportBtn = document.getElementById('exportBtn');
+            const notesBox = document.getElementById('notesBox');
+            const statusArea = document.getElementById('statusArea');
+            const container = document.querySelector('.container');
+
+            let finalTranscript = '';   // 存储最终识别文本
+            let isRecording = false;
+
+            // 更新状态指示
+            function setStatus(text, recording = false) {
+                statusArea.innerHTML = `<span class="rec-indicator"></span> ${text}`;
+                if (recording) {
+                    container.classList.add('recording');
+                } else {
+                    container.classList.remove('recording');
+                }
+            }
+
+            // 添加时间戳段落到笔记区
+            function appendTimestamp() {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+                finalTranscript += `\n[${timeStr}]\n`;
+                notesBox.innerText = finalTranscript;
+                // 自动滚到底部
+                notesBox.scrollTop = notesBox.scrollHeight;
+            }
+
+            // 开始识别
+            startBtn.addEventListener('click', () => {
+                if (isRecording) return;
+                // 每次开始新录音，追加时间戳
+                if (finalTranscript.length > 0) {
+                    finalTranscript += '\n';
+                }
+                appendTimestamp();
+                recognition.start();
+                isRecording = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                setStatus('录音中，请说话...', true);
+            });
+
+            // 停止识别
+            stopBtn.addEventListener('click', () => {
+                if (!isRecording) return;
+                recognition.stop();
+                isRecording = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                setStatus('已停止录音');
+            });
+
+            // 识别结果处理
+            recognition.addEventListener('result', (event) => {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const result = event.results[i];
+                    if (result.isFinal) {
+                        finalTranscript += result[0].transcript;
+                    } else {
+                        interimTranscript += result[0].transcript;
+                    }
+                }
+                // 显示最终结果 + 临时结果
+                notesBox.innerText = finalTranscript + interimTranscript;
+                notesBox.scrollTop = notesBox.scrollHeight;
+            });
+
+            // 错误处理
+            recognition.addEventListener('error', (event) => {
+                console.error('语音识别错误：', event.error);
+                if (event.error === 'not-allowed') {
+                    alert('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问。');
+                } else if (event.error === 'no-speech') {
+                    // 无语音输入，可能只是静音，不强制停止
+                    console.log('未检测到语音');
+                } else {
+                    alert(`识别出错：${event.error}，请刷新后重试。`);
+                }
+                isRecording = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                setStatus('出错，已停止录音');
+            });
+
+            // 识别结束
+            recognition.addEventListener('end', () => {
+                // 如果是手动停止，不额外操作；否则自动重启连续识别
+                if (isRecording) {
+                    // 如果是浏览器自动结束（如长时间静音），尝试重启
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        isRecording = false;
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                        setStatus('录音中断，请重新开始');
+                    }
+                } else {
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    setStatus('已停止录音');
+                }
+            });
+
+            // 导出 TXT
+            exportBtn.addEventListener('click', () => {
+                const content = finalTranscript.trim();
+                if (!content) {
+                    alert('没有笔记内容可以导出。');
+                    return;
+                }
+                const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const now = new Date();
+                const dateStr = now.toLocaleDateString('zh-CN').replace(/\//g, '-');
+                a.download = `灵犀笔记_${dateStr}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+
+            // 允许用户手动编辑笔记区（轻量修改）
+            notesBox.addEventListener('input', function() {
+                // 同步手动修改到 finalTranscript，以便导出最新内容
+                finalTranscript = notesBox.innerText;
+            });
+
+            // 初始状态
+            setStatus('就绪，点击「开始录音」');
+        })();
+    </script>
+</body>
+</html>

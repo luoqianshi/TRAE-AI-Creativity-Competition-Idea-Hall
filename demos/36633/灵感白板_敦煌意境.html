@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>灵感白板 - 敦煌意境</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/konva@9.2.0/konva.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Noto Serif SC', serif; overflow: hidden; background: #f5f0e6; }
+        #container { width: 100vw; height: 100vh; }
+        .input-box {
+            position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 560px; z-index: 100;
+        }
+        .input-box input {
+            width: 100%; padding: 16px 24px; font-size: 18px; font-family: inherit;
+            letter-spacing: 1px; border: 1px solid rgba(180,160,140,0.3); border-radius: 4px;
+            background: linear-gradient(135deg, rgba(250,246,237,0.95), rgba(245,237,220,0.9));
+            backdrop-filter: blur(8px); outline: none;
+            box-shadow: 0 4px 16px rgba(40,40,40,0.06);
+            transition: all 0.3s; color: #3d3d3d;
+        }
+        .input-box input::placeholder { color: rgba(100,90,80,0.5); font-style: italic; }
+        .input-box input:focus {
+            box-shadow: 0 6px 24px rgba(40,40,40,0.08), 0 0 0 3px rgba(200,180,160,0.3);
+            border-color: rgba(180,140,100,0.4);
+        }
+        .toolbar {
+            position: fixed; top: 0; left: 0; right: 0; height: 64px;
+            background: linear-gradient(180deg, rgba(250,246,237,0.95), rgba(245,237,220,0.9));
+            backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: space-between;
+            padding: 0 24px; z-index: 50; box-shadow: 0 2px 8px rgba(40,40,40,0.04);
+            border-bottom: 1px solid rgba(180,160,140,0.2);
+        }
+        .toolbar-title { font-size: 24px; font-weight: 600; color: #3d3d3d; letter-spacing: 2px; font-family: 'ZCOOL XiaoWei', serif; }
+        .toolbar-buttons { display: flex; gap: 12px; }
+        .toolbar-btn {
+            padding: 8px 16px; border: 1px solid rgba(180,160,140,0.3); border-radius: 4px;
+            font-size: 14px; font-family: inherit; letter-spacing: 1px; cursor: pointer;
+            display: flex; align-items: center; gap: 6px; transition: all 0.3s;
+            background: linear-gradient(135deg, #faf6ed, #f0e8d8); color: #5a5a5a;
+        }
+        .toolbar-btn:hover { background: linear-gradient(135deg, #f5ede0, #ebe3d6); transform: translateY(-1px); }
+        .toolbar-btn.active { background: linear-gradient(135deg, #d4c4a8, #c9b896); border-color: rgba(180,140,100,0.4); color: #3a3a3a; }
+        .toolbar-btn .icon { width: 16px; height: 16px; opacity: 0.7; }
+        .toolbar-btn.active .icon { opacity: 1; }
+        .card-hint {
+            position: fixed; pointer-events: none; background: rgba(250,246,237,0.95);
+            padding: 8px 16px; border-radius: 4px; font-size: 14px; color: #5a5a5a;
+            box-shadow: 0 2px 8px rgba(40,40,40,0.1); z-index: 200; opacity: 0; transition: opacity 0.3s;
+        }
+        .card-hint.visible { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+
+    <div class="toolbar">
+        <div class="toolbar-title">灵感湖泊</div>
+        <div class="toolbar-buttons">
+            <button class="toolbar-btn active" onclick="app.setMode('lake')">
+                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 15c2.483 0 4.345-3 6-3s3.517 3 6 3 3.517-3 6-3M3 19c2.483 0 4.345-3 6-3s3.517 3 6 3 3.517-3 6-3"></path>
+                </svg>
+                <span>灵感湖泊</span>
+            </button>
+            <button class="toolbar-btn" onclick="app.setMode('converge')">
+                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+                </svg>
+                <span>收敛模式</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="input-box">
+        <input type="text" id="inspiration-input" placeholder="挥毫泼墨，写下灵感..." onkeydown="app.handleInput(event)" />
+    </div>
+
+    <div class="card-hint" id="card-hint">点击卡片删除 | 拖拽移动位置</div>
+
+    <script>
+        class InspirationApp {
+            constructor() {
+                this.width = window.innerWidth;
+                this.height = window.innerHeight;
+                this.mode = 'lake';
+                this.cards = [];
+                this.selectedCard = null;
+                this.dragging = false;
+                
+                this.stage = new Konva.Stage({
+                    container: 'container',
+                    width: this.width,
+                    height: this.height,
+                });
+                
+                this.bgLayer = new Konva.Layer();
+                this.cardLayer = new Konva.Layer();
+                this.rippleLayer = new Konva.Layer();
+                this.uiLayer = new Konva.Layer();
+                
+                this.stage.add(this.bgLayer);
+                this.stage.add(this.rippleLayer);
+                this.stage.add(this.cardLayer);
+                this.stage.add(this.uiLayer);
+                
+                this.drawBackground();
+                this.initEvents();
+                this.loadFromStorage();
+                
+                if (this.cards.length === 0) {
+                    this.initSampleData();
+                }
+            }
+
+            drawBackground() {
+                const rect = new Konva.Rect({
+                    x: 0, y: 0, width: this.width, height: this.height,
+                    fillLinearGradientStartPoint: { x: 0, y: 0 },
+                    fillLinearGradientEndPoint: { x: 0, y: this.height },
+                    fillLinearGradientColorStops: [0, '#f5f0e6', 0.3, '#e8dcc8', 0.6, '#d4c4a8', 1, '#c9b896'],
+                    listening: false,
+                });
+                this.bgLayer.add(rect);
+                
+                const noiseGroup = new Konva.Group({ listening: false });
+                this.bgLayer.add(noiseGroup);
+                
+                for (let i = 0; i < 30; i++) {
+                    const x = Math.random() * this.width;
+                    const y = Math.random() * this.height;
+                    const radius = Math.random() * 40 + 20;
+                    const gradient = new Konva.Circle({
+                        x: x,
+                        y: y,
+                        radius: radius,
+                        fillRadialGradientStartPoint: { x: 0, y: 0 },
+                        fillRadialGradientStartRadius: 0,
+                        fillRadialGradientEndPoint: { x: 0, y: 0 },
+                        fillRadialGradientEndRadius: radius,
+                        fillRadialGradientColorStops: [0, 'rgba(60, 60, 60, 0.04)', 1, 'transparent'],
+                    });
+                    noiseGroup.add(gradient);
+                }
+                
+                const mountainPath = new Konva.Shape({
+                    sceneFunc: (context, shape) => {
+                        context.beginPath();
+                        context.moveTo(0, this.height);
+                        for (let x = 0; x <= this.width; x += 30) {
+                            const y = this.height - 80 - Math.sin(x * 0.008) * 30 - Math.random() * 20;
+                            context.lineTo(x, y);
+                        }
+                        context.lineTo(this.width, this.height);
+                        context.closePath();
+                        context.fillStrokeShape(shape);
+                    },
+                    fill: 'rgba(45, 45, 45, 0.06)',
+                    listening: false,
+                });
+                this.bgLayer.add(mountainPath);
+                
+                const seal = new Konva.Group({ x: this.width - 100, y: this.height - 160, rotation: -5, listening: false });
+                
+                const sealRect = new Konva.Rect({
+                    x: -30, y: -30, width: 60, height: 60,
+                    stroke: 'rgba(180, 60, 60, 0.4)',
+                    strokeWidth: 2,
+                    fill: 'rgba(180, 60, 60, 0.1)',
+                });
+                seal.add(sealRect);
+                
+                const sealText = new Konva.Text({
+                    text: '灵感',
+                    fontSize: 16,
+                    fontFamily: 'ZCOOL XiaoWei, serif',
+                    fill: 'rgba(180, 60, 60, 0.6)',
+                    align: 'center',
+                    verticalAlign: 'middle',
+                });
+                sealText.offsetX(sealText.width() / 2);
+                sealText.offsetY(sealText.height() / 2);
+                seal.add(sealText);
+                
+                this.bgLayer.add(seal);
+                this.bgLayer.draw();
+            }
+
+            initEvents() {
+                window.addEventListener('resize', () => this.onResize());
+                
+                this.stage.on('mousedown touchstart', (e) => this.onMouseDown(e));
+                this.stage.on('mousemove touchmove', (e) => this.onMouseMove(e));
+                this.stage.on('mouseup touchend', () => this.onMouseUp());
+                this.stage.on('click tap', (e) => this.onClick(e));
+            }
+
+            onResize() {
+                this.width = window.innerWidth;
+                this.height = window.innerHeight;
+                this.stage.size({ width: this.width, height: this.height });
+                this.bgLayer.destroyChildren();
+                this.drawBackground();
+            }
+
+            initSampleData() {
+                const samples = [
+                    '静心冥想，观照内心', '简约之美，大道至简', '白噪音如山间清泉',
+                    '每日正念，晨钟暮鼓', '呼吸吐纳，气韵悠长', '睡眠如梦，云卷云舒',
+                    '禅茶一味，心无挂碍', '清风明月，自在安然'
+                ];
+                
+                const centerX = this.width / 2;
+                const centerY = this.height / 2;
+                
+                samples.forEach((content, i) => {
+                    const angle = (i / samples.length) * Math.PI * 2;
+                    const radius = 120 + (i % 3) * 40;
+                    this.addCard(content, 
+                        centerX + Math.cos(angle) * radius, 
+                        centerY + Math.sin(angle) * radius
+                    );
+                });
+            }
+
+            addCard(content, x, y) {
+                const card = new InspirationCard(content, x, y, this);
+                this.cards.push(card);
+                this.resolveCollisions(card);
+                this.saveToStorage();
+            }
+
+            resolveCollisions(newCard) {
+                const cardRadius = 80;
+                const padding = 20;
+                const maxIterations = 30;
+                
+                let iterations = 0;
+                let hasCollision = true;
+
+                while (hasCollision && iterations < maxIterations) {
+                    hasCollision = false;
+                    
+                    for (const card of this.cards) {
+                        if (card === newCard) continue;
+
+                        const dx = newCard.x - card.x;
+                        const dy = newCard.y - card.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        const minDistance = cardRadius + padding;
+
+                        if (distance < minDistance && distance > 0) {
+                            hasCollision = true;
+                            const angle = Math.atan2(dy, dx);
+                            const pushForce = (minDistance - distance) * 0.7;
+                            const pushX = Math.cos(angle) * pushForce;
+                            const pushY = Math.sin(angle) * pushForce;
+
+                            if (!card.fixed) {
+                                card.x -= pushX * 0.6;
+                                card.y -= pushY * 0.6;
+                            }
+                            newCard.x += pushX * 0.4;
+                            newCard.y += pushY * 0.4;
+                        }
+                    }
+                    iterations++;
+                }
+                
+                for (const card of this.cards) {
+                    card.updatePosition();
+                }
+            }
+
+            onMouseDown(e) {
+                const pos = this.stage.getPointerPosition();
+                if (!pos) return;
+                
+                const clickedCard = this.cards.slice().reverse().find(card => card.contains(pos.x, pos.y));
+                
+                if (clickedCard) {
+                    this.selectedCard = clickedCard;
+                    this.dragging = true;
+                    clickedCard.startDrag(pos.x, pos.y);
+                    this.showHint(pos.x, pos.y);
+                } else {
+                    this.selectedCard = null;
+                    this.hideHint();
+                }
+            }
+
+            onMouseMove(e) {
+                const pos = this.stage.getPointerPosition();
+                if (!pos) return;
+                
+                if (this.dragging && this.selectedCard) {
+                    this.selectedCard.drag(pos.x, pos.y);
+                    this.showHint(pos.x, pos.y);
+                }
+            }
+
+            onMouseUp() {
+                if (this.dragging && this.selectedCard) {
+                    this.selectedCard.endDrag();
+                    this.dragging = false;
+                    this.saveToStorage();
+                }
+            }
+
+            onClick(e) {
+                if (this.dragging) return;
+                
+                const pos = this.stage.getPointerPosition();
+                if (!pos) return;
+                
+                const clickedCard = this.cards.slice().reverse().find(card => card.contains(pos.x, pos.y));
+                
+                if (clickedCard) {
+                    this.deleteCard(clickedCard);
+                }
+            }
+
+            deleteCard(card) {
+                card.animateDelete(() => {
+                    const index = this.cards.indexOf(card);
+                    if (index > -1) {
+                        this.cards.splice(index, 1);
+                        if (this.selectedCard === card) {
+                            this.selectedCard = null;
+                        }
+                    }
+                    this.saveToStorage();
+                });
+            }
+
+            showHint(x, y) {
+                const hint = document.getElementById('card-hint');
+                hint.style.left = `${x + 20}px`;
+                hint.style.top = `${y - 40}px`;
+                hint.classList.add('visible');
+            }
+
+            hideHint() {
+                document.getElementById('card-hint').classList.remove('visible');
+            }
+
+            handleInput(e) {
+                if (e.key === 'Enter') {
+                    const input = document.getElementById('inspiration-input');
+                    const value = input.value.trim();
+                    if (value) {
+                        this.addCard(value, this.width / 2, this.height / 2);
+                        this.addRipple(this.width / 2, this.height / 2);
+                        input.value = '';
+                    }
+                }
+            }
+
+            addRipple(x, y) {
+                for (let i = 0; i < 3; i++) {
+                    setTimeout(() => {
+                        const ripple = new Konva.Circle({
+                            x: x,
+                            y: y,
+                            radius: 10,
+                            stroke: 'rgba(100, 80, 60, 0.4)',
+                            strokeWidth: 3,
+                            fill: 'transparent',
+                            listening: false,
+                        });
+                        this.rippleLayer.add(ripple);
+                        
+                        const anim = new Konva.Animation((frame) => {
+                            const progress = frame.time / 2500;
+                            if (progress >= 1) {
+                                anim.stop();
+                                ripple.destroy();
+                                return;
+                            }
+                            ripple.radius(10 + progress * 180);
+                            ripple.strokeWidth(3 * (1 - progress));
+                            ripple.opacity(0.5 * (1 - progress));
+                        }, this.rippleLayer);
+                        anim.start();
+                    }, i * 350);
+                }
+            }
+
+            setMode(newMode) {
+                this.mode = newMode;
+                const title = document.querySelector('.toolbar-title');
+                const lakeBtn = document.querySelector('.toolbar-btn:nth-child(1)');
+                const convergeBtn = document.querySelector('.toolbar-btn:nth-child(2)');
+                const inputBox = document.querySelector('.input-box');
+                
+                if (newMode === 'converge') {
+                    title.textContent = '收敛思考';
+                    convergeBtn.classList.add('active');
+                    lakeBtn.classList.remove('active');
+                    inputBox.style.display = 'none';
+                    this.cards.forEach(card => card.setFloating(false));
+                } else {
+                    title.textContent = '灵感湖泊';
+                    lakeBtn.classList.add('active');
+                    convergeBtn.classList.remove('active');
+                    inputBox.style.display = 'block';
+                    this.cards.forEach(card => { if (!card.fixed) card.setFloating(true); });
+                }
+            }
+
+            saveToStorage() {
+                const data = this.cards.map(card => ({
+                    content: card.content, x: card.x, y: card.y, fixed: card.fixed
+                }));
+                localStorage.setItem('inspiration_cards_dunhuang', JSON.stringify(data));
+            }
+
+            loadFromStorage() {
+                const saved = localStorage.getItem('inspiration_cards_dunhuang');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    data.forEach(item => {
+                        const card = new InspirationCard(item.content, item.x, item.y, this);
+                        card.fixed = item.fixed;
+                        card.setFloating(!item.fixed);
+                        this.cards.push(card);
+                    });
+                }
+            }
+        }
+
+        class InspirationCard {
+            constructor(content, x, y, app) {
+                this.content = content;
+                this.x = x;
+                this.y = y;
+                this.app = app;
+                this.fixed = false;
+                this.floating = true;
+                this.dragOffset = { x: 0, y: 0 };
+                this.floatOffset = Math.random() * Math.PI * 2;
+                this.floatAmplitude = 5 + Math.random() * 4;
+                
+                this.group = new Konva.Group({
+                    x: x,
+                    y: y,
+                    draggable: false,
+                });
+                
+                this.textNode = new Konva.Text({
+                    text: content,
+                    fontSize: 18,
+                    fontFamily: 'Noto Serif SC, serif',
+                    fill: '#252525',
+                    align: 'center',
+                    padding: 12,
+                });
+                
+                const width = Math.max(this.textNode.width() + 30, 100);
+                const height = this.textNode.height() + 24;
+                
+                this.textNode.position({
+                    x: -width / 2,
+                    y: -height / 2,
+                });
+                
+                this.textBg = new Konva.Rect({
+                    x: -width / 2 - 5,
+                    y: -height / 2 - 5,
+                    width: width + 10,
+                    height: height + 10,
+                    fill: 'rgba(250, 246, 237, 0.3)',
+                    cornerRadius: 3,
+                    opacity: 0,
+                });
+                
+                this.group.add(this.textBg);
+                this.group.add(this.textNode);
+                app.cardLayer.add(this.group);
+                
+                this.startFloatAnimation();
+                this.animateIn();
+            }
+
+            animateIn() {
+                const startY = this.y + 100;
+                this.group.y(startY);
+                
+                new Konva.Tween({
+                    node: this.group,
+                    duration: 0.6,
+                    y: this.y,
+                    easing: Konva.Easings.ElasticEaseOut,
+                }).play();
+                
+                new Konva.Tween({
+                    node: this.group,
+                    duration: 0.3,
+                    opacity: 1,
+                    onFinish: () => {
+                        this.group.opacity(1);
+                    }
+                }).play();
+            }
+
+            startFloatAnimation() {
+                const anim = new Konva.Animation((frame) => {
+                    if (!this.floating || this.fixed) return;
+                    this.floatOffset += 0.02;
+                    const offsetY = Math.sin(this.floatOffset) * this.floatAmplitude;
+                    this.group.y(this.y + offsetY);
+                }, this.app.cardLayer);
+                anim.start();
+            }
+
+            contains(x, y) {
+                const width = Math.max(this.textNode.width() + 30, 100);
+                const height = this.textNode.height() + 24;
+                return x >= this.x - width/2 - 10 && x <= this.x + width/2 + 10 &&
+                       y >= this.y - height/2 - 10 && y <= this.y + height/2 + 10;
+            }
+
+            startDrag(x, y) {
+                this.dragOffset = { x: x - this.x, y: y - this.y };
+                this.floating = false;
+                this.showHighlight(true);
+            }
+
+            drag(x, y) {
+                this.x = Math.max(20, Math.min(this.app.width - 20, x - this.dragOffset.x));
+                this.y = Math.max(80, Math.min(this.app.height - 100, y - this.dragOffset.y));
+                this.updatePosition();
+            }
+
+            endDrag() {
+                if (!this.fixed && this.app.mode === 'lake') {
+                    this.floating = true;
+                }
+                this.showHighlight(false);
+            }
+
+            showHighlight(show) {
+                new Konva.Tween({
+                    node: this.textBg,
+                    duration: 0.2,
+                    opacity: show ? 1 : 0,
+                }).play();
+            }
+
+            updatePosition() {
+                this.group.position({ x: this.x, y: this.y });
+            }
+
+            setFloating(float) {
+                this.floating = float;
+            }
+
+            animateDelete(callback) {
+                this.showHighlight(true);
+                
+                new Konva.Tween({
+                    node: this.group,
+                    duration: 0.8,
+                    y: this.y + 150,
+                    opacity: 0,
+                    scaleX: 0.8,
+                    scaleY: 0.8,
+                    easing: Konva.Easings.EaseIn,
+                    onFinish: () => {
+                        this.group.destroy();
+                        callback();
+                    }
+                }).play();
+            }
+        }
+
+        const app = new InspirationApp();
+    </script>
+</body>
+</html>
