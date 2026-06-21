@@ -63,6 +63,12 @@ class DiscourseClient:
 
         raise RuntimeError(f"Failed to fetch {url} after {max_retries} attempts")
 
+    def get_category_topics(self, page=0):
+        """Get topics from the target category."""
+        endpoint = f"/c/{self.config['category_id']}.json"
+        params = {"page": page} if page > 0 else {}
+        return self._request(endpoint, params)
+
     def get_topic_detail(self, topic_id):
         """Get full topic details including cooked HTML content."""
         endpoint = f"/t/{topic_id}.json"
@@ -644,12 +650,32 @@ class DemoHallCrawler:
             f.write(html)
 
         # Generate frontend data file (minified JS with only needed fields)
+        import re
+        def strip_html(text):
+            """Remove HTML tags and clean up whitespace for safe frontend rendering."""
+            if not text:
+                return ""
+            text = re.sub(r'<[^>]+>', '', text)
+            text = re.sub(r'&nbsp;?', ' ', text, flags=re.IGNORECASE)
+            text = re.sub(r'&(amp|lt|gt|quot|apos|#\d+|\w+);', '', text)
+            text = re.sub(r'\s{3,}', ' ', text)
+            return text.strip()
+
         frontend_demos = []
         for d in demos:
+            raw_excerpt = d.get("excerpt", "") or ""
+            # If excerpt is empty, try to extract from title (strip tags)
+            clean_excerpt = strip_html(raw_excerpt)
+            if not clean_excerpt:
+                clean_title = strip_html(d.get("title", ""))
+                # Use title as fallback excerpt if it's long enough
+                if len(clean_title) > 20:
+                    clean_excerpt = clean_title[:200]
+
             frontend_demos.append({
                 "topic_id": d["topic_id"],
-                "title": d["title"],
-                "excerpt": d.get("excerpt", ""),
+                "title": strip_html(d.get("title", "")),
+                "excerpt": clean_excerpt,
                 "tags": d.get("tags", []),
                 "views": d.get("views", 0),
                 "like_count": d.get("like_count", 0),

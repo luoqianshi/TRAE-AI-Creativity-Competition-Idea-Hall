@@ -124,6 +124,30 @@ const TAG_IMG_MAP = {
   '社会公益': 'special-default.png'
 };
 
+/* --- HTML Sanitization Utilities --- */
+function escapeAttr(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function stripHTML(str) {
+  return String(str || '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&\w+;/gi, '')
+    .replace(/\s{3,}/g, ' ')
+    .trim();
+}
+
 function createCardHTML(demo) {
   const tag = demo.tags && demo.tags[0] ? demo.tags[0] : '';
   const tagImg = TAG_IMG_MAP[tag] || '';
@@ -131,12 +155,15 @@ function createCardHTML(demo) {
     ? '<span class="approved-badge" title="官方审核通过">&#10003;</span>'
     : '';
 
+  const safeTitle = stripHTML(demo.title);
+  const safeExcerpt = stripHTML(demo.excerpt);
+
   let demoBtn = '';
   if (demo.has_demo) {
     if (demo.demo_url) {
-      demoBtn = `<a href="${demo.demo_url}" target="_blank" class="btn btn-primary btn-sm"><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 查看 Demo</a>`;
+      demoBtn = `<a href="${escapeAttr(demo.demo_url)}" target="_blank" class="btn btn-primary btn-sm"><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 查看 Demo</a>`;
     } else if (demo.external_url) {
-      demoBtn = `<a href="${demo.external_url}" target="_blank" class="btn btn-primary btn-sm"><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 查看 Demo</a>`;
+      demoBtn = `<a href="${escapeAttr(demo.external_url)}" target="_blank" class="btn btn-primary btn-sm"><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 查看 Demo</a>`;
     }
   } else {
     demoBtn = '<button class="btn btn-primary btn-sm disabled" disabled><img src="assets/icons/play.svg" class="btn-icon" alt="" loading="lazy"> 暂无 Demo</button>';
@@ -145,24 +172,24 @@ function createCardHTML(demo) {
   const forumUrl = `https://forum.trae.cn/t/topic/${demo.topic_id}`;
 
   return `<div class="card"
-    data-tags="${(demo.tags || []).join(',')}"
-    data-title="${demo.title}"
-    data-excerpt="${demo.excerpt || ''}"
-    data-created="${demo.created_at}"
-    data-views="${demo.views}"
-    data-likes="${demo.like_count}"
+    data-tags="${escapeAttr((demo.tags || []).join(','))}"
+    data-title="${escapeAttr(safeTitle)}"
+    data-excerpt="${escapeAttr(safeExcerpt)}"
+    data-created="${escapeAttr(demo.created_at)}"
+    data-views="${demo.views || 0}"
+    data-likes="${demo.like_count || 0}"
     data-approved="${demo.approved ? 'true' : 'false'}">
     <div class="card-tag-row">
-      ${tagImg ? `<img src="assets/tracks/${tagImg}" alt="${tag}" class="card-tag-img" loading="lazy">` : ''}
-      <span class="card-tag-text">${tag}</span>
+      ${tagImg ? `<img src="assets/tracks/${tagImg}" alt="${escapeAttr(tag)}" class="card-tag-img" loading="lazy">` : ''}
+      <span class="card-tag-text">${escapeAttr(tag)}</span>
       ${approvedBadge}
     </div>
-    <h3 class="card-title">${demo.title}</h3>
-    <p class="card-excerpt">${demo.excerpt || '暂无描述'}</p>
+    <h3 class="card-title">${escapeAttr(safeTitle)}</h3>
+    <p class="card-excerpt">${safeExcerpt ? escapeAttr(safeExcerpt) : '<span class="no-desc">暂无描述</span>'}</p>
     <div class="card-meta">
-      <span class="meta-item"><img src="assets/icons/eye.svg" class="meta-icon" alt="views" loading="lazy"> ${demo.views}</span>
-      <span class="meta-item"><img src="assets/icons/heart.svg" class="meta-icon" alt="likes" loading="lazy"> ${demo.like_count}</span>
-      <span class="meta-item"><img src="assets/icons/user.svg" class="meta-icon" alt="author" loading="lazy"> ${demo.author}</span>
+      <span class="meta-item"><img src="assets/icons/eye.svg" class="meta-icon" alt="views" loading="lazy"> ${demo.views || 0}</span>
+      <span class="meta-item"><img src="assets/icons/heart.svg" class="meta-icon" alt="likes" loading="lazy"> ${demo.like_count || 0}</span>
+      <span class="meta-item"><img src="assets/icons/user.svg" class="meta-icon" alt="author" loading="lazy"> ${escapeAttr(demo.author)}</span>
     </div>
     <div class="card-actions">
       ${demoBtn}

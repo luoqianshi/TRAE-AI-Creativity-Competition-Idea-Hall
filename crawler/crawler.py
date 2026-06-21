@@ -492,12 +492,30 @@ class DemoHallCrawler:
             f.write(html)
 
         # Generate frontend data file
+        import re
+        def strip_html(text):
+            """Remove HTML tags and clean up whitespace for safe frontend rendering."""
+            if not text:
+                return ""
+            text = re.sub(r'<[^>]+>', '', text)
+            text = re.sub(r'&nbsp;?', ' ', text, flags=re.IGNORECASE)
+            text = re.sub(r'&(amp|lt|gt|quot|apos|#\d+|\w+);', '', text)
+            text = re.sub(r'\s{3,}', ' ', text)
+            return text.strip()
+
         frontend_demos = []
         for d in demos:
+            raw_excerpt = d.get("excerpt", "") or ""
+            clean_excerpt = strip_html(raw_excerpt)
+            if not clean_excerpt:
+                clean_title = strip_html(d.get("title", ""))
+                if len(clean_title) > 20:
+                    clean_excerpt = clean_title[:200]
+
             frontend_demos.append({
                 "topic_id": d["topic_id"],
-                "title": d["title"],
-                "excerpt": d.get("excerpt", ""),
+                "title": strip_html(d.get("title", "")),
+                "excerpt": clean_excerpt,
                 "tags": d.get("tags", []),
                 "views": d.get("views", 0),
                 "like_count": d.get("like_count", 0),
