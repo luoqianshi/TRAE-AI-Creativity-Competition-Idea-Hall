@@ -6,7 +6,7 @@
 
 **你看到的数据，都是实时的。** 每天爬虫从论坛 API 拉取最新帖子，下载 Demo 文件，重新生成静态页面，推送到 GitHub Pages。从发帖到上线，全程无人干预。
 
-[在线访问](https://luoqianshi.github.io/TRAE-AI-Creativity-Competition-Idea-Hall) · [前往社区报名](https://forum.trae.cn/c/38-category/40-category/40) · [TRAE 官网](https://www.trae.cn)
+[在线访问](https://luoqianshi.github.io/TRAE-AI-Creativity-Competition-Idea-Hall) · [灵感孵化舱](https://trae-idea-incubator.netlify.app/) · [前往社区报名](https://forum.trae.cn/c/38-category/40-category/40) · [大赛官网](https://www.trae.cn/ai-creativity?utm_source=community)
 
 ---
 
@@ -24,6 +24,7 @@
 | 硬件交互 | 568 |
 | 社会公益 | 1,742 |
 | 野蛮生长（未分类） | 33 |
+| 已生成 Insight 洞见 | 11,815 |
 
 > 数据更新时间：2026-06-21 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
 
@@ -41,12 +42,26 @@
 - 无 Demo 的帖子同样记录在册，卡片按钮置灰显示「暂无 Demo」
 - 每 100 条记录自动保存检查点，防止中断丢失数据
 
+### Insight 洞见生成
+
+- **规则引擎**：基于 title + excerpt 自动为每张卡片生成一句话洞见（平均 26 字），无需外部 API
+- **四层提取策略**（按优先级）：
+  1. 提取「想解决什么问题」后的核心描述
+  2. 提取「创意介绍」后的项目说明
+  3. 取 excerpt 中第一个有意义的句子
+  4. 从 title 中提取副标题（`——` 后的部分）或整个标题
+- **文本清洗**：自动去除 HTML 标签、Discourse 格式标记（`【标题】`、`【标签】`、`【正文】`）、赛道前缀、填充词等噪音
+- **质量保障**：截断至 60 字符，赛道前缀残留率 0%，仅 2 条回退为「暂无简介」
+- 已集成到爬虫渲染管线，每次爬取自动执行
+
 ### 分类展示
 
 - 按五大赛道自动分类：生活娱乐、学习工作、社会服务、硬件交互、社会公益，无法识别的帖子归入「野蛮生长」
-- 支持按赛道筛选、关键词搜索（标题 + 摘要）、按时间/浏览量/点赞数排序
+- **赛道推断**：对无标签帖子（929 条），通过标题/摘要关键词匹配自动推断赛道（96.4% 成功率）
+- 支持按赛道筛选、关键词搜索（标题 + 洞见 + 摘要）、按时间/浏览量/点赞数排序
 - **审核状态筛选**：Toggle 开关切换「仅展示官方审核通过」/「展示全部」
-- 每张卡片展示赛道图标、标题、摘要、浏览量、点赞数、作者、审核标记
+- **已删除帖子过滤**：自动识别「话题已被作者删除」的帖子，前端不展示
+- 每张卡片展示赛道图标、标题、一句话洞见、浏览量、点赞数、作者、审核标记
 
 ### 在线体验
 
@@ -56,7 +71,7 @@
 
 ### 前端性能优化
 
-- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 6.6MB），index.html 仅 5.3KB 骨架
+- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 7.4MB），index.html 仅 6.0KB 骨架
 - **手动加载更多**：首屏渲染 50 张卡片，底部「加载更多」按钮手动触发下一批（每批 50 张）
 - **DOM 回收**：卡片超过 200 张时自动移除顶部批次（保留 150 张缓冲），保持 DOM 轻量
 - **数据层过滤**：搜索/排序/标签筛选在 JS 数组上完成（O(n)），不操作 DOM
@@ -69,6 +84,7 @@
 - 毛玻璃导航栏（`backdrop-filter: blur(14px)`），滚动后加深背景
 - 赛道图标使用语义化 SVG（奖杯/书本/用户群/网格/爱心/发芽），内联渲染
 - 浏览量/点赞/作者/按钮均使用自定义荧光绿 SVG 图标（非 emoji）
+- **Hero 区域**：大赛横幅图 + 非官方提醒条 + 灵感孵化舱/大赛官网链接
 - 响应式布局，移动端适配
 - 卡片滚动入场动画（IntersectionObserver + 逐张延迟 30ms）
 
@@ -92,8 +108,10 @@ Python 爬虫（双数据源）
     │
     ▼
 Jinja2 模板渲染
-    ├── 生成 index.html（骨架 HTML，约 5.3KB）
-    └── 生成 data/demos.min.js（前端数据文件，约 6.6MB）
+    ├── 生成 index.html（骨架 HTML，约 6.0KB）
+    ├── 生成 data/demos.min.js（前端数据文件，约 7.4MB）
+    │   └── 含 insight 洞见字段（规则引擎自动生成）
+    └── Insight 生成（规则引擎，无外部 API 依赖）
     │
     ▼
 Git push → GitHub Actions → GitHub Pages
@@ -187,6 +205,7 @@ URL 校验规则：
       "views": 128,
       "like_count": 5,
       "excerpt": "帖子摘要文本...",
+      "insight": "城市居民家中大量闲置物品堆积占空间，线下置换渠道少、信息不互通",
       "cover_image": "https://...",
       "approved": true,
       "approved_source": "lark_bitable",
@@ -206,6 +225,7 @@ URL 校验规则：
 - `demo_type`：`attachment`（本地下载）/ `external`（外部链接）/ `null`（无 Demo）
 - `demo_url`：相对路径，用于网页引用（兼容 GitHub Pages）
 - `demo_file`：本地绝对路径，用于爬虫内部管理
+- `insight`：规则引擎生成的一句话洞见（平均 26 字），前端卡片展示优先使用
 
 ### 3. 模板渲染（templates/index.html.j2）
 
@@ -216,19 +236,27 @@ URL 校验规则：
 - `last_updated`：最后更新时间
 
 模板结构（骨架模式）：
-- **Hero 区域**：项目标题 + 描述 + CTA 按钮 + 统计数字（总作品 + 五赛道）
+- **Disclaimer 提醒条**：非官方网站声明（可关闭）
+- **大赛横幅**：全宽 promotional banner 图片（可关闭）
+- **Hero 区域**：项目标题 + 描述 + CTA 按钮（灵感孵化舱 + 大赛官网）+ 统计数字（总作品 + 五赛道）
 - **Filter Bar**：赛道标签筛选 + 排序下拉 + 审核状态 Toggle
 - **Cards Grid**：空容器 `<div id="cards-grid">`，由 JS 动态填充
 - **Loading / No Results**：加载指示器和无结果提示（由 JS 控制显隐）
 - **Footer**：数据来源 + 作者链接 + 更新时间
 
 渲染输出两个文件：
-- `index.html`：骨架 HTML（约 5.3KB），不含卡片数据
-- `data/demos.min.js`：前端数据文件（约 6.6MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, excerpt, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
+- `index.html`：骨架 HTML（约 6.0KB），不含卡片数据
+- `data/demos.min.js`：前端数据文件（约 7.4MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, excerpt, insight, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
 
 ### 4. 前端交互（script.js）
 
 全部原生 JavaScript，无框架依赖，由五个模块组成：
+
+#### 数据清洗与初始化
+- **HTML 属性转义**：`escapeAttr()` 防止双引号等特殊字符破坏 `data-*` 属性
+- **HTML 标签剥离**：`stripHTML()` 移除 Discourse 渲染残留的 HTML 标签和实体
+- **已删除帖子过滤**：正则匹配「话题已被作者删除」，从数据数组中移除
+- **空标签补全**：无赛道标签的帖子自动归入「野蛮生长」
 
 #### 粒子动画系统
 - Canvas 2D 实现，60 个粒子，随机位置/速度/半径
@@ -237,8 +265,9 @@ URL 校验规则：
 - 使用 `requestAnimationFrame` 驱动动画循环，窗口 resize 自适应
 - 延迟 500ms 启动，避免与初始渲染竞争
 
-#### 导航栏滚动效果
+#### 导航栏与 Banner
 - 监听 `scroll` 事件，滚动超过 50px 时添加 `.scrolled` 类加深背景透明度
+- Banner 关闭按钮：点击后隐藏横幅图，状态不持久化
 
 #### 手动加载引擎
 - **数据驱动渲染**：从 `window.DEMOS_DATA` 读取数据，通过 `createCardHTML()` 生成卡片 HTML 字符串
@@ -323,23 +352,24 @@ CSS 变量驱动的设计系统：
 
 ```
 TRAE-AI-Creativity-Competition-Idea-Hall/
-├── index.html                          # 生成的骨架首页（约 5.3KB）
+├── index.html                          # 生成的骨架首页（约 6.0KB）
 ├── styles.css                          # TRAE 深色科技风样式（CSS 变量体系）
 ├── script.js                           # 前端交互（手动加载/筛选/搜索/排序/加载更多）
 ├── templates/
 │   └── index.html.j2                   # Jinja2 模板
 ├── crawler/
 │   ├── crawler.py                      # 爬虫 v1（单数据源：Discourse API）
-│   ├── crawler_v2.py                   # 爬虫 v2（双数据源：飞书审批 + Discourse API）
+│   ├── crawler_v2.py                   # 爬虫 v2（双数据源：飞书审批 + Discourse API + Insight 生成）
 │   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
 │   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   ├── demos.json                       # 所有帖子的结构化数据（11,817 条）
-│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 6.6MB）
+│   ├── demos.json                       # 所有帖子的结构化数据（11,817 条，含 insight 字段）
+│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 7.4MB）
 │   └── approved_projects.json          # 飞书多维表格审批数据源
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
 │   ├── trae-logo.png                    # Logo & Favicon
+│   ├── banner.png                      # 大赛横幅图
 │   ├── icons/                          # SVG 图标（eye/heart/user/play/external 等 16 个）
 │   └── tracks/                         # 赛道图标 SVG（5 赛道 + 野蛮生长，内联渲染）
 ├── .github/
@@ -368,6 +398,9 @@ python crawler_v2.py --recheck
 
 # 仅渲染（不爬取，用现有数据重新生成 index.html + demos.min.js）
 python -c "from crawler.crawler_v2 import DemoHallCrawler; DemoHallCrawler().render()"
+
+# 批量生成 Insight 洞见（独立脚本，读取 demos.json 写入 insight 字段）
+python scripts/generate_insights.py
 
 # 本地预览
 cd ..
