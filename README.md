@@ -18,11 +18,12 @@
 | 含 HTML Demo | **9,634** |
 | 官方审核通过 | **2,569** |
 | 暂无 Demo / 未审核 | **2,183** |
-| 生活娱乐 | 3,738 |
-| 学习工作 | 5,053 |
-| 社会服务 | 2,057 |
-| 硬件交互 | 551 |
-| 社会公益 | 1,737 |
+| 生活娱乐 | 3,896 |
+| 学习工作 | 5,742 |
+| 社会服务 | 2,084 |
+| 硬件交互 | 568 |
+| 社会公益 | 1,742 |
+| 野蛮生长（未分类） | 33 |
 
 > 数据更新时间：2026-06-21 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
 
@@ -42,7 +43,7 @@
 
 ### 分类展示
 
-- 按五大赛道自动分类：生活娱乐、学习工作、社会服务、硬件交互、社会公益
+- 按五大赛道自动分类：生活娱乐、学习工作、社会服务、硬件交互、社会公益，无法识别的帖子归入「野蛮生长」
 - 支持按赛道筛选、关键词搜索（标题 + 摘要）、按时间/浏览量/点赞数排序
 - **审核状态筛选**：Toggle 开关切换「仅展示官方审核通过」/「展示全部」
 - 每张卡片展示赛道图标、标题、摘要、浏览量、点赞数、作者、审核标记
@@ -56,8 +57,7 @@
 ### 前端性能优化
 
 - **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 6.6MB），index.html 仅 5.3KB 骨架
-- **无限滚动**：首屏渲染 50 张卡片，滚动到底部自动加载下一批（每批 50 张）
-- **手动加载更多**：底部「加载更多」按钮，显示已加载/总数进度，自动滚动失效时可手动触发
+- **手动加载更多**：首屏渲染 50 张卡片，底部「加载更多」按钮手动触发下一批（每批 50 张）
 - **DOM 回收**：卡片超过 200 张时自动移除顶部批次（保留 150 张缓冲），保持 DOM 轻量
 - **数据层过滤**：搜索/排序/标签筛选在 JS 数组上完成（O(n)），不操作 DOM
 - **CSS 渲染优化**：`content-visibility: auto` 跳过离屏卡片渲染，`contain-intrinsic-size` 预留空间
@@ -67,7 +67,7 @@
 - 纯黑底色（`#0a0a0a`）+ 荧光绿（`#22c55e`）强调色
 - **Canvas 2D 粒子动画背景**：60 个粒子 + 距离连线 + 鼠标交互（150px 范围内高亮连线）
 - 毛玻璃导航栏（`backdrop-filter: blur(14px)`），滚动后加深背景
-- 赛道图标从 TRAE 官网提取的 PNG（5 赛道 x default/active 状态）
+- 赛道图标使用语义化 SVG（奖杯/书本/用户群/网格/爱心/发芽），内联渲染
 - 浏览量/点赞/作者/按钮均使用自定义荧光绿 SVG 图标（非 emoji）
 - 响应式布局，移动端适配
 - 卡片滚动入场动画（IntersectionObserver + 逐张延迟 30ms）
@@ -93,7 +93,7 @@ Python 爬虫（双数据源）
     ▼
 Jinja2 模板渲染
     ├── 生成 index.html（骨架 HTML，约 5.3KB）
-    └── 生成 data/demos.min.js（前端数据文件，约 5.4MB）
+    └── 生成 data/demos.min.js（前端数据文件，约 6.6MB）
     │
     ▼
 Git push → GitHub Actions → GitHub Pages
@@ -102,7 +102,7 @@ Git push → GitHub Actions → GitHub Pages
 浏览器加载
     ├── index.html（骨架）+ styles.css
     ├── data/demos.min.js（11,817 条卡片数据）
-    └── script.js（无限滚动 + 筛选 + 搜索 + 排序）
+    └── script.js（手动加载 + 筛选 + 搜索 + 排序）
 ```
 
 **技术选型理由**：纯静态生成（SSG），没有服务器、没有数据库、没有运行时依赖。GitHub Pages 免费托管，域名自带 HTTPS。爬虫和渲染在 TRAE 定时任务里跑，push 触发 Actions 自动部署。整条链路成本为零。
@@ -172,7 +172,7 @@ URL 校验规则：
 
 ```json
 {
-  "last_updated": "2026-06-21T08:36:32.259459+00:00",
+  "last_updated": "2026-06-21T14:25:00.000000+00:00",
   "total_count": 11817,
   "approved_count": 2569,
   "unapproved_count": 9248,
@@ -224,7 +224,7 @@ URL 校验规则：
 
 渲染输出两个文件：
 - `index.html`：骨架 HTML（约 5.3KB），不含卡片数据
-- `data/demos.min.js`：前端数据文件（约 5.4MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, excerpt, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
+- `data/demos.min.js`：前端数据文件（约 6.6MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, excerpt, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
 
 ### 4. 前端交互（script.js）
 
@@ -240,21 +240,16 @@ URL 校验规则：
 #### 导航栏滚动效果
 - 监听 `scroll` 事件，滚动超过 50px 时添加 `.scrolled` 类加深背景透明度
 
-#### 无限滚动引擎
+#### 手动加载引擎
 - **数据驱动渲染**：从 `window.DEMOS_DATA` 读取数据，通过 `createCardHTML()` 生成卡片 HTML 字符串
 - **分批渲染**：每批 50 张（`BATCH_SIZE`），使用 `DocumentFragment` 批量插入 DOM
-- **滚动触发**：`IntersectionObserver` 监听 1px 高的 sentinel 哨兵元素，`rootMargin: 500px` 提前触发
-- **自动填充**：`loadMore()` 渲染后检查 sentinel 是否仍在视口内，若是则递归加载直到页面足够长
+- **手动触发**：底部「加载更多」按钮点击后调用 `loadMore()`，无自动滚动
 - **DOM 回收**：卡片超过 200 张（`MAX_DOM_CARDS`）时移除顶部多余卡片，保留 150 张缓冲（`BUFFER_CARDS`）
 - **入场动画**：`IntersectionObserver`（阈值 0.1）逐张添加 `.visible` 类，每张延迟 30ms
-
-#### 手动加载更多按钮
-- 与自动无限滚动**共存**，作为自动加载失效时的手动兜底
-- 三种状态：
-  - **可加载**：绿色边框按钮，显示「加载更多（已加载 50 / 2533）」
+- **按钮状态**：
+  - **可加载**：绿色边框，显示「加载更多（已加载 50 / 2569）」
   - **加载中**：灰色 + 旋转 spinner + 「加载中...」，按钮禁用
-  - **已完成**：灰色半透明 + 「已展示全部 2533 个作品」，按钮禁用
-- 点击按钮直接调用 `loadMore()`，与自动滚动共享同一渲染逻辑
+  - **已完成**：灰色半透明 + 「已展示全部 2569 个作品」，按钮禁用
 
 #### 筛选 / 搜索 / 排序
 - **数据层过滤**：在 JS 数组上完成（O(n)），不操作 DOM
@@ -330,7 +325,7 @@ CSS 变量驱动的设计系统：
 TRAE-AI-Creativity-Competition-Idea-Hall/
 ├── index.html                          # 生成的骨架首页（约 5.3KB）
 ├── styles.css                          # TRAE 深色科技风样式（CSS 变量体系）
-├── script.js                           # 前端交互（无限滚动/筛选/搜索/排序/加载更多）
+├── script.js                           # 前端交互（手动加载/筛选/搜索/排序/加载更多）
 ├── templates/
 │   └── index.html.j2                   # Jinja2 模板
 ├── crawler/
@@ -344,9 +339,9 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 │   └── approved_projects.json          # 飞书多维表格审批数据源
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
-│   ├── trae-work.png                    # Logo & Favicon
+│   ├── trae-logo.png                    # Logo & Favicon
 │   ├── icons/                          # SVG 图标（eye/heart/user/play/external 等 16 个）
-│   └── tracks/                         # 赛道图标 PNG（5 赛道 x default/active = 10 个）
+│   └── tracks/                         # 赛道图标 SVG（5 赛道 + 野蛮生长，内联渲染）
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml                   # GitHub Actions 部署配置
@@ -362,17 +357,17 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 cd crawler
 pip install -r requirements.txt
 
-# 增量爬取（只处理新增帖子）
-python crawler.py
+# 增量爬取（只处理新增帖子，推荐）
+python crawler_v2.py
 
 # 全量重建（重新处理所有帖子）
-python crawler.py --force
+python crawler_v2.py --force
 
 # 重新检查无 Demo 的帖子（发现遗漏的 ZIP 附件等）
 python crawler_v2.py --recheck
 
 # 仅渲染（不爬取，用现有数据重新生成 index.html + demos.min.js）
-python -c "from crawler.crawler import DemoHallCrawler; DemoHallCrawler().render()"
+python -c "from crawler.crawler_v2 import DemoHallCrawler; DemoHallCrawler().render()"
 
 # 本地预览
 cd ..
