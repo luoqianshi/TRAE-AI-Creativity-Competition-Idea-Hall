@@ -292,17 +292,33 @@ function createCardHTML(demo) {
       if (loadingEl) loadingEl.style.display = 'none';
       updateLoadMoreButton();
 
-      // If sentinel is still in viewport after rendering, load more immediately
+      // If sentinel is still in viewport after rendering, load more after layout settles
       if (renderedCount < filteredDemos.length && sentinelEl) {
-        const rect = sentinelEl.getBoundingClientRect();
-        if (rect.top < window.innerHeight + PRELOAD_THRESHOLD) {
-          requestAnimationFrame(() => loadMore());
-        }
+        requestAnimationFrame(() => {
+          const rect = sentinelEl.getBoundingClientRect();
+          if (rect.top < window.innerHeight + PRELOAD_THRESHOLD) {
+            setTimeout(() => loadMore(), 120);
+          }
+        });
       }
     });
   }
 
   let sentinelEl = null;
+
+  function fillViewport() {
+    /* Keep rendering batches until grid content overflows the viewport,
+       so the scroll-sentinel starts off-screen and won't trigger immediately. */
+    if (renderedCount >= filteredDemos.length) return;
+    const viewportH = window.innerHeight;
+    let gridH = grid.getBoundingClientRect().height;
+    const limit = Math.min(renderedCount + BATCH_SIZE * 6, filteredDemos.length);
+
+    while (gridH < viewportH * 1.5 && renderedCount < limit) {
+      renderBatch(BATCH_SIZE);
+      gridH = grid.getBoundingClientRect().height;
+    }
+  }
 
   function setupScrollTrigger() {
     if (scrollObserver) scrollObserver.disconnect();
@@ -336,6 +352,7 @@ function createCardHTML(demo) {
 
     setupRevealObserver();
     renderBatch(BATCH_SIZE);
+    fillViewport();
     setupScrollTrigger();
     createLoadMoreButton();
   }
