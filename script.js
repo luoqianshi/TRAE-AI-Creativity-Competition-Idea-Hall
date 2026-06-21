@@ -11,6 +11,21 @@ const BUFFER_CARDS = 150;
 /* ---------- Data Access ---------- */
 const allDemos = window.DEMOS_DATA || [];
 
+// --- Bad case cleanup ---
+// 1. Remove deleted topics
+const DELETED_RE = /话题已被作者删除/;
+for (let i = allDemos.length - 1; i >= 0; i--) {
+  if (DELETED_RE.test(allDemos[i].title) || DELETED_RE.test(allDemos[i].excerpt)) {
+    allDemos.splice(i, 1);
+  }
+}
+// 2. Assign fallback tag for cards without category
+allDemos.forEach(d => {
+  if (!d.tags || d.tags.length === 0) {
+    d.tags = ['野蛮生长'];
+  }
+});
+
 /* ---------- Particle Canvas Background ---------- */
 (function initParticles() {
   const canvas = document.getElementById('particle-canvas');
@@ -116,6 +131,7 @@ const allDemos = window.DEMOS_DATA || [];
 
 /* ---------- Card Factory ---------- */
 const TAG_SVG_MAP = {
+  '野蛮生长': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/><path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2-.4-3.5.4-4.8 1.8"/><path d="M14.1 6a7 7 0 0 0-1.1 4c1.9-.1 3.3-.6 4.3-1.4"/><path d="M18 2h-3v3"/><path d="M18 5l-3-3"/></svg>',
   '生活娱乐': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
   '学习工作': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="m9 9 2 2 4-4"/></svg>',
   '社会服务': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
