@@ -171,7 +171,9 @@ function createCardHTML(demo) {
     : '';
 
   const safeTitle = stripHTML(demo.title);
-  const safeExcerpt = stripHTML(demo.excerpt);
+  // Prefer insight (one-sentence summary), fallback to excerpt
+  const insightText = (demo.insight || '').trim();
+  const safeExcerpt = insightText || stripHTML(demo.excerpt);
 
   let demoBtn = '';
   if (demo.has_demo) {

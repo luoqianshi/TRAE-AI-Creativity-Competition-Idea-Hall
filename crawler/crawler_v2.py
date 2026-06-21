@@ -661,21 +661,111 @@ class DemoHallCrawler:
             text = re.sub(r'\s{3,}', ' ', text)
             return text.strip()
 
+        def generate_insight(demo):
+            """Rule-based one-sentence insight from title + excerpt."""
+            title = demo.get("title", "") or ""
+            excerpt = demo.get("excerpt", "") or ""
+
+            def _clean(t):
+                t = strip_html(t)
+                t = re.sub(r'【标题】.*?(?=\n|$)', '', t)
+                t = re.sub(r'【标签】.*?(?=\n|$)', '', t)
+                t = re.sub(r'【正文】\s*', '', t)
+                t = re.sub(r'话题标签[：:]\S*', '', t)
+                t = re.sub(r'报名赛道\s*[+＋]\s*', '', t)
+                t = re.sub(r'（示例[：:].*?）', '', t)
+                t = re.sub(r'（一个报名帖只能.*?）', '', t)
+                t = re.sub(r'生活娱乐/学习工作/社会服务/硬件交互.*?(?:。|$)', '', t)
+                t = re.sub(r'^\d+\.\s*创意名称\s*[+＋]\s*创意介绍\s*\n?', '', t, flags=re.MULTILINE)
+                t = re.sub(r'^[一二三四五六]、.*?(?:创意|介绍|名称)\s*\n?', '', t, flags=re.MULTILINE)
+                t = re.sub(r'^创意名称[：:]\s*\S.*?(?:\n|$)', '', t, flags=re.MULTILINE)
+                t = re.sub(r'^创意介绍[：:]\s*\n?', '', t, flags=re.MULTILINE)
+                t = re.sub(r'^项目名称[：:]\s*\n?', '', t, flags=re.MULTILINE)
+                t = re.sub(r'^一句话简介[：:]\s*', '', t, flags=re.MULTILINE)
+                t = re.sub(r'\S+\.html\s*\([\d.]+\s*[KMG]?B\)', '', t)
+                t = re.sub(r'^(?:大家好|我们是一群|给各位分享)[，,]?\s*[^\n]*?[。\n]', '', t, flags=re.MULTILINE)
+                t = re.sub(r'[ \t]+', ' ', t)
+                t = re.sub(r'\n{2,}', '\n', t)
+                return t.strip()
+
+            def _clean_title(t):
+                t = strip_html(t)
+                t = re.sub(r'^【(?:生活娱乐|学习工作|社会服务|硬件交互|社会公益|野蛮生长)(?:赛道)?】\s*', '', t)
+                t = re.sub(r'^(?:生活娱乐|学习工作|社会服务|硬件交互|社会公益|野蛮生长)赛道\s*[+＋]\s*[""「]?', '', t)
+                t = re.sub(r'\s*[+＋]\s*创意(?:名称|方案|展示)$', '', t)
+                return t.strip()
+
+            def _clean_insight(s):
+                s = re.sub(r'^【(?:生活娱乐|学习工作|社会服务|硬件交互|社会公益|野蛮生长)(?:赛道)?】\s*', '', s)
+                s = re.sub(r'^(?:大家好[，,]?\s*|我们是一群.{0,30}[，,]\s*|我们确定了参赛创意为[【「])', '', s)
+                s = re.sub(r'^如下[：:]\s*', '', s)
+                return s.strip()
+
+            def _truncate(s, max_len=60):
+                if len(s) <= max_len:
+                    return s
+                for sep in ['，并', '，让', '，使', '，帮', '，', '、', '；']:
+                    idx = s[:max_len].rfind(sep)
+                    if idx > 0:
+                        return s[:idx + len(sep)]
+                return s[:max_len] + '…'
+
+            cleaned_excerpt = _clean(excerpt) if excerpt.strip() else ''
+            cleaned_title = _clean_title(title)
+
+            # Strategy 1: "想解决什么问题"
+            m = re.search(r'想解决什么问题[：:]\s*(.+?)(?:[。\n]|为什么会想到)', cleaned_excerpt)
+            if m and len(m.group(1).strip()) >= 8:
+                return _truncate(_clean_insight(m.group(1).strip()))
+
+            # Strategy 2: "创意介绍"
+            m = re.search(r'创意介绍[：:]\s*\n?\s*(.+?)(?:\n|$)', cleaned_excerpt)
+            if m and len(m.group(1).strip()) >= 8:
+                return _truncate(_clean_insight(m.group(1).strip()))
+
+            # Strategy 3: First meaningful sentence
+            if cleaned_excerpt:
+                for s in re.split(r'[。\n！？]', cleaned_excerpt):
+                    s = s.strip()
+                    if len(s) < 10:
+                        continue
+                    if re.match(r'^(创意|想解决|为什么|项目|一句话|赛道|标签|正文|标题|报名|如下)', s):
+                        continue
+                    if re.match(r'^\d+[.、]', s):
+                        continue
+                    return _truncate(_clean_insight(s))
+
+            # Strategy 4: From title
+            if len(cleaned_title) >= 6:
+                for sep in ['——', ' — ', ' – ']:
+                    if sep in cleaned_title:
+                        parts = cleaned_title.split(sep, 1)
+                        after = parts[1].strip().lstrip('—– ')
+                        if len(after) >= 6:
+                            return _truncate(_clean_insight(after))
+                return _truncate(_clean_insight(cleaned_title))
+
+            return _truncate(_clean_insight(cleaned_title)) if cleaned_title else '暂无简介'
+
         frontend_demos = []
         for d in demos:
             raw_excerpt = d.get("excerpt", "") or ""
-            # If excerpt is empty, try to extract from title (strip tags)
             clean_excerpt = strip_html(raw_excerpt)
             if not clean_excerpt:
                 clean_title = strip_html(d.get("title", ""))
-                # Use title as fallback excerpt if it's long enough
                 if len(clean_title) > 20:
                     clean_excerpt = clean_title[:200]
+
+            # Generate insight if not already present
+            insight = d.get("insight", "").strip()
+            if not insight:
+                insight = generate_insight(d)
 
             frontend_demos.append({
                 "topic_id": d["topic_id"],
                 "title": strip_html(d.get("title", "")),
                 "excerpt": clean_excerpt,
+                "insight": insight,
                 "tags": d.get("tags", []),
                 "views": d.get("views", 0),
                 "like_count": d.get("like_count", 0),
