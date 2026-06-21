@@ -14,16 +14,17 @@
 
 | 维度 | 数量 |
 |---|---|
-| 总报名帖 | **10,071** |
-| 含 HTML Demo | **8,251** |
-| 暂无 Demo | **1,820** |
-| 生活娱乐 | 3,234 |
-| 学习工作 | 4,302 |
-| 社会服务 | 1,725 |
-| 硬件交互 | 471 |
-| 社会公益 | 1,406 |
+| 总报名帖 | **11,817** |
+| 含 HTML Demo | **9,634** |
+| 官方审核通过 | **2,569** |
+| 暂无 Demo / 未审核 | **2,183** |
+| 生活娱乐 | 3,738 |
+| 学习工作 | 5,053 |
+| 社会服务 | 2,057 |
+| 硬件交互 | 551 |
+| 社会公益 | 1,737 |
 
-> 数据更新时间：2026-06-20 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
+> 数据更新时间：2026-06-21 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
 
 ---
 
@@ -52,6 +53,15 @@
 - 社区原帖链接一键跳转
 - 所有 Demo 文件以相对路径部署（`demos/{topic_id}/xxx.html`），兼容 GitHub Pages 子路径
 
+### 前端性能优化
+
+- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 6.6MB），index.html 仅 5.3KB 骨架
+- **无限滚动**：首屏渲染 50 张卡片，滚动到底部自动加载下一批（每批 50 张）
+- **手动加载更多**：底部「加载更多」按钮，显示已加载/总数进度，自动滚动失效时可手动触发
+- **DOM 回收**：卡片超过 200 张时自动移除顶部批次（保留 150 张缓冲），保持 DOM 轻量
+- **数据层过滤**：搜索/排序/标签筛选在 JS 数组上完成（O(n)），不操作 DOM
+- **CSS 渲染优化**：`content-visibility: auto` 跳过离屏卡片渲染，`contain-intrinsic-size` 预留空间
+
 ### TRAE 深色科技风 UI
 
 - 纯黑底色（`#0a0a0a`）+ 荧光绿（`#22c55e`）强调色
@@ -60,14 +70,14 @@
 - 赛道图标从 TRAE 官网提取的 PNG（5 赛道 x default/active 状态）
 - 浏览量/点赞/作者/按钮均使用自定义荧光绿 SVG 图标（非 emoji）
 - 响应式布局，移动端适配
-- 卡片滚动入场动画（IntersectionObserver + 逐张延迟 50ms）
+- 卡片滚动入场动画（IntersectionObserver + 逐张延迟 30ms）
 
 ---
 
 ## 技术架构
 
 ```
-TRAE 定时任务（每日 10:00 北京时间）
+TRAE 定时任务（每日 4:00 北京时间）
     │
     ▼
 Python 爬虫（双数据源）
@@ -82,10 +92,17 @@ Python 爬虫（双数据源）
     │
     ▼
 Jinja2 模板渲染
-    └── 生成 index.html（纯静态，含统计数据）
+    ├── 生成 index.html（骨架 HTML，约 5.3KB）
+    └── 生成 data/demos.min.js（前端数据文件，约 5.4MB）
     │
     ▼
 Git push → GitHub Actions → GitHub Pages
+    │
+    ▼
+浏览器加载
+    ├── index.html（骨架）+ styles.css
+    ├── data/demos.min.js（11,817 条卡片数据）
+    └── script.js（无限滚动 + 筛选 + 搜索 + 排序）
 ```
 
 **技术选型理由**：纯静态生成（SSG），没有服务器、没有数据库、没有运行时依赖。GitHub Pages 免费托管，域名自带 HTTPS。爬虫和渲染在 TRAE 定时任务里跑，push 触发 Actions 自动部署。整条链路成本为零。
@@ -155,10 +172,10 @@ URL 校验规则：
 
 ```json
 {
-  "last_updated": "2026-06-20T10:59:55.139655+00:00",
-  "total_count": 10071,
-  "approved_count": 8251,
-  "unapproved_count": 1820,
+  "last_updated": "2026-06-21T08:36:32.259459+00:00",
+  "total_count": 11817,
+  "approved_count": 2569,
+  "unapproved_count": 9248,
   "demos": [
     {
       "topic_id": 34392,
@@ -198,36 +215,54 @@ URL 校验规则：
 - `track_tags`：赛道标签映射
 - `last_updated`：最后更新时间
 
-模板结构：
+模板结构（骨架模式）：
 - **Hero 区域**：项目标题 + 描述 + CTA 按钮 + 统计数字（总作品 + 五赛道）
 - **Filter Bar**：赛道标签筛选 + 排序下拉 + 审核状态 Toggle
-- **Cards Grid**：卡片列表，每张卡片包含赛道图标、审核标记、标题、摘要、浏览/点赞/作者、操作按钮
+- **Cards Grid**：空容器 `<div id="cards-grid">`，由 JS 动态填充
+- **Loading / No Results**：加载指示器和无结果提示（由 JS 控制显隐）
 - **Footer**：数据来源 + 作者链接 + 更新时间
+
+渲染输出两个文件：
+- `index.html`：骨架 HTML（约 5.3KB），不含卡片数据
+- `data/demos.min.js`：前端数据文件（约 5.4MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, excerpt, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
 
 ### 4. 前端交互（script.js）
 
-全部原生 JavaScript，无框架依赖，由四个 IIFE 模块组成：
+全部原生 JavaScript，无框架依赖，由五个模块组成：
 
 #### 粒子动画系统
 - Canvas 2D 实现，60 个粒子，随机位置/速度/半径
 - **粒子连线**：距离 < 120px 的粒子间绘制半透明绿色连线（opacity 随距离线性衰减，最大 0.2）
 - **鼠标交互**：距离 < 150px 的粒子与鼠标位置连线（opacity 最大 0.3，线宽 0.8）
 - 使用 `requestAnimationFrame` 驱动动画循环，窗口 resize 自适应
+- 延迟 500ms 启动，避免与初始渲染竞争
 
 #### 导航栏滚动效果
 - 监听 `scroll` 事件，滚动超过 50px 时添加 `.scrolled` 类加深背景透明度
 
-#### 卡片滚动入场动画
-- 使用 `IntersectionObserver`，阈值 0.1
-- 进入视口时逐张添加 `.visible` 类，每张延迟 50ms 实现瀑布效果
-- 触发后立即 `unobserve`，不重复动画
+#### 无限滚动引擎
+- **数据驱动渲染**：从 `window.DEMOS_DATA` 读取数据，通过 `createCardHTML()` 生成卡片 HTML 字符串
+- **分批渲染**：每批 50 张（`BATCH_SIZE`），使用 `DocumentFragment` 批量插入 DOM
+- **滚动触发**：`IntersectionObserver` 监听 1px 高的 sentinel 哨兵元素，`rootMargin: 500px` 提前触发
+- **自动填充**：`loadMore()` 渲染后检查 sentinel 是否仍在视口内，若是则递归加载直到页面足够长
+- **DOM 回收**：卡片超过 200 张（`MAX_DOM_CARDS`）时移除顶部多余卡片，保留 150 张缓冲（`BUFFER_CARDS`）
+- **入场动画**：`IntersectionObserver`（阈值 0.1）逐张添加 `.visible` 类，每张延迟 30ms
+
+#### 手动加载更多按钮
+- 与自动无限滚动**共存**，作为自动加载失效时的手动兜底
+- 三种状态：
+  - **可加载**：绿色边框按钮，显示「加载更多（已加载 50 / 2533）」
+  - **加载中**：灰色 + 旋转 spinner + 「加载中...」，按钮禁用
+  - **已完成**：灰色半透明 + 「已展示全部 2533 个作品」，按钮禁用
+- 点击按钮直接调用 `loadMore()`，与自动滚动共享同一渲染逻辑
 
 #### 筛选 / 搜索 / 排序
-- **赛道筛选**：点击 tag-pill 切换 active 状态，按 `data-tags` 属性过滤
-- **关键词搜索**：300ms 防抖，匹配 `data-title` + `data-excerpt`
-- **排序**：支持最新发布（`data-created`）、最多浏览（`data-views`）、最多点赞（`data-likes`）
-- **审核筛选**：Toggle 开关控制 `data-approved` 过滤
-- 过滤后通过 DOM 重排（`appendChild`）实现无刷新更新
+- **数据层过滤**：在 JS 数组上完成（O(n)），不操作 DOM
+- **赛道筛选**：点击 tag-pill 切换 active 状态，按 `tags` 数组过滤
+- **关键词搜索**：300ms 防抖，匹配 `title` + `excerpt`（大小写不敏感）
+- **排序**：支持最新发布（`created_at`）、最多浏览（`views`）、最多点赞（`like_count`）
+- **审核筛选**：Toggle 开关控制 `approved` 字段过滤（默认仅展示审核通过）
+- 过滤/排序后调用 `setFilteredDemos()` 重新渲染，清空网格并从头加载
 
 ### 5. 样式体系（styles.css）
 
@@ -248,6 +283,11 @@ CSS 变量驱动的设计系统：
 字体栈：
 - 无衬线：`Inter` → `SF Pro Display` → `PingFang SC` → `Microsoft YaHei` → 系统字体
 - 等宽：`JetBrains Mono` → `SF Mono` → `Menlo` → `Consolas`
+
+性能相关样式：
+- `.card`：`content-visibility: auto` + `contain-intrinsic-size: 0 300px`，跳过离屏卡片渲染
+- `.card`：`transition` 仅对 `opacity`、`transform`、`border-color`、`box-shadow` 启用（避免 layout thrashing）
+- `.load-more-btn`：绿色边框按钮，hover 填充，三种状态（可加载/加载中/已完成）
 
 ### 6. CI/CD 部署（.github/workflows/deploy.yml）
 
@@ -288,9 +328,9 @@ CSS 变量驱动的设计系统：
 
 ```
 TRAE-AI-Creativity-Competition-Idea-Hall/
-├── index.html                          # 生成的静态首页（Git 追踪）
+├── index.html                          # 生成的骨架首页（约 5.3KB）
 ├── styles.css                          # TRAE 深色科技风样式（CSS 变量体系）
-├── script.js                           # 前端交互（粒子动画/筛选/搜索/排序）
+├── script.js                           # 前端交互（无限滚动/筛选/搜索/排序/加载更多）
 ├── templates/
 │   └── index.html.j2                   # Jinja2 模板
 ├── crawler/
@@ -299,7 +339,8 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 │   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
 │   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   ├── demos.json                       # 所有帖子的结构化数据（10,071 条）
+│   ├── demos.json                       # 所有帖子的结构化数据（11,817 条）
+│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 6.6MB）
 │   └── approved_projects.json          # 飞书多维表格审批数据源
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
@@ -330,7 +371,7 @@ python crawler.py --force
 # 重新检查无 Demo 的帖子（发现遗漏的 ZIP 附件等）
 python crawler_v2.py --recheck
 
-# 仅渲染（不爬取，用现有数据重新生成 index.html）
+# 仅渲染（不爬取，用现有数据重新生成 index.html + demos.min.js）
 python -c "from crawler.crawler import DemoHallCrawler; DemoHallCrawler().render()"
 
 # 本地预览
@@ -345,10 +386,10 @@ python -m http.server 8889
 
 ### TRAE 定时任务
 
-每日 10:00（北京时间）自动执行爬虫，增量拉取新帖子并推送到 GitHub：
+每日 4:00（北京时间）自动执行爬虫 v2，增量拉取新帖子并推送到 GitHub：
 
 ```
-cron: 0 10 * * *
+cron: 0 4 * * *
 ```
 
 ### GitHub Actions
