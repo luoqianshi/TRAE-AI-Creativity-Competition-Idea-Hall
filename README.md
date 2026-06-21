@@ -369,7 +369,7 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
 │   ├── trae-logo.png                    # Logo & Favicon
-│   ├── banner.png                      # 大赛横幅图
+│   ├── banner.webp                     # 大赛横幅图（WebP，49KB）
 │   ├── icons/                          # SVG 图标（eye/heart/user/play/external 等 16 个）
 │   └── tracks/                         # 赛道图标 SVG（5 赛道 + 野蛮生长，内联渲染）
 ├── .github/
