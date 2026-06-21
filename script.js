@@ -1,11 +1,10 @@
 // ============================================================
 // TRAE AI 创造力大赛 · 灵感 Demo Hall
-// 前端交互：粒子动画、无限滚动、筛选、搜索、排序
+// 前端交互：粒子动画、卡片网格、筛选、搜索、排序
 // ============================================================
 
 /* ---------- Configuration ---------- */
 const BATCH_SIZE = 50;
-const PRELOAD_THRESHOLD = 500; // px from bottom to trigger next batch
 const MAX_DOM_CARDS = 200;
 const BUFFER_CARDS = 150;
 
@@ -198,8 +197,8 @@ function createCardHTML(demo) {
   </div>`;
 }
 
-/* ---------- Infinite Scroll Engine ---------- */
-(function initInfiniteScroll() {
+/* ---------- Card Grid Engine ---------- */
+(function initCardGrid() {
   const grid = document.getElementById('cards-grid');
   const loadingEl = document.getElementById('loading');
   const noResultsEl = document.getElementById('no-results');
@@ -208,7 +207,6 @@ function createCardHTML(demo) {
   let filteredDemos = [...allDemos];
   let renderedCount = 0;
   let isLoading = false;
-  let scrollObserver = null;
   let revealObserver = null;
   let loadMoreBtn = null;
 
@@ -291,50 +289,7 @@ function createCardHTML(demo) {
       isLoading = false;
       if (loadingEl) loadingEl.style.display = 'none';
       updateLoadMoreButton();
-
-      // If sentinel is still in viewport after rendering, load more after layout settles
-      if (renderedCount < filteredDemos.length && sentinelEl) {
-        requestAnimationFrame(() => {
-          const rect = sentinelEl.getBoundingClientRect();
-          if (rect.top < window.innerHeight + PRELOAD_THRESHOLD) {
-            setTimeout(() => loadMore(), 120);
-          }
-        });
-      }
     });
-  }
-
-  let sentinelEl = null;
-
-  function fillViewport() {
-    /* Keep rendering batches until grid content overflows the viewport,
-       so the scroll-sentinel starts off-screen and won't trigger immediately. */
-    if (renderedCount >= filteredDemos.length) return;
-    const viewportH = window.innerHeight;
-    let gridH = grid.getBoundingClientRect().height;
-    const limit = Math.min(renderedCount + BATCH_SIZE * 6, filteredDemos.length);
-
-    while (gridH < viewportH * 1.5 && renderedCount < limit) {
-      renderBatch(BATCH_SIZE);
-      gridH = grid.getBoundingClientRect().height;
-    }
-  }
-
-  function setupScrollTrigger() {
-    if (scrollObserver) scrollObserver.disconnect();
-
-    sentinelEl = document.createElement('div');
-    sentinelEl.id = 'scroll-sentinel';
-    sentinelEl.style.height = '1px';
-    grid.appendChild(sentinelEl);
-
-    scrollObserver = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        loadMore();
-      }
-    }, { rootMargin: `${PRELOAD_THRESHOLD}px` });
-
-    scrollObserver.observe(sentinelEl);
   }
 
   function resetAndRender() {
@@ -352,8 +307,6 @@ function createCardHTML(demo) {
 
     setupRevealObserver();
     renderBatch(BATCH_SIZE);
-    fillViewport();
-    setupScrollTrigger();
     createLoadMoreButton();
   }
 
