@@ -321,6 +321,17 @@ function createCardHTML(demo) {
   resetAndRender();
 })();
 
+/* ---------- Banner Close Button ---------- */
+(function initBannerClose() {
+  const closeBtn = document.getElementById('banner-close');
+  const banner = document.getElementById('contest-banner');
+  if (!closeBtn || !banner) return;
+
+  closeBtn.addEventListener('click', () => {
+    banner.style.display = 'none';
+  });
+})();
+
 /* ---------- Filter, Search, Sort (Data Layer) ---------- */
 (function initFilters() {
   const tagPills = document.querySelectorAll('.tag-pill');
