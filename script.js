@@ -163,7 +163,32 @@ function stripHTML(str) {
     .trim();
 }
 
-function createCardHTML(demo) {
+/* --- Search highlighter --- */
+function escapeHTML(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function highlight(text, tokens) {
+  const safe = escapeHTML(stripHTML(text));
+  if (!tokens || tokens.length === 0) return safe;
+  let out = safe;
+  // Replace longer tokens first to avoid partial overlap issues
+  const sorted = tokens.slice().sort((a, b) => b.length - a.length);
+  sorted.forEach((tok) => {
+    if (!tok) return;
+    // Case-insensitive replacement preserving original case via regex
+    const re = new RegExp(tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    out = out.replace(re, (match) => `<mark>${match}</mark>`);
+  });
+  return out;
+}
+
+function createCardHTML(demo, highlightTokens) {
   const tag = demo.tags && demo.tags[0] ? demo.tags[0] : '';
   const tagSvg = TAG_SVG_MAP[tag] || '';
   const approvedBadge = demo.approved
@@ -201,8 +226,8 @@ function createCardHTML(demo) {
       <span class="card-tag-text">${escapeAttr(tag)}</span>
       ${approvedBadge}
     </div>
-    <h3 class="card-title">${escapeAttr(safeTitle)}</h3>
-    <p class="card-excerpt">${safeExcerpt ? escapeAttr(safeExcerpt) : '<span class="no-desc">暂无描述</span>'}</p>
+    <h3 class="card-title">${highlight(safeTitle, highlightTokens)}</h3>
+    <p class="card-excerpt">${safeExcerpt ? highlight(safeExcerpt, highlightTokens) : '<span class="no-desc">暂无描述</span>'}</p>
     <div class="card-meta">
       <span class="meta-item"><img src="assets/icons/eye.svg" class="meta-icon" alt="views" loading="lazy"> ${demo.views || 0}</span>
       <span class="meta-item"><img src="assets/icons/heart.svg" class="meta-icon" alt="likes" loading="lazy"> ${demo.like_count || 0}</span>
@@ -227,6 +252,7 @@ function createCardHTML(demo) {
   let isLoading = false;
   let revealObserver = null;
   let loadMoreBtn = null;
+  let highlightTokens = [];
 
   /* --- "Load More" Button --- */
   function createLoadMoreButton() {
@@ -276,7 +302,7 @@ function createCardHTML(demo) {
     const fragment = document.createDocumentFragment();
     batch.forEach(demo => {
       const wrapper = document.createElement('div');
-      wrapper.innerHTML = createCardHTML(demo);
+      wrapper.innerHTML = createCardHTML(demo, highlightTokens);
       const card = wrapper.firstElementChild;
       fragment.appendChild(card);
       if (revealObserver) revealObserver.observe(card);
@@ -330,10 +356,17 @@ function createCardHTML(demo) {
 
   // Expose reset function for filters
   window.resetInfiniteScroll = resetAndRender;
-  window.setFilteredDemos = (demos) => {
+  window.setFilteredDemos = (demos, tokens) => {
     filteredDemos = demos;
+    highlightTokens = tokens || [];
     resetAndRender();
   };
+
+  // Expose read-only stats for filters
+  window.getCardStats = () => ({
+    total: allDemos.length,
+    filtered: filteredDemos.length
+  });
 
   // Initial render
   resetAndRender();
@@ -352,59 +385,196 @@ function createCardHTML(demo) {
 
 /* ---------- Filter, Search, Sort (Data Layer) ---------- */
 (function initFilters() {
+  const STORAGE_KEY = 'ideaHallFilterState_v1';
   const tagPills = document.querySelectorAll('.tag-pill');
   const searchInput = document.getElementById('search-input');
+  const searchClearBtn = document.getElementById('search-clear');
   const sortSelect = document.getElementById('sort-select');
   const approvedOnlyCheckbox = document.getElementById('approved-only');
+  const resultCountEl = document.getElementById('result-count');
+  const noResultsEl = document.getElementById('no-results');
+  const noResultsTitleEl = document.getElementById('no-results-title');
+  const noResultsTipsEl = document.getElementById('no-results-tips');
+  const noResultsClearBtn = document.getElementById('no-results-clear');
 
   let activeTag = 'all';
   let searchQuery = '';
   let sortBy = 'newest';
-  let approvedOnly = true;
+  let approvedOnly = false;
+  let tokens = [];
+
+  // ---- Restore from sessionStorage
+  try {
+    const raw = typeof sessionStorage !== 'undefined' && sessionStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        activeTag = typeof parsed.activeTag === 'string' ? parsed.activeTag : activeTag;
+        searchQuery = typeof parsed.searchQuery === 'string' ? parsed.searchQuery : '';
+        sortBy = typeof parsed.sortBy === 'string' ? parsed.sortBy : sortBy;
+        approvedOnly = !!parsed.approvedOnly;
+      }
+    }
+  } catch (e) { /* ignore storage errors */ }
+
+  // ---- Sync UI with restored state
+  if (searchInput) {
+    searchInput.value = searchQuery;
+  }
+  if (searchClearBtn) {
+    searchClearBtn.classList.toggle('visible', !!searchQuery);
+  }
+  if (sortSelect) {
+    sortSelect.value = sortBy;
+  }
+  if (approvedOnlyCheckbox) {
+    approvedOnlyCheckbox.checked = approvedOnly;
+  }
+  tagPills.forEach(pill => {
+    pill.classList.toggle('active', pill.dataset.tag === activeTag);
+  });
+
+  // ---- Utilities
+  function tokenize(q) {
+    if (!q) return [];
+    const parts = String(q)
+      .toLowerCase()
+      .replace(/[，。、！？：；（）【】""''\-—\s]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter((t, idx, arr) => t && arr.indexOf(t) === idx);
+    return parts;
+  }
+
+  function scoreDemo(demo, toks) {
+    if (!toks || toks.length === 0) return 0;
+    const title = String(demo.title || '').toLowerCase();
+    const insight = String(demo.insight || '').toLowerCase();
+    const tagStr = (demo.tags || []).join(' ').toLowerCase();
+    const excerpt = String(demo.excerpt || '').toLowerCase();
+    const author = String(demo.author || '').toLowerCase();
+
+    const W = { title: 3, insight: 2, tags: 1.5, excerpt: 1, author: 0.8 };
+    let score = 0;
+    let anyHit = false;
+
+    toks.forEach((tok) => {
+      let fieldHit = 0;
+      if (title.includes(tok)) fieldHit += W.title;
+      if (insight.includes(tok)) fieldHit += W.insight;
+      if (tagStr.includes(tok)) fieldHit += W.tags;
+      if (excerpt.includes(tok)) fieldHit += W.excerpt;
+      if (author.includes(tok)) fieldHit += W.author;
+      if (fieldHit > 0) anyHit = true;
+      score += fieldHit;
+      if (title.startsWith(tok)) score += 2;
+    });
+
+    return anyHit ? score : 0;
+  }
+
+  function updateResultCount(filtered, hasSearch) {
+    if (!resultCountEl) return;
+    const total = (window.getCardStats && window.getCardStats().total) || allDemos.length;
+    if (hasSearch) {
+      resultCountEl.innerHTML =
+        `找到 <span class="accent">${filtered.length}</span> / ${total} 个作品`;
+    } else {
+      resultCountEl.innerHTML =
+        `当前显示 <span class="accent">${filtered.length}</span> / ${total} 个作品`;
+    }
+  }
+
+  function updateNoResults(filtered, toks) {
+    if (!noResultsEl) return;
+    const isEmpty = filtered.length === 0;
+    noResultsEl.style.display = isEmpty ? 'block' : 'none';
+    if (!isEmpty) return;
+
+    const title = noResultsTitleEl;
+    const tips = noResultsTipsEl;
+    if (title) {
+      if (toks && toks.length) {
+        title.innerHTML = `没有找到匹配「${escapeHTML(toks.join(' '))}」的作品`;
+      } else {
+        title.textContent = '当前条件下没有作品';
+      }
+    }
+    if (tips) {
+      const lines = [];
+      if (toks && toks.length) lines.push('· 试试更少的关键词，或换一个更宽泛的词');
+      if (approvedOnly) {
+        lines.push('· 当前仅展示审核通过的作品，试试关闭「仅展示官方审核通过」看更多结果');
+      }
+      if (activeTag !== 'all') {
+        lines.push(`· 当前筛选了赛道「${escapeHTML(activeTag)}」，试试切换到「全部」`);
+      }
+      tips.innerHTML = lines.map(l => `<span class="tip-line">${l}</span>`).join('');
+    }
+  }
+
+  function persistState() {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+          activeTag,
+          searchQuery,
+          sortBy,
+          approvedOnly
+        }));
+      }
+    } catch (e) { /* ignore */ }
+  }
 
   function getFilteredSorted() {
-    let result = [...allDemos];
+    let result = allDemos;
 
-    // Approval filter
     if (approvedOnly) {
       result = result.filter(d => d.approved);
     }
 
-    // Tag filter
     if (activeTag !== 'all') {
       result = result.filter(d => d.tags && d.tags.includes(activeTag));
     }
 
-    // Search filter
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(d =>
-        d.title.toLowerCase().includes(q) ||
-        (d.excerpt || '').toLowerCase().includes(q)
-      );
+    const toks = tokens;
+    let isSearch = toks.length > 0;
+    if (isSearch) {
+      const scored = [];
+      for (let i = 0; i < result.length; i++) {
+        const s = scoreDemo(result[i], toks);
+        if (s > 0) scored.push({ demo: result[i], score: s });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      result = scored.map(item => item.demo);
+    } else {
+      switch (sortBy) {
+        case 'newest':
+          result = result.slice().sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+          break;
+        case 'views':
+          result = result.slice().sort((a, b) => (b.views || 0) - (a.views || 0));
+          break;
+        case 'likes':
+          result = result.slice().sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
+          break;
+      }
     }
-
-    // Sort
-    switch (sortBy) {
-      case 'newest':
-        result.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-        break;
-      case 'views':
-        result.sort((a, b) => (b.views || 0) - (a.views || 0));
-        break;
-      case 'likes':
-        result.sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
-        break;
-    }
-
     return result;
   }
 
   function applyFilters() {
+    tokens = tokenize(searchQuery);
+    if (searchClearBtn) {
+      searchClearBtn.classList.toggle('visible', !!searchQuery);
+    }
     const filtered = getFilteredSorted();
     if (window.setFilteredDemos) {
-      window.setFilteredDemos(filtered);
+      window.setFilteredDemos(filtered, tokens);
     }
+    updateResultCount(filtered, tokens.length > 0);
+    updateNoResults(filtered, tokens);
+    persistState();
   }
 
   // Tag click
@@ -423,9 +593,26 @@ function createCardHTML(demo) {
     searchInput.addEventListener('input', (e) => {
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
-        searchQuery = e.target.value.toLowerCase().trim();
+        searchQuery = (e.target.value || '').trim();
         applyFilters();
-      }, 300);
+      }, 250);
+    });
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        searchInput.value = '';
+        searchQuery = '';
+        applyFilters();
+        searchInput.blur();
+      }
+    });
+  }
+
+  // Search clear button
+  if (searchClearBtn) {
+    searchClearBtn.addEventListener('click', () => {
+      if (searchInput) searchInput.value = '';
+      searchQuery = '';
+      applyFilters();
     });
   }
 
@@ -444,4 +631,22 @@ function createCardHTML(demo) {
       applyFilters();
     });
   }
+
+  // Clear button in no-results block
+  if (noResultsClearBtn) {
+    noResultsClearBtn.addEventListener('click', () => {
+      searchQuery = '';
+      if (searchInput) searchInput.value = '';
+      activeTag = 'all';
+      approvedOnly = false;
+      if (approvedOnlyCheckbox) approvedOnlyCheckbox.checked = false;
+      tagPills.forEach(pill => {
+        pill.classList.toggle('active', pill.dataset.tag === 'all');
+      });
+      applyFilters();
+    });
+  }
+
+  // Initial count update (sync on load)
+  applyFilters();
 })();
