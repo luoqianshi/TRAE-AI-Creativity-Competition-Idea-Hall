@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocSync — 代码变更驱动的文档自动化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap');
+        
+        * { font-family: 'Inter', -apple-system, sans-serif; }
+        code, .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        .grid-bg {
+            background-color: #0a0e1a;
+            background-image: 
+                linear-gradient(rgba(99, 102, 241, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(99, 102, 241, 0.08) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #06b6d4 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .glow-card {
+            background: rgba(20, 24, 40, 0.8);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        .glow-card:hover {
+            border-color: rgba(99, 102, 241, 0.6);
+            box-shadow: 0 0 40px rgba(99, 102, 241, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .pulse-dot { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
+        
+        .cursor::after {
+            content: '|';
+            animation: blink 1s infinite;
+            color: #06b6d4;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        
+        .code-block {
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        
+        .kw { color: #ff7b72; }
+        .str { color: #a5d6ff; }
+        .num { color: #79c0ff; }
+        .cm { color: #8b949e; font-style: italic; }
+        .fn { color: #d2a8ff; }
+        .var { color: #ffa657; }
+        .cls { color: #4ee1b7; }
+        
+        .diff-add { background: rgba(46, 160, 67, 0.15); border-left: 3px solid #2ea043; color: #7ee787; }
+        .diff-del { background: rgba(248, 81, 73, 0.15); border-left: 3px solid #f85149; color: #ffa198; }
+        .diff-neutral { background: rgba(110, 118, 129, 0.1); color: #8b949e; }
+        
+        .terminal {
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        
+        .terminal-header {
+            background: #161b22;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #21262d;
+        }
+        
+        .dot-r { background: #ff5f56; width: 12px; height: 12px; border-radius: 50%; }
+        .dot-y { background: #ffbd2e; width: 12px; height: 12px; border-radius: 50%; }
+        .dot-g { background: #27c93f; width: 12px; height: 12px; border-radius: 50%; }
+        
+        .float { animation: float 6s ease-in-out infinite; }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        
+        .status-active { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); }
+        .status-pending { background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); }
+        
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0a0e1a; }
+        ::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 4px; }
+        
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: #6366f1;
+            border-radius: 50%;
+            opacity: 0.4;
+        }
+        
+        .flow-arrow {
+            color: #6366f1;
+            font-size: 24px;
+        }
+    </style>
+</head>
+<body class="bg-[#0a0e1a] text-gray-100 overflow-x-hidden">
+    
+    <!-- 顶部导航 -->
+    <nav class="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl bg-[#0a0e1a]/80 border-b border-indigo-500/20">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center">
+                    <i class="fas fa-sync-alt text-white text-lg"></i>
+                </div>
+                <span class="text-xl font-bold gradient-text">DocSync</span>
+            </div>
+            <div class="hidden md:flex items-center gap-8 text-sm text-gray-400">
+                <a href="#features" class="hover:text-white transition">核心机制</a>
+                <a href="#workflow" class="hover:text-white transition">运行流程</a>
+                <a href="#config" class="hover:text-white transition">配置方式</a>
+            </div>
+            <div class="flex items-center gap-3 text-sm">
+                <span class="flex items-center gap-2 text-green-400">
+                    <span class="w-2 h-2 rounded-full bg-green-400 pulse-dot"></span>
+                    运行中
+                </span>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Hero 区域 -->
+    <section class="grid-bg pt-32 pb-24 relative overflow-hidden">
+        <div class="absolute inset-0 pointer-events-none">
+            <div class="particle float" style="top: 20%; left: 10%;"></div>
+            <div class="particle float" style="top: 30%; left: 80%; animation-delay: 1s;"></div>
+            <div class="particle float" style="top: 60%; left: 20%; animation-delay: 2s;"></div>
+            <div class="particle float" style="top: 70%; left: 70%; animation-delay: 3s;"></div>
+        </div>
+        
+        <div class="max-w-5xl mx-auto px-6 relative z-10">
+            <div class="text-center mb-12">
+                <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500/10 border border-indigo-500/30 mb-6">
+                    <span class="w-2 h-2 rounded-full bg-green-400 pulse-dot"></span>
+                    <span class="text-sm text-indigo-300">代码驱动文档 · 全自动同步</span>
+                </div>
+                <h1 class="text-4xl md:text-6xl font-bold mb-6 leading-tight">
+                    让<span class="gradient-text">文档同步</span><br>
+                    于代码变更的<span class="gradient-text cursor">瞬间</span>
+                </h1>
+                <p class="text-lg text-gray-400 mb-8 max-w-2xl mx-auto leading-relaxed">
+                    AI 时代的文档自动化工具。每次代码变更自动感知，精准匹配需更新的文档，
+                    让团队不再为"文档滞后"和"信息失真"买单。
+                </p>
+            </div>
+            
+            <!-- 终端预览：启动监听 -->
+            <div class="max-w-3xl mx-auto">
+                <div class="terminal mb-6">
+                    <div class="terminal-header">
+                        <span class="dot-r"></span>
+                        <span class="dot-y"></span>
+                        <span class="dot-g"></span>
+                        <span class="ml-4 text-sm text-gray-400 mono">项目根目录 · 文档同步监听</span>
+                    </div>
+                    <div class="p-6 mono text-sm space-y-2">
+                        <div class="text-cyan-400">$ docsync watch</div>
+                        <div class="text-gray-400 mt-3">
+                            <span class="text-green-400">✓</span> 读取项目配置...<span class="text-gray-500">发现文档定义</span>
+                        </div>
+                        <div class="text-gray-400">
+                            <span class="text-green-400">✓</span> 解析文档索引...<span class="text-gray-500">每份文档标注覆盖范围</span>
+                        </div>
+                        <div class="text-gray-400">
+                            <span class="text-green-400">✓</span> 注册 git hook 监听...<span class="text-gray-500">代码提交时自动触发</span>
+                        </div>
+                        <div class="text-gray-400">
+                            <span class="text-green-400">✓</span> 连接大语言模型...<span class="text-gray-500">就绪</span>
+                        </div>
+                        <div class="text-indigo-400 mt-4">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                        <div class="text-gray-300 mt-2"><span class="text-cyan-400">📁</span> 项目监听中...</div>
+                        <div class="text-gray-300"><span class="text-cyan-400">⚙️</span> 覆盖文档：README · API文档 · 数据库文档 · 部署文档</div>
+                        <div class="text-gray-300"><span class="text-cyan-400">🎯</span> 触发时机：每次代码提交</div>
+                        <div class="text-indigo-300 mt-3"><span class="cursor">▍</span> 等待代码变更...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- 核心机制 -->
+    <section id="features" class="py-24 relative">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="text-center mb-16">
+                <span class="px-4 py-2 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-sm">核心机制</span>
+                <h2 class="text-4xl md:text-5xl font-bold mt-6 mb-4">四大模块 · <span class="gradient-text">无缝协作</span></h2>
+                <p class="text-gray-400 text-lg max-w-2xl mx-auto">从代码变更到文档更新，每一步都有精确的机制支撑</p>
+            </div>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- 模块 1 -->
+                <div class="glow-card rounded-2xl p-8">
+                    <div class="flex items-start gap-5">
+                        <div class="flex-shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center">
+                            <i class="fas fa-file-alt text-2xl text-indigo-400"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-2xl font-bold mb-3">文档索引机制</h3>
+                            <p class="text-gray-400 mb-5 leading-relaxed">
+                                每份文档顶部有一段特殊的索引标记，描述该文档覆盖的内容范围。
+                                系统根据这份索引来匹配代码变更，只更新相关的文档。
+                            </p>
+                            <div class="code-block p-5">
+                                <div class="mono text-xs space-y-1">
+                                    <div><span class="cm">&gt; 本文档覆盖内容</span></div>
+                                    <div><span class="cm">&gt; 数据库连接配置、表结构定义</span></div>
+                                    <div><span class="cm">&gt; 迁移方案说明、性能优化建议</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 模块 2 -->
+                <div class="glow-card rounded-2xl p-8">
+                    <div class="flex items-start gap-5">
+                        <div class="flex-shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 flex items-center justify-center">
+                            <i class="fas fa-code-branch text-2xl text-cyan-400"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-2xl font-bold mb-3">变更感知引擎</h3>
+                            <p class="text-gray-400 mb-5 leading-relaxed">
+                                深度解析代码变更，识别修改了哪些文件、函数、配置项。
+                                提取变更的语义信息（如"修改数据库连接"或"新增 API 接口"），
+                                为后续文档匹配提供依据。
+                            </p>
+                            <div class="space-y-2 mt-4">
+                                <div class="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                                    <span class="text-sm text-gray-300">src/db/connection.ts</span>
+                                    <span class="text-xs px-2 py-1 rounded-full status-active">数据库相关 · 匹配</span>
+                                </div>
+                                <div class="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                                    <span class="text-sm text-gray-300">src/api/user.ts</span>
+                                    <span class="text-xs px-2 py-1 rounded-full status-active">接口相关 · 匹配</span>
+                                </div>
+                                <div class="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                                    <span class="text-sm text-gray-500">src/utils/helper.ts</span>
+                                    <span class="text-xs px-2 py-1 rounded-full text-gray-500">无匹配文档 · 跳过</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 模块 3 -->
+                <div class="glow-card rounded-2xl p-8">
+                    <div class="flex items-start gap-5">
+                        <div class="flex-shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center">
+                            <i class="fas fa-robot text-2xl text-purple-400"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-2xl font-bold mb-3">智能文档生成</h3>
+                            <p class="text-gray-400 mb-5 leading-relaxed">
+                                基于变更语义和文档索引，调用大语言模型生成精准的文档更新内容。
+                                只修改文档中受影响的段落，保持其他内容不变，避免 AI 幻觉污染整篇文档。
+                            </p>
+                            <div class="mt-4 space-y-2">
+                                <div class="diff-add px-4 py-2 rounded mono text-sm">+ host: postgres.internal.svc</div>
+                                <div class="diff-add px-4 py-2 rounded mono text-sm">+ port: PostgreSQL 默认端口</div>
+                                <div class="diff-del px-4 py-2 rounded mono text-sm">- host: mysql.localhost</div>
+                                <div class="diff-del px-4 py-2 rounded mono text-sm">- port: MySQL 默认端口</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 模块 4 -->
+                <div class="glow-card rounded-2xl p-8">
+                    <div class="flex items-start gap-5">
+                        <div class="flex-shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 flex items-center justify-center">
+                            <i class="fas fa-user-check text-2xl text-green-400"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-2xl font-bold mb-3">审核确认写入</h3>
+                            <p class="text-gray-400 mb-5 leading-relaxed">
+                                所有文档更新在写入前需用户确认。以可视化 diff 方式展示变更内容，
+                                用户可接受、拒绝，或手动编辑。所有变更通过 Git 管理，支持任意版本回滚。
+                            </p>
+                            <div class="flex gap-3 mt-5">
+                                <button class="flex-1 py-3 rounded-lg bg-green-600/20 text-green-400 border border-green-500/30 text-sm font-medium hover:bg-green-600/30 transition">
+                                    <i class="fas fa-check mr-2"></i>接受变更
+                                </button>
+                                <button class="flex-1 py-3 rounded-lg bg-red-600/20 text-red-400 border border-red-500/30 text-sm font-medium hover:bg-red-600/30 transition">
+                                    <i class="fas fa-times mr-2"></i>拒绝修改
+                                </button>
+                                <button class="flex-1 py-3 rounded-lg bg-white/10 text-gray-300 border border-white/20 text-sm font-medium hover:bg-white/15 transition">
+                                    <i class="fas fa-edit mr-2"></i>手动编辑
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- 运行流程：一次代码变更的完整旅程 -->
+    <section id="workflow" class="py-24 bg-gradient-to-b from-transparent via-indigo-950/20 to-transparent">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="text-center mb-16">
+                <span class="px-4 py-2 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-sm">运行流程</span>
+                <h2 class="text-4xl md:text-5xl font-bold mt-6 mb-4">一次 Commit 的<span class="gradient-text">完整旅程</span></h2>
+                <p class="text-gray-400 text-lg max-w-2xl mx-auto">模拟真实开发场景：修改数据库连接代码，自动完成文档同步</p>
+            </div>
+            
+            <!-- 步骤 1：开发者修改代码 -->
+            <div class="mb-10">
+                <div class="flex items-center gap-4 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-xl">
+                        <i class="fas fa-code text-white"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm text-indigo-400 mb-1">第一步</div>
+                        <h3 class="text-2xl font-bold">开发者修改数据库连接代码</h3>
+                    </div>
+                    <div class="flex-1 h-px bg-gradient-to-r from-indigo-500/50 to-transparent ml-2"></div>
+                </div>
+                <div class="glow-card rounded-2xl p-6">
+                    <div class="flex items-center gap-2 mb-4 text-sm text-gray-400">
+                        <i class="fas fa-file-code text-indigo-400"></i>
+                        <span class="mono">src/db/connection.ts</span>
+                        <span class="ml-auto text-xs px-2 py-1 rounded-full status-active">已修改</span>
+                    </div>
+                    <div class="code-block p-5 overflow-x-auto">
+                        <pre class="mono text-xs"><span class="diff-del">  const config = {
+      host: 'mysql.localhost',
+      port: MySQL 默认端口,
+      database: 'app_prod',
+      password: secret
+  };</span>
+
+<span class="diff-add">  const config = {
+      host: 'postgres.internal.svc',
+      port: PostgreSQL 默认端口,
+      database: 'app_prod',
+      password: secret
+  };</span>
+
+  export default { createPool, connect }</pre>
+                    </div>
+                    <div class="mt-4 flex items-center gap-3 text-sm text-gray-500">
+                        <span><i class="fas fa-clock text-indigo-400"></i> 常规代码编辑</span>
+                        <span class="text-gray-600">·</span>
+                        <span>变更内容：<span class="text-indigo-300">数据库连接配置</span></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 步骤 2：git commit 触发 -->
+            <div class="mb-10">
+                <div class="flex items-center gap-4 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center font-bold text-xl">
+                        <i class="fas fa-code-commit text-white"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm text-cyan-400 mb-1">第二步</div>
+                        <h3 class="text-2xl font-bold">git commit 触发文档监听</h3>
+                    </div>
+                    <div class="flex-1 h-px bg-gradient-to-r from-cyan-500/50 to-transparent ml-2"></div>
+                </div>
+                <div class="glow-card rounded-2xl p-6">
+                    <div class="terminal">
+                        <div class="terminal-header">
+                            <span class="dot-r"></span>
+                            <span class="dot-y"></span>
+                            <span class="dot-g"></span>
+                            <span class="ml-4 text-sm text-gray-400 mono">终端 · commit 监听输出</span>
+                        </div>
+                        <div class="p-5 mono text-sm space-y-2">
+                            <div class="text-cyan-400">$ git commit -m "feat: 迁移数据库连接配置"</div>
+                            <div class="text-gray-400 mt-2">
+                                <span class="text-yellow-400">[DocSync]</span> 检测到代码提交，解析变更内容...
+                            </div>
+                            <div class="text-gray-400">
+                                <span class="text-yellow-400">[DocSync]</span> 变更语义：<span class="text-indigo-300">数据库连接 / 主机地址 / 端口</span>
+                            </div>
+                            <div class="text-gray-400">
+                                <span class="text-yellow-400">[DocSync]</span> 匹配文档索引...<span class="text-green-400">命中 1 份文档</span>
+                            </div>
+                            <div class="text-gray-400">
+                                <span class="text-yellow-400">[DocSync]</span> 目标文档：<span class="text-cyan-300">docs/database.md</span>
+                            </div>
+                            <div class="text-gray-400">
+                                <span class="text-yellow-400">[DocSync]</span> 调用模型生成更新建议...<span class="text-green-400">完成</span>
+                            </div>
+                            <div class="text-purple-400 mt-2">━━━━━━ 生成的变更内容 ━━━━━━</div>
+                            <div class="text-gray-300 mt-1 pl-2 border-l-2 border-purple-500/50">
+                                → docs/database.md <span class="text-indigo-300">(连接配置章节)</span>
+                            </div>
+                            <div class="text-gray-300 pl-2 border-l-2 border-purple-500/50">
+                                → docs/README.md <span class="text-indigo-300">(技术栈说明)</span>
+                            </div>
+                            <div class="text-green-400 mt-2">
+                                <span class="cursor">▍</span> 已生成差异对比，等待用户审核...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 步骤 3：AI 生成更新建议（Diff） -->
+            <div class="mb-10">
+                <div class="flex items-center gap-4 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center font-bold text-xl">
+                        <i class="fas fa-wand-magic-sparkles text-white"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm text-purple-400 mb-1">第三步</div>
+                        <h3 class="text-2xl font-bold">AI 生成精准的文档更新建议</h3>
+                    </div>
+                    <div class="flex-1 h-px bg-gradient-to-r from-purple-500/50 to-transparent ml-2"></div>
+                </div>
+                
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div class="glow-card rounded-2xl p-6">
+                        <div class="flex items-center gap-2 mb-4 text-sm">
+                            <i class="fas fa-file-database text-purple-400"></i>
+                            <span class="mono text-gray-300">docs/database.md</span>
+                            <span class="ml-auto text-xs px-2 py-1 rounded-full status-pending">待审核</span>
+                        </div>
+                        <div class="text-xs text-gray-500 mb-3">▶ 连接配置章节（局部更新）</div>
+                        <div class="code-block p-5">
+                            <div class="mono text-xs space-y-1">
+                                <div class="diff-neutral px-3 py-1"># 数据库文档</div>
+                                <div class="diff-neutral px-3 py-1"></div>
+                                <div class="diff-neutral px-3 py-1">## 连接配置</div>
+                                <div class="diff-del px-3 py-1">- host: mysql.localhost</div>
+                                <div class="diff-del px-3 py-1">- port: MySQL 默认端口</div>
+                                <div class="diff-add px-3 py-1">+ host: postgres.internal.svc</div>
+                                <div class="diff-add px-3 py-1">+ port: PostgreSQL 默认端口</div>
+                                <div class="diff-neutral px-3 py-1">- database: app_prod</div>
+                                <div class="diff-neutral px-3 py-1"></div>
+                                <div class="diff-neutral px-3 py-1">## 表结构定义</div>
+                                <div class="diff-neutral px-3 py-1 text-gray-600">（未变化，省略...）</div>
+                            </div>
+                        </div>
+                        <div class="mt-4 text-xs text-gray-500 flex items-center gap-2">
+                            <i class="fas fa-wand-magic-sparkles text-purple-400"></i>
+                            AI 建议：<span class="text-gray-400">只修改连接配置章节，其余内容保持不变</span>
+                        </div>
+                    </div>
+                    
+                    <div class="glow-card rounded-2xl p-6">
+                        <div class="flex items-center gap-2 mb-4 text-sm">
+                            <i class="fas fa-file-lines text-blue-400"></i>
+                            <span class="mono text-gray-300">README.md</span>
+                            <span class="ml-auto text-xs px-2 py-1 rounded-full status-pending">待审核</span>
+                        </div>
+                        <div class="text-xs text-gray-500 mb-3">▶ 技术栈说明（局部更新）</div>
+                        <div class="code-block p-5">
+                            <div class="mono text-xs space-y-1">
+                                <div class="diff-neutral px-3 py-1"># 项目说明</div>
+                                <div class="diff-neutral px-3 py-1"></div>
+                                <div class="diff-neutral px-3 py-1">## 技术栈</div>
+                                <div class="diff-neutral px-3 py-1">- 语言：TypeScript</div>
+                                <div class="diff-neutral px-3 py-1">- 框架：Node.js</div>
+                                <div class="diff-del px-3 py-1">- 数据库：MySQL</div>
+                                <div class="diff-add px-3 py-1">+ 数据库：PostgreSQL</div>
+                                <div class="diff-neutral px-3 py-1">- 缓存：Redis</div>
+                                <div class="diff-neutral px-3 py-1"></div>
+                                <div class="diff-neutral px-3 py-1">## 部署方式</div>
+                                <div class="diff-neutral px-3 py-1 text-gray-600">（未变化，省略...）</div>
+                            </div>
+                        </div>
+                        <div class="mt-4 text-xs text-gray-500 flex items-center gap-2">
+                            <i class="fas fa-wand-magic-sparkles text-purple-400"></i>
+                            AI 建议：<span class="text-gray-400">技术栈章节包含数据库类型说明，需同步更新</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 步骤 4：用户审核确认 -->
+            <div class="mb-10">
+                <div class="flex items-center gap-4 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center font-bold text-xl">
+                        <i class="fas fa-user-check text-white"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm text-green-400 mb-1">第四步</div>
+                        <h3 class="text-2xl font-bold">用户审核并确认变更</h3>
+                    </div>
+                    <div class="flex-1 h-px bg-gradient-to-r from-green-500/50 to-transparent ml-2"></div>
+                </div>
+                
+                <div class="glow-card rounded-2xl p-6">
+                    <div class="mb-5">
+                        <div class="flex items-center gap-2 text-lg font-semibold mb-4">
+                            <i class="fas fa-list-check text-green-400"></i>
+                            <span>变更汇总</span>
+                        </div>
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div class="bg-white/5 rounded-xl p-5 border border-white/10">
+                                <div class="flex items-center justify-between mb-3">
+                                    <span class="mono text-sm text-gray-300">docs/database.md</span>
+                                    <div class="flex gap-1">
+                                        <span class="text-xs text-green-400">+3 新增</span>
+                                        <span class="text-xs text-red-400">-2 删除</span>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-gray-500 mb-3">连接配置章节 · 数据库技术栈</div>
+                                <div class="flex gap-2">
+                                    <button class="flex-1 py-2 rounded-lg bg-green-600/20 text-green-400 border border-green-500/40 text-xs font-medium hover:bg-green-600/30 transition">
+                                        <i class="fas fa-check mr-1"></i> 接受
+                                    </button>
+                                    <button class="flex-1 py-2 rounded-lg bg-red-600/20 text-red-400 border border-red-500/40 text-xs font-medium hover:bg-red-600/30 transition">
+                                        <i class="fas fa-times mr-1"></i> 拒绝
+                                    </button>
+                                    <button class="py-2 px-3 rounded-lg bg-white/10 text-gray-300 border border-white/20 text-xs font-medium hover:bg-white/15 transition">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-white/5 rounded-xl p-5 border border-white/10">
+                                <div class="flex items-center justify-between mb-3">
+                                    <span class="mono text-sm text-gray-300">README.md</span>
+                                    <div class="flex gap-1">
+                                        <span class="text-xs text-green-400">+1 新增</span>
+                                        <span class="text-xs text-red-400">-1 删除</span>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-gray-500 mb-3">技术栈说明章节</div>
+                                <div class="flex gap-2">
+                                    <button class="flex-1 py-2 rounded-lg bg-green-600/20 text-green-400 border border-green-500/40 text-xs font-medium hover:bg-green-600/30 transition">
+                                        <i class="fas fa-check mr-1"></i> 接受
+                                    </button>
+                                    <button class="flex-1 py-2 rounded-lg bg-red-600/20 text-red-400 border border-red-500/40 text-xs font-medium hover:bg-red-600/30 transition">
+                                        <i class="fas fa-times mr-1"></i> 拒绝
+                                    </button>
+                                    <button class="py-2 px-3 rounded-lg bg-white/10 text-gray-300 border border-white/20 text-xs font-medium hover:bg-white/15 transition">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center justify-between pt-4 border-t border-white/10">
+                        <div class="text-sm text-gray-500">
+                            <i class="fas fa-info-circle mr-2 text-indigo-400"></i>
+                            点击"接受"后，变更将写入文件并通过 Git 管理
+                        </div>
+                        <div class="flex gap-3">
+                            <button class="px-5 py-2.5 rounded-lg bg-red-500/20 text-red-400 border border-red-500/40 text-sm font-medium hover:bg-red-500/30 transition">
+                                全部拒绝
+                            </button>
+                            <button class="px-5 py-2.5 rounded-lg bg-gradient-to-r from-green-600 to-emerald-600 text-white text-sm font-medium hover:shadow-lg hover:shadow-green-500/30 transition">
+                                <i class="fas fa-check mr-2"></i>全部接受并提交
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 步骤 5：同步完成 -->
+            <div>
+                <div class="flex items-center gap-4 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center font-bold text-xl">
+                        <i class="fas fa-check-double text-white"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm text-emerald-400 mb-1">第五步</div>
+                        <h3 class="text-2xl font-bold">文档同步完成 · Git 提交记录</h3>
+                    </div>
+                    <div class="flex-1 h-px bg-gradient-to-r from-emerald-500/50 to-transparent ml-2"></div>
+                </div>
+                
+                <div class="glow-card rounded-2xl p-6">
+                    <div class="terminal">
+                        <div class="terminal-header">
+                            <span class="dot-r"></span>
+                            <span class="dot-y"></span>
+                            <span class="dot-g"></span>
+                            <span class="ml-4 text-sm text-gray-400 mono">终端 · 最终提交记录</span>
+                        </div>
+                        <div class="p-5 mono text-sm space-y-2">
+                            <div class="text-cyan-400">$ git log --oneline -n 3</div>
+                            <div class="text-gray-300 mt-3">
+                                <span class="text-yellow-400">[commit]</span>
+                                <span class="text-indigo-300 ml-2">feat: 迁移数据库连接配置</span>
+                            </div>
+                            <div class="text-gray-500 ml-12">
+                                └─ 修改：src/db/connection.ts
+                            </div>
+                            <div class="text-gray-300 mt-2">
+                                <span class="text-yellow-400">[commit]</span>
+                                <span class="text-green-400 ml-2">docs: 同步更新数据库文档和 README</span>
+                            </div>
+                            <div class="text-gray-500 ml-12">
+                                ├─ 修改：docs/database.md  <span class="text-green-400">(自动同步)</span>
+                            </div>
+                            <div class="text-gray-500 ml-12">
+                                └─ 修改：README.md  <span class="text-green-400">(自动同步)</span>
+                            </div>
+                            <div class="text-gray-300 mt-2">
+                                <span class="text-yellow-400">[commit]</span>
+                                <span class="text-indigo-300 ml-2">feat: 新增用户认证接口</span>
+                            </div>
+                            
+                            <div class="text-emerald-400 mt-5 flex items-center gap-3">
+                                <i class="fas fa-check-circle text-xl"></i>
+                                <span>代码与文档保持一致 · 流程完成</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="grid md:grid-cols-4 gap-4 mt-6">
+                        <div class="text-center p-4 bg-indigo-500/10 rounded-xl border border-indigo-500/30">
+                            <i class="fas fa-file-code text-2xl text-indigo-400 mb-2"></i>
+                            <div class="text-sm font-medium text-white mb-1">代码变更</div>
+                            <div class="text-xs text-gray-400">开发者主动编辑</div>
+                        </div>
+                        <div class="text-center p-4 bg-cyan-500/10 rounded-xl border border-cyan-500/30">
+                            <i class="fas fa-file-alt text-2xl text-cyan-400 mb-2"></i>
+                            <div class="text-sm font-medium text-white mb-1">文档同步</div>
+                            <div class="text-xs text-gray-400">自动感知并更新</div>
+                        </div>
+                        <div class="text-center p-4 bg-purple-500/10 rounded-xl border border-purple-500/30">
+                            <i class="fas fa-user-check text-2xl text-purple-400 mb-2"></i>
+                            <div class="text-sm font-medium text-white mb-1">人工审核</div>
+                            <div class="text-xs text-gray-400">确保内容准确</div>
+                        </div>
+                        <div class="text-center p-4 bg-green-500/10 rounded-xl border border-green-500/30">
+                            <i class="fas fa-code-branch text-2xl text-green-400 mb-2"></i>
+                            <div class="text-sm font-medium text-white mb-1">版本管理</div>
+                            <div class="text-xs text-gray-400">通过 Git 全程记录</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- 配置与部署 -->
+    <section id="config" class="py-24 bg-gradient-to-b from-transparent to-indigo-950/30">
+        <div class="max-w-6xl mx-auto px-6">
+            <div class="text-center mb-16">
+                <span class="px-4 py-2 rounded-full bg-teal-500/10 border border-teal-500/30 text-teal-300 text-sm">配置部署</span>
+                <h2 class="text-4xl md:text-5xl font-bold mt-6 mb-4">在项目中<span class="gradient-text">快速启用</span></h2>
+                <p class="text-gray-400 text-lg max-w-2xl mx-auto">只需几步，即可让文档同步机制在你的项目中运转起来</p>
+            </div>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- 配置文件示例 -->
+                <div class="glow-card rounded-2xl p-8">
+                    <div class="flex items-center gap-3 mb-6">
+                        <div class="w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                            <i class="fas fa-sliders text-indigo-400"></i>
+                        </div>
+                        <h3 class="text-xl font-bold">文档索引配置</h3>
+                    </div>
+                    <p class="text-gray-400 text-sm mb-5 leading-relaxed">
+                        在每一份需要同步的文档顶部，添加一段描述文档覆盖范围的索引标记，
+                        系统将据此匹配代码变更。
+                    </p>
+                    <div class="terminal rounded-xl">
+                        <div class="terminal-header">
+                            <span class="dot-r"></span>
+                            <span class="dot-y"></span>
+                            <span class="dot-g"></span>
+                            <span class="ml-3 text-xs text-gray-400 mono">docs/database.md</span>
+                        </div>
+                        <div class="p-5 mono text-xs space-y-1 text-gray-300">
+                            <div><span class="text-purple-400">&lt;!--</span> <span class="text-cyan-300">doc-scope</span><span class="text-purple-400"> --&gt;</span></div>
+                            <div><span class="text-green-400">#</span> 本文档覆盖内容：</div>
+                            <div class="pl-4"><span class="text-yellow-400">•</span> 数据库连接配置</div>
+                            <div class="pl-4"><span class="text-yellow-400">•</span> 表结构定义</div>
+                            <div class="pl-4"><span class="text-yellow-400">•</span> 迁移方案说明</div>
+                            <div class="pl-4"><span class="text-yellow-400">•</span> 性能优化建议</div>
+                            <div><span class="text-purple-400">&lt;!--</span> <span class="text-cyan-300">/doc-scope</span><span class="text-purple-400"> --&gt;</span></div>
+                            <div class="text-gray-600 mt-2"># 数据库文档</div>
+                            <div class="text-gray-600">...</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 命令行操作 -->
+                <div class="glow-card rounded-2xl p-8">
+                    <div class="flex items-center gap-3 mb-6">
+                        <div class="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center">
+                            <i class="fas fa-terminal text-cyan-400"></i>
+                        </div>
+                        <h3 class="text-xl font-bold">命令行操作</h3>
+                    </div>
+                    <p class="text-gray-400 text-sm mb-5 leading-relaxed">
+                        通过简洁的命令行指令，即可启动文档监听、手动触发同步，
+                        或查看当前项目的同步状态。
+                    </p>
+                    <div class="terminal rounded-xl">
+                        <div class="terminal-header">
+                            <span class="dot-r"></span>
+                            <span class="dot-y"></span>
+                            <span class="dot-g"></span>
+                            <span class="ml-3 text-xs text-gray-400 mono">终端 · 命令示例</span>
+                        </div>
+                        <div class="p-5 mono text-xs space-y-3">
+                            <div>
+                                <span class="text-cyan-400">$ docsync init</span>
+                                <div class="text-gray-500 mt-1 pl-2">在当前项目初始化文档同步配置</div>
+                            </div>
+                            <div>
+                                <span class="text-cyan-400">$ docsync watch</span>
+                                <div class="text-gray-500 mt-1 pl-2">启动监听模式，每次 commit 自动触发</div>
+                            </div>
+                            <div>
+                                <span class="text-cyan-400">$ docsync sync --file src/db/connection.ts</span>
+                                <div class="text-gray-500 mt-1 pl-2">针对指定文件手动触发文档同步</div>
+                            </div>
+                            <div>
+                                <span class="text-cyan-400">$ docsync status</span>
+                                <div class="text-gray-500 mt-1 pl-2">查看当前项目的文档同步状态</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 支持的文档类型 -->
+            <div class="mt-12 glow-card rounded-2xl p-8">
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                        <i class="fas fa-folder-tree text-purple-400"></i>
+                    </div>
+                    <h3 class="text-xl font-bold">支持的文档类型</h3>
+                    <span class="ml-auto text-xs text-gray-500">持续扩展中</span>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                    <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10 hover:border-indigo-500/40 transition">
+                        <i class="fas fa-readme text-2xl text-indigo-400 mb-2"></i>
+                        <div class="text-sm text-gray-300">README</div>
+                    </div>
+                    <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10 hover:border-cyan-500/40 transition">
+                        <i class="fas fa-database text-2xl text-cyan-400 mb-2"></i>
+                        <div class="text-sm text-gray-300">数据库文档</div>
+                    </div>
+                    <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10 hover:border-purple-500/40 transition">
+                        <i class="fas fa-plug text-2xl text-purple-400 mb-2"></i>
+                        <div class="text-sm text-gray-300">API 文档</div>
+                    </div>
+                    <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10 hover:border-green-500/40 transition">
+                        <i class="fas fa-code text-2xl text-green-400 mb-2"></i>
+                        <div class="text-sm text-gray-300">代码逻辑文档</div>
+                    </div>
+                    <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10 hover:border-yellow-500/40 transition">
+                        <i class="fas fa-clock-rotate-left text-2xl text-yellow-400 mb-2"></i>
+                        <div class="text-sm text-gray-300">变更记录文档</div>
+                    </div>
+                    <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10 hover:border-pink-500/40 transition">
+                        <i class="fas fa-cloud-arrow-up text-2xl text-pink-400 mb-2"></i>
+                        <div class="text-sm text-gray-300">部署文档</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- 页脚 -->
+    <footer class="py-12 border-t border-indigo-500/20">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center">
+                        <i class="fas fa-sync-alt text-white"></i>
+                    </div>
+                    <div>
+                        <div class="font-bold gradient-text">DocSync</div>
+                        <div class="text-xs text-gray-500">代码驱动的文档自动化</div>
+                    </div>
+                </div>
+                <div class="text-sm text-gray-500 text-center md:text-right">
+                    <div>让文档不再滞后 · 让协作不再失真</div>
+                    <div class="text-xs mt-1 text-gray-600">基于 Git 钩子与大语言模型驱动</div>
+                </div>
+            </div>
+        </div>
+    </footer>
+    
+    <script>
+        // 平滑滚动
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

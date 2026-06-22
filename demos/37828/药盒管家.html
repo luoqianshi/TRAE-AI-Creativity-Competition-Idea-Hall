@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>药盒管家 · 智能服药提醒</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
+              400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8',
+              800: '#1e40af', 900: '#1e3a8a'
+            },
+            leaf: {
+              50: '#f0fdf4', 100: '#dcfce7', 400: '#4ade80', 500: '#22c55e', 600: '#16a34a', 700: '#15803d'
+            }
+          },
+          fontFamily: {
+            sans: ['"PingFang SC"', '"Microsoft YaHei"', '"Helvetica Neue"', 'Helvetica', 'Arial', 'sans-serif']
+          },
+          boxShadow: {
+            card: '0 4px 20px rgba(37, 99, 235, 0.08)',
+            tab: '0 -4px 24px rgba(15, 23, 42, 0.06)'
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    html, body { -webkit-tap-highlight-color: transparent; }
+    body { background: #e8eef5; }
+    /* 滚动条隐藏 */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* 页面切换动画 */
+    .page { display: none; animation: fadeSlide .35s ease both; }
+    .page.active { display: block; }
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 打卡按钮按压反馈 */
+    .press { transition: transform .12s ease, box-shadow .2s ease; }
+    .press:active { transform: scale(.96); }
+
+    /* loading 旋转 */
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* 扫描线动画 */
+    .scanline {
+      position: absolute; left: 8%; right: 8%; height: 3px; border-radius: 9px;
+      background: linear-gradient(90deg, transparent, #22c55e, transparent);
+      box-shadow: 0 0 16px #22c55e;
+      animation: scan 1.6s ease-in-out infinite;
+    }
+    @keyframes scan {
+      0% { top: 12%; opacity: 0; }
+      15% { opacity: 1; }
+      85% { opacity: 1; }
+      100% { top: 88%; opacity: 0; }
+    }
+
+    /* 打卡成功小庆祝 */
+    @keyframes pop {
+      0% { transform: scale(.6); opacity: 0; }
+      60% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); }
+    }
+    .pop { animation: pop .45s cubic-bezier(.2,.8,.3,1.2) both; }
+
+    /* toast */
+    #toast { transition: all .35s cubic-bezier(.2,.8,.3,1.2); }
+
+    /* 柱状图动画 */
+    @keyframes grow { from { height: 0; } }
+    .bar { animation: grow .8s cubic-bezier(.2,.8,.3,1) both; }
+
+    /* 渐变背景 */
+    .grad-head { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 60%, #1e40af 100%); }
+  </style>
+</head>
+
+<body class="font-sans text-slate-800">
+
+  <!-- ============ 手机外壳 ============ -->
+  <div class="mx-auto w-full max-w-[414px] min-h-screen bg-slate-50 relative overflow-hidden shadow-2xl">
+
+    <!-- ============ 顶部状态栏占位 ============ -->
+    <div class="h-7 bg-slate-50"></div>
+
+    <!-- ================================================== -->
+    <!-- 页面一：今日计划 -->
+    <!-- ================================================== -->
+    <section id="page-today" class="page active pb-28">
+      <!-- 顶部问候 -->
+      <header class="grad-head text-white px-5 pt-3 pb-8 rounded-b-[28px] shadow-card relative overflow-hidden">
+        <div class="absolute -right-6 -top-6 w-28 h-28 bg-white/10 rounded-full"></div>
+        <div class="absolute right-10 top-12 w-16 h-16 bg-white/10 rounded-full"></div>
+
+        <div class="flex items-center justify-between relative">
+          <div class="flex items-center gap-2">
+            <div class="w-10 h-10 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+              <i class="fa-solid fa-pills text-lg"></i>
+            </div>
+            <div>
+              <p class="text-base font-bold tracking-wide">药盒管家</p>
+              <p id="todayDate" class="text-xs text-white/80"></p>
+            </div>
+          </div>
+          <button class="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center press" aria-label="提醒设置">
+            <i class="fa-regular fa-bell text-lg"></i>
+          </button>
+        </div>
+
+        <div class="mt-5 relative">
+          <h1 id="greeting" class="text-3xl font-bold leading-tight">早上好，张爷爷</h1>
+          <p class="mt-1 text-white/85 text-lg">今天也要按时吃药哦～</p>
+        </div>
+
+        <!-- 今日概览 -->
+        <div class="mt-5 bg-white/15 backdrop-blur rounded-2xl p-4 flex items-center justify-between relative">
+          <div>
+            <p class="text-white/80 text-sm">今日服药进度</p>
+            <p class="mt-1"><span id="doneCount" class="text-3xl font-bold">1</span><span class="text-lg text-white/80">/<span id="totalCount">3</span> 次</span></p>
+          </div>
+          <div class="w-16 h-16 relative">
+            <svg viewBox="0 0 64 64" class="w-16 h-16 -rotate-90">
+              <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="8"/>
+              <circle id="progRing" cx="32" cy="32" r="26" fill="none" stroke="#bbf7d0" stroke-width="8"
+                      stroke-linecap="round" stroke-dasharray="163.4" stroke-dashoffset="108.9"
+                      style="transition:stroke-dashoffset .6s ease;"/>
+            </svg>
+            <span id="progText" class="absolute inset-0 flex items-center justify-center text-sm font-bold">33%</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- 时间轴 -->
+      <div class="px-5 mt-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <i class="fa-regular fa-calendar-check text-brand-600"></i> 今日计划
+          </h2>
+          <span class="text-sm text-slate-400">共 3 项</span>
+        </div>
+        <div id="timeline" class="relative"></div>
+      </div>
+    </section>
+
+    <!-- ================================================== -->
+    <!-- 页面二：拍照录入 -->
+    <!-- ================================================== -->
+    <section id="page-photo" class="page pb-28">
+      <header class="grad-head text-white px-5 pt-3 pb-7 rounded-b-[28px] shadow-card">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+            <i class="fa-solid fa-camera-retro text-lg"></i>
+          </div>
+          <div>
+            <h1 class="text-2xl font-bold">拍照录入</h1>
+            <p class="text-white/85 text-sm">拍处方单/药盒，AI 自动识别</p>
+          </div>
+        </div>
+      </header>
+
+      <div class="px-5 mt-6">
+        <!-- 取景框 -->
+        <div class="relative rounded-3xl bg-slate-900 aspect-[3/4] overflow-hidden shadow-card">
+          <!-- 取景框装饰角 -->
+          <div class="absolute inset-6 pointer-events-none">
+            <div class="absolute top-0 left-0 w-10 h-10 border-l-4 border-t-4 border-brand-400 rounded-tl-2xl"></div>
+            <div class="absolute top-0 right-0 w-10 h-10 border-r-4 border-t-4 border-brand-400 rounded-tr-2xl"></div>
+            <div class="absolute bottom-0 left-0 w-10 h-10 border-l-4 border-b-4 border-brand-400 rounded-bl-2xl"></div>
+            <div class="absolute bottom-0 right-0 w-10 h-10 border-r-4 border-b-4 border-brand-400 rounded-br-2xl"></div>
+          </div>
+
+          <!-- 识别中 -->
+          <div id="recognizing" class="hidden absolute inset-0 flex flex-col items-center justify-center text-white z-10 bg-slate-900/60 backdrop-blur-sm">
+            <div class="scanline"></div>
+            <i class="fa-solid fa-brain text-5xl text-leaf-400 mb-4 pop"></i>
+            <p class="text-xl font-bold">AI 识别中…</p>
+            <p id="recogStep" class="text-sm text-white/70 mt-1">正在解析处方单信息</p>
+            <div class="mt-4 flex gap-1.5">
+              <span class="w-2 h-2 bg-leaf-400 rounded-full animate-bounce" style="animation-delay:0ms"></span>
+              <span class="w-2 h-2 bg-leaf-400 rounded-full animate-bounce" style="animation-delay:150ms"></span>
+              <span class="w-2 h-2 bg-leaf-400 rounded-full animate-bounce" style="animation-delay:300ms"></span>
+            </div>
+          </div>
+
+          <!-- 默认取景内容 -->
+          <div id="viewfinder" class="absolute inset-0 flex flex-col items-center justify-center text-white/90 px-6 text-center">
+            <div class="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center mb-4">
+              <i class="fa-solid fa-prescription-bottle-medical text-4xl"></i>
+            </div>
+            <p class="text-xl font-bold">将处方单 / 药盒放入框内</p>
+            <p class="text-sm text-white/60 mt-2">支持手写处方、印刷药盒标签</p>
+          </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="grid grid-cols-2 gap-3 mt-5">
+          <button id="btnShoot" class="press bg-brand-600 text-white rounded-2xl py-4 font-bold text-lg flex items-center justify-center gap-2 shadow-card">
+            <i class="fa-solid fa-camera"></i> 拍照识别
+          </button>
+          <button id="btnAlbum" class="press bg-white text-brand-700 border-2 border-brand-200 rounded-2xl py-4 font-bold text-lg flex items-center justify-center gap-2">
+            <i class="fa-regular fa-image"></i> 从相册选择
+          </button>
+        </div>
+
+        <!-- 识别结果 -->
+        <div id="resultCard" class="hidden mt-6 bg-white rounded-3xl shadow-card p-5 border border-slate-100">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-11 h-11 rounded-xl bg-leaf-100 flex items-center justify-center">
+              <i class="fa-solid fa-circle-check text-leaf-600 text-xl"></i>
+            </div>
+            <div>
+              <p class="font-bold text-lg text-slate-800">识别成功</p>
+              <p class="text-sm text-leaf-600">已自动解析药物信息</p>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-start gap-3 p-3 bg-slate-50 rounded-2xl">
+              <i class="fa-solid fa-tag text-brand-600 w-6 text-center mt-1"></i>
+              <div class="flex-1">
+                <p class="text-xs text-slate-400">药名</p>
+                <p class="text-lg font-bold">阿司匹林肠溶片</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 p-3 bg-slate-50 rounded-2xl">
+              <i class="fa-solid fa-cubes-stacked text-brand-600 w-6 text-center mt-1"></i>
+              <div class="flex-1">
+                <p class="text-xs text-slate-400">规格 / 剂量</p>
+                <p class="text-lg font-bold">100mg/片 · 每次 1 片</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 p-3 bg-slate-50 rounded-2xl">
+              <i class="fa-regular fa-clock text-brand-600 w-6 text-center mt-1"></i>
+              <div class="flex-1">
+                <p class="text-xs text-slate-400">服用频次</p>
+                <p class="text-lg font-bold">每日 1 次，早餐后服用</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 p-3 bg-amber-50 rounded-2xl">
+              <i class="fa-solid fa-triangle-exclamation text-amber-500 w-6 text-center mt-1"></i>
+              <div class="flex-1">
+                <p class="text-xs text-amber-500">注意事项</p>
+                <p class="text-base leading-relaxed">避免空腹服用；如出现胃部不适、黑便等情况请及时就医。</p>
+              </div>
+            </div>
+          </div>
+
+          <button id="btnSave" class="press mt-5 w-full bg-leaf-600 text-white rounded-2xl py-4 font-bold text-lg flex items-center justify-center gap-2 shadow-card">
+            <i class="fa-solid fa-plus"></i> 添加到今日计划
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================== -->
+    <!-- 页面三：服药统计 -->
+    <!-- ================================================== -->
+    <section id="page-stats" class="page pb-28">
+      <header class="grad-head text-white px-5 pt-3 pb-7 rounded-b-[28px] shadow-card">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+            <i class="fa-solid fa-chart-column text-lg"></i>
+          </div>
+          <div>
+            <h1 class="text-2xl font-bold">服药统计</h1>
+            <p class="text-white/85 text-sm">坚持就是胜利，您做得很棒</p>
+          </div>
+        </div>
+      </header>
+
+      <div class="px-5 mt-6 space-y-5">
+        <!-- 本周总览 -->
+        <div class="bg-white rounded-3xl shadow-card p-5 flex items-center gap-5">
+          <div class="relative w-28 h-28 shrink-0">
+            <svg viewBox="0 0 100 100" class="w-28 h-28 -rotate-90">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#e2e8f0" stroke-width="12"/>
+              <circle id="weekRing" cx="50" cy="50" r="42" fill="none" stroke="#16a34a" stroke-width="12"
+                      stroke-linecap="round" stroke-dasharray="263.9" stroke-dashoffset="263.9"
+                      style="transition:stroke-dashoffset 1s ease;"/>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span id="weekPct" class="text-3xl font-bold text-leaf-600">85%</span>
+              <span class="text-xs text-slate-400">按时率</span>
+            </div>
+          </div>
+          <div class="flex-1">
+            <p class="text-lg font-bold text-slate-800">本周依从性</p>
+            <p class="text-sm text-slate-400 mt-1">您本周按时服药率较高，请继续保持！</p>
+            <div class="mt-3 inline-flex items-center gap-1 bg-leaf-50 text-leaf-700 px-3 py-1.5 rounded-full text-sm font-bold">
+              <i class="fa-solid fa-fire"></i> 连续打卡 <span id="streak">6</span> 天
+            </div>
+          </div>
+        </div>
+
+        <!-- 柱状图 -->
+        <div class="bg-white rounded-3xl shadow-card p-5">
+          <div class="flex items-center justify-between mb-5">
+            <h2 class="text-lg font-bold flex items-center gap-2">
+              <i class="fa-regular fa-calendar-days text-brand-600"></i> 本周服药情况
+            </h2>
+            <span class="text-xs text-slate-400">单位：完成率</span>
+          </div>
+          <div id="barChart" class="flex items-end justify-between h-44 gap-2"></div>
+          <div class="flex items-center justify-center gap-4 mt-4 text-xs text-slate-400">
+            <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-brand-500"></span>已按时</span>
+            <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-slate-200"></span>未完成</span>
+          </div>
+        </div>
+
+        <!-- 月度数据 -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-white rounded-2xl shadow-card p-4">
+            <div class="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center mb-2">
+              <i class="fa-solid fa-check-double text-brand-600"></i>
+            </div>
+            <p class="text-2xl font-bold text-slate-800">82<span class="text-base text-slate-400">次</span></p>
+            <p class="text-sm text-slate-400">本月已服药</p>
+          </div>
+          <div class="bg-white rounded-2xl shadow-card p-4">
+            <div class="w-10 h-10 rounded-xl bg-leaf-50 flex items-center justify-center mb-2">
+              <i class="fa-solid fa-medal text-leaf-600"></i>
+            </div>
+            <p class="text-2xl font-bold text-slate-800">94<span class="text-base text-slate-400">%</span></p>
+            <p class="text-sm text-slate-400">本月按时率</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 底部 Tab 栏 ============ -->
+    <nav class="tabbar fixed left-1/2 -translate-x-1/2 bottom-0 w-full max-w-[414px] bg-white border-t border-slate-100 shadow-tab z-20">
+      <div class="grid grid-cols-3">
+        <button data-tab="today" class="tabbtn py-3 flex flex-col items-center gap-1 press">
+          <i class="fa-solid fa-house text-2xl"></i>
+          <span class="text-xs font-bold">今日</span>
+        </button>
+        <button data-tab="photo" class="tabbtn py-3 flex flex-col items-center gap-1 press text-slate-400">
+          <i class="fa-solid fa-camera text-2xl"></i>
+          <span class="text-xs font-bold">录入</span>
+        </button>
+        <button data-tab="stats" class="tabbtn py-3 flex flex-col items-center gap-1 press text-slate-400">
+          <i class="fa-solid fa-chart-column text-2xl"></i>
+          <span class="text-xs font-bold">统计</span>
+        </button>
+      </div>
+    </nav>
+  </div>
+
+  <!-- ============ Toast ============ -->
+  <div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-28 z-50 opacity-0 pointer-events-none translate-y-4 w-[90%] max-w-[380px]">
+    <div class="bg-slate-900/95 text-white rounded-2xl px-5 py-4 shadow-2xl flex items-center gap-3">
+      <div class="w-10 h-10 rounded-full bg-leaf-500/20 flex items-center justify-center shrink-0">
+        <i class="toast-icon fa-solid fa-heart text-leaf-400 text-lg"></i>
+      </div>
+      <p class="toast-msg text-base font-medium leading-snug"></p>
+    </div>
+  </div>
+
+  <script>
+    /* ============ 模拟数据 ============ */
+    const tasks = [
+      { id: 0, time: '08:00', meal: '早餐后', name: '阿司匹林肠溶片', dose: '1 片', icon: 'fa-pills', done: true },
+      { id: 1, time: '12:30', meal: '午餐后', name: '二甲双胍缓释片', dose: '1 片', icon: 'fa-tablets', done: false },
+      { id: 2, time: '20:00', meal: '睡前',   name: '阿托伐他汀钙片', dose: '1 片', icon: 'fa-capsules', done: false }
+    ];
+
+    // 本周服药完成率（周一~周日）
+    const weekData = [
+      { day: '一', pct: 100 }, { day: '二', pct: 100 }, { day: '三', pct: 67 },
+      { day: '四', pct: 100 }, { day: '五', pct: 67  }, { day: '六', pct: 100 },
+      { day: '日', pct: 33, today: true }
+    ];
+
+    const warmWords = [
+      '做得很棒！记得多喝杯温水哦～',
+      '今天的健康打卡完成！您真了不起！',
+      '按时吃药，身体棒棒！再接再厉～',
+      '又一个任务完成！健康生活从坚持开始！',
+      '吃药完成！建议饭后散步十分钟更有益哦～',
+      '太棒啦！规律服药是康复的第一步。'
+    ];
+
+    /* ============ 日期与问候 ============ */
+    (function initHeader() {
+      const now = new Date();
+      const weeks = ['日', '一', '二', '三', '四', '五', '六'];
+      const dateStr = `${now.getMonth() + 1} 月 ${now.getDate()} 日 · 星期${weeks[now.getDay()]}`;
+      document.getElementById('todayDate').textContent = dateStr;
+
+      const h = now.getHours();
+      let greet = '早上好';
+      if (h >= 11 && h < 13) greet = '中午好';
+      else if (h >= 13 && h < 18) greet = '下午好';
+      else if (h >= 18 || h < 5) greet = '晚上好';
+      document.getElementById('greeting').textContent = `${greet}，张爷爷`;
+    })();
+
+    /* ============ 时间轴渲染 ============ */
+    function renderTimeline() {
+      const box = document.getElementById('timeline');
+      box.innerHTML = tasks.map((t, i) => {
+        const last = i === tasks.length - 1;
+        const dot = t.done
+          ? 'bg-leaf-500 border-leaf-500'
+          : 'bg-white border-brand-500';
+        const dotIcon = t.done ? '<i class="fa-solid fa-check text-white text-xs"></i>' : '';
+        const cardCls = t.done ? 'opacity-70' : 'bg-white';
+        const nameCls = t.done ? 'line-through text-slate-400' : 'text-slate-800';
+        const badge = t.done
+          ? '<span class="text-sm font-bold text-leaf-700 bg-leaf-50 px-3 py-1 rounded-full flex items-center gap-1"><i class="fa-solid fa-circle-check"></i> 已完成</span>'
+          : '<span class="text-sm font-bold text-brand-700 bg-brand-50 px-3 py-1 rounded-full flex items-center gap-1"><i class="fa-regular fa-clock"></i> 待服药</span>';
+        const btn = t.done
+          ? `<button class="done-btn press w-full mt-3 bg-leaf-50 text-leaf-700 rounded-2xl py-4 font-bold text-lg flex items-center justify-center gap-2">
+               <i class="fa-solid fa-check-circle"></i> 已打卡</button>`
+          : `<button data-id="${t.id}" class="check-btn press w-full mt-3 bg-brand-600 text-white rounded-2xl py-4 font-bold text-lg flex items-center justify-center gap-2 shadow-card">
+               <i class="fa-solid fa-hand-pointer"></i> 点击打卡</button>`;
+
+        return `
+          <div class="flex gap-3">
+            <!-- 时间 + 节点 -->
+            <div class="flex flex-col items-center">
+              <span class="text-sm font-bold text-slate-500 h-6 leading-6">${t.time}</span>
+              <span class="w-5 h-5 rounded-full border-4 ${dot} flex items-center justify-center mt-1 z-10">${dotIcon}</span>
+              ${last ? '<span class="flex-1"></span>' : '<span class="flex-1 w-0.5 bg-brand-100 my-1"></span>'}
+            </div>
+            <!-- 卡片 -->
+            <div class="flex-1 mb-4">
+              <div class="${cardCls} rounded-2xl shadow-card p-4 border border-slate-100">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs text-slate-400 font-medium">${t.meal}</span>
+                  ${badge}
+                </div>
+                <div class="flex items-center gap-3 mt-2">
+                  <div class="w-11 h-11 rounded-xl ${t.done ? 'bg-slate-100' : 'bg-brand-50'} flex items-center justify-center shrink-0">
+                    <i class="fa-solid ${t.icon} ${t.done ? 'text-slate-400' : 'text-brand-600'} text-lg"></i>
+                  </div>
+                  <div class="min-w-0">
+                    <p class="${nameCls} text-lg font-bold truncate">${t.name}</p>
+                    <p class="text-sm text-slate-400">剂量：${t.dose}</p>
+                  </div>
+                </div>
+                ${btn}
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+
+      // 绑定打卡事件
+      box.querySelectorAll('.check-btn').forEach(b => {
+        b.addEventListener('click', () => checkIn(parseInt(b.dataset.id)));
+      });
+      updateProgress();
+    }
+
+    /* ============ 打卡 ============ */
+    function checkIn(id) {
+      const t = tasks.find(x => x.id === id);
+      if (!t || t.done) return;
+      t.done = true;
+      renderTimeline();
+      const word = warmWords[Math.floor(Math.random() * warmWords.length)];
+      showToast(word, 'heart');
+    }
+
+    /* ============ 进度环 ============ */
+    function updateProgress() {
+      const done = tasks.filter(t => t.done).length;
+      const total = tasks.length;
+      const pct = Math.round(done / total * 100);
+      document.getElementById('doneCount').textContent = done;
+      document.getElementById('totalCount').textContent = total;
+      document.getElementById('progText').textContent = pct + '%';
+      // 圆环 r=26, 周长 ≈ 163.4
+      const C = 163.4;
+      document.getElementById('progRing').setAttribute('stroke-dashoffset', C * (1 - pct / 100));
+    }
+
+    /* ============ Toast ============ */
+    let toastTimer = null;
+    function showToast(msg, icon = 'heart') {
+      const t = document.getElementById('toast');
+      t.querySelector('.toast-icon').className = 'toast-icon fa-solid fa-' + icon + ' text-leaf-400 text-lg';
+      t.querySelector('.toast-msg').textContent = msg;
+      t.classList.remove('opacity-0', 'pointer-events-none', 'translate-y-4');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        t.classList.add('opacity-0', 'pointer-events-none', 'translate-y-4');
+      }, 2800);
+    }
+
+    /* ============ 拍照识别流程 ============ */
+    const recognizeSteps = ['正在解析处方单信息', '正在识别药品名称', '正在匹配用法用量', '识别完成，整理结果中'];
+    function startRecognition() {
+      document.getElementById('viewfinder').classList.add('hidden');
+      const rec = document.getElementById('recognizing');
+      const result = document.getElementById('resultCard');
+      result.classList.add('hidden');
+
+      rec.classList.remove('hidden');
+      const stepEl = document.getElementById('recogStep');
+      let i = 0;
+      stepEl.textContent = recognizeSteps[0];
+      const stepTimer = setInterval(() => {
+        i++;
+        if (i < recognizeSteps.length) stepEl.textContent = recognizeSteps[i];
+      }, 550);
+
+      setTimeout(() => {
+        clearInterval(stepTimer);
+        rec.classList.add('hidden');
+        document.getElementById('viewfinder').classList.remove('hidden');
+        result.classList.remove('hidden');
+        result.classList.add('pop');
+        showToast('识别成功，请核对药物信息', 'circle-check');
+        setTimeout(() => result.classList.remove('pop'), 500);
+      }, 2200);
+    }
+
+    document.getElementById('btnShoot').addEventListener('click', startRecognition);
+    document.getElementById('btnAlbum').addEventListener('click', startRecognition);
+    document.getElementById('btnSave').addEventListener('click', () => {
+      showToast('已添加到今日计划，记得按时服药哦', 'circle-plus');
+    });
+
+    /* ============ 柱状图渲染 ============ */
+    function renderChart() {
+      const chart = document.getElementById('barChart');
+      chart.innerHTML = weekData.map((d, i) => {
+        const h = Math.max(8, d.pct); // 最小高度避免看不见
+        const isToday = d.today;
+        const barColor = isToday ? 'bg-brand-500' : (d.pct >= 100 ? 'bg-leaf-500' : 'bg-brand-400');
+        const labelCls = isToday ? 'text-brand-700 font-bold' : 'text-slate-500';
+        const todayMark = isToday ? '<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] text-brand-600 font-bold whitespace-nowrap">今天</span>' : '';
+        return `
+          <div class="flex-1 flex flex-col items-center justify-end gap-2 relative">
+            ${todayMark}
+            <span class="text-xs font-bold ${d.pct >= 100 ? 'text-leaf-600' : 'text-slate-500'}">${d.pct}%</span>
+            <div class="bar w-full max-w-[34px] ${barColor} rounded-t-lg" style="height:${h}%"></div>
+            <span class="text-sm ${labelCls}">周${d.day}</span>
+          </div>`;
+      }).join('');
+
+      // 本周总环 + 百分比
+      const total = Math.round(weekData.reduce((s, d) => s + d.pct, 0) / weekData.length);
+      document.getElementById('weekPct').textContent = total + '%';
+      const C = 263.9;
+      setTimeout(() => {
+        document.getElementById('weekRing').setAttribute('stroke-dashoffset', C * (1 - total / 100));
+      }, 200);
+    }
+
+    /* ============ Tab 切换 ============ */
+    const tabs = document.querySelectorAll('.tabbtn');
+    tabs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        // 高亮
+        tabs.forEach(b => {
+          const active = b.dataset.tab === tab;
+          b.classList.toggle('text-slate-400', !active);
+          b.classList.toggle('text-brand-600', active);
+        });
+        // 页面
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById('page-' + tab).classList.add('active');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+    // 默认高亮今日
+    tabs[0].classList.add('text-brand-600');
+
+    /* ============ 初始化 ============ */
+    renderTimeline();
+    renderChart();
+  </script>
+</body>
+</html>

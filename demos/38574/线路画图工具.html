@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>路线速绘 - 公交改道绘画板</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #f0f2f5; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; padding: 30px; }
+        .container { max-width: 900px; width: 100%; background: #fff; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); padding: 30px; }
+        h1 { font-size: 28px; margin-bottom: 5px; }
+        .sub { color: #666; font-size: 14px; margin-bottom: 20px; }
+        .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 15px; }
+        .toolbar button, .toolbar input { padding: 6px 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; font-size: 14px; transition: 0.2s; }
+        .toolbar button:hover { background: #e8f4ff; border-color: #4a90d9; }
+        .toolbar label { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+        .toolbar .color-picker { width: 36px; height: 36px; padding: 0; border: none; cursor: pointer; }
+        canvas { display: block; width: 100%; height: 500px; border: 1px solid #ddd; border-radius: 12px; background: #fafafa; cursor: crosshair; touch-action: none; }
+        .actions { margin-top: 15px; display: flex; gap: 10px; }
+        .actions button { padding: 8px 24px; background: #4a90d9; color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
+        .actions button.secondary { background: #e0e0e0; color: #333; }
+        .info { margin-top: 12px; font-size: 13px; color: #777; display: flex; gap: 20px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🚌 路线速绘</h1>
+    <div class="sub">公交改道 / 交通绕行 快速绘画工具 · 鼠标拖动画线，点击标记站点</div>
+
+    <div class="toolbar">
+        <label>画笔颜色:
+            <input type="color" class="color-picker" id="colorPicker" value="#1a73e8">
+        </label>
+        <label>线条粗细:
+            <select id="lineWidth">
+                <option value="2">2px</option>
+                <option value="4" selected>4px</option>
+                <option value="6">6px</option>
+                <option value="8">8px</option>
+            </select>
+        </label>
+        <button id="addMarker">➕ 添加站点标记（在最后位置）</button>
+        <button id="undo">↩ 撤销</button>
+        <button id="clear">🗑️ 清空画板</button>
+    </div>
+
+    <canvas id="drawCanvas"></canvas>
+
+    <div class="actions">
+        <button id="exportBtn">📥 导出为图片</button>
+        <button class="secondary" id="demoBtn">🔄 加载示例线路</button>
+    </div>
+    <div class="info">
+        <span>当前线条: <span id="lineCount">0</span></span>
+        <span>站点: <span id="markerCount">0</span></span>
+        <span>操作提示: 拖动画线，松开结束一条线</span>
+    </div>
+</div>
+
+<script>
+    (function() {
+        const canvas = document.getElementById('drawCanvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const lineWidthSelect = document.getElementById('lineWidth');
+        const addMarkerBtn = document.getElementById('addMarker');
+        const undoBtn = document.getElementById('undo');
+        const clearBtn = document.getElementById('clear');
+        const exportBtn = document.getElementById('exportBtn');
+        const demoBtn = document.getElementById('demoBtn');
+        const lineCountSpan = document.getElementById('lineCount');
+        const markerCountSpan = document.getElementById('markerCount');
+
+        // 调整canvas实际像素尺寸（Retina适配）
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            // 重新绘制所有内容
+            redrawAll();
+        }
+
+        // 数据结构：存储所有线条和标记
+        let lines = [];      // 每条线: { points: [{x,y}], color, width }
+        let markers = [];    // 每个标记: { x, y, color }
+        let currentLine = null;   // 正在绘制的线
+        let isDrawing = false;
+
+        // 记录历史用于撤销 (只保留线条和标记的完整副本?
+        // 这里简化：撤销时删除最后一条线 或 最后一个标记? 更合理：撤销删除最后一条线，标记单独撤销靠点击移除? 简化：撤销删除最后一条绘制的线（忽略标记）
+        function undo() {
+            if (lines.length === 0) return;
+            lines.pop();
+            redrawAll();
+        }
+
+        function redrawAll() {
+            ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1));
+
+            // 绘制所有线条
+            for (let line of lines) {
+                if (line.points.length < 2) continue;
+                ctx.beginPath();
+                ctx.strokeStyle = line.color;
+                ctx.lineWidth = line.width;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.moveTo(line.points[0].x, line.points[0].y);
+                for (let i = 1; i < line.points.length; i++) {
+                    ctx.lineTo(line.points[i].x, line.points[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // 绘制所有标记 (小圆点 + 边框)
+            for (let m of markers) {
+                ctx.beginPath();
+                ctx.fillStyle = m.color;
+                ctx.arc(m.x, m.y, 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                // 可选：加个小十字
+                ctx.beginPath();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1.5;
+                ctx.moveTo(m.x - 4, m.y);
+                ctx.lineTo(m.x + 4, m.y);
+                ctx.moveTo(m.x, m.y - 4);
+                ctx.lineTo(m.x, m.y + 4);
+                ctx.stroke();
+            }
+
+            // 如果正在绘制，显示当前线条
+            if (currentLine && currentLine.points.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = currentLine.color;
+                ctx.lineWidth = currentLine.width;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.moveTo(currentLine.points[0].x, currentLine.points[0].y);
+                for (let i = 1; i < currentLine.points.length; i++) {
+                    ctx.lineTo(currentLine.points[i].x, currentLine.points[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // 更新计数
+            lineCountSpan.textContent = lines.length + (currentLine ? 1 : 0);
+            markerCountSpan.textContent = markers.length;
+        }
+
+        // 获取鼠标/触摸在canvas中的坐标 (相对CSS像素)
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            let clientX, clientY;
+            if (e.touches) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+                e.preventDefault();
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        // 鼠标/触摸事件
+        function startDrawing(e) {
+            e.preventDefault();
+            const pos = getPos(e);
+            isDrawing = true;
+            const color = colorPicker.value;
+            const width = parseInt(lineWidthSelect.value);
+            currentLine = {
+                points: [{ x: pos.x, y: pos.y }],
+                color: color,
+                width: width
+            };
+        }
+
+        function draw(e) {
+            if (!isDrawing || !currentLine) return;
+            e.preventDefault();
+            const pos = getPos(e);
+            currentLine.points.push({ x: pos.x, y: pos.y });
+            redrawAll(); // 重绘全部，包括当前线条
+        }
+
+        function endDrawing(e) {
+            if (!isDrawing || !currentLine) return;
+            isDrawing = false;
+            if (currentLine.points.length >= 2) {
+                lines.push(currentLine);
+            }
+            currentLine = null;
+            redrawAll();
+        }
+
+        // 添加标记：在当前线条的最后一点？或者用户点击? 这里简化：在最后一条线的终点或画板中央?
+        // 采用：如果存在最后一条线的末尾，标记在那里；否则在画板中心
+        function addMarkerByLastPoint() {
+            let x, y;
+            const color = colorPicker.value;
+            if (lines.length > 0) {
+                const lastLine = lines[lines.length - 1];
+                const lastPoint = lastLine.points[lastLine.points.length - 1];
+                x = lastPoint.x;
+                y = lastPoint.y;
+            } else {
+                // 默认画板中心
+                const rect = canvas.getBoundingClientRect();
+                x = rect.width / 2;
+                y = rect.height / 2;
+            }
+            markers.push({ x, y, color });
+            redrawAll();
+        }
+
+        // 加载示例线路
+        function loadDemo() {
+            // 清除所有
+            lines = [];
+            markers = [];
+            // 绘制两条线模拟改道
+            const demoLine1 = {
+                points: [{x:80, y:100}, {x:200, y:140}, {x:320, y:130}, {x:450, y:200}, {x:550, y:180}],
+                color: '#e74c3c',
+                width: 5
+            };
+            const demoLine2 = {
+                points: [{x:550, y:180}, {x:630, y:240}, {x:710, y:220}, {x:800, y:270}],
+                color: '#e74c3c',
+                width: 5
+            };
+            lines.push(demoLine1, demoLine2);
+            // 添加几个站点标记
+            markers.push({x:80, y:100, color:'#2ecc71'});
+            markers.push({x:320, y:130, color:'#2ecc71'});
+            markers.push({x:550, y:180, color:'#2ecc71'});
+            markers.push({x:800, y:270, color:'#2ecc71'});
+            redrawAll();
+        }
+
+        // 导出为图片
+        function exportImage() {
+            // 先把当前未完成的线完成？但不需要
+            const link = document.createElement('a');
+            link.download = '路线速绘_改道方案.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        // 清空
+        function clearAll() {
+            lines = [];
+            markers = [];
+            currentLine = null;
+            isDrawing = false;
+            redrawAll();
+        }
+
+        // 初始化事件绑定
+        function init() {
+            resizeCanvas();
+
+            // 鼠标事件
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', endDrawing);
+            canvas.addEventListener('mouseleave', function(e) {
+                if (isDrawing) endDrawing(e);
+            });
+
+            // 触摸事件
+            canvas.addEventListener('touchstart', startDrawing, { passive: false });
+            canvas.addEventListener('touchmove', draw, { passive: false });
+            canvas.addEventListener('touchend', endDrawing, { passive: false });
+
+            // 按钮
+            addMarkerBtn.addEventListener('click', addMarkerByLastPoint);
+            undoBtn.addEventListener('click', undo);
+            clearBtn.addEventListener('click', clearAll);
+            exportBtn.addEventListener('click', exportImage);
+            demoBtn.addEventListener('click', loadDemo);
+
+            // 窗口resize重新适配
+            window.addEventListener('resize', resizeCanvas);
+
+            // 初始加载示例
+            loadDemo();
+        }
+
+        init();
+    })();
+</script>
+</body>
+</html>

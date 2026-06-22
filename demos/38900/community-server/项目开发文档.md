@@ -1,0 +1,804 @@
+# 社区便民生活服务系统 - 后端开发文档
+
+## 1 项目概述
+
+### 1.1 项目简介
+
+本社区便民生活服务系统基于 SpringBoot + Vue3 前后端分离架构开发，针对传统小区微信群管理混乱、服务碎片化、数据无留存、业务无追溯等痛点，整合**社区公告、线上报修、邻里闲置交易、社区活动、家政预约**五大核心业务模块。系统划分多角色精细化权限体系，实现居民生活服务一站式线上办理、物业工作数字化管控，搭配数据可视化大屏实现社区运营数据直观统计，全面提升社区服务效率与居民居住体验。
+
+### 1.2 运行环境
+
+| 项目 | 要求 |
+|------|------|
+| 操作系统 | Windows 10/11、CentOS 7+ |
+| 数据库 | MySQL 8.0+ |
+| JDK | JDK 17 |
+| 构建工具 | Maven 3.6+ |
+| 缓存 | Redis |
+| 前端环境 | Node.js 18+ |
+| 浏览器 | Chrome、Edge 等主流浏览器 |
+
+---
+
+## 2 技术架构设计
+
+### 2.1 整体架构
+
+系统采用前后端分离架构：
+- **前端**：负责页面渲染、交互逻辑、数据可视化
+- **后端**：负责业务逻辑处理、数据持久化、权限校验、接口提供
+- **通信**：前后端通过 HTTP RESTful 接口交互，JWT 令牌完成身份认证
+
+### 2.2 后端技术栈
+
+| 技术 | 版本 | 说明 |
+|------|------|------|
+| Spring Boot | 3.2.x | 快速开发框架，提供自动配置与内嵌服务器 |
+| MyBatis-Plus | 3.5.5 | 简化数据库 CRUD 操作，提供代码生成器与分页插件 |
+| JWT (jjwt) | 0.12.5 | 无状态登录鉴权，Token 令牌校验 |
+| Spring Data Redis | (Boot 内置) | 缓存热点数据，提升查询性能 |
+| MySQL Connector | (Boot 内置) | MySQL 数据库驱动 |
+| Lombok | 1.18.x | 简化 Java Bean 开发 |
+| Hutool | 5.8.25 | 通用工具类库（加密、文件处理、日期等） |
+| Lettuce + commons-pool2 | (Boot 内置) | Redis 连接池支持 |
+
+### 2.3 前端技术栈
+
+| 技术 | 版本 | 说明 |
+|------|------|------|
+| Vue | 3.4.x | 渐进式前端框架 |
+| Vite | 6.5.x | 快速构建工具 |
+| Vue Router | 4.3.x | 路由管理 |
+| Element Plus | 2.8.x | UI 组件库 |
+| ECharts | 5.5.x | 数据可视化图表 |
+| Axios | 1.6.x | HTTP 请求与拦截器 |
+
+### 2.4 辅助技术
+
+- 本地文件存储（用户上传图片，数据库保存路径）
+- Nginx 部署代理
+- 操作日志记录
+- 数据脱敏处理
+- 权限拦截校验
+
+---
+
+## 3 系统角色与权限设计
+
+系统采用多角色 **RBAC** 权限设计，五大角色权责分离：
+
+### 角色定义表
+
+| 角色值 | 角色名称 | 标识 | 说明 |
+|-------|---------|------|------|
+| 0 | 超级管理员 | admin | 系统最高权限，管理所有用户和配置 |
+| 1 | 居民 | resident | 普通住户，使用各项服务 |
+| 2 | 维修人员 | maintainer | 处理报修工单 |
+| 3 | 物业管理员 | manager | 管理社区日常业务 |
+| 4 | 家政服务员 | housekeeper | 提供家政服务 |
+
+### 3.1 普通居民（resident）
+
+- 注册登录、修改个人信息、头像上传、绑定手机号
+- 查看社区公告，自动标记已读
+- 提交报修工单、查看工单进度、完工评价
+- 发布闲置物品、管理个人发布、浏览搜索闲置、收藏/想要物品
+- 报名社区活动、查看报名记录
+- 预约家政服务、查看家政订单、订单评价
+- 查询个人全部业务记录
+
+### 3.2 维修人员（maintainer）
+
+- 接收物业派发的报修工单
+- 实时更新维修进度
+- 填写维修处理结果、上传完工凭证
+- 查询个人负责的全部工单
+
+### 3.3 家政服务员（housekeeper）
+
+- 查看指派给自己的家政订单
+- 更新服务状态
+- 查看服务评价
+
+### 3.4 物业管理员（manager）
+
+- 发布、编辑、删除、置顶社区公告，查看公告阅读明细
+- 报修工单接单、派单、进度管理
+- 审核邻里闲置物品、驳回填写原因、下架违规商品
+- 发布、编辑、管理社区活动，查看报名名单
+- 上架下架家政服务、管理家政订单
+- 处理用户评价与简单纠纷
+- 查看本社区业务数据统计
+- 人员管理（居民、维修人员、家政服务员）
+
+### 3.5 超级管理员（admin）
+
+- 管理全站用户账号、分配各角色权限
+- 配置社区基础信息与系统参数
+- 查看全局数据大屏统计
+- 封禁违规内容
+- 查询系统全部操作日志、处理系统敏感操作
+- 完整的人员管理功能
+
+---
+
+## 4 数据库设计
+
+### 4.1 用户表 `user`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| username | VARCHAR(50) | 用户名，唯一 |
+| password | VARCHAR(255) | 密码（加密存储） |
+| real_name | VARCHAR(50) | 真实姓名 |
+| phone | VARCHAR(20) | 手机号 |
+| avatar | VARCHAR(255) | 头像路径 |
+| role | TINYINT | 角色（0-超级管理员 1-居民 2-维修人员 3-物业管理员 4-家政服务员） |
+| community_id | BIGINT | 所属社区ID |
+| create_time | DATETIME | 创建时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.2 公告表 `notice`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| title | VARCHAR(100) | 公告标题 |
+| content | TEXT | 公告内容 |
+| images | VARCHAR(1000) | 图片路径数组（JSON） |
+| publisher_id | BIGINT | 发布人ID |
+| is_top | TINYINT | 是否置顶（0-否 1-是） |
+| create_time | DATETIME | 发布时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.3 公告阅读表 `notice_read`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| notice_id | BIGINT | 公告ID |
+| user_id | BIGINT | 用户ID |
+| is_read | TINYINT | 是否已读（0-未读 1-已读） |
+| read_time | DATETIME | 阅读时间 |
+
+### 4.4 报修工单表 `repair_order`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| user_id | BIGINT | 报修用户ID |
+| title | VARCHAR(100) | 报修标题 |
+| description | TEXT | 报修描述 |
+| images | VARCHAR(1000) | 图片路径数组（JSON） |
+| address | VARCHAR(255) | 报修地址 |
+| phone | VARCHAR(20) | 联系电话 |
+| status | TINYINT | 状态（0-待受理 1-处理中 2-待确认 3-已完成 4-已评价） |
+| handler_id | BIGINT | 维修人员ID |
+| result | TEXT | 维修结果 |
+| rating | TINYINT | 星级评分（1-5） |
+| comment | VARCHAR(500) | 评价文字 |
+| create_time | DATETIME | 提交时间 |
+| accept_time | DATETIME | 受理时间 |
+| finish_time | DATETIME | 完工时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.5 闲置物品表 `idle_item`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| user_id | BIGINT | 发布者ID |
+| title | VARCHAR(100) | 物品标题 |
+| description | TEXT | 物品描述 |
+| images | VARCHAR(1000) | 图片路径数组（JSON） |
+| cover_img | VARCHAR(255) | 封面图片 |
+| category | VARCHAR(50) | 物品分类 |
+| price | DECIMAL(10,2) | 价格 |
+| trade_type | VARCHAR(20) | 交易方式（赠送/低价转让/交换） |
+| status | TINYINT | 状态（0-待审核 1-已发布 2-已售出 3-已下架） |
+| audit_reason | VARCHAR(255) | 审核驳回原因 |
+| create_time | DATETIME | 创建时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.6 活动表 `activity`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| title | VARCHAR(100) | 活动标题 |
+| description | TEXT | 活动描述 |
+| cover_image | VARCHAR(255) | 封面图片路径 |
+| start_time | DATETIME | 活动开始时间 |
+| end_time | DATETIME | 活动结束时间 |
+| location | VARCHAR(255) | 活动地点 |
+| max_people | INT | 人数上限 |
+| current_people | INT | 当前报名人数 |
+| status | TINYINT | 状态（0-报名中 1-已满额 2-进行中 3-已结束 4-已取消） |
+| publisher_id | BIGINT | 发布人ID |
+| create_time | DATETIME | 创建时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.7 活动报名表 `activity_signup`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| activity_id | BIGINT | 活动ID |
+| user_id | BIGINT | 报名用户ID |
+| signup_time | DATETIME | 报名时间 |
+
+### 4.8 家政服务表 `housekeeping`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| title | VARCHAR(100) | 服务标题 |
+| category | VARCHAR(50) | 服务分类 |
+| price | DECIMAL(10,2) | 服务价格 |
+| intro | TEXT | 服务介绍 |
+| phone | VARCHAR(20) | 联系电话 |
+| status | TINYINT | 状态（0-下架 1-上架） |
+| create_time | DATETIME | 创建时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.9 家政订单表 `housekeeping_order`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| user_id | BIGINT | 预约用户ID |
+| service_id | BIGINT | 家政服务ID |
+| appoint_time | DATETIME | 预约时间 |
+| demand | TEXT | 需求描述 |
+| status | TINYINT | 状态（0-已下单 1-已接单 2-服务中 3-已完成 4-已评价） |
+| handler_id | BIGINT | 服务人员ID |
+| rating | TINYINT | 星级评分（1-5） |
+| comment | VARCHAR(500) | 评价文字 |
+| create_time | DATETIME | 创建时间 |
+| update_time | DATETIME | 更新时间 |
+| delete_time | DATETIME | 软删除时间 |
+
+### 4.10 消息表 `message`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| sender_id | BIGINT | 发送者ID |
+| receiver_id | BIGINT | 接收者ID |
+| type | VARCHAR(20) | 消息类型 |
+| content | TEXT | 消息内容 |
+| related_id | BIGINT | 关联业务ID |
+| is_read | TINYINT | 是否已读（0-未读 1-已读） |
+| create_time | DATETIME | 创建时间 |
+
+### 4.11 闲置收藏表 `idle_favorite`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | BIGINT | 主键，自增 |
+| user_id | BIGINT | 用户ID |
+| item_id | BIGINT | 闲置物品ID |
+| create_time | DATETIME | 创建时间 |
+
+---
+
+## 5 核心业务状态枚举设计
+
+### 5.1 报修工单状态
+
+| 状态码 | 状态名称 | 说明 |
+|--------|----------|------|
+| 0 | 待受理 | 居民已提交，等待物业接单 |
+| 1 | 处理中 | 物业已指派，维修人员处理中 |
+| 2 | 待用户确认 | 维修完成，等待居民确认 |
+| 3 | 已完成 | 居民已确认完工 |
+| 4 | 已评价 | 居民已提交评分和评论 |
+
+### 5.2 闲置物品状态
+
+| 状态码 | 状态名称 | 说明 |
+|--------|----------|------|
+| 0 | 待审核 | 刚发布，等待物业审核 |
+| 1 | 已发布 | 审核通过，前台可见 |
+| 2 | 已售出 | 发布者标记售出 |
+| 3 | 已下架 | 发布者或管理员强制下架 |
+
+### 5.3 社区活动状态
+
+| 状态码 | 状态名称 | 说明 |
+|--------|----------|------|
+| 0 | 报名中 | 活动发布，接受报名 |
+| 1 | 已满额 | 达到人数上限，报名关闭 |
+| 2 | 进行中 | 活动正在进行 |
+| 3 | 已结束 | 活动已结束 |
+| 4 | 已取消 | 活动被取消 |
+
+### 5.4 家政订单状态
+
+| 状态码 | 状态名称 | 说明 |
+|--------|----------|------|
+| 0 | 已下单 | 居民提交预约 |
+| 1 | 已接单 | 管理员已接单 |
+| 2 | 服务中 | 服务进行中 |
+| 3 | 已完成 | 服务完成，待评价 |
+| 4 | 已评价 | 居民已评价 |
+
+---
+
+## 6 核心业务模块详细设计
+
+### 6.1 社区公告模块
+
+**业务流程：**
+物业管理员发布公告（支持置顶、多图配图）→ 居民前端浏览公告列表 → 点击详情自动标记已读 → 物业后台实时统计、查看居民已读/未读明细。
+
+**管理员功能：**
+- 公告新增、编辑、删除、置顶/取消置顶、多图上传
+- 按时间、关键词搜索公告
+- 查看公告阅读人数、详细已读/未读名单
+
+**居民功能：**
+- 置顶公告优先展示，列表时间倒序排列
+- 未读公告红点提醒
+- 详情页自动标记已读
+- 历史公告搜索、大图预览
+
+### 6.2 线上报修模块
+
+**业务流程：**
+居民提交图文报修工单 → 物业管理员接单 → 指派对应维修人员 → 维修人员接收工单并回填维修结果 → 居民查看维修结果、确认完工并进行星级评价 → 工单正式关闭归档。
+
+**工单状态流转：**
+```
+待受理(0) → 处理中(1) → 待用户确认(2) → 已完成(3) → 已评价(4)
+```
+
+**特色功能：**
+- 后台超时未处理工单标红高亮预警，督促物业及时处理
+
+**角色功能细分：**
+- **居民端**：提交图文报修、填写地址电话、查看工单进度、确认完工、1-5星评分+文字评价、查询历史工单
+- **维修人员端**：查看指派工单、更新工单状态、填写维修结果、上传完工凭证、闭环工单处理
+- **物业端**：工单筛选、接单、派单、查看全站工单数据、查看用户评价、超时工单预警
+
+### 6.3 邻里闲置模块
+
+**业务流程：**
+居民编辑发布闲置物品信息 → 物业后台审核（通过/驳回）→ 审核通过前台展示 → 其他用户浏览搜索 → 线下交易 → 发布者标记售出/下架。
+
+**状态流转：**
+```
+待审核(0) → 已发布(1) → 已售出(2) / 已下架(3)
+```
+
+**核心规则：**
+- 无在线支付功能，仅做信息撮合
+- 支持用户举报违规内容，管理员可强制下架
+- 驳回审核可填写驳回原因，支持用户修改重提
+- 用户可收藏/想要物品，系统自动发送消息通知
+
+### 6.4 社区活动模块
+
+**业务流程：**
+物业发布活动（时间、地点、人数上限、封面）→ 居民浏览报名 → 满额自动关闭报名 → 活动结束归档 → 管理员统计报名数据。
+
+**核心功能：**
+- 自动拦截重复报名、人数超限弹窗提示
+- 系统自动区分活动状态：报名中、已满额、进行中、已结束、已取消
+- 用户可查看报名状态，管理员可查看报名名单
+
+### 6.5 家政预约模块
+
+**业务说明：**
+简化开发，无在线支付，以服务展示、在线预约、订单管理、评价闭环为核心。
+
+**状态流转：**
+```
+已下单(0) → 已接单(1) → 服务中(2) → 已完成(3) → 已评价(4)
+```
+
+**功能详情：**
+- **居民端**：浏览家政分类、查看服务详情、提交预约订单、查看订单进度、完工星级评价+文字评价
+- **管理员端**：上架/下架服务、编辑服务信息、审核订单、更新订单状态、查看用户评价
+- **家政服务员端**：查看指派订单、更新服务状态
+
+### 6.6 人员管理模块
+
+**功能说明：**
+- **超级管理员**：管理所有用户，可创建、编辑、删除任何角色（除超级管理员外）
+- **物业管理员**：管理居民、维修人员、家政服务员，不可操作超级管理员和其他物业管理员
+- **权限限制**：超级管理员只有admin一个，无法通过系统界面创建
+
+---
+
+## 7 通用基础模块设计
+
+### 7.1 账号权限模块
+
+- 基于 JWT 令牌实现无状态鉴权
+- 前端拦截器自动携带 Token
+- 后端接口统一校验权限，防止未授权访问、水平越权
+- 用户密码采用加密存储与传输，敏感信息脱敏处理
+
+### 7.2 个人信息模块
+
+- 支持用户修改昵称、手机号、头像、个人资料
+- 所有信息实时同步数据库，数据持久化保存
+
+### 7.3 通用查询组件
+
+系统全局统一封装：
+- 分页查询
+- 关键词搜索
+- 时间区间筛选
+- 状态筛选
+- 升降序排序
+
+### 7.4 日志与统计模块
+
+- 系统自动记录用户操作日志，留存操作轨迹
+- 个人中心提供基础数据统计展示
+
+---
+
+## 8 数据可视化大屏设计
+
+### 8.1 刷新机制
+
+前端 30 秒自动轮询请求后端接口，数据实时刷新，保证统计数据时效性。
+
+### 8.2 指标卡片
+
+- 总居民数
+- 本月新增报修数量
+- 待处理报修数量
+- 闲置物品总数
+- 本月活动场次
+- 累计活动报名人次
+
+### 8.3 可视化图表
+
+- 近7天/30天报修数量趋势折线图
+- 报修工单状态分布饼图
+- 月度活动报名人次统计柱状图
+- 工单完成率统计图表
+- 家政订单完成率与满意度统计图
+
+---
+
+## 9 后端项目结构设计
+
+```
+com.example.communityserver
+├── config/                  # 配置类
+│   ├── MyBatisPlusConfig.java       # MyBatis-Plus 分页插件配置
+│   ├── RedisConfig.java             # Redis 序列化配置
+│   ├── WebMvcConfig.java            # 跨域、静态资源映射配置
+│   └── CorsConfig.java              # 跨域配置
+├── common/                  # 通用组件
+│   ├── Result.java                  # 统一响应结果封装
+│   ├── PageQuery.java               # 通用分页查询参数
+│   └── Constants.java               # 系统常量定义
+├── interceptor/             # 拦截器
+│   └── JwtInterceptor.java         # JWT 权限拦截器
+├── util/                    # 工具类
+│   ├── JwtUtil.java                 # JWT 令牌生成与解析
+│   └── FileUtil.java                # 文件上传工具
+├── entity/                  # 实体类
+│   ├── User.java
+│   ├── Notice.java
+│   ├── NoticeRead.java
+│   ├── RepairOrder.java
+│   ├── IdleItem.java
+│   ├── IdleFavorite.java
+│   ├── Activity.java
+│   ├── ActivitySignup.java
+│   ├── Housekeeping.java
+│   ├── HousekeepingOrder.java
+│   └── Message.java
+├── mapper/                  # 数据访问层
+│   ├── UserMapper.java
+│   ├── NoticeMapper.java
+│   ├── NoticeReadMapper.java
+│   ├── RepairOrderMapper.java
+│   ├── IdleItemMapper.java
+│   ├── IdleFavoriteMapper.java
+│   ├── ActivityMapper.java
+│   ├── ActivitySignupMapper.java
+│   ├── HousekeepingMapper.java
+│   ├── HousekeepingOrderMapper.java
+│   └── MessageMapper.java
+├── service/                 # 业务逻辑层
+│   ├── UserService.java
+│   ├── NoticeService.java
+│   ├── RepairOrderService.java
+│   ├── IdleItemService.java
+│   ├── ActivityService.java
+│   ├── HousekeepingService.java
+│   ├── HousekeepingOrderService.java
+│   ├── MessageService.java
+│   └── StatsService.java            # 数据统计服务（大屏）
+├── service/impl/            # 业务逻辑实现
+│   └── ...ServiceImpl.java
+├── controller/              # 控制器层
+│   ├── AuthController.java          # 登录注册接口
+│   ├── UserController.java          # 用户信息接口
+│   ├── UserManagementController.java # 用户管理接口（管理员）
+│   ├── NoticeController.java        # 公告模块接口
+│   ├── RepairOrderController.java   # 报修工单接口
+│   ├── IdleItemController.java      # 闲置物品接口
+│   ├── ActivityController.java      # 社区活动接口
+│   ├── HousekeepingController.java  # 家政服务接口
+│   ├── HousekeepingOrderController.java  # 家政订单接口
+│   ├── UploadController.java        # 文件上传接口
+│   ├── MessageController.java       # 消息接口
+│   └── StatsController.java         # 数据大屏统计接口
+├── dto/                     # 数据传输对象
+│   ├── LoginDTO.java
+│   ├── RegisterDTO.java
+│   ├── UserUpdateDTO.java
+│   └── StatsVO.java
+└── CommunityServerApplication.java  # 启动类
+```
+
+---
+
+## 10 接口设计规范
+
+### 10.1 统一响应格式
+
+```json
+{
+  "code": 200,
+  "message": "操作成功",
+  "data": {}
+}
+```
+
+| 状态码 | 说明 |
+|--------|------|
+| 200 | 操作成功 |
+| 400 | 参数错误 |
+| 401 | 未登录/Token失效 |
+| 403 | 无权限访问 |
+| 404 | 资源不存在 |
+| 500 | 服务器内部错误 |
+
+### 10.2 核心接口列表
+
+#### 认证模块 `/api/auth`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/auth/register | 用户注册 |
+| POST | /api/auth/login | 用户登录 |
+
+#### 用户模块 `/api/user`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/user/info | 获取当前用户信息 |
+| PUT | /api/user/info | 修改个人信息 |
+| POST | /api/user/avatar | 上传头像 |
+
+#### 用户管理模块 `/api/admin/users`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/admin/users | 用户列表（管理员） |
+| POST | /api/admin/users | 创建用户（管理员） |
+| PUT | /api/admin/users/{id} | 更新用户（管理员） |
+| DELETE | /api/admin/users/{id} | 删除用户（管理员） |
+| GET | /api/admin/users/roles | 获取角色列表 |
+
+#### 公告模块 `/api/notice`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/notice | 发布公告（管理员） |
+| PUT | /api/notice/{id} | 编辑公告（管理员） |
+| DELETE | /api/notice/{id} | 删除公告（管理员） |
+| PUT | /api/notice/{id}/top | 置顶/取消置顶（管理员） |
+| GET | /api/notice/list | 公告列表（分页） |
+| GET | /api/notice/{id} | 公告详情（自动标记已读） |
+| GET | /api/notice/{id}/read-list | 阅读/未读名单（管理员） |
+| GET | /api/notice/{id}/read-count | 阅读人数统计（管理员） |
+
+#### 报修工单模块 `/api/repair`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/repair | 提交报修工单（居民） |
+| GET | /api/repair/list | 工单列表（分页、按角色筛选） |
+| GET | /api/repair/{id} | 工单详情 |
+| PUT | /api/repair/{id}/accept | 物业接单 |
+| PUT | /api/repair/{id}/assign | 物业派单给维修人员 |
+| PUT | /api/repair/{id}/process | 维修人员更新进度 |
+| PUT | /api/repair/{id}/finish | 维修完成 |
+| PUT | /api/repair/{id}/confirm | 居民确认完工 |
+| PUT | /api/repair/{id}/rate | 居民评价 |
+| GET | /api/repair/handlers | 获取维修人员列表（管理员） |
+
+#### 闲置物品模块 `/api/idle`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/idle | 发布闲置物品 |
+| PUT | /api/idle/{id} | 编辑闲置物品 |
+| DELETE | /api/idle/{id} | 删除/下架 |
+| GET | /api/idle/list | 闲置列表（分页、搜索） |
+| GET | /api/idle/{id} | 闲置详情 |
+| PUT | /api/idle/{id}/audit | 审核通过/驳回（管理员） |
+| PUT | /api/idle/{id}/sold | 标记已售出 |
+| POST | /api/idle/{id}/favorite | 收藏/取消收藏 |
+| GET | /api/idle/my-favorites | 我的收藏列表 |
+| POST | /api/idle/{id}/contact | 联系卖家/我想要 |
+| GET | /api/idle/my-list | 我的发布列表 |
+
+#### 活动模块 `/api/activity`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/activity | 发布活动（管理员） |
+| PUT | /api/activity/{id} | 编辑活动 |
+| DELETE | /api/activity/{id} | 取消活动 |
+| GET | /api/activity/list | 活动列表 |
+| GET | /api/activity/{id} | 活动详情 |
+| POST | /api/activity/{id}/signup | 报名活动 |
+| GET | /api/activity/{id}/signups | 报名名单（管理员） |
+| GET | /api/activity/my-signups | 我的报名记录 |
+
+#### 家政模块 `/api/housekeeping`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/housekeeping | 上架服务（管理员） |
+| PUT | /api/housekeeping/{id} | 编辑服务 |
+| PUT | /api/housekeeping/{id}/status | 上架/下架 |
+| GET | /api/housekeeping/list | 服务列表 |
+| GET | /api/housekeeping/{id} | 服务详情 |
+| POST | /api/housekeeping/order | 提交预约订单 |
+| GET | /api/housekeeping/order/list | 订单列表 |
+| PUT | /api/housekeeping/order/{id}/status | 更新订单状态 |
+| PUT | /api/housekeeping/order/{id}/rate | 订单评价 |
+
+#### 消息模块 `/api/message`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/message/list | 获取消息列表 |
+| PUT | /api/message/{id}/read | 标记已读 |
+| DELETE | /api/message/{id} | 删除消息 |
+| GET | /api/message/count | 未读消息数量 |
+
+#### 文件上传 `/api/upload`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/upload/image | 上传单张图片 |
+| POST | /api/upload/images | 上传多张图片 |
+
+#### 数据大屏 `/api/stats`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/stats/dashboard | 全部统计数据（大屏轮询） |
+
+---
+
+## 11 系统安全与非功能设计
+
+### 11.1 权限安全
+
+- 基于 JWT 令牌鉴权，接口统一权限拦截
+- 区分多角色访问权限，杜绝未授权访问、水平越权
+- Token 有效期管理（24小时），过期自动失效
+- 超级管理员与物业管理员权限隔离
+
+### 11.2 数据安全
+
+- 用户密码加密存储（BCrypt）、加密传输
+- 用户手机号等敏感信息页面脱敏展示
+- 所有业务数据支持软删除，防止数据误删丢失
+- 图片路径安全校验，防止路径遍历攻击
+
+### 11.3 交互体验
+
+- 关键操作弹窗提示、二次确认
+- 表单提交前置校验，减少无效请求
+- 页面适配 PC 与移动端场景
+- 图片懒加载，提升页面加载速度
+
+---
+
+## 12 部署方案
+
+### 12.1 开发环境
+
+```bash
+# 后端启动
+cd community-server
+mvn spring-boot:run
+
+# 前端启动
+cd community-web
+npm install
+npm run dev
+```
+
+### 12.2 生产部署
+
+项目支持 **Nginx + SpringBoot Jar 包**服务器部署：
+
+1. **前端**：`npm run build` 打包为静态资源，放置于 Nginx 代理目录下
+2. **后端**：`mvn clean package` 打包为 Jar 包，`java -jar` 独立运行
+3. **Nginx**：配置反向代理，前端静态资源 + 后端 API 接口统一代理
+
+### 12.3 Nginx 配置示例
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # 前端静态资源
+    location / {
+        root /path/to/community-web/dist;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # API 接口代理
+    location /api/ {
+        proxy_pass http://localhost:8080/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # 图片资源代理
+    location /uploads/ {
+        proxy_pass http://localhost:8080/uploads/;
+    }
+}
+```
+
+---
+
+## 13 启动前准备
+
+### 13.1 数据库配置
+
+创建数据库并执行初始化脚本：
+
+```sql
+CREATE DATABASE IF NOT EXISTS community_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE community_db;
+-- 执行 community-server/src/main/resources/schema.sql
+```
+
+### 13.2 配置文件修改
+
+修改 `application.yml` 中的数据库连接信息：
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/community_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false
+    username: your_username
+    password: your_password
+```
+
+### 13.3 初始用户
+
+系统初始化时需手动创建超级管理员账号：
+
+| 用户名 | 密码 | 角色 |
+|--------|------|------|
+| admin | admin123 | 超级管理员 |

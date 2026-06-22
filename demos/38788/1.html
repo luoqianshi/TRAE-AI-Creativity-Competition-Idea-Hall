@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>沃尔玛SKU销售数据分析</title>
+  <!-- 引入第三方库（CDN，无需下载） -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tailwindcss@3.3.0/dist/tailwind.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  
+  <!-- Tailwind自定义配置 -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#165DFF',
+            success: '#00B42A',
+            warning: '#FF7D00',
+            danger: '#F53F3F',
+            neutral: '#F5F7FA',
+            info: '#4E5BA6', // 快递费专属颜色
+            refund: '#9D2235' // 退款金额专属颜色
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .card-shadow { @apply shadow-lg hover:shadow-xl transition-shadow duration-300; }
+      .btn-primary { @apply bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors; }
+      .input-box { @apply border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50; }
+      .increase-tag { @apply bg-danger/10 text-danger px-2 py-1 rounded text-xs font-medium; }
+      .decrease-tag { @apply bg-success/10 text-success px-2 py-1 rounded text-xs font-medium; }
+      .normal-tag { @apply bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-medium; }
+    }
+  </style>
+</head>
+<body class="bg-neutral min-h-screen">
+  <!-- 页面头部 -->
+  <header class="bg-white card-shadow py-6 px-4 mb-8">
+    <div class="container mx-auto">
+      <h1 class="text-[clamp(1.5rem,3vw,2.5rem)] font-bold text-gray-800 flex items-center gap-2">
+        <i class="fa fa-bar-chart text-primary"></i>沃尔玛SKU销售数据分析
+      </h1>
+      <p class="text-gray-500 mt-2">双销售表汇总 | 按年月本地化存储 | 重复上传自动覆盖 | 汇率换算 | 月度销售额趋势 | SKU销量环比分析 | 退款金额统计</p>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 pb-12">
+    <!-- 文件上传区域 -->
+    <section class="bg-white rounded-2xl p-6 card-shadow mb-8">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
+        <i class="fa fa-upload text-primary"></i>数据上传与管理
+      </h2>
+      
+      <!-- 年月选择器 + 销售表 + 成本表 + 快递费表 + 退款表 -->
+      <div class="grid md:grid-cols-6 gap-4 mb-4"> <!-- 改为6列适配新增的退款表 -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">📅 选择年月</label>
+          <input type="month" id="monthPicker" class="input-box w-full">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">① 沃尔玛销售表1</label>
+          <input type="file" id="salesFile1" accept=".xlsx,.xls" class="input-box w-full">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">② 沃尔玛销售表2（可选）</label>
+          <input type="file" id="salesFile2" accept=".xlsx,.xls" class="input-box w-full">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">③ SKU成本表（sku/ITEM_ID/成本）</label>
+          <input type="file" id="costFile" accept=".xlsx,.xls" class="input-box w-full">
+          <p class="text-xs text-gray-500 mt-1">需包含sku、ITEM_ID、成本列</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">④ 海外快递费表（店铺总和）</label>
+          <input type="file" id="shippingFile" accept=".xlsx,.xls" class="input-box w-full">
+          <p class="text-xs text-gray-500 mt-1">仅计算Net Payable列总和</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">⑤ 沃尔玛退款表（可选）</label>
+          <input type="file" id="refundFile" accept=".xlsx,.xls" class="input-box w-full">
+          <p class="text-xs text-gray-500 mt-1">统计ITEM ID/QUANTITY/TOTAL_REFUND_AMOUNT</p>
+        </div>
+      </div>
+
+      <!-- 汇率输入框 -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">⑥ 汇率（销售额/快递费/退款 = 计算值 × 汇率）</label>
+        <input type="number" id="exchangeRate" step="0.0001" value="1.0000" class="input-box w-full md:w-1/4" placeholder="请输入汇率">
+      </div>
+
+      <div class="flex gap-3 flex-wrap">
+        <button id="analyzeBtn" class="btn-primary flex items-center gap-2">
+          <i class="fa fa-calculator"></i>分析并保存当月数据
+        </button>
+        <button id="loadBtn" class="bg-success text-white px-4 py-2 rounded-lg hover:bg-success/90 transition-colors flex items-center gap-2">
+          <i class="fa fa-database"></i>加载当月已存数据
+        </button>
+        <button id="clearBtn" class="bg-danger text-white px-4 py-2 rounded-lg hover:bg-danger/90 transition-colors flex items-center gap-2">
+          <i class="fa fa-trash"></i>清空当月数据
+        </button>
+      </div>
+      <p id="tip" class="text-sm text-gray-500 mt-3">选择年月 → 上传销售表(至少1个)+成本表+快递费表（退款表可选）→ 点击分析保存（自动汇总+覆盖）</p>
+    </section>
+
+    <!-- 数据汇总卡片 -->
+    <section id="summaryCards" class="hidden grid md:grid-cols-6 sm:grid-cols-2 gap-4 mb-8"> <!-- 改为6列适配退款卡片 -->
+      <div class="bg-white rounded-xl p-5 card-shadow border-l-4 border-primary">
+        <p class="text-sm text-gray-500">总销售额（已乘汇率）</p>
+        <h3 id="totalSales" class="text-2xl font-bold text-primary mt-2">¥0.00</h3>
+      </div>
+      <div class="bg-white rounded-xl p-5 card-shadow border-l-4 border-success">
+        <p class="text-sm text-gray-500">总销售数量</p>
+        <h3 id="totalQty" class="text-2xl font-bold text-success mt-2">0</h3>
+      </div>
+      <div class="bg-white rounded-xl p-5 card-shadow border-l-4 border-warning">
+        <p class="text-sm text-gray-500">总SKU成本</p>
+        <h3 id="totalCost" class="text-2xl font-bold text-warning mt-2">¥0.00</h3>
+      </div>
+      <div class="bg-white rounded-xl p-5 card-shadow border-l-4 border-info">
+        <p class="text-sm text-gray-500">海外快递费（已乘汇率）</p>
+        <h3 id="totalShippingFee" class="text-2xl font-bold text-info mt-2">¥0.00</h3>
+      </div>
+      <div class="bg-white rounded-xl p-5 card-shadow border-l-4 border-refund">
+        <p class="text-sm text-gray-500">总退款金额（已乘汇率）</p>
+        <h3 id="totalRefundFee" class="text-2xl font-bold text-refund mt-2">¥0.00</h3>
+      </div>
+      <div class="bg-white rounded-xl p-5 card-shadow border-l-4 border-danger">
+        <p class="text-sm text-gray-500">总毛利（已减快递费+退款）</p>
+        <h3 id="totalProfit" class="text-2xl font-bold text-danger mt-2">¥0.00</h3>
+      </div>
+    </section>
+
+    <!-- 可视化图表 -->
+    <section class="bg-white rounded-2xl p-6 card-shadow mb-8">
+      <h2 class="text-xl font-semibold text-gray-800 mb-6 flex items-center gap-2">
+        <i class="fa fa-pie-chart text-primary"></i>单月数据可视化
+      </h2>
+      <div class="grid md:grid-cols-2 gap-6">
+        <div class="h-80">
+          <canvas id="barChart"></canvas>
+        </div>
+        <div class="h-80">
+          <canvas id="pieChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- SKU明细表格 -->
+    <section id="dataTableSection" class="bg-white rounded-2xl p-6 card-shadow overflow-x-auto mb-8">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
+        <i class="fa fa-table text-primary"></i>SKU明细数据（汇总）</h2>
+      <table id="dataTable" class="w-full min-w-[800px] text-left"> <!-- 加宽表格适配新增列 -->
+        <thead class="bg-gray-50 text-gray-700">
+          <tr>
+            <th class="px-4 py-3 rounded-l-lg">SKU编码</th>
+            <th class="px-4 py-3">总销售数量</th>
+            <th class="px-4 py-3">总销售额（已乘汇率）</th>
+            <th class="px-4 py-3">单个SKU成本</th>
+            <th class="px-4 py-3">总SKU成本</th>
+            <th class="px-4 py-3">退款金额（已乘汇率）</th>
+            <th class="px-4 py-3 rounded-r-lg">SKU毛利（已减退款）</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody" class="divide-y divide-gray-200 text-gray-600">
+          <tr class="text-center text-gray-400"><td colspan="7" class="py-6">请选择年月并加载/分析数据</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 沃尔玛月度销售额趋势分析 -->
+    <section class="bg-white rounded-2xl p-6 card-shadow">
+      <h2 class="text-xl font-semibold text-gray-800 mb-6 flex items-center gap-2">
+        <i class="fa fa-line-chart text-primary"></i>沃尔玛月度销售额趋势分析
+      </h2>
+      <div class="h-80 mb-8">
+        <canvas id="lineChart"></canvas>
+      </div>
+      
+      <!-- 月度销量数据列表 -->
+      <div class="mt-8">
+        <h3 class="text-lg font-medium text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa fa-list text-primary"></i>月度销量&销售额明细
+        </h3>
+        <div class="overflow-x-auto">
+          <table id="monthlyDataTable" class="w-full min-w-[700px] text-left"> <!-- 加宽表格适配新增列 -->
+            <thead class="bg-gray-50 text-gray-700">
+              <tr>
+                <th class="px-4 py-3 rounded-l-lg">年月</th>
+                <th class="px-4 py-3">总销售数量</th>
+                <th class="px-4 py-3">总销售额（已乘汇率）</th>
+                <th class="px-4 py-3">海外快递费（已乘汇率）</th>
+                <th class="px-4 py-3">总退款金额（已乘汇率）</th>
+                <th class="px-4 py-3 rounded-r-lg">总毛利（已减快递费+退款）</th>
+              </tr>
+            </thead>
+            <tbody id="monthlyTableBody" class="divide-y divide-gray-200 text-gray-600">
+              <tr class="text-center text-gray-400"><td colspan="6" class="py-6">暂无月度数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SKU年月度销量分析 -->
+      <div class="mt-12">
+        <!-- 新增：显示对比的两个月 -->
+        <h3 class="text-lg font-medium text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa fa-area-chart text-primary"></i>SKU年月度销量环比分析
+          <span id="compareMonthTip" class="text-sm text-gray-500 font-normal ml-2"></span>
+        </h3>
+        <div class="overflow-x-auto">
+          <table id="skuMonthlyCompareTable" class="w-full min-w-[800px] text-left">
+            <thead class="bg-gray-50 text-gray-700">
+              <tr>
+                <th class="px-4 py-3 rounded-l-lg">SKU编码</th>
+                <th class="px-4 py-3" id="prevMonthHeader">上月销量</th>
+                <th class="px-4 py-3" id="currentMonthHeader">本月销量</th>
+                <th class="px-4 py-3">环比变化率</th>
+                <th class="px-4 py-3">状态标注</th>
+                <th class="px-4 py-3 rounded-r-lg">运营建议</th>
+              </tr>
+            </thead>
+            <tbody id="skuCompareTableBody" class="divide-y divide-gray-200 text-gray-600">
+              <tr class="text-center text-gray-400"><td colspan="6" class="py-6">请选择年月并确保该月份和上个月都有SKU数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="mt-3 text-sm text-gray-500">
+          <i class="fa fa-info-circle mr-1"></i>
+          环比变化率计算规则：(本月销量-上月销量)/上月销量 × 100% | 
+          <span class="text-danger">↑>10%：热销增加备货量</span> | 
+          <span class="text-success">↓>10%：检查流量评论情况</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="text-center text-gray-500 py-6 text-sm">
+    沃尔玛SKU数据分析工具 | 本地存储版 | 数据永不丢失 | SKU销量环比分析 | 退款金额统计
+  </footer>
+
+  <script>
+    // 全局存储数据
+    let salesData1 = [];  // 销售表1
+    let salesData2 = [];  // 销售表2
+    let costMap = {};    
+    let itemIdToSkuMap = {}; // 新增：ITEM_ID 到 SKU 的映射表
+    let shippingData = []; // 快递费表原始数据（店铺级别）
+    let refundData = []; // 新增：退款表原始数据
+    let refundMap = {}; // 新增：SKU退款金额映射
+    let finalData = [];
+    let currentChart = { 
+      bar: null, 
+      pie: null,
+      line: null
+    };
+
+    // DOM元素
+    const monthPicker = document.getElementById('monthPicker');
+    const salesFile1 = document.getElementById('salesFile1');
+    const salesFile2 = document.getElementById('salesFile2');
+    const costFile = document.getElementById('costFile');
+    const shippingFile = document.getElementById('shippingFile');
+    const refundFile = document.getElementById('refundFile'); // 新增：退款表DOM
+    const exchangeRate = document.getElementById('exchangeRate');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const loadBtn = document.getElementById('loadBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const tip = document.getElementById('tip');
+    const summaryCards = document.getElementById('summaryCards');
+    const tableBody = document.getElementById('tableBody');
+    const monthlyTableBody = document.getElementById('monthlyTableBody');
+    const skuCompareTableBody = document.getElementById('skuCompareTableBody');
+    const totalShippingFee = document.getElementById('totalShippingFee');
+    const totalRefundFee = document.getElementById('totalRefundFee'); // 新增：总退款金额DOM
+    // 新增：对比月份的标题元素
+    const compareMonthTip = document.getElementById('compareMonthTip');
+    const prevMonthHeader = document.getElementById('prevMonthHeader');
+    const currentMonthHeader = document.getElementById('currentMonthHeader');
+
+    // 初始化：设置默认年月为当前月份
+    const now = new Date();
+    const currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    monthPicker.value = currentMonth;
+
+    // ==================== 本地化存储核心函数 ====================
+    const STORAGE_PREFIX = 'WALMART_SKU_DATA_';
+
+    function saveDataToMonth(month, data) {
+      localStorage.setItem(STORAGE_PREFIX + month, JSON.stringify(data));
+    }
+
+    function loadDataFromMonth(month) {
+      const data = localStorage.getItem(STORAGE_PREFIX + month);
+      return data ? JSON.parse(data) : null;
+    }
+
+    function clearMonthData(month) {
+      localStorage.removeItem(STORAGE_PREFIX + month);
+    }
+
+    function getAllMonthSalesData() {
+      const data = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key.startsWith(STORAGE_PREFIX)) {
+          const month = key.replace(STORAGE_PREFIX, '');
+          const monthData = JSON.parse(localStorage.getItem(key));
+          data.push({
+            month: month,
+            sales: monthData.totalSales || 0,
+            qty: monthData.totalQty || 0,
+            shippingFee: monthData.totalShippingFee || 0,
+            refundFee: monthData.totalRefundFee || 0, // 新增：退款金额
+            profit: monthData.totalProfit || 0,
+            skuDetails: monthData.finalData || [] // 保存SKU明细数据
+          });
+        }
+      }
+      return data.sort((a, b) => a.month.localeCompare(b.month));
+    }
+
+    // 【核心修改1】获取选中月份的上个月（格式：YYYY-MM）
+    function getPreviousMonth(selectedMonth) {
+      if (!selectedMonth) return null;
+      
+      const [year, month] = selectedMonth.split('-').map(Number);
+      const date = new Date(year, month - 1, 1); // 选中月份的1号
+      date.setMonth(date.getMonth() - 1); // 往前推一个月
+      
+      const prevYear = date.getFullYear();
+      const prevMonth = String(date.getMonth() + 1).padStart(2, '0');
+      return `${prevYear}-${prevMonth}`;
+    }
+
+    // 【核心修改2】基于选中月份和它的上个月生成对比数据
+    function getSkuMonthlyCompareData(selectedMonth) {
+      // 如果没选月份，直接返回空
+      if (!selectedMonth) return { data: [], prevMonth: '', currentMonth: '' };
+      
+      // 获取选中月份的上个月
+      const prevMonth = getPreviousMonth(selectedMonth);
+      const currentMonth = selectedMonth;
+      
+      // 加载两个月的数据
+      const currentData = loadDataFromMonth(currentMonth);
+      const prevData = loadDataFromMonth(prevMonth);
+      
+      // 校验：两个月都必须有数据
+      if (!currentData || !prevData || !currentData.finalData || !prevData.finalData) {
+        return { data: [], prevMonth, currentMonth };
+      }
+      
+      // 构建上月SKU销量映射
+      const prevSkuMap = {};
+      prevData.finalData.forEach(item => {
+        prevSkuMap[item.sku] = item.qty;
+      });
+      
+      // 合并两个月的所有SKU（避免漏项）
+      const allSkus = new Set([
+        ...currentData.finalData.map(item => item.sku),
+        ...prevData.finalData.map(item => item.sku)
+      ]);
+      
+      // 计算环比数据
+      const compareData = [];
+      allSkus.forEach(sku => {
+        const currentQty = currentData.finalData.find(item => item.sku === sku)?.qty || 0;
+        const prevQty = prevSkuMap[sku] || 0;
+        let changeRate = 0;
+        
+        if (prevQty > 0) {
+          changeRate = ((currentQty - prevQty) / prevQty) * 100;
+        } else if (currentQty > 0) {
+          changeRate = 100; // 上月无销量，本月有销量，按100%增长算
+        }
+        
+        // 确定状态和建议
+        let status = 'normal';
+        let statusText = '销量稳定';
+        let suggestion = '保持当前运营策略';
+        
+        if (changeRate > 10) {
+          status = 'increase';
+          statusText = `增长${changeRate.toFixed(2)}%`;
+          suggestion = '热销增加备货量';
+        } else if (changeRate < -10) {
+          status = 'decrease';
+          statusText = `下降${Math.abs(changeRate).toFixed(2)}%`;
+          suggestion = '检查流量评论情况';
+        }
+        
+        compareData.push({
+          sku: sku,
+          prevQty: prevQty,
+          currentQty: currentQty,
+          changeRate: changeRate,
+          status: status,
+          statusText: statusText,
+          suggestion: suggestion
+        });
+      });
+      
+      return { data: compareData, prevMonth, currentMonth };
+    }
+
+    // 【核心修改3】渲染SKU月度对比表格：基于选中月份和它的上个月
+    function renderSkuMonthlyCompareTable(selectedMonth) {
+      const { data: compareData, prevMonth, currentMonth } = getSkuMonthlyCompareData(selectedMonth);
+      
+      // 更新表头和提示文字
+      if (prevMonth && currentMonth) {
+        prevMonthHeader.textContent = `${prevMonth} 销量`;
+        currentMonthHeader.textContent = `${currentMonth} 销量`;
+        compareMonthTip.textContent = `（${prevMonth} → ${currentMonth}）`;
+      } else {
+        prevMonthHeader.textContent = '上月销量';
+        currentMonthHeader.textContent = '本月销量';
+        compareMonthTip.textContent = '';
+      }
+      
+      skuCompareTableBody.innerHTML = '';
+      
+      // 无数据时的提示（区分：没选月份 / 月份无数据）
+      if (!selectedMonth) {
+        skuCompareTableBody.innerHTML = '<tr class="text-center text-gray-400"><td colspan="6" class="py-6">请先选择要分析的年月</td></tr>';
+      } else if (compareData.length === 0) {
+        skuCompareTableBody.innerHTML = `<tr class="text-center text-gray-400"><td colspan="6" class="py-6">${prevMonth} 或 ${currentMonth} 暂无SKU数据，请先上传并分析这两个月的数据</td></tr>`;
+      } else {
+        // 有数据时渲染表格
+        compareData.forEach(item => {
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-gray-50 transition-colors';
+          
+          // 根据状态选择标签样式
+          let tagClass = 'normal-tag';
+          if (item.status === 'increase') tagClass = 'increase-tag';
+          if (item.status === 'decrease') tagClass = 'decrease-tag';
+          
+          tr.innerHTML = `
+            <td class="px-4 py-3 font-medium">${item.sku}</td>
+            <td class="px-4 py-3">${item.prevQty.toLocaleString()}</td>
+            <td class="px-4 py-3">${item.currentQty.toLocaleString()}</td>
+            <td class="px-4 py-3 ${item.changeRate > 10 ? 'text-danger font-medium' : item.changeRate < -10 ? 'text-success font-medium' : ''}">
+              ${item.changeRate > 0 ? '+' : ''}${item.changeRate.toFixed(2)}%
+            </td>
+            <td class="px-4 py-3"><span class="${tagClass}">${item.statusText}</span></td>
+            <td class="px-4 py-3 font-medium ${item.status === 'increase' ? 'text-danger' : item.status === 'decrease' ? 'text-success' : 'text-gray-600'}">
+              ${item.suggestion}
+            </td>
+          `;
+          skuCompareTableBody.appendChild(tr);
+        });
+      }
+    }
+
+    // ==================== 通用工具函数 ====================
+    // 读取Excel文件
+    async function readExcel(file) {
+      try {
+        const reader = new FileReader();
+        return new Promise((resolve, reject) => {
+          reader.onload = (e) => {
+            try {
+              const workbook = XLSX.read(e.target.result, { type: 'binary' });
+              const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+              const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+              resolve(jsonData || []);
+            } catch (err) {
+              reject('Excel解析失败，请检查文件格式');
+            }
+          };
+          reader.onerror = () => reject('文件读取失败');
+          reader.readAsBinaryString(file);
+        });
+      } catch (err) {
+        throw err;
+      }
+    }
+
+    // 提取销售表核心列
+    function extractTargetColumns(rawData) {
+      if (!Array.isArray(rawData)) return [];
+      return rawData.map(row => ({
+        sku: row['sku'] || row['SKU'] || row['编码'] || '',
+        qty: Number(row['qty'] || row['Qty'] || row['QTY'] || row['数量'] || 0),
+        itemCost: Number(row['Item Cost'] || row['item cost'] || row['ITEM COST'] || row['单价'] || 0)
+      })).filter(row => row.sku && row.sku.trim() !== '');
+    }
+
+    // 【核心修复】金额提取工具函数：处理带货币符号的金额
+    function extractAmount(amountRaw) {
+      if (amountRaw === undefined || amountRaw === null) return 0;
+      // 转字符串，去掉所有非数字、非小数点的内容（包括$、¥、逗号、空格等）
+      const amountStr = String(amountRaw).replace(/[^\d.]/g, '');
+      // 转数字，无效数字返回0
+      const amount = Number(amountStr);
+      return isNaN(amount) ? 0 : Math.max(0, amount);
+    }
+
+    // 【核心重写】退款表解析逻辑，适配你的表结构，处理带$的金额
+    function extractRefundColumns(rawData) {
+      console.log('==================== 退款金额计算开始 ====================');
+      
+      // 基础校验
+      if (!Array.isArray(rawData)) {
+        console.warn('退款表原始数据不是数组，返回空');
+        return { refundList: [], refundMap: {} };
+      }
+      if (Object.keys(itemIdToSkuMap).length === 0) {
+        console.warn('未加载SKU成本表，无ITEM_ID→SKU映射，无法计算退款金额');
+        return { refundList: [], refundMap: {} };
+      }
+
+      console.log('1. 退款表原始数据总行数：', rawData.length);
+      console.log('2. 可用的ITEM_ID→SKU映射总数：', Object.keys(itemIdToSkuMap).length);
+      console.log('3. 映射表内容：', itemIdToSkuMap);
+
+      const errorRows = []; // 存储有问题的行
+      const validRefundList = []; // 存储有效退款记录
+
+      // 遍历每一行退款数据
+      rawData.forEach((row, index) => {
+        const excelRowNum = index + 2; // Excel行号从2开始（表头是1）
+        console.log(`\n--- 处理第${excelRowNum}行 ---`);
+
+        // 1. 提取ITEM ID，优先匹配带空格的ITEM ID，兼容所有写法
+        const itemIdRaw = row['ITEM ID'] || row['ITEMID'] || row['ITEM_ID'] || row['Item ID'] || row['itemid'] || row['商品ID'] || row['产品ID'] || '';
+        // 统一处理：转字符串、去除所有空格、转大写，确保匹配准确
+        const itemId = String(itemIdRaw).replace(/\s+/g, '').toUpperCase().trim();
+        console.log(`提取的ITEM ID：原始值=${itemIdRaw}，处理后=${itemId}`);
+
+        // 2. 提取退货数量，严格数字处理
+        const quantityRaw = row['QUANTITY'] || row['Quantity'] || row['quantity'] || row['数量'] || row['退货数量'] || 0;
+        const quantity = isNaN(Number(quantityRaw)) ? 0 : Math.max(0, Number(quantityRaw));
+        console.log(`提取的退货数量：原始值=${quantityRaw}，处理后=${quantity}`);
+
+        // 3. 提取退款金额，优先匹配TOTAL_REFUND_AMOUNT，兼容所有写法，处理带$的金额
+        const orderAmountRaw = row['TOTAL_REFUND_AMOUNT'] || row['ORDER_AMOUNT'] || row['Order Amount'] || row['order_amount'] || row['订单金额'] || row['退款金额'] || row['金额'] || 0;
+        const orderAmount = extractAmount(orderAmountRaw); // 用工具函数处理带货币符号的金额
+        console.log(`提取的退款金额：原始值=${orderAmountRaw}，处理后=${orderAmount}`);
+
+        // 4. 匹配SKU
+        const sku = itemIdToSkuMap[itemId] || '';
+        console.log(`匹配到的SKU：${sku}`);
+
+        // 5. 校验有效性
+        let isValid = true;
+        let errorReason = '';
+
+        if (!itemId) {
+          isValid = false;
+          errorReason = 'ITEM ID为空';
+        } else if (!sku) {
+          isValid = false;
+          errorReason = 'ITEM ID无法匹配到SKU';
+        } else if (quantity <= 0) {
+          isValid = false;
+          errorReason = '退货数量≤0';
+        } else if (orderAmount <= 0) {
+          isValid = false;
+          errorReason = '退款金额≤0';
+        }
+
+        // 6. 处理结果
+        if (isValid) {
+          const singleRefundAmount = quantity * orderAmount;
+          validRefundList.push({
+            excelRowNum,
+            itemId,
+            sku,
+            quantity,
+            orderAmount,
+            singleRefundAmount
+          });
+          console.log(`✅ 该行有效，单条退款金额=${singleRefundAmount}`);
+        } else {
+          errorRows.push({
+            excelRowNum,
+            itemId,
+            sku,
+            quantityRaw,
+            orderAmountRaw,
+            errorReason
+          });
+          console.log(`❌ 该行无效，原因：${errorReason}`);
+        }
+      });
+
+      // 7. 按SKU汇总退款金额
+      const refundMap = {};
+      validRefundList.forEach(item => {
+        const sku = item.sku;
+        if (!refundMap[sku]) {
+          refundMap[sku] = 0;
+        }
+        refundMap[sku] += item.singleRefundAmount;
+      });
+
+      // 8. 计算总退款金额
+      const totalRefundAmount = Object.values(refundMap).reduce((sum, amount) => sum + amount, 0);
+
+      // 9. 输出最终结果
+      console.log('\n==================== 退款金额计算结果 ====================');
+      console.log('有效退款记录数：', validRefundList.length);
+      console.log('无效退款记录数：', errorRows.length);
+      console.log('SKU退款汇总表：', refundMap);
+      console.log('店铺总退款原始金额（未乘汇率）：', totalRefundAmount);
+      console.log('无效记录明细：', errorRows);
+      console.log('============================================================');
+
+      return {
+        refundList: validRefundList,
+        refundMap,
+        totalRefundAmount
+      };
+    }
+
+    // 核心：计算快递费（仅求和Net Payable列，店铺级别总和）
+    function calculateShippingFee(rawData) {
+      if (!Array.isArray(rawData) || rawData.length === 0) return 0;
+      
+      let totalNetPayable = 0;
+      // 遍历所有行，只累加Net Payable列的值
+      rawData.forEach(row => {
+        // 兼容各种列名写法（大小写、空格）
+        const netPayableValues = [
+          row['Net Payable'],
+          row['net payable'],
+          row['NET PAYABLE'],
+          row['NetPayable'],
+          row['快递费'],
+          row['运费']
+        ];
+        
+        // 找到第一个有效数值
+        let netPayable = 0;
+        for (const val of netPayableValues) {
+          if (val !== undefined && val !== null) {
+            netPayable = Number(val) || 0;
+            break;
+          }
+        }
+        
+        totalNetPayable += netPayable;
+      });
+      
+      return totalNetPayable;
+    }
+
+    // 新增：计算总退款金额，确保不会出现NaN
+    function calculateTotalRefund(refundMap) {
+      let total = 0;
+      Object.values(refundMap).forEach(amount => {
+        total += isNaN(Number(amount)) ? 0 : Number(amount);
+      });
+      return total;
+    }
+
+    // 销毁所有旧图表
+    function destroyCharts() {
+      if (currentChart.bar) currentChart.bar.destroy();
+      if (currentChart.pie) currentChart.pie.destroy();
+      if (currentChart.line) currentChart.line.destroy();
+    }
+
+    // ==================== 数据渲染函数 ====================
+    function renderAllData(result) {
+      destroyCharts();
+      finalData = result.finalData || [];
+      
+      // 更新汇总数据
+      document.getElementById('totalSales').textContent = `¥${(result.totalSales || 0).toFixed(2)}`;
+      document.getElementById('totalQty').textContent = (result.totalQty || 0).toLocaleString();
+      document.getElementById('totalCost').textContent = `¥${(result.totalCost || 0).toFixed(2)}`;
+      totalShippingFee.textContent = `¥${(result.totalShippingFee || 0).toFixed(2)}`;
+      totalRefundFee.textContent = `¥${(result.totalRefundFee || 0).toFixed(2)}`; // 新增：渲染总退款金额
+      document.getElementById('totalProfit').textContent = `¥${(result.totalProfit || 0).toFixed(2)}`;
+      
+      // 渲染SKU明细表格
+      tableBody.innerHTML = '';
+      if (finalData.length === 0) {
+        tableBody.innerHTML = '<tr class="text-center text-gray-400"><td colspan="7" class="py-6">暂无有效数据</td></tr>';
+      } else {
+        finalData.forEach(item => {
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-gray-50 transition-colors';
+          tr.innerHTML = `
+            <td class="px-4 py-3 font-medium">${item.sku}</td>
+            <td class="px-4 py-3">${item.qty}</td>
+            <td class="px-4 py-3 text-primary">¥${item.sales.toFixed(2)}</td>
+            <td class="px-4 py-3">¥${item.unitCost.toFixed(2)}</td>
+            <td class="px-4 py-3 text-warning">¥${item.totalSkuCost.toFixed(2)}</td>
+            <td class="px-4 py-3 text-refund">¥${(item.refundAmount || 0).toFixed(2)}</td>
+            <td class="px-4 py-3 text-danger">¥${(item.skuProfit || 0).toFixed(2)}</td>
+          `;
+          tableBody.appendChild(tr);
+        });
+      }
+
+      // 绘制柱状图（新增退款金额系列）
+      const skus = finalData.map(item => item.sku);
+      const sales = finalData.map(item => item.sales);
+      const costs = finalData.map(item => item.totalSkuCost);
+      const refunds = finalData.map(item => item.refundAmount || 0);
+
+      currentChart.bar = new Chart(document.getElementById('barChart'), {
+        type: 'bar',
+        data: { labels: skus, datasets: [
+          { label: '总销售额（已乘汇率）', data: sales, backgroundColor: '#165DFF' },
+          { label: '总SKU成本', data: costs, backgroundColor: '#FF7D00' },
+          { label: '退款金额（已乘汇率）', data: refunds, backgroundColor: '#9D2235' }
+        ]},
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+
+      // 绘制饼图
+      currentChart.pie = new Chart(document.getElementById('pieChart'), {
+        type: 'doughnut',
+        data: { labels: skus, datasets: [{
+          data: sales,
+          backgroundColor: ['#165DFF','#00B42A','#FF7D00','#F53F3F','#722ED1','#0FC6C2','#FFB400','#86909C']
+        }]},
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+
+      // 绘制折线图 + 渲染月度数据列表 + 渲染SKU月度对比表（传入选中的月份）
+      renderLineChart();
+      renderMonthlyDataTable();
+      renderSkuMonthlyCompareTable(monthPicker.value); // 关键：传入选中的月份
+      
+      summaryCards.classList.remove('hidden');
+    }
+
+    // 绘制月度销售额折线图
+    function renderLineChart() {
+      const data = getAllMonthSalesData();
+      const months = data.map(item => item.month);
+      const salesValues = data.map(item => item.sales);
+      const refundValues = data.map(item => item.refundFee); // 新增：退款金额
+
+      currentChart.line = new Chart(document.getElementById('lineChart'), {
+        type: 'line',
+        data: {
+          labels: months,
+          datasets: [{
+            label: '月度总销售额（已乘汇率）',
+            data: salesValues,
+            borderColor: '#165DFF',
+            backgroundColor: 'rgba(22, 93, 255, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }, {
+            label: '月度总退款金额（已乘汇率）',
+            data: refundValues,
+            borderColor: '#9D2235',
+            backgroundColor: 'rgba(157, 34, 53, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: { display: true, text: '沃尔玛各月销售额&退款金额变化趋势' },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return `¥${context.parsed.y.toFixed(2)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '¥' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // 渲染月度数据列表（新增退款列）
+    function renderMonthlyDataTable() {
+      const data = getAllMonthSalesData();
+      monthlyTableBody.innerHTML = '';
+      
+      if (data.length === 0) {
+        monthlyTableBody.innerHTML = '<tr class="text-center text-gray-400"><td colspan="6" class="py-6">暂无月度数据</td></tr>';
+        return;
+      }
+
+      data.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-gray-50 transition-colors';
+        tr.innerHTML = `
+          <td class="px-4 py-3 font-medium">${item.month}</td>
+          <td class="px-4 py-3 text-success">${item.qty.toLocaleString()}</td>
+          <td class="px-4 py-3 text-primary">¥${item.sales.toFixed(2)}</td>
+          <td class="px-4 py-3 text-info">¥${item.shippingFee.toFixed(2)}</td>
+          <td class="px-4 py-3 text-refund">¥${item.refundFee.toFixed(2)}</td>
+          <td class="px-4 py-3 text-danger">¥${item.profit.toFixed(2)}</td>
+        `;
+        monthlyTableBody.appendChild(tr);
+      });
+    }
+
+    // ==================== 核心业务逻辑 ====================
+    // 1. 销售表1上传
+    salesFile1.addEventListener('change', async (e) => {
+      if (!e.target.files.length) {
+        salesData1 = [];
+        tip.textContent = 'ℹ️ 销售表1已清空';
+        tip.className = 'text-sm text-gray-500 mt-3';
+        return;
+      }
+      try {
+        const raw = await readExcel(e.target.files[0]);
+        salesData1 = extractTargetColumns(raw);
+        tip.textContent = `✅ 销售表1加载完成：${salesData1.length}条有效SKU数据`;
+        tip.className = 'text-sm text-success mt-3';
+      } catch (e) {
+        salesData1 = [];
+        tip.textContent = `❌ 销售表1读取失败：${e}`;
+        tip.className = 'text-sm text-danger mt-3';
+      }
+    });
+
+    // 2. 销售表2上传
+    salesFile2.addEventListener('change', async (e) => {
+      if (!e.target.files.length) {
+        salesData2 = [];
+        tip.textContent = 'ℹ️ 销售表2已清空';
+        tip.className = 'text-sm text-gray-500 mt-3';
+        return;
+      }
+      try {
+        const raw = await readExcel(e.target.files[0]);
+        salesData2 = extractTargetColumns(raw);
+        tip.textContent = `✅ 销售表2加载完成：${salesData2.length}条有效SKU数据`;
+        tip.className = 'text-sm text-success mt-3';
+      } catch (e) {
+        salesData2 = [];
+        tip.textContent = `❌ 销售表2读取失败：${e}`;
+        tip.className = 'text-sm text-danger mt-3';
+      }
+    });
+
+    // 3. 成本表上传（优化ITEM_ID匹配逻辑，去除空格、转大写）
+    costFile.addEventListener('change', async (e) => {
+      if (!e.target.files.length) {
+        costMap = {};
+        itemIdToSkuMap = {}; // 清空映射表
+        tip.textContent = 'ℹ️ 成本表已清空';
+        tip.className = 'text-sm text-gray-500 mt-3';
+        return;
+      }
+      try {
+        const data = await readExcel(e.target.files[0]);
+        costMap = {};
+        itemIdToSkuMap = {}; // 初始化映射表
+        
+        console.log('成本表原始数据：', data);
+        
+        if (Array.isArray(data)) {
+          data.forEach(item => {
+            // 1. 提取SKU
+            const skuRaw = item['sku'] || item['SKU'] || item['编码'] || '';
+            const sku = typeof skuRaw === 'string' ? skuRaw.trim() : '';
+            
+            // 2. 提取ITEM_ID，优先匹配ITEM_ID，兼容所有写法，统一处理
+            const itemIdRaw = item['ITEM_ID'] || item['ITEMID'] || item['ITEM ID'] || item['Item ID'] || item['itemid'] || item['商品ID'] || item['产品ID'] || '';
+            // 统一处理：转字符串、去除所有空格、转大写，确保和退款表匹配准确
+            const itemId = String(itemIdRaw).replace(/\s+/g, '').toUpperCase().trim();
+            
+            // 3. 提取成本
+            const cost = Number(item['成本']) || Number(item['单价']) || Number(item['ORDER_AMOUNT']) || 0;
+            
+            // 4. 建立映射
+            if (sku && itemId) {
+              costMap[sku] = cost;
+              itemIdToSkuMap[itemId] = sku;
+            }
+          });
+        }
+        
+        console.log('成本映射表：', costMap);
+        console.log('ITEM_ID→SKU映射表：', itemIdToSkuMap);
+        
+        tip.textContent = `✅ 成本表加载完成：${Object.keys(costMap).length}个SKU成本数据，${Object.keys(itemIdToSkuMap).length}个ITEM_ID映射关系`;
+        tip.className = 'text-sm text-success mt-3';
+      } catch (e) {
+        costMap = {};
+        itemIdToSkuMap = {}; // 清空映射表
+        tip.textContent = `❌ 成本表读取失败：${e}`;
+        tip.className = 'text-sm text-danger mt-3';
+      }
+    });
+
+    // 4. 海外快递费表格上传（店铺级别总和）
+    shippingFile.addEventListener('change', async (e) => {
+      if (!e.target.files.length) {
+        shippingData = [];
+        tip.textContent = 'ℹ️ 海外快递费表已清空';
+        tip.className = 'text-sm text-gray-500 mt-3';
+        return;
+      }
+      try {
+        const raw = await readExcel(e.target.files[0]);
+        shippingData = raw; 
+        const totalNetPayable = calculateShippingFee(raw);
+        tip.textContent = `✅ 海外快递费表加载完成：Net Payable总和 = ${totalNetPayable.toFixed(2)}`;
+        tip.className = 'text-sm text-success mt-3';
+      } catch (e) {
+        shippingData = [];
+        tip.textContent = `❌ 海外快递费表读取失败：${e}`;
+        tip.className = 'text-sm text-danger mt-3';
+      }
+    });
+
+    // 【核心重写】退款表上传，使用新的解析逻辑
+    refundFile.addEventListener('change', async (e) => {
+      if (!e.target.files.length) {
+        refundData = [];
+        refundMap = {};
+        tip.textContent = 'ℹ️ 退款表已清空';
+        tip.className = 'text-sm text-gray-500 mt-3';
+        return;
+      }
+      
+      // 校验：是否已加载成本表
+      if (Object.keys(itemIdToSkuMap).length === 0) {
+        tip.textContent = '❌ 请先上传包含ITEM_ID的SKU成本表，再上传退款表！';
+        tip.className = 'text-sm text-danger mt-3';
+        return;
+      }
+      
+      try {
+        const raw = await readExcel(e.target.files[0]);
+        const { refundList, refundMap: map, totalRefundAmount } = extractRefundColumns(raw);
+        refundData = refundList;
+        refundMap = map;
+        
+        // 提示信息
+        if (refundList.length === 0) {
+          tip.textContent = `⚠️ 退款表加载完成，无有效退款记录（请检查ITEM ID是否匹配、数量/金额是否有效），总退款金额 = 0.00`;
+          tip.className = 'text-sm text-warning mt-3';
+        } else {
+          tip.textContent = `✅ 退款表加载完成：${refundList.length}条有效退款记录，总退款原始金额 = ${totalRefundAmount.toFixed(2)}`;
+          tip.className = 'text-sm text-success mt-3';
+        }
+      } catch (e) {
+        refundData = [];
+        refundMap = {};
+        tip.textContent = `❌ 退款表读取失败：${e}`;
+        tip.className = 'text-sm text-danger mt-3';
+      }
+    });
+
+    // 【核心修复】分析并保存数据，优化退款金额计算
+    async function analyzeAndSave() {
+      const month = monthPicker.value;
+      if (!month) { 
+        tip.textContent = '❌ 请选择年月！'; 
+        tip.className = 'text-sm text-danger mt-3';
+        return; 
+      }
+
+      // 校验：至少有一个销售表 + 成本表 + 快递费表
+      const hasSalesData = salesData1.length > 0 || salesData2.length > 0;
+      const hasCostData = Object.keys(costMap).length > 0;
+      const hasShippingData = shippingData.length > 0;
+      
+      if (!hasSalesData) {
+        tip.textContent = '❌ 请至少上传一个沃尔玛销售表！';
+        tip.className = 'text-sm text-danger mt-3';
+        return;
+      }
+      if (!hasCostData) {
+        tip.textContent = '❌ 请上传SKU成本表！';
+        tip.className = 'text-sm text-danger mt-3';
+        return;
+      }
+      if (!hasShippingData) {
+        tip.textContent = '❌ 请上传海外快递费表！';
+        tip.className = 'text-sm text-danger mt-3';
+        return;
+      }
+
+      const rate = parseFloat(exchangeRate.value) || 1;
+      const skuMap = {};
+
+      // 合并销售表数据
+      const allSalesData = [...salesData1, ...salesData2].filter(item => item.sku);
+      
+      // 计算销售额/销量（按SKU汇总）
+      allSalesData.forEach(item => {
+        const sku = item.sku.trim();
+        const qty = Number(item.qty) || 0;
+        const itemCost = Number(item.itemCost) || 0;
+        const salesAmount = qty * itemCost * rate;
+        
+        if (!skuMap[sku]) {
+          skuMap[sku] = { qty: 0, totalSales: 0 };
+        }
+        skuMap[sku].qty += qty;
+        skuMap[sku].totalSales += salesAmount;
+      });
+
+      // 生成SKU明细数据
+      finalData = [];
+      let totalSales=0, totalQty=0, totalCost=0;
+      
+      // 计算总退款金额（已乘汇率）
+      const totalRefundBeforeRate = calculateTotalRefund(refundMap);
+      const totalRefundFeeVal = totalRefundBeforeRate * rate;
+      
+      Object.keys(skuMap).forEach(sku => {
+        const qty = skuMap[sku].qty;
+        const sales = skuMap[sku].totalSales;
+        const unitCost = costMap[sku] || 0;
+        const totalSkuCost = qty * unitCost;
+        // SKU退款金额（已乘汇率）
+        const skuRefundBeforeRate = refundMap[sku] || 0;
+        const refundAmount = skuRefundBeforeRate * rate;
+        // SKU毛利 = 销售额 - SKU成本 - 退款金额
+        const skuProfit = sales - totalSkuCost - refundAmount;
+        
+        finalData.push({ 
+          sku, 
+          qty, 
+          sales, 
+          unitCost, 
+          totalSkuCost,
+          refundAmount,
+          skuProfit
+        });
+        totalSales += sales; 
+        totalQty += qty; 
+        totalCost += totalSkuCost;
+      });
+
+      // 计算店铺快递费
+      const totalNetPayable = calculateShippingFee(shippingData);
+      const totalShippingFeeVal = totalNetPayable * rate;
+      
+      // 总毛利 = 总销售额 - 总SKU成本 - 快递费 - 总退款金额
+      const totalProfit = totalSales - totalCost - totalShippingFeeVal - totalRefundFeeVal;
+
+      // 保存到本地存储
+      const result = { 
+        finalData, 
+        totalSales, 
+        totalQty, 
+        totalCost, 
+        totalShippingFee: totalShippingFeeVal,
+        totalRefundFee: totalRefundFeeVal,
+        totalProfit, 
+        rate 
+      };
+      saveDataToMonth(month, result);
+      renderAllData(result);
+      
+      // 最终提示
+      if (totalRefundFeeVal > 0) {
+        tip.textContent = `✅ ${month} 数据汇总完成（有效SKU：${finalData.length}个），快递费总和：¥${totalShippingFeeVal.toFixed(2)}，总退款金额：¥${totalRefundFeeVal.toFixed(2)}，已保存/覆盖！`;
+      } else {
+        tip.textContent = `✅ ${month} 数据汇总完成（有效SKU：${finalData.length}个），快递费总和：¥${totalShippingFeeVal.toFixed(2)}，无有效退款数据，已保存/覆盖！`;
+      }
+      tip.className = 'text-sm text-success mt-3';
+    }
+
+    // 7. 加载当月已存数据
+    function loadMonthData() {
+      const month = monthPicker.value;
+      const data = loadDataFromMonth(month);
+      if (!data) {
+        tip.textContent = `❌ ${month} 暂无存储数据`;
+        tip.className = 'text-sm text-danger mt-3';
+        summaryCards.classList.add('hidden');
+        destroyCharts();
+        renderLineChart();
+        renderMonthlyDataTable();
+        renderSkuMonthlyCompareTable(month);
+        return;
+      }
+      renderAllData(data);
+      exchangeRate.value = data.rate || 1;
+      tip.textContent = `✅ ${month} 数据加载完成`;
+      tip.className = 'text-sm text-success mt-3';
+    }
+
+    // 8. 清空当月数据
+    function handleClear() {
+      const month = monthPicker.value;
+      if (!confirm(`确定清空 ${month} 的所有数据吗？`)) return;
+      clearMonthData(month);
+      destroyCharts();
+      renderLineChart();
+      renderMonthlyDataTable();
+      renderSkuMonthlyCompareTable(month);
+      summaryCards.classList.add('hidden');
+      tableBody.innerHTML = '<tr class="text-center text-gray-400"><td colspan="7" class="py-6">请选择年月并加载/分析数据</td></tr>';
+      tip.textContent = `✅ ${month} 数据已清空`;
+      tip.className = 'text-sm text-success mt-3';
+    }
+
+    // 绑定按钮事件
+    analyzeBtn.addEventListener('click', analyzeAndSave);
+    loadBtn.addEventListener('click', loadMonthData);
+    clearBtn.addEventListener('click', handleClear);
+    
+    // 切换年月时，重新渲染对比表格
+    monthPicker.addEventListener('change', function() {
+      loadMonthData();
+      renderSkuMonthlyCompareTable(this.value);
+    });
+
+    // 页面初始化
+    window.addEventListener('load', () => {
+      renderLineChart();
+      renderMonthlyDataTable();
+      renderSkuMonthlyCompareTable(monthPicker.value);
+    });
+  </script>
+</body>
+</html>

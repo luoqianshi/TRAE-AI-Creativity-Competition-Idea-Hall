@@ -1,0 +1,3635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="Flash游戏联机复活 - 使用Ruffle运行SWF游戏，支持多人在线对战">
+    <title>Flash游戏联机复活 - FireIce Online</title>
+    <script>
+    // Ruffle配置 - 在脚本加载后设置
+    window.RufflePlayer = window.RufflePlayer || {};
+    window.RufflePlayer.config = {
+        autoplay: 'on',
+        unmuteOverlay: 'visible',
+        backgroundColor: '#000000',
+        letterbox: 'on',
+        upgradeToHttps: true,
+        allowNetworking: 'none',
+        openUrlMode: 'deny',
+        allowScriptAccess: 'sameDomain',
+        quality: 'high',
+        scale: 'showAll',
+        menu: true,
+        wmode: 'window',
+        warnOnUnsupportedContent: false,
+        showSwfDownload: false
+    };
+
+    (function loadRuffleRuntime() {
+        const basePath = (() => {
+            const pathname = String(location.pathname || '/');
+            if (!pathname || pathname === '/') return '';
+            const normalized = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+            if (!normalized) return '';
+
+            const lastSlash = normalized.lastIndexOf('/');
+            const tail = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+            if (tail.includes('.')) {
+                return lastSlash <= 0 ? '' : normalized.slice(0, lastSlash);
+            }
+            return normalized;
+        })();
+
+        const sources = [
+            `${basePath}/node_modules/@ruffle-rs/ruffle/ruffle.js`,
+            'https://cdn.jsdelivr.net/npm/@ruffle-rs/ruffle/ruffle.js',
+            'https://unpkg.com/@ruffle-rs/ruffle/ruffle.js',
+            'https://fastly.jsdelivr.net/npm/@ruffle-rs/ruffle/ruffle.js'
+        ];
+
+        const sourceTimeoutMs = 4500;
+
+        const tryLoad = (index, resolve, reject) => {
+            if (index >= sources.length) {
+                reject(new Error('Ruffle 运行时加载失败：所有来源均不可用'));
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = sources[index];
+            script.async = true;
+
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                script.remove();
+                tryLoad(index + 1, resolve, reject);
+            }, sourceTimeoutMs);
+
+            script.onload = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                window.__ruffleRuntimeSource = sources[index];
+                console.info('[Ruffle] Runtime loaded from:', sources[index]);
+                resolve();
+            };
+            script.onerror = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                console.warn('[Ruffle] Failed source:', sources[index]);
+                script.remove();
+                tryLoad(index + 1, resolve, reject);
+            };
+
+            document.head.appendChild(script);
+        };
+
+        window.__ruffleLoadPromise = new Promise((resolve, reject) => {
+            tryLoad(0, resolve, reject);
+        });
+    })();
+    </script>
+    <style>
+        :root {
+            --primary: #4a90e2;
+            --primary-dark: #357abd;
+            --success: #4caf50;
+            --danger: #f44336;
+            --warning: #ff9800;
+            --bg-dark: #1a1a2e;
+            --bg-card: #16213e;
+            --bg-input: #0f3460;
+            --text: #eaeaea;
+            --text-muted: #a0a0a0;
+            --border: #2a2a4a;
+            --shadow: 0 4px 20px rgba(0,0,0,0.3);
+            --radius: 12px;
+            --transition: 0.3s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        :root {
+            --app-height: 100dvh;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .app-container {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 大厅界面 */
+        .lobby-screen {
+            display: flex;
+            width: 100%;
+            min-height: 100vh;
+        }
+
+        .lobby-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+            background: linear-gradient(135deg, var(--bg-dark) 0%, #1f1f3d 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .lobby-left::before {
+            content: '';
+            position: absolute;
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(74,144,226,0.15) 0%, transparent 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 2rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .logo h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, var(--primary), #00d4ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+
+        .logo p {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .lobby-form {
+            width: 100%;
+            max-width: 400px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .form-group {
+            margin-bottom: 1.2rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.8rem 1rem;
+            background: var(--bg-input);
+            border: 2px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            font-size: 1rem;
+            transition: var(--transition);
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(74,144,226,0.2);
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            height: 50px;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+            z-index: 1;
+        }
+
+        .file-input-display {
+            position: relative;
+            padding: 0.8rem 1rem;
+            background: var(--bg-input);
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            text-align: center;
+            color: var(--text-muted);
+            transition: var(--transition);
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .file-input-wrapper:hover .file-input-display {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .btn {
+            position: relative;
+            z-index: 10;
+            padding: 0.8rem 1.5rem;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow);
+        }
+
+        .btn-secondary {
+            background: var(--bg-input);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }
+
+        .btn-group .btn {
+            flex: 1;
+        }
+
+        /* 右侧介绍 */
+        .lobby-right {
+            width: 400px;
+            background: var(--bg-card);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid var(--border);
+        }
+
+        .feature-list {
+            list-style: none;
+        }
+
+        .feature-list li {
+            padding: 0.8rem 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .feature-list li:last-child {
+            border-bottom: none;
+        }
+
+        .feature-icon {
+            width: 36px;
+            height: 36px;
+            background: rgba(74,144,226,0.2);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+
+        /* 游戏界面 */
+        .game-screen {
+            display: none;
+            width: 100%;
+            height: 100vh;
+        }
+
+        .game-screen.active {
+            display: flex;
+        }
+
+        /* 游戏主区域 */
+        .game-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #000;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.8rem 1.5rem;
+            background: linear-gradient(135deg, var(--bg-card) 0%, #1a2a4a 100%);
+            border-bottom: 1px solid var(--border);
+            z-index: 10;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 20px rgba(0,0,0,0.3);
+        }
+
+        .room-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .room-code-info {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .room-code-label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .room-code {
+            font-size: 1.4rem;
+            font-weight: bold;
+            color: var(--primary);
+            letter-spacing: 3px;
+            text-shadow: 0 0 10px rgba(74, 144, 226, 0.5);
+            background: rgba(74, 144, 226, 0.15);
+            padding: 0.4rem 0.8rem;
+            border-radius: 8px;
+            border: 1px solid rgba(74, 144, 226, 0.3);
+        }
+
+        .room-tip {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            background: linear-gradient(135deg, rgba(74, 144, 226, 0.15) 0%, rgba(74, 144, 226, 0.05) 100%);
+            padding: 0.4rem 0.8rem;
+            border-radius: 8px;
+            border: 1px solid rgba(74, 144, 226, 0.2);
+        }
+
+        .copy-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0.4rem;
+            font-size: 1rem;
+            transition: var(--transition);
+        }
+
+        .copy-btn:hover {
+            color: var(--primary);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--bg-input) 0%, #1a2a4a 100%);
+            border: 1px solid rgba(74, 144, 226, 0.3);
+            color: var(--text);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .icon-btn:hover {
+            background: linear-gradient(135deg, var(--primary) 0%, #357abd 100%);
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 144, 226, 0.4);
+        }
+
+        .icon-btn:active {
+            transform: translateY(0);
+        }
+
+        .game-wrapper {
+            flex: 1;
+            position: relative;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .game-wrapper ruffle-player {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 性能HUD */
+        .perf-hud {
+            position: absolute;
+            top: 74px;
+            right: 10px;
+            left: auto;
+            display: flex;
+            gap: 10px;
+            z-index: 12;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            opacity: 0;
+            visibility: hidden;
+        }
+
+        .perf-hud.is-visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        body.fullscreen-active .perf-hud {
+            top: 12px;
+            left: 12px;
+            right: auto;
+            z-index: 60;
+        }
+
+        .fullscreen-overlay {
+            position: absolute;
+            inset: 0;
+            display: none;
+            pointer-events: none;
+            z-index: 40;
+        }
+
+        .fullscreen-overlay.active {
+            display: block;
+        }
+
+        .fullscreen-controls {
+            position: absolute;
+            right: max(10px, env(safe-area-inset-right, 0px));
+            top: calc(12px + env(safe-area-inset-top, 0px));
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: auto;
+        }
+
+        .fullscreen-overlay.non-fullscreen .fullscreen-controls {
+            top: max(86px, calc(86px + env(safe-area-inset-top, 0px)));
+        }
+
+        .fullscreen-control-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--bg-input) 0%, #1a2a4a 100%);
+            border: 1px solid rgba(74, 144, 226, 0.3);
+            color: var(--text);
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: opacity 0.2s ease;
+        }
+
+        .fullscreen-control-btn.active {
+            color: var(--primary);
+            border-color: var(--primary);
+        }
+
+        .fullscreen-overlay.non-fullscreen .perf-hud { opacity: 0.72; }
+
+        .fullscreen-overlay.non-fullscreen .fullscreen-control-btn {
+            opacity: 0.66;
+        }
+
+        .fullscreen-overlay.non-fullscreen .fullscreen-control-btn:hover,
+        .fullscreen-overlay.non-fullscreen .fullscreen-control-btn.active {
+            opacity: 0.92;
+        }
+
+        .fullscreen-chat-ticker {
+            position: absolute;
+            left: max(10px, env(safe-area-inset-left, 0px));
+            right: max(56px, calc(56px + env(safe-area-inset-right, 0px)));
+            top: calc(10px + env(safe-area-inset-top, 0px));
+            display: none;
+            pointer-events: auto;
+            background: rgba(0,0,0,0.52);
+            border: 1px solid rgba(74, 144, 226, 0.3);
+            border-radius: 10px;
+            padding: 6px 10px;
+            backdrop-filter: blur(8px);
+            max-height: 88px;
+            overflow: hidden;
+        }
+
+        .fullscreen-chat-ticker.visible {
+            display: block;
+        }
+
+        .fullscreen-chat-line {
+            font-size: 0.78rem;
+            line-height: 1.25;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .fullscreen-chat-line + .fullscreen-chat-line {
+            margin-top: 4px;
+        }
+
+        .fullscreen-chat-line .name {
+            color: var(--primary);
+            margin-right: 6px;
+        }
+
+        .perf-stat {
+            background: rgba(0,0,0,0.6);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-family: monospace;
+        }
+
+        .perf-stat span {
+            color: var(--success);
+        }
+
+        /* 侧边栏 */
+        .game-sidebar {
+            width: 300px;
+            background: linear-gradient(135deg, var(--bg-card) 0%, #1a2a4a 100%);
+            border-left: 1px solid rgba(74, 144, 226, 0.2);
+            display: flex;
+            flex-direction: column;
+            transition: var(--transition);
+            backdrop-filter: blur(10px);
+            box-shadow: -5px 0 30px rgba(0,0,0,0.3);
+        }
+
+        .sidebar-tabs {
+            display: flex;
+            border-bottom: 1px solid rgba(74, 144, 226, 0.2);
+            background: rgba(0,0,0,0.2);
+        }
+
+        .sidebar-tab {
+            flex: 1;
+            padding: 1.2rem 0.5rem;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            position: relative;
+            backdrop-filter: blur(10px);
+        }
+
+        .sidebar-tab.active {
+            color: var(--primary);
+            background: rgba(74, 144, 226, 0.1);
+        }
+
+        .sidebar-tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            width: 60%;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--primary), transparent);
+            transform: translateX(-50%);
+            border-radius: 2px;
+        }
+
+        .sidebar-tab:hover {
+            background: rgba(74, 144, 226, 0.05);
+            color: var(--text);
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .sidebar-panel {
+            display: none;
+        }
+
+        .sidebar-panel.active {
+            display: block;
+        }
+
+        /* 玩家列表 */
+        .player-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 0.8rem;
+            background: var(--bg-input);
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+        }
+
+        .player-badge.host {
+            border: 1px solid var(--warning);
+            background: rgba(255,152,0,0.1);
+        }
+
+        .role-badge {
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--primary);
+        }
+
+        .role-badge.p1 { background: #ff6b6b; }
+        .role-badge.p2 { background: #4ecdc4; }
+
+        /* 聊天 */
+        .chat-messages {
+            height: 200px;
+            overflow-y: auto;
+            background: var(--bg-input);
+            border-radius: 8px;
+            padding: 0.8rem;
+            margin-bottom: 0.8rem;
+        }
+
+        .chat-message {
+            margin-bottom: 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .chat-message .name {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .chat-message .time {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            margin-left: 0.5rem;
+        }
+
+        .chat-input-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .chat-input-group input {
+            flex: 1;
+            padding: 0.6rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+        }
+
+        .chat-input-group input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* 设置面板 */
+        .setting-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .setting-section h4 {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .setting-item {
+            margin-bottom: 1rem;
+        }
+
+        .setting-item label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.4rem;
+            font-size: 0.9rem;
+        }
+
+        .setting-item .value {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            background: var(--bg-input);
+            border-radius: 3px;
+            outline: none;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        select.form-control {
+            cursor: pointer;
+        }
+
+        /* 键位设置 */
+        .key-binding-section {
+            margin-bottom: 1.2rem;
+        }
+
+        .key-binding-section h5 {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.6rem;
+        }
+
+        .key-binding-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            background: var(--bg-input);
+            border-radius: 6px;
+            margin-bottom: 0.4rem;
+        }
+
+        .key-binding-name {
+            font-size: 0.85rem;
+        }
+
+        .key-tags {
+            display: flex;
+            gap: 0.3rem;
+            flex-wrap: wrap;
+        }
+
+        .key-tag {
+            padding: 3px 8px;
+            background: var(--primary);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .key-tag:hover {
+            background: var(--primary-dark);
+        }
+
+        .key-tag.listening {
+            animation: pulse 0.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .btn-add-key {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            background: var(--border);
+            border: none;
+            color: var(--text);
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+        }
+
+        .btn-add-key:hover {
+            background: var(--primary);
+        }
+
+        .btn-delete-key {
+            background: none;
+            border: none;
+            color: var(--danger);
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-left: 0.3rem;
+        }
+
+        .btn-reset {
+            width: 100%;
+            margin-top: 1rem;
+            padding: 0.6rem;
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .btn-reset:hover {
+            background: #d32f2f;
+        }
+
+        .action-editor {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.6rem;
+            align-items: center;
+        }
+
+        .action-editor .form-control {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .action-editor-tip {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 0.8rem;
+        }
+
+        .ruffle-save-module {
+            background: linear-gradient(180deg, rgba(15, 52, 96, 0.38) 0%, rgba(10, 38, 72, 0.34) 100%);
+            border: 1px solid rgba(74, 144, 226, 0.24);
+            border-radius: 10px;
+            padding: 0.62rem 0.68rem;
+        }
+
+        .ruffle-save-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.45rem;
+            margin-bottom: 0.42rem;
+        }
+
+        .ruffle-save-title {
+            font-size: 0.86rem;
+            color: var(--text);
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .ruffle-save-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.16rem 0.44rem;
+            border-radius: 999px;
+            font-size: 0.68rem;
+            letter-spacing: 0.2px;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }
+
+        .ruffle-save-badge.is-info {
+            background: rgba(74, 144, 226, 0.12);
+            color: rgba(180, 215, 255, 0.95);
+            border-color: rgba(74, 144, 226, 0.3);
+        }
+
+        .ruffle-save-badge.is-waiting {
+            background: rgba(245, 166, 35, 0.12);
+            color: rgba(255, 214, 138, 0.96);
+            border-color: rgba(245, 166, 35, 0.32);
+        }
+
+        .ruffle-save-badge.is-ready {
+            background: rgba(80, 227, 194, 0.12);
+            color: rgba(164, 245, 227, 0.96);
+            border-color: rgba(80, 227, 194, 0.32);
+        }
+
+        .ruffle-save-status {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 0.45rem;
+            line-height: 1.45;
+        }
+
+        .ruffle-save-steps {
+            margin: 0;
+            padding-left: 1.2rem;
+            color: var(--text-muted);
+            font-size: 0.73rem;
+            line-height: 1.35;
+            background: rgba(10, 38, 72, 0.42);
+            border: 1px solid rgba(74, 144, 226, 0.2);
+            border-radius: 7px;
+            padding: 0.4rem 0.55rem 0.4rem 1.25rem;
+        }
+
+        .ruffle-save-steps li + li {
+            margin-top: 0.22rem;
+        }
+
+        @media screen and (max-width: 520px) {
+            .ruffle-save-module {
+                padding: 0.56rem 0.6rem;
+            }
+
+            .ruffle-save-title {
+                font-size: 0.82rem;
+            }
+
+            .ruffle-save-badge {
+                font-size: 0.64rem;
+                padding: 0.14rem 0.4rem;
+            }
+
+            .ruffle-save-status {
+                font-size: 0.72rem;
+            }
+
+            .ruffle-save-steps {
+                font-size: 0.7rem;
+            }
+        }
+
+        /* 移动端虚拟按键 */
+        .virtual-controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+            display: none;
+            pointer-events: none;
+            z-index: 20;
+            background: linear-gradient(to top, rgba(0,0,0,0.34) 0%, rgba(0,0,0,0.08) 45%, transparent 100%);
+        }
+
+        .virtual-controls.hidden {
+            display: none;
+        }
+
+        .v-btn-lane {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 12px;
+            pointer-events: none;
+        }
+
+        .v-btn-stack {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            max-width: 48%;
+            pointer-events: none;
+        }
+
+        .v-btn-stack-left {
+            justify-content: flex-start;
+        }
+
+        .v-btn-stack-right {
+            justify-content: flex-end;
+        }
+
+        .v-btn {
+            width: 62px;
+            height: 62px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(74, 144, 226, 0.6) 0%, rgba(74, 144, 226, 0.3) 100%);
+            border: 2px solid rgba(255,255,255,0.4);
+            color: white;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            pointer-events: auto;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        .v-btn-jump {
+            width: 72px;
+            height: 72px;
+            background: linear-gradient(135deg, rgba(76, 175, 80, 0.78) 0%, rgba(69, 160, 73, 0.5) 100%);
+            border-color: rgba(255,255,255,0.52);
+            box-shadow: 0 10px 28px rgba(76, 175, 80, 0.35);
+        }
+
+        .v-btn:active, .v-btn.active {
+            background: linear-gradient(135deg, rgba(74, 144, 226, 0.9) 0%, rgba(74, 144, 226, 0.6) 100%);
+            transform: scale(0.92);
+            box-shadow: 0 12px 30px rgba(74, 144, 226, 0.5);
+            border-color: rgba(255,255,255,0.6);
+        }
+
+        .v-btn-jump:active, .v-btn-jump.active {
+            background: linear-gradient(135deg, rgba(76, 175, 80, 0.95) 0%, rgba(69, 160, 73, 0.72) 100%);
+            box-shadow: 0 12px 30px rgba(76, 175, 80, 0.45);
+        }
+
+        /* 移动端底部工具栏 */
+        .mobile-toolbar {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border);
+            padding: 0.5rem;
+            z-index: 50;
+        }
+
+        .mobile-toolbar.visible {
+            display: flex;
+            justify-content: space-around;
+        }
+
+        .mobile-toolbar button {
+            background: none;
+            border: none;
+            color: var(--text);
+            padding: 0.5rem;
+            font-size: 1.2rem;
+            cursor: pointer;
+        }
+
+        .mobile-toolbar button.active {
+            color: var(--primary);
+        }
+
+        /* 模态框 */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            padding: 1rem;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            width: 100%;
+            max-width: 400px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        /* 通知 */
+        .notification {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            background: var(--bg-card);
+            padding: 1rem 2rem;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            z-index: 300;
+            max-width: min(92vw, 560px);
+            text-align: center;
+            pointer-events: none;
+            transition: transform 0.3s ease;
+        }
+
+        .notification.show {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .notification.error {
+            border-left: 4px solid var(--danger);
+        }
+
+        .notification.success {
+            border-left: 4px solid var(--success);
+        }
+
+        /* 连接状态 */
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+        }
+
+        .connection-status.connected {
+            background: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+
+        .connection-status.disconnected {
+            background: rgba(244, 67, 54, 0.2);
+            color: var(--danger);
+        }
+
+        .connection-status.connecting {
+            background: rgba(255, 152, 0, 0.2);
+            color: var(--warning);
+        }
+
+        /* 横屏提示 */
+        .landscape-warning {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-dark);
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .landscape-warning svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 1rem;
+            animation: rotate 2s ease-in-out infinite;
+        }
+
+        @keyframes rotate {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(90deg); }
+        }
+
+        /* 响应式布局 */
+        @media screen and (max-width: 900px) {
+            .lobby-right {
+                display: none;
+            }
+
+            .game-header {
+                padding: 0.55rem 0.75rem;
+            }
+
+            .room-info {
+                gap: 0.45rem;
+                min-width: 0;
+            }
+
+            .room-code-label {
+                font-size: 0.8rem;
+            }
+
+            .room-code {
+                font-size: 1.05rem;
+                letter-spacing: 1px;
+                max-width: 120px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .room-tip {
+                display: none;
+            }
+
+            .connection-status {
+                font-size: 0.68rem;
+                padding: 3px 8px;
+            }
+
+            .game-sidebar {
+                position: fixed;
+                right: -100%;
+                top: 0;
+                bottom: 0;
+                width: 80%;
+                max-width: 300px;
+                z-index: 100;
+            }
+
+            .game-sidebar.active {
+                right: 0;
+            }
+
+            .mobile-toolbar.visible {
+                display: flex;
+            }
+
+            .game-main.has-virtual-controls .game-wrapper {
+                margin-bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+            }
+
+            .logo h1 {
+                font-size: 1.8rem;
+            }
+
+            .action-editor {
+                flex-wrap: wrap;
+            }
+
+            .action-editor .btn {
+                width: 100%;
+            }
+
+            .notification {
+                top: auto;
+                bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+                padding: 0.8rem 1rem;
+                border-radius: 10px;
+                transform: translateX(-50%) translateY(120px);
+            }
+
+            .notification.show {
+                transform: translateX(-50%) translateY(0);
+            }
+
+        }
+
+        body.fullscreen-active {
+            background: #000;
+        }
+
+        body.fullscreen-active #app,
+        body.fullscreen-active .game-screen,
+        body.fullscreen-active .game-main {
+            width: 100vw;
+            height: var(--app-height, 100dvh);
+        }
+
+        body.ios-pseudo-fullscreen {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        body.fullscreen-active .game-header,
+        body.fullscreen-active .mobile-toolbar {
+            display: none !important;
+        }
+
+        body.fullscreen-active .game-sidebar {
+            display: flex !important;
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: min(320px, 86vw);
+            max-width: 86vw;
+            z-index: 72;
+            transform: translateX(100%);
+            transition: transform 0.25s ease;
+        }
+
+        body.fullscreen-active .game-sidebar.active {
+            transform: translateX(0);
+        }
+
+        body.fullscreen-active .game-wrapper {
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            margin-bottom: 0 !important;
+        }
+
+        body.fullscreen-active .game-main.has-virtual-controls .game-wrapper {
+            margin-bottom: 0 !important;
+        }
+
+        body.fullscreen-active #game-wrapper,
+        body.fullscreen-active #game-wrapper ruffle-player,
+        body.fullscreen-active #game-wrapper canvas {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        body.fullscreen-active .perf-hud {
+            z-index: 12;
+            top: 12px;
+        }
+
+        body.fullscreen-active .fullscreen-overlay {
+            display: block;
+        }
+
+        /* 游戏操作按钮 */
+        .game-actions {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .btn-start {
+            background: linear-gradient(135deg, var(--success), #45a049);
+            animation: glow 2s ease-in-out infinite;
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
+            50% { box-shadow: 0 0 20px rgba(76, 175, 80, 0.8); }
+        }
+
+        /* 输入提示 */
+        .input-tip {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.3rem;
+        }
+
+        /* 加载动画 */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            flex-direction: column;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(74, 144, 226, 0.3);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 1rem;
+            color: var(--text);
+        }
+
+        /* 远程视频 */
+        .remote-video-container {
+            position: absolute;
+            top: 60px;
+            right: 10px;
+            width: 200px;
+            height: 150px;
+            background: rgba(0,0,0,0.8);
+            border-radius: 8px;
+            overflow: hidden;
+            z-index: 5;
+            display: none;
+        }
+
+        .remote-video-container.active {
+            display: block;
+        }
+
+        .remote-video-container canvas,
+        .remote-video-container video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+
+        .remote-video-label {
+            position: absolute;
+            bottom: 5px;
+            left: 5px;
+            background: rgba(0,0,0,0.7);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+        }
+
+        .game-main.spectator-mode .game-wrapper { display: none; }
+        .game-main.spectator-mode .remote-video-container { top: 0; left: 0; right: 0; width: 100%; height: 100%; border-radius: 0; display: block; z-index: 4; }
+        .game-main.spectator-mode .remote-video-container canvas,
+        .game-main.spectator-mode .remote-video-container video { object-fit: contain; background: #000; }
+        .game-main.spectator-mode .remote-video-label { top: 12px; left: 12px; bottom: auto; font-size: 0.8rem; padding: 4px 10px; }
+        .game-main.spectator-mode .perf-hud { top: 12px; left: 12px; right: auto; z-index: 12; }
+
+        @media screen and (max-width: 900px) {
+            .fullscreen-controls {
+                top: calc(8px + env(safe-area-inset-top, 0px));
+                right: max(8px, env(safe-area-inset-right, 0px));
+            }
+
+            .fullscreen-overlay.non-fullscreen .fullscreen-controls {
+                top: max(74px, calc(74px + env(safe-area-inset-top, 0px)));
+            }
+
+            body.fullscreen-active .game-main.has-chat-ticker .perf-hud {
+                top: calc(96px + env(safe-area-inset-top, 0px));
+            }
+
+            body.fullscreen-active .game-main.has-chat-ticker.ticker-lines-2 .perf-hud {
+                top: calc(112px + env(safe-area-inset-top, 0px));
+            }
+
+            body.fullscreen-active .game-main.has-chat-ticker.ticker-lines-3 .perf-hud {
+                top: calc(128px + env(safe-area-inset-top, 0px));
+            }
+
+            .fullscreen-chat-ticker {
+                left: max(8px, env(safe-area-inset-left, 0px));
+                right: max(52px, calc(52px + env(safe-area-inset-right, 0px)));
+                top: calc(8px + env(safe-area-inset-top, 0px));
+                max-height: 82px;
+            }
+
+            .fullscreen-control-btn {
+                width: 36px;
+                height: 36px;
+                font-size: 0.95rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- 大厅界面 -->
+        <div id="lobby-screen" class="lobby-screen">
+            <div class="lobby-left">
+                <div class="logo">
+                    <h1>🔥 Flash联机复活</h1>
+                    <p>经典Flash游戏，多人在线对战</p>
+                </div>
+                <div class="lobby-form">
+                    <div class="form-group">
+                        <label>玩家昵称</label>
+                        <input type="text" id="player-name" class="form-control" placeholder="输入你的昵称" maxlength="12">
+                    </div>
+                    <div class="form-group" id="swf-group">
+                        <label>选择游戏文件</label>
+                        <div class="file-input-wrapper">
+                            <div class="file-input-display" id="swf-preview">
+                                📁 点击选择SWF文件
+                            </div>
+                            <input type="file" id="swf-file" accept=".swf">
+                        </div>
+                    </div>
+                    <div class="form-group" id="join-group" style="display:none;">
+                        <label>房间代码</label>
+                        <input type="text" id="room-code-input" class="form-control" placeholder="输入6位房间代码" maxlength="6">
+                        <div class="input-tip">请输入好友分享的房间代码</div>
+                    </div>
+                    <button id="btn-create" class="btn btn-primary">创建房间</button>
+                    <div class="btn-group">
+                        <button id="btn-join" class="btn btn-secondary">加入房间</button>
+                    </div>
+                </div>
+            </div>
+            <div class="lobby-right">
+                <h3 style="margin-bottom: 1rem;">✨ 项目特性</h3>
+                <ul class="feature-list">
+                    <li>
+                        <div class="feature-icon">🎮</div>
+                        <div>
+                            <strong>Ruffle引擎</strong>
+                            <p style="font-size:0.85rem;color:var(--text-muted)">无需Flash Player，浏览器直接运行</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="feature-icon">👥</div>
+                        <div>
+                            <strong>多人联机</strong>
+                            <p style="font-size:0.85rem;color:var(--text-muted)">支持2名玩家实时对战</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="feature-icon">📱</div>
+                        <div>
+                            <strong>移动端支持</strong>
+                            <p style="font-size:0.85rem;color:var(--text-muted)">虚拟按键，触控操作</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="feature-icon">⌨️</div>
+                        <div>
+                            <strong>键位自定义</strong>
+                            <p style="font-size:0.85rem;color:var(--text-muted)">支持自定义键位设置</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="feature-icon">⚡</div>
+                        <div>
+                            <strong>流畅体验</strong>
+                            <p style="font-size:0.85rem;color:var(--text-muted)">可调帧率，优化性能</p>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 游戏界面 -->
+        <div id="game-screen" class="game-screen">
+            <div class="game-main">
+                <div class="game-header">
+                    <div class="room-info">
+                        <div class="room-code-info">
+                            <span class="room-code-label">房间代码:</span>
+                            <span class="room-code" id="display-room-code">------</span>
+                        </div>
+                        <button class="copy-btn" id="btn-copy-room" title="复制房间代码">📋</button>
+                        <div class="room-tip">分享给好友一起玩</div>
+                    </div>
+                    <div class="header-actions">
+                        <div class="connection-status disconnected" id="connection-status">
+                            <span id="status-text">未连接</span>
+                        </div>
+                        <button class="icon-btn" id="btn-fullscreen" title="全屏">⛶</button>
+                        <button class="icon-btn" id="btn-settings" title="设置">⚙️</button>
+                        <button class="icon-btn" id="btn-leave" title="离开">🚪</button>
+                    </div>
+                </div>
+                <div class="game-wrapper" id="game-wrapper"></div>
+                
+                <!-- 远程视频显示 -->
+                <div class="remote-video-container" id="remote-video-container">
+                    <canvas id="remote-canvas"></canvas>
+                    <video id="remote-video" autoplay playsinline muted style="display:none;"></video>
+                    <div class="remote-video-label">远程画面</div>
+                </div>
+
+                <div class="perf-hud" id="perf-hud">
+                    <div class="perf-stat">FPS: <span id="hud-fps">0</span></div>
+                    <div class="perf-stat">延迟: <span id="hud-latency">0ms</span></div>
+                    <div class="perf-stat">码率: <span id="hud-bitrate">0Mbps</span></div>
+                    <div class="perf-stat">传输: <span id="hud-transport">初始化</span></div>
+                </div>
+
+                <div class="virtual-controls" id="virtual-controls"></div>
+
+                <div class="fullscreen-overlay" id="fullscreen-overlay">
+                    <div class="fullscreen-chat-ticker" id="fullscreen-chat-ticker" title="点击打开聊天"></div>
+                    <div class="fullscreen-controls" id="fullscreen-controls">
+                        <button class="fullscreen-control-btn" id="btn-fs-esc" title="发送 Esc">⎋</button>
+                        <button class="fullscreen-control-btn" id="btn-fs-players" title="玩家列表">👥</button>
+                        <button class="fullscreen-control-btn" id="btn-fs-chat" title="聊天">💬</button>
+                        <button class="fullscreen-control-btn" id="btn-fs-settings" title="设置">⚙️</button>
+                    </div>
+                </div>
+            </div>
+            <div class="game-sidebar" id="game-sidebar">
+                <div class="sidebar-tabs">
+                    <button class="sidebar-tab active" data-tab="players">👥 玩家</button>
+                    <button class="sidebar-tab" data-tab="chat">💬 聊天</button>
+                    <button class="sidebar-tab" data-tab="settings">⚙️ 设置</button>
+                </div>
+                <div class="sidebar-content">
+                    <div id="panel-players" class="sidebar-panel active">
+                        <div id="player-list"></div>
+                        <div class="game-actions" id="host-actions" style="display:none;">
+                            <button class="btn btn-primary btn-start" id="btn-start">开始游戏</button>
+                        </div>
+                    </div>
+                    <div id="panel-chat" class="sidebar-panel">
+                        <div class="chat-messages" id="chat-messages"></div>
+                        <div class="chat-input-group">
+                            <input type="text" id="chat-input" placeholder="发送消息...">
+                            <button class="btn btn-primary" id="btn-send" style="width:auto;">发送</button>
+                        </div>
+                    </div>
+                    <div id="panel-settings" class="sidebar-panel">
+                        <div class="setting-section">
+                            <h4>游戏设置</h4>
+                            <div class="setting-item">
+                                <label>
+                                    推流帧率
+                                    <span class="value" id="setting-fps-value">25</span>
+                                </label>
+                                <select class="form-control" id="setting-fps">
+                                    <option value="20">20 FPS（低延时）</option>
+                                    <option value="25" selected>25 FPS（默认）</option>
+                                    <option value="30">30 FPS</option>
+                                    <option value="50">50 FPS</option>
+                                    <option value="60">60 FPS</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label>画质优先</label>
+                                <select class="form-control" id="setting-quality">
+                                    <option value="low">低（更流畅）</option>
+                                    <option value="medium" selected>中（推荐）</option>
+                                    <option value="high">高（更清晰）</option>
+                                </select>
+                            </div>
+                            <div class="setting-item" style="font-size:0.82rem;color:var(--text-muted);line-height:1.45;">
+                                延时会根据网络自动调节，无需手动设置缓冲。
+                            </div>
+                        </div>
+                        <div class="setting-section">
+                            <h4>虚拟按键</h4>
+                            <div class="setting-item">
+                                <label>
+                                    按键大小
+                                    <span class="value" id="setting-btn-size-value">70</span>
+                                </label>
+                                <input type="range" id="setting-btn-size" min="50" max="100" step="5" value="70">
+                            </div>
+                            <div class="setting-item">
+                                <label>
+                                    透明度
+                                    <span class="value" id="setting-btn-opacity-value">40</span>
+                                </label>
+                                <input type="range" id="setting-btn-opacity" min="20" max="80" step="10" value="40">
+                            </div>
+                        </div>
+                        <div class="setting-section">
+                            <h4>角色管理</h4>
+                            <div id="role-actions" style="display:none;">
+                                <button class="btn btn-secondary" id="btn-swap-roles">互换 P1/P2</button>
+                                <div class="action-editor-tip" style="margin-top:0.6rem;">建议在开局前调整角色，减少操作冲突</div>
+                            </div>
+                        </div>
+                        <div class="setting-section">
+                            <h4>键位绑定</h4>
+                            <div class="action-editor" id="action-editor">
+                                <input type="text" id="action-name-input" class="form-control" placeholder="新增动作名称（如：冲刺）" maxlength="20">
+                                <button class="btn btn-secondary" id="btn-add-action" style="width:auto;">新增动作</button>
+                            </div>
+                            <div class="action-editor-tip">仅房主可编辑动作与键位</div>
+                            <div id="key-bindings"></div>
+                            <button class="btn btn-reset" id="btn-reset-keys">重置键位</button>
+                        </div>
+                        <div class="setting-section">
+                            <h4>存档管理</h4>
+                            <div class="ruffle-save-module" id="ruffle-save-module"></div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- 移动端工具栏 -->
+        <div class="mobile-toolbar" id="mobile-toolbar">
+            <button id="btn-mobile-players">👥</button>
+            <button id="btn-mobile-chat">💬</button>
+            <button id="btn-mobile-start">▶️</button>
+        </div>
+
+        <!-- 横屏提示 -->
+        <div class="landscape-warning" id="landscape-warning">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M16.48 2.52c3.27 1.55 5.61 4.72 5.97 8.48h1.5C23.44 4.84 18.29 0 12 0l-.66.03 3.81 3.81 1.33-1.32zm-6.25-.77c-.59-.59-1.54-.59-2.12 0L1.75 8.11c-.59.59-.59 1.54 0 2.12l12.02 12.02c.59.59 1.54.59 2.12 0l6.36-6.36c.59-.59.59-1.54 0-2.12L10.23 1.75zm4.6 19.44L2.81 9.17l6.36-6.36 12.02 12.02-6.36 6.36zm-7.31.29l-1.33 1.33c-3.27-1.54-5.61-4.72-5.97-8.48h-1.5c.51 6.16 5.66 11 11.95 11l.66-.03-3.81-3.82z"/>
+            </svg>
+            <h2>请横屏使用</h2>
+            <p>为获得最佳体验，请将设备旋转至横屏模式</p>
+        </div>
+
+        <!-- 模态框 -->
+        <div class="modal" id="mobile-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modal-title"></h3>
+                    <button class="modal-close" id="modal-close">×</button>
+                </div>
+                <div id="modal-body"></div>
+            </div>
+        </div>
+
+        <!-- 通知 -->
+        <div class="notification" id="notification"></div>
+        
+        <!-- 加载遮罩 -->
+        <div class="loading-overlay" id="loading-overlay">
+            <div class="loading-spinner"></div>
+            <div class="loading-text" id="loading-text">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 加载重构后的模块 -->
+    <script src="js/ruffle-manager.js"></script>
+    <script src="js/ruffle-save-module.js"></script>
+    <script src="js/stream-manager.js"></script>
+    <script src="js/game-engine.js"></script>
+
+    <script>
+        // Default ICE config for IP-only deployment. Override this before app init if needed.
+        window.__WEBRTC_ICE_SERVERS__ = window.__WEBRTC_ICE_SERVERS__ || [
+            { urls: ['stun:stun.l.google.com:19302'] },
+            {
+                urls: [
+                    'turn:39.104.68.76:3478?transport=udp',
+                    'turn:39.104.68.76:3478?transport=tcp'
+                ],
+                username: 'fireice',
+                credential: 'iCnHUcKAVq'
+            }
+        ];
+    </script>
+    
+    <script>
+        class GameApp {
+            constructor() {
+                this.gameEngine = null;
+                this.ruffleSaveModule = null;
+                this.swfUrl = null;
+                this.isJoinMode = false;
+                this.bindingListenState = null;
+                this.remoteStreamWaitTimer = null;
+                this.remoteStreamTipTimer = null;
+                this.remoteStreamRecoveryTimer = null;
+                this.lastRemoteFrameAt = 0;
+                this.remoteConnectedNotified = false;
+                this.remoteFrameDecodeFailCount = 0;
+                this.remoteBlackFrameStreak = 0;
+                this.remoteFramesReceived = 0;
+                this.remoteFramesRendered = 0;
+                this.remoteDiagWindowStart = Date.now();
+                this.remoteBytesReceived = 0;
+                this.remoteRenderInFlight = false;
+                this.pendingRemoteFrame = null;
+                this.hudLastLatencyMs = 0;
+                this.hudInteractionLatencyMs = 0;
+                this.hudTimer = null;
+                this.hostPublishBitrateMbps = 0;
+                this.hostPublishFps = 0;
+                this.viewerRealtimeBitrateMbps = 0;
+                this.viewerRealtimeFps = 0;
+                this.hudTransportMode = '初始化';
+                this.fullscreenChatItems = [];
+                this.fullscreenChatTimer = null;
+                this.lastFullscreenGuideAt = 0;
+                this.pseudoFullscreenActive = false;
+                this.isIosLikeDevice = /iP(hone|ad|od)/i.test(navigator.userAgent)
+                    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                this.lastBackgroundLimitHintAt = 0;
+                this.pendingBackgroundLimitHint = false;
+
+                this.ui = {
+                    lobbyScreen: document.getElementById('lobby-screen'),
+                    gameScreen: document.getElementById('game-screen'),
+                    loadingOverlay: document.getElementById('loading-overlay'),
+                    loadingText: document.getElementById('loading-text'),
+                    notification: document.getElementById('notification'),
+                    playerName: document.getElementById('player-name'),
+                    swfFile: document.getElementById('swf-file'),
+                    swfPreview: document.getElementById('swf-preview'),
+                    joinGroup: document.getElementById('join-group'),
+                    swfGroup: document.getElementById('swf-group'),
+                    roomCodeInput: document.getElementById('room-code-input'),
+                    displayRoomCode: document.getElementById('display-room-code'),
+                    playerList: document.getElementById('player-list'),
+                    hostActions: document.getElementById('host-actions'),
+                    roleActions: document.getElementById('role-actions'),
+                    chatMessages: document.getElementById('chat-messages'),
+                    remoteCanvas: document.getElementById('remote-canvas'),
+                    remoteVideo: document.getElementById('remote-video'),
+                    remoteVideoContainer: document.getElementById('remote-video-container'),
+                    gameMain: document.querySelector('.game-main'),
+                    gameSidebar: document.getElementById('game-sidebar'),
+                    mobileToolbar: document.getElementById('mobile-toolbar'),
+                    virtualControls: document.getElementById('virtual-controls'),
+                    connectionStatus: document.getElementById('connection-status'),
+                    statusText: document.getElementById('status-text'),
+                    keyBindings: document.getElementById('key-bindings'),
+                    actionNameInput: document.getElementById('action-name-input'),
+                    ruffleSaveModule: document.getElementById('ruffle-save-module'),
+                    modal: document.getElementById('mobile-modal'),
+                    modalTitle: document.getElementById('modal-title'),
+                    modalBody: document.getElementById('modal-body'),
+                    fullscreenOverlay: document.getElementById('fullscreen-overlay'),
+                    fullscreenChatTicker: document.getElementById('fullscreen-chat-ticker')
+                };
+
+                this.init();
+            }
+
+            async init() {
+                this.generateRandomName();
+                this.ruffleSaveModule = new RuffleSaveModule({
+                    container: this.ui.ruffleSaveModule
+                });
+                this.ruffleSaveModule.initialize();
+                this.bindEvents();
+                this.setupFullscreenStateSync();
+                await this.loadSwfFiles();
+
+                const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+                const wsUrl = `${wsProtocol}://${location.host}${this.getBasePath()}/ws`;
+                const streamWsUrl = `${wsProtocol}://${location.host}${this.getBasePath()}/ws-stream`;
+
+                this.showLoading('初始化游戏引擎...');
+                try {
+                    this.gameEngine = new GameEngine({
+                        wsUrl,
+                        streamWsUrl,
+                        containerSelector: '#game-wrapper',
+                        fps: Number(document.getElementById('setting-fps').value || 25),
+                        quality: document.getElementById('setting-quality').value || 'medium',
+                        rtcIceServers: Array.isArray(window.__WEBRTC_ICE_SERVERS__) ? window.__WEBRTC_ICE_SERVERS__ : null
+                    });
+
+                    this.bindEngineEvents();
+                    await this.gameEngine.initialize();
+                    this.gameEngine.updateQuality(document.getElementById('setting-quality').value || 'medium');
+                    this.renderKeyBindings();
+                    this.renderVirtualButtons();
+                    this.startPerfHudLoop();
+                    this.hideLoading();
+                } catch (error) {
+                    this.hideLoading();
+                    this.showNotification(`初始化失败: ${error.message}`, 'error');
+                }
+            }
+
+            isNativeFullscreenActive() {
+                return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+            }
+
+            isFullscreenActive() {
+                return this.isNativeFullscreenActive() || Boolean(this.pseudoFullscreenActive);
+            }
+
+            applyViewportHeightVar() {
+                const height = Math.max(
+                    0,
+                    Math.round(Number(window.visualViewport?.height || window.innerHeight || 0))
+                );
+                if (height > 0) {
+                    document.documentElement.style.setProperty('--app-height', `${height}px`);
+                }
+            }
+
+            canUsePseudoFullscreen() {
+                return Boolean(this.isIosLikeDevice);
+            }
+
+            enterPseudoFullscreen() {
+                this.pseudoFullscreenActive = true;
+                document.body.classList.add('ios-pseudo-fullscreen');
+                this.applyViewportHeightVar();
+            }
+
+            exitPseudoFullscreen() {
+                this.pseudoFullscreenActive = false;
+                document.body.classList.remove('ios-pseudo-fullscreen');
+                this.applyViewportHeightVar();
+            }
+
+            isLikelyBrowserFullscreen() {
+                const screenWidth = Number(window.screen?.width || 0);
+                const screenHeight = Number(window.screen?.height || 0);
+                if (!screenWidth || !screenHeight) {
+                    return false;
+                }
+
+                const viewportWidth = Number(window.innerWidth || 0);
+                const viewportHeight = Number(window.innerHeight || 0);
+                const widthDelta = Math.abs(screenWidth - viewportWidth);
+                const heightDelta = Math.abs(screenHeight - viewportHeight);
+
+                return widthDelta <= 3 && heightDelta <= 3;
+            }
+
+            maybeShowNonApiFullscreenHint() {
+                const inGameScreen = Boolean(this.ui?.gameScreen && this.ui.gameScreen.classList.contains('active'));
+                if (!inGameScreen || this.isFullscreenActive()) {
+                    return;
+                }
+
+                if (!this.isLikelyBrowserFullscreen()) {
+                    return;
+                }
+
+                const now = Date.now();
+                if (now - this.lastFullscreenGuideAt < 8000) {
+                    return;
+                }
+
+                this.lastFullscreenGuideAt = now;
+                this.showNotification('检测到系统全屏（F11），建议使用应用内全屏按钮以显示完整控制层', 'info');
+            }
+
+            maybeShowHostBackgroundHint() {
+                if (document.visibilityState !== 'hidden') {
+                    return;
+                }
+
+                const inGameScreen = Boolean(this.ui?.gameScreen && this.ui.gameScreen.classList.contains('active'));
+                const isHost = Boolean(this.gameEngine && this.gameEngine.state && this.gameEngine.state.isHost);
+                if (!inGameScreen || !isHost) {
+                    return;
+                }
+
+                const now = Date.now();
+                if (now - this.lastBackgroundLimitHintAt < 15000) {
+                    return;
+                }
+
+                this.lastBackgroundLimitHintAt = now;
+                this.pendingBackgroundLimitHint = true;
+            }
+
+            syncFullscreenLayout() {
+                const active = this.isFullscreenActive();
+                document.body.classList.toggle('fullscreen-active', active);
+                this.applyViewportHeightVar();
+
+                if (active) {
+                    this.ui.gameSidebar.classList.remove('active');
+                    this.ui.mobileToolbar.classList.remove('visible');
+                }
+
+                this.updateFullscreenOverlay();
+                this.updatePerfHud();
+                this.maybeShowNonApiFullscreenHint();
+            }
+
+            setupFullscreenStateSync() {
+                const sync = () => this.syncFullscreenLayout();
+                document.addEventListener('fullscreenchange', sync);
+                document.addEventListener('webkitfullscreenchange', sync);
+                window.addEventListener('resize', sync);
+                window.addEventListener('orientationchange', sync);
+                if (window.visualViewport) {
+                    window.visualViewport.addEventListener('resize', sync);
+                    window.visualViewport.addEventListener('scroll', sync);
+                }
+                sync();
+            }
+
+            bindEvents() {
+                document.getElementById('btn-create').addEventListener('click', () => {
+                    if (this.isJoinMode) {
+                        this.toggleJoinMode(false);
+                        return;
+                    }
+                    this.createRoom();
+                });
+
+                document.getElementById('btn-join').addEventListener('click', () => {
+                    if (!this.isJoinMode) {
+                        this.toggleJoinMode(true);
+                        return;
+                    }
+                    this.joinRoom();
+                });
+
+                this.ui.swfFile.addEventListener('change', (event) => this.handleSwfSelect(event));
+
+                document.getElementById('btn-copy-room').addEventListener('click', async () => {
+                    const code = this.ui.displayRoomCode.textContent.trim();
+                    if (!code || code === '------') return;
+
+                    const copied = await this.copyTextToClipboard(code);
+                    if (copied) {
+                        this.showNotification('房间代码已复制', 'success');
+                        return;
+                    }
+
+                    this.showNotification('复制失败，请手动复制', 'error');
+                });
+
+                document.getElementById('btn-leave').addEventListener('click', () => this.leaveRoom());
+                document.getElementById('btn-fullscreen').addEventListener('click', () => this.toggleFullscreen());
+                document.getElementById('btn-settings').addEventListener('click', () => this.switchTab('settings'));
+                document.getElementById('btn-start').addEventListener('click', () => this.startGame());
+                document.getElementById('btn-swap-roles').addEventListener('click', () => {
+                    this.gameEngine.swapRoles();
+                });
+                document.getElementById('btn-add-action').addEventListener('click', () => {
+                    if (!this.gameEngine || !this.gameEngine.state.isHost) {
+                        this.showNotification('仅房主可编辑动作与键位', 'info');
+                        return;
+                    }
+
+                    const label = String(this.ui.actionNameInput.value || '').trim();
+                    if (!label) {
+                        this.showNotification('请输入动作名称', 'error');
+                        return;
+                    }
+
+                    let actionId = label.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+                    if (!actionId) {
+                        actionId = `action_${Date.now().toString(36)}_${Math.floor(Math.random()*1000)}`;
+                    }
+
+                    if (!/^[a-z0-9_]+$/.test(actionId)) {
+                        actionId = actionId.replace(/[^a-z0-9_]/g, '');
+                    }
+
+                    const sent = this.gameEngine.addRoomAction(actionId, label);
+                    if (sent) {
+                        this.ui.actionNameInput.value = '';
+                    }
+                });
+
+                document.querySelectorAll('.sidebar-tab').forEach((tab) => {
+                    tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
+                });
+
+                document.getElementById('btn-send').addEventListener('click', () => this.sendChat());
+                document.getElementById('chat-input').addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                        this.sendChat();
+                    }
+                });
+
+                document.getElementById('setting-fps').addEventListener('change', async (event) => {
+                    if (!this.gameEngine) return;
+                    const fps = Number(event.target.value);
+                    document.getElementById('setting-fps-value').textContent = String(fps);
+                    const ok = await this.gameEngine.updateFps(fps);
+                    this.showNotification(ok ? `帧率已应用：${fps} FPS` : '帧率应用失败，已保留当前设置', ok ? 'success' : 'error');
+                });
+
+                document.getElementById('setting-quality').addEventListener('change', (event) => {
+                    if (!this.gameEngine) return;
+                    this.gameEngine.updateQuality(event.target.value);
+                    const textMap = { low: '低', medium: '中', high: '高' };
+                    const key = String(event.target.value || 'medium');
+                    this.showNotification(`画质优先已应用：${textMap[key] || key}（延时自动调节）`, 'success');
+                });
+
+                document.getElementById('setting-btn-size').addEventListener('input', (event) => {
+                    document.getElementById('setting-btn-size-value').textContent = event.target.value;
+                    this.updateVirtualButtonSize(Number(event.target.value));
+                });
+
+                document.getElementById('setting-btn-opacity').addEventListener('input', (event) => {
+                    document.getElementById('setting-btn-opacity-value').textContent = event.target.value;
+                    this.updateVirtualButtonOpacity(Number(event.target.value));
+                });
+
+                document.getElementById('btn-reset-keys').addEventListener('click', () => {
+                    this.gameEngine.resetBindings();
+                    this.showNotification('房主可重置为默认动作键位', 'success');
+                });
+
+                document.getElementById('modal-close').addEventListener('click', () => {
+                    this.ui.modal.classList.remove('active');
+                });
+
+                document.getElementById('btn-mobile-players').addEventListener('click', () => this.switchTab('players'));
+                document.getElementById('btn-mobile-chat').addEventListener('click', () => this.switchTab('chat'));
+                document.getElementById('btn-mobile-start').addEventListener('click', () => this.startGame());
+                document.getElementById('btn-fs-players').addEventListener('click', () => this.toggleFullscreenSidebar('players'));
+                document.getElementById('btn-fs-chat').addEventListener('click', () => this.toggleFullscreenSidebar('chat'));
+                document.getElementById('btn-fs-settings').addEventListener('click', () => this.toggleFullscreenSidebar('settings'));
+                document.getElementById('btn-fs-esc').addEventListener('click', () => this.sendVirtualEscape());
+
+                if (this.ui.fullscreenChatTicker) {
+                    this.ui.fullscreenChatTicker.addEventListener('click', () => this.toggleFullscreenSidebar('chat'));
+                }
+
+                document.addEventListener('keydown', (event) => {
+                    if (this.bindingListenState) {
+                        event.preventDefault();
+                        this.gameEngine.setBinding(this.bindingListenState.role, this.bindingListenState.action, event.code);
+                        this.bindingListenState = null;
+                        this.renderKeyBindings();
+                        return;
+                    }
+
+                    if (this.gameEngine && this.gameEngine.handleLocalKeyboard(event.code, true)) {
+                        event.preventDefault();
+                    }
+                });
+
+                document.addEventListener('keyup', (event) => {
+                    if (this.gameEngine && this.gameEngine.handleLocalKeyboard(event.code, false)) {
+                        event.preventDefault();
+                    }
+                });
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        if (this.pendingBackgroundLimitHint) {
+                            this.pendingBackgroundLimitHint = false;
+                            this.showNotification('你刚从后台返回：后台期间浏览器可能已降频，实时操作与帧率可能受限', 'info');
+                        }
+                        const isViewer = this.gameEngine && !this.gameEngine.state.isHost;
+                        if (isViewer && Date.now() - this.lastRemoteFrameAt > 2000) {
+                            this.gameEngine.requestStreamSubscription();
+                        }
+                        return;
+                    }
+
+                    this.maybeShowHostBackgroundHint();
+                });
+
+            }
+
+            isCanvasNearlyBlack(canvas, context) {
+                if (!canvas || !context) {
+                    return false;
+                }
+
+                const width = Number(canvas.width || 0);
+                const height = Number(canvas.height || 0);
+                if (!width || !height) {
+                    return false;
+                }
+
+                const points = [
+                    [0.5, 0.5],
+                    [0.2, 0.2],
+                    [0.8, 0.2],
+                    [0.2, 0.8],
+                    [0.8, 0.8]
+                ];
+
+                let darkCount = 0;
+                let sampleCount = 0;
+
+                for (const [px, py] of points) {
+                    const x = Math.max(0, Math.min(width - 1, Math.round((width - 1) * px)));
+                    const y = Math.max(0, Math.min(height - 1, Math.round((height - 1) * py)));
+
+                    let data = null;
+                    try {
+                        data = context.getImageData(x, y, 1, 1).data;
+                    } catch {
+                        return false;
+                    }
+
+                    if (!data || data.length < 3) {
+                        continue;
+                    }
+
+                    const luma = (0.2126 * Number(data[0] || 0))
+                        + (0.7152 * Number(data[1] || 0))
+                        + (0.0722 * Number(data[2] || 0));
+
+                    if (luma <= 3) {
+                        darkCount += 1;
+                    }
+                    sampleCount += 1;
+                }
+
+                return sampleCount > 0 && darkCount === sampleCount;
+            }
+
+            async renderRemoteFrame(blob, mimeType = '') {
+                if (!blob || !this.ui || !this.ui.remoteCanvas) {
+                    return { blackFrame: false };
+                }
+
+                const canvas = this.ui.remoteCanvas;
+                const context = canvas.getContext('2d', { alpha: false }) || canvas.getContext('2d');
+                if (!context) {
+                    return { blackFrame: false };
+                }
+
+                const effectiveType = String(mimeType || blob.type || '').toLowerCase();
+                const preferBitmap = typeof createImageBitmap === 'function' && !effectiveType.includes('webp');
+
+                if (preferBitmap) {
+                    try {
+                        const bitmap = await createImageBitmap(blob);
+                        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+                            canvas.width = bitmap.width;
+                            canvas.height = bitmap.height;
+                        }
+                        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                        bitmap.close();
+                        return { blackFrame: this.isCanvasNearlyBlack(canvas, context) };
+                    } catch {
+                        // fallback to Image decode path
+                    }
+                }
+
+                const image = await new Promise((resolve, reject) => {
+                    const img = new Image();
+                    const url = URL.createObjectURL(blob);
+                    img.onload = () => {
+                        URL.revokeObjectURL(url);
+                        resolve(img);
+                    };
+                    img.onerror = () => {
+                        URL.revokeObjectURL(url);
+                        reject(new Error('远程帧解码失败'));
+                    };
+                    img.src = url;
+                });
+
+                if (canvas.width !== image.width || canvas.height !== image.height) {
+                    canvas.width = image.width;
+                    canvas.height = image.height;
+                }
+                context.drawImage(image, 0, 0, canvas.width, canvas.height);
+                return { blackFrame: this.isCanvasNearlyBlack(canvas, context) };
+            }
+
+            attachRemoteStream(stream) {
+                if (!this.ui || !this.ui.remoteVideo) {
+                    return;
+                }
+
+                const video = this.ui.remoteVideo;
+                if (!stream) {
+                    this.detachRemoteStream();
+                    return;
+                }
+
+                try {
+                    if (video.srcObject !== stream) {
+                        video.srcObject = stream;
+                    }
+                } catch {
+                    return;
+                }
+
+                video.style.display = 'block';
+                if (this.ui.remoteCanvas) {
+                    this.ui.remoteCanvas.style.display = 'none';
+                }
+
+                const stampFrame = () => {
+                    this.lastRemoteFrameAt = Date.now();
+                    this.remoteFramesRendered += 1;
+                };
+
+                video.onplaying = stampFrame;
+                video.ontimeupdate = stampFrame;
+
+                if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+                    const loop = () => {
+                        if (!video.srcObject) return;
+                        video.requestVideoFrameCallback(() => {
+                            this.lastRemoteFrameAt = Date.now();
+                            loop();
+                        });
+                    };
+                    loop();
+                }
+
+                video.play().catch(() => {});
+                this.ui.remoteVideoContainer.classList.add('active');
+                this.lastRemoteFrameAt = Date.now();
+                this.clearRemoteStreamWaitState();
+                if (!this.remoteConnectedNotified) {
+                    this.remoteConnectedNotified = true;
+                    this.showNotification('远程画面已连接（WebRTC）', 'success');
+                }
+            }
+
+            detachRemoteStream() {
+                if (!this.ui || !this.ui.remoteVideo) {
+                    return;
+                }
+
+                const video = this.ui.remoteVideo;
+                video.onplaying = null;
+                video.ontimeupdate = null;
+                try {
+                    video.pause();
+                } catch {
+                    // ignore
+                }
+                video.srcObject = null;
+                video.style.display = 'none';
+
+                if (this.ui.remoteCanvas) {
+                    this.ui.remoteCanvas.style.display = 'block';
+                }
+            }
+
+            updatePerfHud() {
+                this.updateFullscreenOverlay();
+                this.renderHudVisibility();
+
+                const now = Date.now();
+                const elapsedSec = Math.max(1, (now - this.remoteDiagWindowStart) / 1000);
+                const renderFps = this.remoteFramesRendered / elapsedSec;
+                const viewerBitrateMbps = (this.remoteBytesReceived * 8) / (elapsedSec * 1000 * 1000);
+                const isViewer = Boolean(this.gameEngine && !this.gameEngine.state.isHost);
+                const hostFps = Number(this.gameEngine?.config?.fps || 0);
+
+                const hostRealtimeFps = Number(this.hostPublishFps || 0);
+                const hostRealtimeBitrate = Number(this.hostPublishBitrateMbps || 0);
+                const viewerRealtimeFps = Number(this.viewerRealtimeFps || 0);
+                const viewerRealtimeBitrate = Number(this.viewerRealtimeBitrateMbps || 0);
+
+                const hudFps = isViewer
+                    ? (viewerRealtimeFps > 0 ? viewerRealtimeFps.toFixed(1) : renderFps.toFixed(1))
+                    : String((hostRealtimeFps > 0 ? hostRealtimeFps : hostFps || 0).toFixed(1));
+                const displayLatency = Math.max(
+                    0,
+                    Number(this.hudInteractionLatencyMs || this.hudLastLatencyMs || 0)
+                );
+                const hudLatency = `${Math.round(displayLatency)}ms`;
+                const hudBitrate = isViewer
+                    ? `${Math.max(0, viewerRealtimeBitrate > 0 ? viewerRealtimeBitrate : viewerBitrateMbps).toFixed(2)}Mbps`
+                    : `${Math.max(0, hostRealtimeBitrate).toFixed(2)}Mbps`;
+                const hudTransport = String(this.hudTransportMode || '未知');
+
+                document.getElementById('hud-fps').textContent = String(hudFps);
+                document.getElementById('hud-latency').textContent = hudLatency;
+                document.getElementById('hud-bitrate').textContent = hudBitrate;
+                document.getElementById('hud-transport').textContent = hudTransport;
+            }
+
+            renderHudVisibility() {
+                const hud = document.getElementById('perf-hud');
+                if (!hud || !this.ui) {
+                    return;
+                }
+
+                const inGameScreen = Boolean(this.ui.gameScreen && this.ui.gameScreen.classList.contains('active'));
+                hud.classList.toggle('is-visible', inGameScreen);
+            }
+
+            startPerfHudLoop() {
+                this.stopPerfHudLoop();
+                this.hudTimer = setInterval(() => {
+                    this.updatePerfHud();
+                }, 500);
+                this.updatePerfHud();
+            }
+
+            stopPerfHudLoop() {
+                if (this.hudTimer) {
+                    clearInterval(this.hudTimer);
+                    this.hudTimer = null;
+                }
+            }
+
+            async enqueueRemoteFrame(blob, mimeType = '', sizeBytes = 0) {
+                if (!blob) {
+                    return;
+                }
+
+                if (this.ui && this.ui.remoteVideo && this.ui.remoteVideo.srcObject) {
+                    return;
+                }
+
+                this.remoteFramesReceived += 1;
+                this.remoteBytesReceived += Math.max(0, Number(sizeBytes || 0));
+                this.clearRemoteStreamWaitState();
+                this.clearRemoteStreamRecoveryTimer();
+                this.lastRemoteFrameAt = Date.now();
+                this.ui.remoteVideoContainer.classList.add('active');
+                this.pendingRemoteFrame = { blob, mimeType };
+
+                if (!this.remoteConnectedNotified) {
+                    this.remoteConnectedNotified = true;
+                    this.showNotification('远程画面已连接', 'success');
+                }
+
+                if (this.remoteRenderInFlight) {
+                    return;
+                }
+
+                this.remoteRenderInFlight = true;
+                try {
+                    while (this.pendingRemoteFrame) {
+                        const frame = this.pendingRemoteFrame;
+                        this.pendingRemoteFrame = null;
+
+                        try {
+                            const { blackFrame } = await this.renderRemoteFrame(frame.blob, frame.mimeType);
+                            this.remoteFrameDecodeFailCount = 0;
+                            this.remoteFramesRendered += 1;
+
+                            if (blackFrame) {
+                                this.remoteBlackFrameStreak += 1;
+                                if (this.remoteBlackFrameStreak === 90) {
+                                    console.warn('[RemoteVideo] 检测到连续黑帧，触发重订阅恢复');
+                                    this.scheduleRemoteStreamRecovery('black-frame-streak');
+                                }
+                            } else {
+                                this.remoteBlackFrameStreak = 0;
+                            }
+                        } catch {
+                            this.remoteFrameDecodeFailCount += 1;
+                            if (this.remoteFrameDecodeFailCount >= 3) {
+                                this.scheduleRemoteStreamRecovery('frame-render-failed');
+                            }
+                        }
+                    }
+                } finally {
+                    this.remoteRenderInFlight = false;
+                }
+            }
+
+            async copyTextToClipboard(text) {
+                const value = String(text || '');
+                if (!value) return false;
+
+                if (navigator.clipboard && window.isSecureContext) {
+                    try {
+                        await navigator.clipboard.writeText(value);
+                        return true;
+                    } catch {
+                        // 回退到 execCommand
+                    }
+                }
+
+                try {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = value;
+                    textarea.setAttribute('readonly', '');
+                    textarea.style.position = 'fixed';
+                    textarea.style.top = '-1000px';
+                    textarea.style.left = '-1000px';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+
+                    textarea.focus();
+                    textarea.select();
+                    textarea.setSelectionRange(0, textarea.value.length);
+
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    return Boolean(ok);
+                } catch {
+                    return false;
+                }
+            }
+
+            bindEngineEvents() {
+                this.gameEngine.on('wsConnected', () => {
+                    this.updateConnectionStatus('connected', '已连接');
+                });
+
+                this.gameEngine.on('wsDisconnected', () => {
+                    this.clearRemoteStreamWaitState();
+                    this.remoteConnectedNotified = false;
+                    this.updateConnectionStatus('disconnected', '未连接');
+                });
+
+                this.gameEngine.on('roomCreated', (data) => {
+                    this.enterRoom(data, '房间创建成功');
+                });
+
+                this.gameEngine.on('roomJoined', (data) => {
+                    this.enterRoom(data, '加入房间成功');
+                });
+
+                this.gameEngine.on('playersUpdated', ({ players }) => {
+                    this.renderPlayers(players || []);
+                });
+
+                this.gameEngine.on('playerJoined', ({ playerName }) => {
+                    this.addChatMessage('系统', `${playerName} 加入了房间`);
+                });
+
+                this.gameEngine.on('playerLeft', ({ playerName }) => {
+                    this.addChatMessage('系统', `${playerName || '玩家'} 离开了房间`);
+                });
+
+                this.gameEngine.on('chatMessage', ({ playerName, message }) => {
+                    this.addChatMessage(playerName || '未知', message || '');
+                });
+
+                this.gameEngine.on('hostTransfer', ({ message }) => {
+                    this.updateHostUI(true);
+                    this.renderKeyBindings();
+                    this.showNotification(message || '你已成为新房主', 'success');
+                });
+
+                this.gameEngine.on('roleUpdated', ({ role }) => {
+                    this.renderKeyBindings();
+                    this.renderVirtualButtons();
+                    const displayRole = role === 'p1' ? '玩家1(火人)' : role === 'p2' ? '玩家2(冰人)' : '观众';
+                    this.showNotification(`当前角色：${displayRole}`, 'success');
+                });
+
+                this.gameEngine.on('bindingsUpdated', () => {
+                    this.renderKeyBindings();
+                });
+
+                this.gameEngine.on('controlsUpdated', () => {
+                    this.renderKeyBindings();
+                    this.renderVirtualButtons();
+                });
+
+                this.gameEngine.on('gameStarted', async ({ swfUrl, shouldLoadLocal }) => {
+                    if (!shouldLoadLocal) {
+                        this.remoteConnectedNotified = false;
+                        this.setSpectatorLayout(true);
+                        this.startRemoteStreamWaitState();
+                        this.gameEngine.requestStreamSubscription();
+                        this.showNotification('已进入观战模式：通过远程画面参与游戏', 'success');
+                        this.ui.remoteVideoContainer.classList.add('active');
+                        this.refreshRuffleSaveModuleState();
+                        this.updatePerfHud();
+                        return;
+                    }
+
+                    this.setSpectatorLayout(false);
+                    this.updatePerfHud();
+
+                    if (!swfUrl) {
+                        this.showNotification('未找到游戏文件', 'error');
+                        return;
+                    }
+
+                    this.showLoading('加载游戏中...');
+                    try {
+                        await this.gameEngine.loadGame(swfUrl);
+                        this.updatePerfHud();
+                    } catch (error) {
+                        this.hideLoading();
+                        this.showNotification(`加载失败: ${error.message}`, 'error');
+                    }
+                });
+
+                this.gameEngine.on('gameReady', () => {
+                    this.hideLoading();
+                    this.refreshRuffleSaveModuleState({ gameReady: true });
+                    this.showNotification('游戏加载完成', 'success');
+                });
+
+                this.gameEngine.on('remoteFrame', ({ blob, mimeType, sizeBytes }) => {
+                    this.hudTransportMode = 'WebSocket帧流';
+                    this.enqueueRemoteFrame(blob, mimeType, sizeBytes).catch(() => {});
+                });
+
+                this.gameEngine.on('remoteStream', ({ stream }) => {
+                    if (stream) {
+                        this.hudTransportMode = 'WebRTC';
+                        this.attachRemoteStream(stream);
+                    } else {
+                        if (this.hudTransportMode === 'WebRTC') {
+                            this.hudTransportMode = 'WebRTC重连中';
+                        }
+                        this.detachRemoteStream();
+                    }
+                });
+
+                this.gameEngine.on('streamState', ({ state, message, ...extra }) => {
+                    const normalized = String(state || '').toLowerCase();
+                    if (normalized === 'active') {
+                        this.clearRemoteStreamWaitState();
+                    }
+
+                    if (normalized === 'publish-stats') {
+                        this.hostPublishBitrateMbps = Math.max(0, Number(extra.bitrateMbps || 0));
+                        this.hostPublishFps = Math.max(0, Number(extra.fps || 0));
+                    }
+
+                    if (normalized === 'stream-ping') {
+                        this.hudLastLatencyMs = Math.max(0, Number(extra.latency || this.hudLastLatencyMs || 0));
+                    }
+
+                    if (normalized === 'viewer-stats') {
+                        this.viewerRealtimeBitrateMbps = Math.max(0, Number(extra.bitrateMbps || 0));
+                        this.viewerRealtimeFps = Math.max(0, Number(extra.fps || 0));
+
+                        const mediaLatencyMs = Math.max(0, Number(extra.mediaLatencyMs || 0));
+                        if (mediaLatencyMs > 0 && this.gameEngine) {
+                            this.gameEngine.streamMediaLatencyMs = mediaLatencyMs;
+                            if (typeof this.gameEngine.emitPerfSample === 'function') {
+                                this.gameEngine.emitPerfSample();
+                            }
+                        }
+                    }
+
+                    if (normalized === 'transport') {
+                        const mode = String(extra.mode || '').toLowerCase();
+                        if (mode === 'webrtc') {
+                            this.hudTransportMode = 'WebRTC';
+                        } else if (mode === 'websocket-frame') {
+                            this.hudTransportMode = 'WebSocket帧流';
+                        } else {
+                            this.hudTransportMode = mode || '未知';
+                        }
+                    }
+
+                    if (normalized === 'transport-fallback') {
+                        const mode = String(extra.mode || '').toLowerCase();
+                        if (mode === 'websocket-frame') {
+                            this.hudTransportMode = 'WebSocket帧流';
+                            const reason = String(extra.reason || '').trim();
+                            const detail = reason ? `（${reason}）` : '';
+                            this.showNotification(`WebRTC 不可用，已自动回退到帧流推送${detail}`, 'info');
+                        }
+                    }
+
+                    if (normalized === 'capture-bridge-enabled') {
+                        this.showNotification('已启用兼容推流模式（稳定优先）', 'info');
+                    }
+
+                    if (normalized === 'black-frame-detected') {
+                        this.showNotification('检测到连续黑帧，已切换兼容推流策略', 'info');
+                    }
+
+                    const failedStates = new Set(['error', 'disconnected']);
+                    if (failedStates.has(normalized)) {
+                        this.remoteConnectedNotified = false;
+                        this.remoteFrameDecodeFailCount = 0;
+                        this.showNotification(message || '远程流连接失败，请检查网络或刷新重试', 'error');
+                    }
+
+                    if (normalized === 'idle') {
+                        this.remoteConnectedNotified = false;
+                        this.scheduleRemoteStreamRecovery('stream-idle');
+                    }
+                });
+
+                this.gameEngine.on('perfUpdate', (stats) => {
+                    const latency = Math.max(0, Number(stats.latency || 0));
+                    const interactionLatency = Math.max(0, Number(stats.interactionLatency || 0));
+                    if (interactionLatency > 0) {
+                        this.hudInteractionLatencyMs = interactionLatency;
+                    }
+                    if (latency > 0) {
+                        this.hudLastLatencyMs = latency;
+                    }
+                });
+
+                this.gameEngine.on('latencyHint', ({ playerName, interactionLatency, mediaLatency }) => {
+                    const name = String(playerName || '玩家');
+                    const interaction = Math.round(Math.max(0, Number(interactionLatency || 0)));
+                    const media = Math.round(Math.max(0, Number(mediaLatency || 0)));
+                    this.showNotification(`${name} 反馈高延迟（交互 ${interaction}ms / 媒体 ${media}ms）`, 'info');
+                });
+
+                this.gameEngine.on('latencyHintApplied', ({ fps, quality }) => {
+                    const fpsValue = Number(fps || 20);
+                    const qualityValue = String(quality || 'low');
+                    const qualityMap = { low: '低', medium: '中', high: '高' };
+                    const fpsSelect = document.getElementById('setting-fps');
+                    const fpsLabel = document.getElementById('setting-fps-value');
+                    const qualitySelect = document.getElementById('setting-quality');
+
+                    if (fpsSelect) {
+                        fpsSelect.value = String(fpsValue);
+                    }
+                    if (fpsLabel) {
+                        fpsLabel.textContent = String(fpsValue);
+                    }
+                    if (qualitySelect) {
+                        qualitySelect.value = qualityValue;
+                    }
+
+                    this.showNotification(`已自动切换低延时配置：${fpsValue}FPS / ${qualityMap[qualityValue] || qualityValue}`, 'success');
+                });
+
+                this.gameEngine.on('serverError', ({ message }) => {
+                    this.hideLoading();
+                    this.showNotification(message || '服务器错误', 'error');
+                });
+
+                this.gameEngine.on('error', ({ error }) => {
+                    this.hideLoading();
+                    const message = error && error.message ? error.message : '发生未知错误';
+                    this.showNotification(message, 'error');
+
+                    if (typeof message === 'string' && message.includes('远程画面编码连续失败')) {
+                        const isViewer = this.gameEngine && !this.gameEngine.state.isHost;
+                        if (isViewer) {
+                            this.gameEngine.requestStreamSubscription();
+                        }
+                    }
+                });
+            }
+
+            async loadSwfFiles() {
+                try {
+                    const response = await fetch(`${this.getBasePath()}/.swflist`);
+                    const files = await response.json();
+                    if (Array.isArray(files) && files.length > 0) {
+                        this.showSwfFileSelector(files);
+                    }
+                } catch {
+                    this.ui.swfPreview.textContent = '📁 未检测到服务端SWF文件，请手动选择';
+                }
+            }
+
+            showSwfFileSelector(files) {
+                const shorten = (name) => {
+                    if (name.length <= 24) return name;
+                    return `${name.slice(0, 16)}...${name.slice(-4)}`;
+                };
+
+                if (files.length === 1) {
+                    this.swfUrl = this.resolveSwfUrl(files[0]);
+                    this.ui.swfPreview.textContent = `📄 ${shorten(files[0])}`;
+                    this.ui.swfPreview.title = files[0];
+                    this.ui.swfPreview.style.borderColor = 'var(--success)';
+                    return;
+                }
+
+                const select = document.createElement('select');
+                select.id = 'swf-select';
+                select.className = 'form-control';
+                select.style.marginTop = '0.5rem';
+                select.innerHTML = '<option value="">-- 选择游戏 --</option>';
+
+                files.forEach((fileName) => {
+                    const option = document.createElement('option');
+                    option.value = fileName;
+                    option.title = fileName;
+                    option.textContent = shorten(fileName);
+                    select.appendChild(option);
+                });
+
+                this.ui.swfPreview.innerHTML = '';
+                this.ui.swfPreview.appendChild(select);
+
+                select.addEventListener('change', (event) => {
+                    if (!event.target.value) return;
+                    this.swfUrl = this.resolveSwfUrl(event.target.value);
+                    this.ui.swfPreview.style.borderColor = 'var(--success)';
+                });
+            }
+
+            getBasePath() {
+                const pathname = String(location.pathname || '/');
+                if (pathname === '/' || pathname === '') {
+                    return '';
+                }
+
+                const normalized = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+                if (!normalized) {
+                    return '';
+                }
+
+                const lastSlash = normalized.lastIndexOf('/');
+                const tail = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+                if (tail.includes('.')) {
+                    return lastSlash <= 0 ? '' : normalized.slice(0, lastSlash);
+                }
+
+                return normalized;
+            }
+
+            resolveSwfUrl(fileName) {
+                const name = String(fileName || '').trim();
+                if (!name) return '';
+
+                if (/^(blob:|https?:|\/)/i.test(name)) {
+                    return name;
+                }
+
+                const encodedName = encodeURIComponent(name).replace(/%2F/g, '/');
+                const basePath = this.getBasePath();
+                return `${basePath}/${encodedName}`;
+            }
+
+            generateRandomName() {
+                const adjectives = ['快乐', '勇敢', '聪明', '可爱', '神秘', '活泼', '酷酷', '萌萌'];
+                const nouns = ['小猫', '小狗', '小熊', '小兔', '小鸟', '小鱼', '小龙', '小狐'];
+                const random = `${adjectives[Math.floor(Math.random() * adjectives.length)]}${nouns[Math.floor(Math.random() * nouns.length)]}${Math.floor(Math.random() * 100)}`;
+                this.ui.playerName.value = random;
+            }
+
+            handleSwfSelect(event) {
+                const file = event.target.files[0];
+                if (!file || !file.name.toLowerCase().endsWith('.swf')) {
+                    this.showNotification('请选择 .swf 文件', 'error');
+                    return;
+                }
+
+                this.swfUrl = URL.createObjectURL(file);
+                this.ui.swfPreview.textContent = `📄 ${file.name}`;
+                this.ui.swfPreview.style.borderColor = 'var(--success)';
+            }
+
+            toggleJoinMode(isJoin) {
+                this.isJoinMode = isJoin;
+                this.ui.joinGroup.style.display = isJoin ? 'block' : 'none';
+                this.ui.swfGroup.style.display = isJoin ? 'none' : 'block';
+                document.getElementById('btn-join').textContent = isJoin ? '确认加入' : '加入房间';
+                document.getElementById('btn-create').textContent = isJoin ? '返回' : '创建房间';
+            }
+
+            async createRoom() {
+                const playerName = this.ui.playerName.value.trim();
+                if (!playerName) {
+                    this.showNotification('请输入玩家昵称', 'error');
+                    return;
+                }
+                if (!this.swfUrl) {
+                    this.showNotification('请选择游戏文件', 'error');
+                    return;
+                }
+
+                this.showLoading('正在创建房间...');
+                try {
+                    await this.gameEngine.connectWebSocket(playerName);
+                    this.gameEngine.createRoom(this.swfUrl);
+                } catch (error) {
+                    this.hideLoading();
+                    this.showNotification(`连接服务器失败: ${error.message}`, 'error');
+                }
+            }
+
+            async joinRoom() {
+                const playerName = this.ui.playerName.value.trim();
+                const roomCode = this.ui.roomCodeInput.value.trim().toUpperCase();
+
+                if (!playerName) {
+                    this.showNotification('请输入玩家昵称', 'error');
+                    return;
+                }
+
+                if (roomCode.length !== 6) {
+                    this.showNotification('请输入6位房间代码', 'error');
+                    return;
+                }
+
+                this.showLoading('正在加入房间...');
+                try {
+                    await this.gameEngine.connectWebSocket(playerName);
+                    this.gameEngine.joinRoom(roomCode);
+                } catch (error) {
+                    this.hideLoading();
+                    this.showNotification(`连接服务器失败: ${error.message}`, 'error');
+                }
+            }
+
+            startGame() {
+                if (!this.gameEngine.state.isHost) {
+                    this.showNotification('只有房主可以开始游戏', 'error');
+                    return;
+                }
+                this.gameEngine.startGame();
+            }
+
+            leaveRoom() {
+                this.gameEngine.leaveRoom();
+                this.showLobbyScreen();
+                this.resetUI();
+                this.updatePerfHud();
+                this.showNotification('已离开房间', 'success');
+            }
+
+            enterRoom(data, message) {
+                this.hideLoading();
+                this.ui.displayRoomCode.textContent = data.roomCode || '------';
+                this.showGameScreen();
+                this.updateHostUI(Boolean(data.isHost));
+                this.startPerfHudLoop();
+                this.updatePerfHud();
+                this.showNotification(message, 'success');
+                this.renderKeyBindings();
+                this.renderVirtualButtons();
+                this.refreshRuffleSaveModuleState({ gameReady: false });
+            }
+
+            showGameScreen() {
+                this.ui.lobbyScreen.style.display = 'none';
+                this.ui.gameScreen.classList.add('active');
+                this.setSpectatorLayout(false);
+                this.remoteDiagWindowStart = Date.now();
+                this.remoteFramesReceived = 0;
+                this.remoteFramesRendered = 0;
+                this.remoteBytesReceived = 0;
+                this.viewerRealtimeBitrateMbps = 0;
+                this.viewerRealtimeFps = 0;
+                this.syncFullscreenLayout();
+                this.updatePerfHud();
+                this.renderFullscreenChatTicker();
+                if (window.matchMedia('(max-width: 900px)').matches) {
+                    this.ui.mobileToolbar.classList.add('visible');
+                }
+            }
+
+            showLobbyScreen() {
+                this.ui.gameScreen.classList.remove('active');
+                this.ui.lobbyScreen.style.display = 'flex';
+                this.stopPerfHudLoop();
+                this.setSpectatorLayout(false);
+                this.ui.mobileToolbar.classList.remove('visible');
+                this.ui.gameSidebar.classList.remove('active');
+                this.ui.virtualControls.innerHTML = '';
+                this.ui.virtualControls.classList.add('hidden');
+                this.ui.gameMain.classList.remove('has-virtual-controls');
+                this.ui.fullscreenChatTicker?.classList.remove('visible');
+                this.updatePerfHud();
+            }
+
+            setSpectatorLayout(enabled) {
+                if (!this.ui.gameMain) return;
+                this.ui.gameMain.classList.toggle('spectator-mode', Boolean(enabled));
+                this.renderHudVisibility();
+            }
+
+            updateHostUI(isHost) {
+                this.ui.hostActions.style.display = isHost ? 'block' : 'none';
+                this.ui.roleActions.style.display = isHost ? 'block' : 'none';
+                this.refreshRuffleSaveModuleState();
+            }
+
+            renderPlayers(players) {
+                this.ui.playerList.innerHTML = '';
+                players.forEach((player) => {
+                    const badge = document.createElement('div');
+                    badge.className = `player-badge${player.isHost ? ' host' : ''}`;
+                    badge.id = `player-${player.id}`;
+
+                    const roleText = player.isHost ? '房主' : player.role === 'p1' ? 'P1' : player.role === 'p2' ? 'P2' : '观众';
+                    const roleClass = player.role === 'p1' ? 'p1' : player.role === 'p2' ? 'p2' : '';
+
+                    badge.innerHTML = `
+                        <span>${player.name}</span>
+                        <span class="role-badge ${roleClass}">${roleText}</span>
+                    `;
+                    this.ui.playerList.appendChild(badge);
+                });
+
+                const mine = players.find((item) => item.id === this.gameEngine.state.playerId);
+                this.updateHostUI(Boolean(mine && mine.isHost));
+            }
+
+            addChatMessage(name, message) {
+                const line = document.createElement('div');
+                line.className = 'chat-message';
+                const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                line.innerHTML = `
+                    <span class="name">${name}</span>
+                    <span class="time">${time}</span>
+                    <div>${message}</div>
+                `;
+
+                this.ui.chatMessages.appendChild(line);
+                this.ui.chatMessages.scrollTop = this.ui.chatMessages.scrollHeight;
+                this.pushFullscreenChatTicker(name, message, time);
+            }
+
+            pushFullscreenChatTicker(name, message, timeText = '') {
+                const displayName = String(name || '未知').trim() || '未知';
+                const displayMessage = String(message || '').trim();
+                if (!displayMessage) {
+                    return;
+                }
+
+                this.fullscreenChatItems.push({
+                    name: displayName,
+                    message: displayMessage,
+                    time: String(timeText || '').trim(),
+                    at: Date.now()
+                });
+
+                this.fullscreenChatItems = this.fullscreenChatItems.slice(-3);
+                this.renderFullscreenChatTicker();
+                this.scheduleFullscreenChatPrune();
+            }
+
+            renderFullscreenChatTicker() {
+                if (!this.ui || !this.ui.fullscreenChatTicker) {
+                    return;
+                }
+
+                const inGameScreen = Boolean(this.ui.gameScreen && this.ui.gameScreen.classList.contains('active'));
+                const visible = this.isFullscreenActive() && inGameScreen && this.fullscreenChatItems.length > 0;
+                const overlay = this.ui.fullscreenOverlay;
+                const gameMain = this.ui.gameMain;
+                const clearTickerLineClasses = () => {
+                    if (overlay) {
+                        overlay.classList.remove('ticker-lines-1', 'ticker-lines-2', 'ticker-lines-3');
+                    }
+                    if (gameMain) {
+                        gameMain.classList.remove('ticker-lines-1', 'ticker-lines-2', 'ticker-lines-3');
+                    }
+                };
+
+                this.ui.fullscreenChatTicker.innerHTML = '';
+                if (!visible) {
+                    this.ui.fullscreenChatTicker.classList.remove('visible');
+                    if (overlay) {
+                        overlay.classList.remove('has-chat-ticker');
+                    }
+                    if (gameMain) {
+                        gameMain.classList.remove('has-chat-ticker');
+                    }
+                    clearTickerLineClasses();
+                    return;
+                }
+
+                this.fullscreenChatItems.forEach((item) => {
+                    const row = document.createElement('div');
+                    row.className = 'fullscreen-chat-line';
+
+                    const nameSpan = document.createElement('span');
+                    nameSpan.className = 'name';
+                    nameSpan.textContent = `${item.name}${item.time ? ` ${item.time}` : ''}`;
+
+                    const messageSpan = document.createElement('span');
+                    messageSpan.textContent = item.message;
+
+                    row.appendChild(nameSpan);
+                    row.appendChild(messageSpan);
+                    this.ui.fullscreenChatTicker.appendChild(row);
+                });
+
+                this.ui.fullscreenChatTicker.classList.add('visible');
+                if (overlay) {
+                    const lineCount = Math.max(1, Math.min(3, this.fullscreenChatItems.length));
+                    overlay.classList.add('has-chat-ticker');
+                    if (gameMain) {
+                        gameMain.classList.add('has-chat-ticker');
+                    }
+                    clearTickerLineClasses();
+                    overlay.classList.add(`ticker-lines-${lineCount}`);
+                    if (gameMain) {
+                        gameMain.classList.add(`ticker-lines-${lineCount}`);
+                    }
+                }
+            }
+
+            scheduleFullscreenChatPrune() {
+                if (this.fullscreenChatTimer) {
+                    return;
+                }
+
+                this.fullscreenChatTimer = setInterval(() => {
+                    const now = Date.now();
+                    this.fullscreenChatItems = this.fullscreenChatItems.filter((item) => now - Number(item.at || 0) < 12000);
+                    if (this.fullscreenChatItems.length === 0) {
+                        clearInterval(this.fullscreenChatTimer);
+                        this.fullscreenChatTimer = null;
+                    }
+                    this.renderFullscreenChatTicker();
+                }, 1000);
+            }
+
+            updateFullscreenOverlay() {
+                if (!this.ui || !this.ui.fullscreenOverlay) {
+                    return;
+                }
+
+                const inGameScreen = Boolean(this.ui.gameScreen && this.ui.gameScreen.classList.contains('active'));
+                const spectatorMode = Boolean(this.ui.gameMain && this.ui.gameMain.classList.contains('spectator-mode'));
+                const active = inGameScreen;
+                this.ui.fullscreenOverlay.classList.toggle('active', active);
+                this.ui.fullscreenOverlay.style.setProperty('display', active ? 'block' : 'none', 'important');
+                this.ui.fullscreenOverlay.style.setProperty('visibility', active ? 'visible' : 'hidden', 'important');
+                this.ui.fullscreenOverlay.classList.toggle('non-fullscreen', active && !this.isFullscreenActive());
+                this.ui.fullscreenOverlay.classList.toggle('spectator-layout', spectatorMode);
+                this.renderFullscreenChatTicker();
+                this.syncFullscreenControlState();
+            }
+
+            syncFullscreenControlState() {
+                const activeTab = document.querySelector('.sidebar-tab.active')?.dataset?.tab || '';
+                ['players', 'chat', 'settings'].forEach((name) => {
+                    const button = document.getElementById(`btn-fs-${name}`);
+                    if (!button) return;
+                    const isActive = this.ui.gameSidebar.classList.contains('active') && activeTab === name;
+                    button.classList.toggle('active', isActive);
+                });
+            }
+
+            toggleFullscreenSidebar(tabName) {
+                const currentTab = document.querySelector('.sidebar-tab.active')?.dataset?.tab || '';
+                const sidebarActive = this.ui.gameSidebar.classList.contains('active');
+                if (sidebarActive && currentTab === tabName) {
+                    this.ui.gameSidebar.classList.remove('active');
+                    this.syncFullscreenControlState();
+                    return;
+                }
+
+                this.switchTab(tabName);
+                this.syncFullscreenControlState();
+            }
+
+            sendVirtualEscape() {
+                if (!this.gameEngine || typeof this.gameEngine.sendVirtualEscape !== 'function') {
+                    this.showNotification('ESC 发送失败：游戏尚未就绪', 'error');
+                    return;
+                }
+
+                this.gameEngine.sendVirtualEscape();
+            }
+
+            sendChat() {
+                const input = document.getElementById('chat-input');
+                const message = input.value.trim();
+                if (!message) return;
+                this.gameEngine.sendChat(message);
+                input.value = '';
+            }
+
+            renderKeyBindings() {
+                if (!this.gameEngine) return;
+                const actions = this.gameEngine.getActions();
+                const bindings = this.gameEngine.getBindings();
+                const role = this.gameEngine.state.role;
+                const isHost = Boolean(this.gameEngine.state.isHost);
+                const actionEditor = document.getElementById('action-editor');
+
+                this.ui.keyBindings.innerHTML = '';
+                if (actionEditor) {
+                    actionEditor.style.display = isHost ? 'flex' : 'none';
+                }
+
+                if (!Array.isArray(actions) || actions.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'key-binding-section';
+                    empty.innerHTML = '<h5>暂无动作配置</h5>';
+                    this.ui.keyBindings.appendChild(empty);
+                    return;
+                }
+
+                if (!isHost && role !== 'p1' && role !== 'p2') {
+                    const section = document.createElement('div');
+                    section.className = 'key-binding-section';
+                    section.innerHTML = '<h5>当前为观众，无可用键位</h5>';
+                    this.ui.keyBindings.appendChild(section);
+                    return;
+                }
+
+                const roleConfigs = isHost
+                    ? [
+                        { key: 'p1', title: 'P1 键位' },
+                        { key: 'p2', title: 'P2 键位' }
+                    ]
+                    : [{ key: role, title: role === 'p1' ? 'P1 键位' : 'P2 键位' }];
+
+                roleConfigs.forEach((roleConfig) => {
+                    const section = document.createElement('div');
+                    section.className = 'key-binding-section';
+                    const title = document.createElement('h5');
+                    title.textContent = roleConfig.title;
+                    section.appendChild(title);
+
+                    actions.forEach((action) => {
+                        const row = document.createElement('div');
+                        row.className = 'key-binding-item';
+
+                        const name = document.createElement('span');
+                        name.className = 'key-binding-name';
+                        name.textContent = action.label || action.id;
+
+                        const tags = document.createElement('div');
+                        tags.className = 'key-tags';
+
+                        const tag = document.createElement(isHost ? 'button' : 'span');
+                        tag.className = 'key-tag';
+                        const keyValue = (bindings[roleConfig.key] && bindings[roleConfig.key][action.id]) || '未设置';
+
+                        if (
+                            isHost
+                            && this.bindingListenState
+                            && this.bindingListenState.action === action.id
+                            && this.bindingListenState.role === roleConfig.key
+                        ) {
+                            tag.classList.add('listening');
+                            tag.textContent = '按下按键...';
+                        } else {
+                            tag.textContent = keyValue;
+                        }
+
+                        if (isHost) {
+                            tag.addEventListener('click', () => {
+                                this.bindingListenState = { role: roleConfig.key, action: action.id };
+                                this.renderKeyBindings();
+                            });
+                        }
+
+                        tags.appendChild(tag);
+                        row.appendChild(name);
+                        row.appendChild(tags);
+
+                        if (isHost) {
+                            const deleteBtn = document.createElement('button');
+                            deleteBtn.className = 'btn-delete-key';
+                            deleteBtn.textContent = '删除动作';
+                            deleteBtn.addEventListener('click', () => {
+                                if (actions.length <= 1) {
+                                    this.showNotification('至少保留 1 个动作', 'info');
+                                    return;
+                                }
+                                this.gameEngine.removeRoomAction(action.id);
+                            });
+                            row.appendChild(deleteBtn);
+                        }
+
+                        section.appendChild(row);
+                    });
+
+                    this.ui.keyBindings.appendChild(section);
+                });
+            }
+
+            renderVirtualButtons() {
+                if (!this.gameEngine || !this.ui.virtualControls || !this.ui.gameMain) return;
+                const isMobile = window.matchMedia('(max-width: 900px)').matches;
+
+                const role = this.gameEngine.state.role;
+                const actions = this.gameEngine.getActions();
+                const bindings = this.gameEngine.getBindings();
+                const roleBindings = bindings && bindings[role] ? bindings[role] : {};
+
+                this.ui.virtualControls.innerHTML = '';
+
+                if (!['p1', 'p2'].includes(role)) {
+                    this.ui.virtualControls.classList.add('hidden');
+                    this.ui.gameMain.classList.remove('has-virtual-controls');
+                    if (isMobile && this.ui.mobileToolbar) {
+                        this.ui.mobileToolbar.classList.add('visible');
+                    }
+                    return;
+                }
+
+                const availableActions = Array.isArray(actions)
+                    ? actions.filter((action) => Object.prototype.hasOwnProperty.call(roleBindings, action.id))
+                    : [];
+
+                if (availableActions.length === 0) {
+                    this.ui.virtualControls.classList.add('hidden');
+                    this.ui.gameMain.classList.remove('has-virtual-controls');
+                    if (isMobile && this.ui.mobileToolbar) {
+                        this.ui.mobileToolbar.classList.add('visible');
+                    }
+                    return;
+                }
+
+                const lane = document.createElement('div');
+                lane.className = 'v-btn-lane';
+
+                const leftStack = document.createElement('div');
+                leftStack.className = 'v-btn-stack v-btn-stack-left';
+
+                const rightStack = document.createElement('div');
+                rightStack.className = 'v-btn-stack v-btn-stack-right';
+
+                availableActions.forEach((action) => {
+                    const button = document.createElement('button');
+                    button.className = 'v-btn';
+
+                    const label = String(action.label || action.id || '').trim();
+                    const idText = String(action.id || '').toLowerCase();
+                    const isLeftRight = idText.includes('left')
+                        || idText.includes('right')
+                        || label.includes('向左')
+                        || label.includes('向右');
+                    const isJump = idText.includes('jump') || label.includes('跳');
+
+                    if (isJump) {
+                        button.classList.add('v-btn-jump');
+                    }
+
+                    button.textContent = label.length > 4 ? `${label.slice(0, 4)}…` : label;
+
+                    const start = (event) => {
+                        event.preventDefault();
+                        button.classList.add('active');
+                        this.gameEngine.sendInput(action.id, true);
+                    };
+
+                    const end = (event) => {
+                        event.preventDefault();
+                        button.classList.remove('active');
+                        this.gameEngine.sendInput(action.id, false);
+                    };
+
+                    button.addEventListener('mousedown', start);
+                    button.addEventListener('mouseup', end);
+                    button.addEventListener('mouseleave', end);
+                    button.addEventListener('touchstart', start, { passive: false });
+                    button.addEventListener('touchend', end, { passive: false });
+                    button.addEventListener('touchcancel', end, { passive: false });
+
+                    if (isLeftRight) {
+                        leftStack.appendChild(button);
+                    } else {
+                        rightStack.appendChild(button);
+                    }
+                });
+
+                lane.append(leftStack, rightStack);
+                this.ui.virtualControls.appendChild(lane);
+                this.ui.virtualControls.classList.remove('hidden');
+                this.ui.virtualControls.style.display = 'block';
+                this.ui.gameMain.classList.add('has-virtual-controls');
+                if (isMobile && this.ui.mobileToolbar) {
+                    this.ui.mobileToolbar.classList.remove('visible');
+                }
+
+                this.updateVirtualButtonSize(Number(document.getElementById('setting-btn-size').value || 70));
+                this.updateVirtualButtonOpacity(Number(document.getElementById('setting-btn-opacity').value || 40));
+            }
+
+            refreshRuffleSaveModuleState(patch = {}) {
+                if (!this.ruffleSaveModule || !this.gameEngine) return;
+
+                this.ruffleSaveModule.updateState({
+                    isHost: Boolean(this.gameEngine.state.isHost),
+                    gameStarted: Boolean(this.gameEngine.state.gameStarted),
+                    ...patch
+                });
+            }
+
+            switchTab(tabName) {
+                const tab = document.querySelector(`[data-tab="${tabName}"]`);
+                const panel = document.getElementById(`panel-${tabName}`);
+                const isMobile = window.matchMedia('(max-width: 900px)').matches;
+                const isFullscreen = this.isFullscreenActive();
+
+                if ((isMobile || isFullscreen) && tab && tab.classList.contains('active') && this.ui.gameSidebar.classList.contains('active')) {
+                    this.ui.gameSidebar.classList.remove('active');
+                    this.syncFullscreenControlState();
+                    return;
+                }
+
+                document.querySelectorAll('.sidebar-tab').forEach((tab) => tab.classList.remove('active'));
+                document.querySelectorAll('.sidebar-panel').forEach((panel) => panel.classList.remove('active'));
+
+                if (tab) tab.classList.add('active');
+                if (panel) panel.classList.add('active');
+
+                if (isMobile) {
+                    this.ui.gameSidebar.classList.add('active');
+                }
+
+                if (isFullscreen) {
+                    this.ui.gameSidebar.classList.add('active');
+                }
+
+                this.syncFullscreenControlState();
+            }
+
+            async toggleFullscreen() {
+                const nativeActive = this.isNativeFullscreenActive();
+                const pseudoActive = Boolean(this.pseudoFullscreenActive);
+
+                if (!nativeActive && !pseudoActive) {
+                    let enteredNative = false;
+                    if (document.documentElement && typeof document.documentElement.requestFullscreen === 'function') {
+                        try {
+                            await document.documentElement.requestFullscreen();
+                            enteredNative = this.isNativeFullscreenActive();
+                        } catch {
+                            enteredNative = false;
+                        }
+                    }
+
+                    if (enteredNative) {
+                        this.syncFullscreenLayout();
+                        if (screen.orientation && typeof screen.orientation.lock === 'function') {
+                            try {
+                                await screen.orientation.lock('landscape');
+                            } catch {
+                                this.showNotification('设备不支持自动横屏，请手动旋转设备', 'info');
+                            }
+                        }
+                        return;
+                    }
+
+                    if (this.canUsePseudoFullscreen()) {
+                        this.enterPseudoFullscreen();
+                        this.syncFullscreenLayout();
+                        this.showNotification('已启用 iPhone 沉浸全屏模式', 'success');
+                        return;
+                    }
+
+                    this.showNotification('当前浏览器不支持全屏', 'error');
+                    return;
+                }
+
+                if (nativeActive && typeof document.exitFullscreen === 'function') {
+                    document.exitFullscreen().catch(() => {});
+                }
+                if (pseudoActive) {
+                    this.exitPseudoFullscreen();
+                }
+                this.syncFullscreenLayout();
+            }
+
+            updateConnectionStatus(status, text) {
+                this.ui.connectionStatus.className = `connection-status ${status}`;
+                this.ui.statusText.textContent = text;
+            }
+
+            updateVirtualButtonSize(size) {
+                document.querySelectorAll('.v-btn').forEach((button) => {
+                    button.style.width = `${size}px`;
+                    button.style.height = `${size}px`;
+                });
+            }
+
+            updateVirtualButtonOpacity(opacity) {
+                document.querySelectorAll('.v-btn').forEach((button) => {
+                    button.style.opacity = String(opacity / 100);
+                });
+            }
+
+            showLoading(text) {
+                this.ui.loadingText.textContent = text;
+                this.ui.loadingOverlay.classList.add('active');
+            }
+
+            hideLoading() {
+                this.ui.loadingOverlay.classList.remove('active');
+            }
+
+            showNotification(message, type = 'info') {
+                this.ui.notification.textContent = message;
+                this.ui.notification.className = `notification ${type} show`;
+                setTimeout(() => {
+                    this.ui.notification.classList.remove('show');
+                }, 2600);
+            }
+
+            startRemoteStreamWaitState() {
+                this.clearRemoteStreamWaitState();
+                this.showLoading('观战模式：正在等待房主画面...');
+
+                this.remoteStreamTipTimer = setTimeout(() => {
+                    this.showNotification('远程画面连接中，请稍候...', 'info');
+                }, 3500);
+
+                this.remoteStreamWaitTimer = setTimeout(() => {
+                    this.hideLoading();
+                    if (this.gameEngine && !this.gameEngine.state.isHost) {
+                        this.gameEngine.requestStreamSubscription();
+                        this.showNotification('远程画面超时：可能是房主端 SWF 外链资源被拦截，已自动重试', 'info');
+                        return;
+                    }
+                    this.showNotification('远程画面连接超时，请检查房主网络或刷新后重试', 'error');
+                }, 12000);
+            }
+
+            clearRemoteStreamWaitState() {
+                if (this.remoteStreamWaitTimer) {
+                    clearTimeout(this.remoteStreamWaitTimer);
+                    this.remoteStreamWaitTimer = null;
+                }
+                if (this.remoteStreamTipTimer) {
+                    clearTimeout(this.remoteStreamTipTimer);
+                    this.remoteStreamTipTimer = null;
+                }
+                this.hideLoading();
+            }
+
+            clearRemoteStreamRecoveryTimer() {
+                if (this.remoteStreamRecoveryTimer) {
+                    clearTimeout(this.remoteStreamRecoveryTimer);
+                    this.remoteStreamRecoveryTimer = null;
+                }
+            }
+
+            scheduleRemoteStreamRecovery(reason = 'unknown') {
+                this.clearRemoteStreamRecoveryTimer();
+                this.remoteStreamRecoveryTimer = setTimeout(() => {
+                    const isViewer = this.gameEngine && !this.gameEngine.state.isHost;
+                    const staleMs = Date.now() - this.lastRemoteFrameAt;
+
+                    if (isViewer && staleMs > 2200) {
+                        console.warn('[RemoteVideo] 远程画面超时，触发重连:', reason, { staleMs });
+                        this.gameEngine.requestStreamSubscription();
+                        this.showNotification('远程画面异常，正在自动重连...', 'info');
+                    }
+                }, 2200);
+            }
+
+            resetUI() {
+                this.clearRemoteStreamWaitState();
+                this.clearRemoteStreamRecoveryTimer();
+                if (this.fullscreenChatTimer) {
+                    clearInterval(this.fullscreenChatTimer);
+                    this.fullscreenChatTimer = null;
+                }
+                this.lastRemoteFrameAt = 0;
+                this.remoteConnectedNotified = false;
+                this.remoteFrameDecodeFailCount = 0;
+                this.remoteBlackFrameStreak = 0;
+                this.remoteFramesReceived = 0;
+                this.remoteFramesRendered = 0;
+                this.remoteDiagWindowStart = Date.now();
+                this.remoteBytesReceived = 0;
+                this.pendingRemoteFrame = null;
+                this.remoteRenderInFlight = false;
+                this.hudLastLatencyMs = 0;
+                this.hudInteractionLatencyMs = 0;
+                this.hostPublishBitrateMbps = 0;
+                this.hostPublishFps = 0;
+                this.viewerRealtimeBitrateMbps = 0;
+                this.viewerRealtimeFps = 0;
+                this.fullscreenChatItems = [];
+                this.setSpectatorLayout(false);
+                this.detachRemoteStream();
+                this.hudTransportMode = '初始化';
+                this.ui.playerList.innerHTML = '';
+                this.ui.chatMessages.innerHTML = '';
+                this.ui.remoteVideoContainer.classList.remove('active');
+                if (this.ui.remoteCanvas) {
+                    const context = this.ui.remoteCanvas.getContext('2d');
+                    if (context) {
+                        context.clearRect(0, 0, this.ui.remoteCanvas.width, this.ui.remoteCanvas.height);
+                    }
+                }
+                this.ui.displayRoomCode.textContent = '------';
+                this.bindingListenState = null;
+                this.ui.mobileToolbar.classList.remove('visible');
+                this.ui.gameSidebar.classList.remove('active');
+                this.ui.virtualControls.innerHTML = '';
+                this.ui.virtualControls.classList.add('hidden');
+                this.ui.gameMain.classList.remove('has-virtual-controls');
+                if (this.ui.fullscreenChatTicker) {
+                    this.ui.fullscreenChatTicker.innerHTML = '';
+                    this.ui.fullscreenChatTicker.classList.remove('visible');
+                }
+                this.toggleJoinMode(false);
+                this.renderKeyBindings();
+                this.renderVirtualButtons();
+                this.refreshRuffleSaveModuleState({ gameReady: false });
+                this.updatePerfHud();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            window.gameApp = new GameApp();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, touch-action: none">
+<title>消灭病毒</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #000;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    font-family: 'Arial', 'Microsoft YaHei', sans-serif;
+  }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  canvas {
+    display: block;
+    image-rendering: auto;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+// ============================================================
+//  消灭病毒 (Virus Killer) — 完整游戏实现
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---- 游戏区域设计尺寸（会等比缩放适配屏幕） ----
+const GAME_W = 480;
+const GAME_H = 800;
+
+// ---- 响应式画布 ----
+function resizeCanvas() {
+  const ratio = GAME_W / GAME_H;
+  const winW = window.innerWidth;
+  const winH = window.innerHeight;
+  let w, h;
+  if (winW / winH > ratio) {
+    h = winH;
+    w = h * ratio;
+  } else {
+    w = winW;
+    h = w / ratio;
+  }
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  canvas.width = GAME_W;
+  canvas.height = GAME_H;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ============================================================
+//  常量定义
+// ============================================================
+const DAMAGE = 10;                    // 每发子弹伤害
+const BASE_FIRE_RATE = 200;          // 基础射速(ms)
+const MIN_FIRE_RATE = 20;            // 最快射速(ms)
+const BULLET_SPEED = 10;             // 子弹速度
+const BULLET_W = 3;                  // 子弹宽度
+const BULLET_H = 16;                 // 子弹高度
+const BULLET_SPACING = 10;           // 多列子弹间距
+const PLAYER_W = 44;                 // 玩家宽度
+const PLAYER_H = 52;                 // 玩家高度
+const PLAYER_Y_OFFSET = 100;         // 玩家距底部距离
+const SHIELD_DURATION = 10;          // 护盾持续时间(秒)
+const POWERUP_DROP_CHANCE = 0.05;    // 道具掉落概率
+const POWERUP_SPEED = 1.8;           // 道具下落速度
+const VIRUS_MIN_RADIUS = 16;         // 病毒最小半径
+const VIRUS_MAX_RADIUS = 46;         // 病毒最大半径
+const SPLIT_MIN_HP = 10;              // 分裂最小血量（低于此值直接死亡）
+const NORMAL_WAVES = 3;              // 每阶段普通波次
+const WAVE_GAP_MS = 1500;            // 波次间隔(ms)
+const STAGE_TRANSITION_MS = 2500;    // 阶段过渡时间(ms)
+const VIRUS_SPAWN_INTERVAL = 800;    // 病毒生成间隔(ms)
+
+// ============================================================
+//  游戏状态
+// ============================================================
+const STATE = { MENU: 'menu', PLAYING: 'playing', STAGE_TRANSITION: 'stageTransition', GAME_OVER: 'gameOver' };
+
+const game = {
+  state: STATE.MENU,
+  score: 0,
+  highScore: 0,
+  stage: 1,
+  wave: 0,                  // 当前波次(0-based, < NORMAL_WAVES 为普通波, == NORMAL_WAVES 为boss波)
+  waveVirusesSpawned: 0,    // 当前波已生成病毒数
+  waveVirusesTotal: 0,      // 当前波需要生成的总病毒数
+  waveVirusesAlive: 0,      // 当前波存活病毒数（含场上所有病毒）
+  lastVirusSpawn: 0,        // 上次生成病毒时间戳
+  waveCompleted: false,     // 当前波是否已清空
+  waveCooldown: 0,          // 波次冷却倒计时
+  stageTransitionTimer: 0,  // 阶段过渡倒计时
+  isBossWave: false,        // 是否boss波
+  frameTime: 0,
+  deltaTime: 0,
+  lastTime: 0,
+  shakeTimer: 0,            // 屏幕震动
+  shakeIntensity: 0,
+  messageText: '',          // 中央提示文字
+  messageTimer: 0,
+  // 玩家相关
+  player: null,
+  bullets: [],
+  // 病毒
+  viruses: [],
+  // 道具
+  powerUps: [],
+  // 粒子
+  particles: [],
+  // 星星背景
+  stars: [],
+};
+
+// ============================================================
+//  输入处理
+// ============================================================
+const input = {
+  dragging: false,
+  mouseX: 0,
+  mouseY: 0,
+  touchId: null,
+};
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = GAME_W / rect.width;
+  const scaleY = GAME_H / rect.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY,
+  };
+}
+
+function isOnPlayer(pos) {
+  const p = game.player;
+  if (!p) return false;
+  const dx = pos.x - p.x;
+  const dy = pos.y - p.y;
+  // 扩大可点击区域
+  return Math.abs(dx) < PLAYER_W && Math.abs(dy) < PLAYER_H + 10;
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  if (game.state === STATE.MENU) {
+    startGame();
+    return;
+  }
+  if (game.state === STATE.GAME_OVER) {
+    startGame();
+    return;
+  }
+  if (game.state === STATE.PLAYING && isOnPlayer(pos)) {
+    input.dragging = true;
+    input.mouseX = pos.x;
+    input.mouseY = pos.y;
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  e.preventDefault();
+  if (!input.dragging) return;
+  const pos = getCanvasPos(e);
+  input.mouseX = pos.x;
+  input.mouseY = pos.y;
+});
+
+canvas.addEventListener('mouseup', (e) => {
+  e.preventDefault();
+  input.dragging = false;
+});
+
+canvas.addEventListener('mouseleave', (e) => {
+  input.dragging = false;
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (e.touches.length !== 1) return;
+  const pos = getCanvasPos(e);
+  if (game.state === STATE.MENU) {
+    startGame();
+    return;
+  }
+  if (game.state === STATE.GAME_OVER) {
+    startGame();
+    return;
+  }
+  if (game.state === STATE.PLAYING) {
+    input.dragging = true;
+    input.touchId = e.touches[0].identifier;
+    input.mouseX = pos.x;
+    input.mouseY = pos.y;
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (!input.dragging) return;
+  for (let i = 0; i < e.touches.length; i++) {
+    if (e.touches[i].identifier === input.touchId) {
+      const pos = { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = GAME_W / rect.width;
+      const scaleY = GAME_H / rect.height;
+      pos.x = (e.touches[i].clientX - rect.left) * scaleX;
+      pos.y = (e.touches[i].clientY - rect.top) * scaleY;
+      input.mouseX = pos.x;
+      input.mouseY = pos.y;
+      break;
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    if (e.changedTouches[i].identifier === input.touchId) {
+      input.dragging = false;
+      input.touchId = null;
+      break;
+    }
+  }
+});
+
+canvas.addEventListener('touchcancel', (e) => {
+  input.dragging = false;
+  input.touchId = null;
+});
+
+// ============================================================
+//  玩家
+// ============================================================
+function createPlayer() {
+  return {
+    x: GAME_W / 2,
+    y: GAME_H - PLAYER_Y_OFFSET,
+    fireRate: BASE_FIRE_RATE,
+    bulletColumns: 1,
+    lastFireTime: 0,
+    shieldActive: false,
+    shieldTimer: 0,
+    engineFlame: 0,   // 引擎动画
+  };
+}
+
+function updatePlayer(dt) {
+  const p = game.player;
+  if (!p) return;
+
+  // 拖拽移动
+  if (input.dragging) {
+    const targetX = input.mouseX;
+    const targetY = input.mouseY;
+    // 平滑跟随
+    const lerp = 0.3;
+    p.x += (targetX - p.x) * lerp;
+    // y 轴仅在范围内微调
+    const clampedY = Math.max(GAME_H * 0.4, Math.min(GAME_H - PLAYER_Y_OFFSET, targetY));
+    p.y += (clampedY - p.y) * lerp * 0.5;
+  }
+
+  // 限制在游戏区域内
+  p.x = Math.max(PLAYER_W / 2, Math.min(GAME_W - PLAYER_W / 2, p.x));
+  p.y = Math.max(GAME_H * 0.3, Math.min(GAME_H - 60, p.y));
+
+  // 护盾计时
+  if (p.shieldActive) {
+    p.shieldTimer -= dt;
+    if (p.shieldTimer <= 0) {
+      p.shieldActive = false;
+      p.shieldTimer = 0;
+    }
+  }
+
+  // 引擎动画
+  p.engineFlame += dt * 10;
+
+  // 自动射击
+  const now = performance.now();
+  if (now - p.lastFireTime >= p.fireRate) {
+    fireBullets(p);
+    p.lastFireTime = now;
+  }
+}
+
+function fireBullets(p) {
+  const cols = p.bulletColumns;
+  const centerX = p.x;
+  const baseY = p.y - PLAYER_H / 2 - 4;
+
+  if (cols === 1) {
+    spawnBullet(centerX, baseY);
+  } else {
+    const totalSpread = (cols - 1) * BULLET_SPACING;
+    const startX = centerX - totalSpread / 2;
+    for (let i = 0; i < cols; i++) {
+      spawnBullet(startX + i * BULLET_SPACING, baseY);
+    }
+  }
+}
+
+function spawnBullet(x, y) {
+  game.bullets.push({
+    x: x,
+    y: y,
+    w: BULLET_W,
+    h: BULLET_H,
+    speed: BULLET_SPEED,
+    alive: true,
+  });
+}
+
+// ============================================================
+//  病毒
+// ============================================================
+function createVirus(x, y, hp, canSplit, speedMult) {
+  const radius = VIRUS_MIN_RADIUS + (hp / 150) * (VIRUS_MAX_RADIUS - VIRUS_MIN_RADIUS);
+  const clampedRadius = Math.max(VIRUS_MIN_RADIUS, Math.min(VIRUS_MAX_RADIUS, radius));
+
+  // 随机向下角度 (-50° ~ +50° 偏离垂直向下)
+  const angle = (Math.random() - 0.5) * (Math.PI * 0.56) + Math.PI / 2;
+  const baseSpeed = 1.2 + Math.random() * 1.8;
+  const speed = baseSpeed * (speedMult || 1);
+
+  return {
+    x: x,
+    y: y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    radius: clampedRadius,
+    hp: hp,
+    maxHp: hp,
+    canSplit: canSplit !== false,
+    alive: true,
+    pulsePhase: Math.random() * Math.PI * 2,
+    hitFlash: 0,       // 受伤闪烁
+  };
+}
+
+function updateViruses(dt) {
+  for (const v of game.viruses) {
+    if (!v.alive) continue;
+
+    // 移动
+    v.x += v.vx;
+    v.y += v.vy;
+
+    // 左右边界反弹
+    if (v.x - v.radius <= 0) {
+      v.x = v.radius;
+      v.vx = Math.abs(v.vx);
+    }
+    if (v.x + v.radius >= GAME_W) {
+      v.x = GAME_W - v.radius;
+      v.vx = -Math.abs(v.vx);
+    }
+
+    // 超出底部则移除
+    if (v.y - v.radius > GAME_H) {
+      v.alive = false;
+    }
+
+    // 受伤闪烁衰减
+    if (v.hitFlash > 0) v.hitFlash -= dt * 4;
+
+    // 脉冲相位
+    v.pulsePhase += dt * 3;
+  }
+
+  // 清理死亡病毒
+  game.viruses = game.viruses.filter(v => v.alive);
+}
+
+function damageVirus(virus) {
+  virus.hp -= DAMAGE;
+  virus.hitFlash = 1;
+  spawnHitParticles(virus.x, virus.y);
+
+  if (virus.hp <= 0) {
+    virus.alive = false;
+
+    if (virus.canSplit) {
+      // 分裂
+      splitVirus(virus);
+    } else {
+      // 死亡
+      killVirus(virus);
+    }
+  }
+}
+
+function splitVirus(virus) {
+  const totalHp = virus.maxHp;
+  // 随机分配血量给两个子病毒
+  const minChildHp = SPLIT_MIN_HP;
+  const maxChildHp = totalHp - SPLIT_MIN_HP;
+
+  if (maxChildHp < minChildHp) {
+    // 血量太少，无法分裂，直接死亡
+    killVirus(virus);
+    return;
+  }
+
+  const child1Hp = minChildHp + Math.floor(Math.random() * (maxChildHp - minChildHp + 1));
+  const child2Hp = totalHp - child1Hp;
+
+  const speedMult = 1 + (game.stage - 1) * 0.08;
+
+  // 创建两个子病毒，子病毒不能再分裂（每只病毒只分裂一次）
+  // "分裂一次之后的两只血量低于零则消失"
+  const offsetX1 = (Math.random() - 0.5) * 30;
+  const offsetY1 = (Math.random() - 0.5) * 15;
+  const offsetX2 = (Math.random() - 0.5) * 30;
+  const offsetY2 = (Math.random() - 0.5) * 15;
+
+  const child1 = createVirus(
+    virus.x + offsetX1,
+    virus.y + offsetY1,
+    child1Hp,
+    false,  // 子病毒不可再分裂
+    speedMult
+  );
+  const child2 = createVirus(
+    virus.x + offsetX2,
+    virus.y + offsetY2,
+    child2Hp,
+    false,  // 子病毒不可再分裂
+    speedMult
+  );
+
+  // 确保子病毒在游戏区域内
+  child1.x = Math.max(child1.radius, Math.min(GAME_W - child1.radius, child1.x));
+  child1.y = Math.max(child1.radius, Math.min(GAME_H / 2, child1.y));
+  child2.x = Math.max(child2.radius, Math.min(GAME_W - child2.radius, child2.x));
+  child2.y = Math.max(child2.radius, Math.min(GAME_H / 2, child2.y));
+
+  game.viruses.push(child1, child2);
+
+  // 更新存活计数（原病毒已死，新增2个子病毒）
+  updateAliveCount();
+
+  // 分裂粒子效果
+  spawnSplitParticles(virus.x, virus.y, virus.radius);
+}
+
+function killVirus(virus) {
+  // 死亡粒子
+  spawnDeathParticles(virus.x, virus.y, virus.radius);
+
+  // 加分
+  game.score += virus.maxHp;
+
+  // 道具掉落概率
+  if (Math.random() < POWERUP_DROP_CHANCE) {
+    dropPowerUp(virus.x, virus.y);
+  }
+
+  // 更新存活计数
+  updateAliveCount();
+}
+
+function updateAliveCount() {
+  game.waveVirusesAlive = game.viruses.filter(v => v.alive).length;
+}
+
+// ============================================================
+//  道具系统
+// ============================================================
+const POWERUP_TYPES = {
+  EXPANDED_MAG: { name: '扩容弹夹', color: '#4488ff', icon: '+1', desc: '子弹+1列' },
+  FAST_MAG: { name: '快速弹夹', color: '#ffaa00', icon: '>>', desc: '射速+50%' },
+  SHIELD: { name: '护盾', color: '#00ddff', icon: '🛡', desc: '10秒免疫' },
+};
+
+const POWERUP_LIST = [POWERUP_TYPES.EXPANDED_MAG, POWERUP_TYPES.FAST_MAG, POWERUP_TYPES.SHIELD];
+
+function dropPowerUp(x, y) {
+  const typeIdx = Math.floor(Math.random() * POWERUP_LIST.length);
+  game.powerUps.push({
+    x: x,
+    y: y,
+    type: POWERUP_LIST[typeIdx],
+    radius: 15,
+    vy: POWERUP_SPEED,
+    alive: true,
+    glowPhase: Math.random() * Math.PI * 2,
+  });
+}
+
+function updatePowerUps(dt) {
+  for (const pu of game.powerUps) {
+    if (!pu.alive) continue;
+    pu.y += pu.vy;
+    pu.glowPhase += dt * 4;
+
+    // 检测与玩家的碰撞
+    const p = game.player;
+    if (p) {
+      const dx = pu.x - p.x;
+      const dy = pu.y - p.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < pu.radius + PLAYER_W / 2) {
+        collectPowerUp(pu);
+        pu.alive = false;
+      }
+    }
+
+    // 超出屏幕
+    if (pu.y > GAME_H + 20) {
+      pu.alive = false;
+    }
+  }
+  game.powerUps = game.powerUps.filter(pu => pu.alive);
+}
+
+function collectPowerUp(pu) {
+  const p = game.player;
+  spawnCollectParticles(pu.x, pu.y, pu.type.color);
+
+  switch (pu.type) {
+    case POWERUP_TYPES.EXPANDED_MAG:
+      p.bulletColumns = Math.min(5, p.bulletColumns + 1);
+      showMessage('子弹 +1列！', pu.type.color);
+      break;
+    case POWERUP_TYPES.FAST_MAG:
+      p.fireRate = Math.max(MIN_FIRE_RATE, Math.floor(p.fireRate * 0.5));
+      showMessage('射速提升！', pu.type.color);
+      break;
+    case POWERUP_TYPES.SHIELD:
+      p.shieldActive = true;
+      p.shieldTimer = SHIELD_DURATION;
+      showMessage('护盾激活！', pu.type.color);
+      break;
+  }
+}
+
+// ============================================================
+//  粒子系统
+// ============================================================
+function spawnParticles(x, y, count, color, config) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (config.speed || 3) * (0.5 + Math.random());
+    game.particles.push({
+      x: x,
+      y: y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: config.life || 0.6,
+      maxLife: config.life || 0.6,
+      color: color,
+      radius: (config.radius || 3) * (0.5 + Math.random()),
+    });
+  }
+}
+
+function spawnHitParticles(x, y) {
+  spawnParticles(x, y, 4, '#ffff88', { speed: 2, life: 0.3, radius: 2 });
+}
+
+function spawnSplitParticles(x, y, radius) {
+  spawnParticles(x, y, 12, '#ff8844', { speed: 5, life: 0.6, radius: 3 });
+}
+
+function spawnDeathParticles(x, y, radius) {
+  spawnParticles(x, y, 16, '#ff4444', { speed: 4, life: 0.8, radius: 4 });
+}
+
+function spawnCollectParticles(x, y, color) {
+  spawnParticles(x, y, 10, color, { speed: 3, life: 0.5, radius: 3 });
+}
+
+function updateParticles(dt) {
+  for (const pt of game.particles) {
+    pt.x += pt.vx;
+    pt.y += pt.vy;
+    pt.life -= dt;
+    pt.radius *= 0.97; // 粒子缩小
+  }
+  game.particles = game.particles.filter(pt => pt.life > 0);
+}
+
+// ============================================================
+//  阶段与波次系统
+// ============================================================
+function getStageConfig(stage) {
+  return {
+    virusHpMin: 5 + (stage - 1) * 5,
+    virusHpMax: 100 + (stage - 1) * 30,
+    virusesPerWave: 5 + (stage - 1) * 3,
+    numWaves: NORMAL_WAVES,
+    bossWaveMultiplier: 2,
+    speedMultiplier: 1 + (stage - 1) * 0.08,
+  };
+}
+
+function startWave() {
+  const cfg = getStageConfig(game.stage);
+
+  if (game.wave < NORMAL_WAVES) {
+    // 普通波
+    game.isBossWave = false;
+    game.waveVirusesTotal = cfg.virusesPerWave;
+  } else {
+    // Boss波
+    game.isBossWave = true;
+    game.waveVirusesTotal = cfg.virusesPerWave * cfg.bossWaveMultiplier;
+  }
+
+  game.waveVirusesSpawned = 0;
+  game.waveVirusesAlive = 0;
+  game.waveCompleted = false;
+  game.lastVirusSpawn = performance.now();
+
+  if (game.isBossWave) {
+    showMessage('⚠ BOSS WAVE ⚠', '#ff4444');
+  } else {
+    showMessage(`第 ${game.stage} 阶段 - 第 ${game.wave + 1} 波`, '#ffffff');
+  }
+}
+
+function spawnVirus() {
+  const cfg = getStageConfig(game.stage);
+  const hp = cfg.virusHpMin + Math.floor(Math.random() * (cfg.virusHpMax - cfg.virusHpMin + 1));
+  const x = 40 + Math.random() * (GAME_W - 80);
+  const y = -VIRUS_MAX_RADIUS;
+  const v = createVirus(x, y, hp, true, cfg.speedMultiplier);
+  game.viruses.push(v);
+  game.waveVirusesSpawned++;
+  game.waveVirusesAlive++;
+}
+
+function updateStageSystem(now) {
+  if (game.state !== STATE.PLAYING) return;
+
+  const cfg = getStageConfig(game.stage);
+  updateAliveCount();
+
+  // 检查当前波是否完成
+  if (!game.waveCompleted && game.waveVirusesSpawned >= game.waveVirusesTotal && game.waveVirusesAlive <= 0) {
+    game.waveCompleted = true;
+    game.waveCooldown = WAVE_GAP_MS;
+  }
+
+  // 冷却时间（波次间隔）
+  if (game.waveCompleted && game.waveCooldown > 0) {
+    game.waveCooldown -= game.deltaTime * 1000;
+    if (game.waveCooldown <= 0) {
+      // 进入下一波
+      game.wave++;
+      if (game.wave <= NORMAL_WAVES) {
+        // 还有波次（包括boss波）
+        startWave();
+      } else {
+        // 阶段完成
+        completeStage();
+      }
+    }
+  }
+
+  // 生成病毒
+  if (!game.waveCompleted && game.waveVirusesSpawned < game.waveVirusesTotal) {
+    const spawnInterval = game.isBossWave ? VIRUS_SPAWN_INTERVAL * 0.5 : VIRUS_SPAWN_INTERVAL;
+    if (now - game.lastVirusSpawn >= spawnInterval) {
+      spawnVirus();
+      game.lastVirusSpawn = now;
+    }
+  }
+}
+
+function completeStage() {
+  game.state = STATE.STAGE_TRANSITION;
+  game.stageTransitionTimer = STAGE_TRANSITION_MS;
+  showMessage(`🎉 阶段 ${game.stage} 完成！`, '#44ff44');
+}
+
+function advanceStage() {
+  game.stage++;
+  game.wave = 0;
+  game.viruses = [];
+  game.bullets = [];
+  game.powerUps = [];
+  game.particles = [];
+  startWave();
+  game.state = STATE.PLAYING;
+  showMessage(`阶段 ${game.stage}`, '#ffffff');
+}
+
+// ============================================================
+//  碰撞检测
+// ============================================================
+function checkCollisions() {
+  const p = game.player;
+  if (!p || game.state !== STATE.PLAYING) return;
+
+  // 子弹 vs 病毒
+  for (const bullet of game.bullets) {
+    if (!bullet.alive) continue;
+    for (const virus of game.viruses) {
+      if (!virus.alive) continue;
+      const dx = bullet.x - virus.x;
+      const dy = bullet.y - virus.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < virus.radius + Math.max(bullet.w, bullet.h) / 2) {
+        bullet.alive = false;
+        damageVirus(virus);
+        break; // 一颗子弹只命中一个病毒
+      }
+    }
+  }
+
+  // 清理死亡子弹
+  game.bullets = game.bullets.filter(b => b.alive);
+
+  // 病毒碰撞超出底部的已在上方处理
+
+  // 玩家 vs 病毒
+  if (!p.shieldActive) {
+    for (const virus of game.viruses) {
+      if (!virus.alive) continue;
+      const dx = p.x - virus.x;
+      const dy = p.y - virus.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const collisionDist = virus.radius + PLAYER_W * 0.35;
+      if (dist < collisionDist) {
+        gameOver();
+        return;
+      }
+    }
+  } else {
+    // 护盾激活时，碰到病毒推开病毒
+    for (const virus of game.viruses) {
+      if (!virus.alive) continue;
+      const dx = p.x - virus.x;
+      const dy = p.y - virus.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const collisionDist = virus.radius + PLAYER_W * 0.4;
+      if (dist < collisionDist && dist > 0) {
+        // 推开病毒
+        const nx = dx / dist;
+        const ny = dy / dist;
+        virus.vx = nx * 4;
+        virus.vy = ny * 4;
+        spawnHitParticles(virus.x, virus.y);
+      }
+    }
+  }
+}
+
+// ============================================================
+//  星星背景
+// ============================================================
+function initStars() {
+  game.stars = [];
+  for (let i = 0; i < 80; i++) {
+    game.stars.push({
+      x: Math.random() * GAME_W,
+      y: Math.random() * GAME_H,
+      radius: 0.5 + Math.random() * 1.5,
+      twinkle: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.02 + Math.random() * 0.04,
+      speed: 0.3 + Math.random() * 0.7,
+    });
+  }
+}
+
+function updateStars(dt) {
+  for (const s of game.stars) {
+    s.y += s.speed;
+    s.twinkle += s.twinkleSpeed;
+    if (s.y > GAME_H + 5) {
+      s.y = -5;
+      s.x = Math.random() * GAME_W;
+    }
+  }
+}
+
+function drawStars() {
+  for (const s of game.stars) {
+    const alpha = 0.4 + 0.4 * Math.sin(s.twinkle);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+//  渲染
+// ============================================================
+function drawBackground() {
+  // 深空背景渐变
+  const grad = ctx.createLinearGradient(0, 0, 0, GAME_H);
+  grad.addColorStop(0, '#0a0a2e');
+  grad.addColorStop(0.5, '#12123a');
+  grad.addColorStop(1, '#1a1a3e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+}
+
+function drawPlayer() {
+  const p = game.player;
+  if (!p) return;
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+
+  // 护盾光环
+  if (p.shieldActive) {
+    const shieldAlpha = 0.3 + 0.15 * Math.sin(performance.now() * 0.005);
+    ctx.strokeStyle = `rgba(0, 220, 255, ${shieldAlpha})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, PLAYER_W * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 内层护盾
+    ctx.strokeStyle = `rgba(0, 255, 255, ${shieldAlpha * 0.5})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, PLAYER_W * 0.7, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // 引擎火焰
+  const flameLen = 8 + Math.abs(Math.sin(p.engineFlame)) * 10;
+  ctx.fillStyle = '#ff6600';
+  ctx.beginPath();
+  ctx.moveTo(-8, PLAYER_H / 2 - 2);
+  ctx.lineTo(0, PLAYER_H / 2 + flameLen);
+  ctx.lineTo(8, PLAYER_H / 2 - 2);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#ffcc00';
+  ctx.beginPath();
+  ctx.moveTo(-4, PLAYER_H / 2 - 2);
+  ctx.lineTo(0, PLAYER_H / 2 + flameLen * 0.6);
+  ctx.lineTo(4, PLAYER_H / 2 - 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // 机身（菱形/箭头形状）
+  ctx.fillStyle = '#44ccff';
+  ctx.beginPath();
+  ctx.moveTo(0, -PLAYER_H / 2);           // 顶部尖端
+  ctx.lineTo(PLAYER_W / 2, PLAYER_H / 2 - 8);  // 右下
+  ctx.lineTo(PLAYER_W / 4, PLAYER_H / 4);       // 内右下
+  ctx.lineTo(-PLAYER_W / 4, PLAYER_H / 4);      // 内左下
+  ctx.lineTo(-PLAYER_W / 2, PLAYER_H / 2 - 8);  // 左下
+  ctx.closePath();
+  ctx.fill();
+
+  // 机身高光
+  ctx.fillStyle = '#88eeff';
+  ctx.beginPath();
+  ctx.moveTo(0, -PLAYER_H / 2);
+  ctx.lineTo(PLAYER_W / 4, PLAYER_H / 4);
+  ctx.lineTo(0, PLAYER_H / 4 - 4);
+  ctx.lineTo(-PLAYER_W / 4, PLAYER_H / 4);
+  ctx.closePath();
+  ctx.fill();
+
+  // 机翼
+  ctx.fillStyle = '#3399dd';
+  ctx.beginPath();
+  ctx.moveTo(-PLAYER_W / 2, PLAYER_H / 2 - 8);
+  ctx.lineTo(-PLAYER_W / 2 - 6, PLAYER_H / 2 + 4);
+  ctx.lineTo(-PLAYER_W / 4, PLAYER_H / 4);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(PLAYER_W / 2, PLAYER_H / 2 - 8);
+  ctx.lineTo(PLAYER_W / 2 + 6, PLAYER_H / 2 + 4);
+  ctx.lineTo(PLAYER_W / 4, PLAYER_H / 4);
+  ctx.closePath();
+  ctx.fill();
+
+  // 驾驶舱
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(0, -4, 6, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawBullets() {
+  for (const b of game.bullets) {
+    if (!b.alive) continue;
+    // 子弹光晕
+    ctx.fillStyle = 'rgba(255, 255, 100, 0.3)';
+    ctx.fillRect(b.x - b.w, b.y - b.h / 2, b.w * 3, b.h);
+    // 子弹本体
+    ctx.fillStyle = '#ffff44';
+    ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+    // 高亮核心
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(b.x - b.w / 4, b.y - b.h / 2, b.w / 2, b.h);
+  }
+}
+
+function drawViruses() {
+  for (const v of game.viruses) {
+    if (!v.alive) continue;
+
+    ctx.save();
+    ctx.translate(v.x, v.y);
+
+    // 脉冲缩放
+    const pulse = 1 + Math.sin(v.pulsePhase) * 0.04;
+    const r = v.radius * pulse;
+
+    // 颜色：根据血量比例从绿到黄到红
+    const hpRatio = v.hp / v.maxHp;
+    let r_col, g_col, b_col;
+    if (hpRatio > 0.5) {
+      // 红 → 橙 (1.0→0.5)
+      const t = (hpRatio - 0.5) * 2; // 0→1 (红→橙)
+      r_col = 255;
+      g_col = Math.floor(100 + t * 100);
+      b_col = Math.floor(30 + t * 50);
+    } else {
+      // 橙 → 绿 (0.5→0)
+      const t = hpRatio * 2; // 0→1 (绿→橙)
+      r_col = Math.floor(100 + t * 155);
+      g_col = Math.floor(200 - t * 50);
+      b_col = Math.floor(30 + t * 50);
+    }
+
+    // 受伤闪烁
+    if (v.hitFlash > 0) {
+      r_col = Math.min(255, r_col + 100);
+      g_col = Math.min(255, g_col + 100);
+      b_col = Math.min(255, b_col + 100);
+    }
+
+    const colorStr = `rgb(${r_col},${g_col},${b_col})`;
+
+    // 外发光
+    ctx.fillStyle = `rgba(${r_col},${g_col},${b_col},0.2)`;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 病毒主体（带刺的圆形）
+    ctx.fillStyle = colorStr;
+    ctx.beginPath();
+    const spikes = 12;
+    for (let i = 0; i < spikes; i++) {
+      const angle = (i / spikes) * Math.PI * 2;
+      const spikeR = i % 3 === 0 ? r * 1.12 : r;
+      const x = Math.cos(angle) * spikeR;
+      const y = Math.sin(angle) * spikeR;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // 边框
+    ctx.strokeStyle = `rgba(255,255,255,0.3)`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 内部高光
+    const grad = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.1, 0, 0, r);
+    grad.addColorStop(0, 'rgba(255,255,255,0.35)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // HP数字
+    const fontSize = Math.max(12, r * 0.6);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${fontSize}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 3;
+    ctx.fillText(v.hp, 0, 1);
+    ctx.shadowBlur = 0;
+
+    ctx.restore();
+  }
+}
+
+function drawPowerUps() {
+  for (const pu of game.powerUps) {
+    if (!pu.alive) continue;
+
+    ctx.save();
+    ctx.translate(pu.x, pu.y);
+
+    const glow = Math.sin(pu.glowPhase) * 0.3 + 0.7;
+
+    // 光晕
+    ctx.fillStyle = pu.type.color.replace(')', `,${glow * 0.3})`).replace('rgb', 'rgba');
+    if (pu.type.color.startsWith('#')) {
+      ctx.fillStyle = pu.type.color + '44';
+    }
+    ctx.beginPath();
+    ctx.arc(0, 0, pu.radius + 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 菱形背景
+    ctx.fillStyle = pu.type.color;
+    ctx.beginPath();
+    ctx.moveTo(0, -pu.radius);
+    ctx.lineTo(pu.radius, 0);
+    ctx.lineTo(0, pu.radius);
+    ctx.lineTo(-pu.radius, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // 图标文字
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(pu.type.icon, 0, 0);
+
+    ctx.restore();
+  }
+}
+
+function drawParticles() {
+  for (const pt of game.particles) {
+    const alpha = pt.life / pt.maxLife;
+    ctx.fillStyle = pt.color;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, pt.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  const p = game.player;
+
+  // 分数（左上角）
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Arial';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 4;
+  ctx.fillText(`分数: ${game.score}`, 14, 14);
+  ctx.shadowBlur = 0;
+
+  // 最高分
+  ctx.fillStyle = '#aaaaaa';
+  ctx.font = '12px Arial';
+  ctx.fillText(`最高: ${game.highScore}`, 16, 38);
+
+  // 阶段（右上角）
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 18px Arial';
+  ctx.textAlign = 'right';
+  ctx.fillText(`阶段 ${game.stage}`, GAME_W - 14, 14);
+
+  // 波次信息
+  if (game.state === STATE.PLAYING) {
+    const waveLabel = game.isBossWave ? 'BOSS波' : `第${game.wave + 1}波`;
+    ctx.fillStyle = game.isBossWave ? '#ff4444' : '#cccccc';
+    ctx.font = '13px Arial';
+    ctx.fillText(waveLabel, GAME_W - 14, 36);
+
+    // 剩余病毒数
+    ctx.fillStyle = '#999999';
+    ctx.font = '12px Arial';
+    ctx.fillText(`剩余: ${game.waveVirusesAlive}`, GAME_W - 14, 54);
+  }
+
+  // 底部状态栏
+  if (p) {
+    const barY = GAME_H - 36;
+
+    // 射速指示
+    const fireRatePercent = Math.round((BASE_FIRE_RATE / p.fireRate) * 100);
+    ctx.fillStyle = '#ffaa00';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(`🚀 射速: ${fireRatePercent}%`, 14, barY);
+
+    // 弹夹列数
+    ctx.fillStyle = '#4488ff';
+    ctx.fillText(`🎯 弹道: ${p.bulletColumns}列`, 140, barY);
+
+    // 护盾状态
+    if (p.shieldActive) {
+      ctx.fillStyle = '#00ddff';
+      ctx.fillText(`🛡 护盾: ${p.shieldTimer.toFixed(1)}s`, 260, barY);
+    }
+  }
+
+  // 中央消息
+  if (game.messageTimer > 0) {
+    const alpha = Math.min(1, game.messageTimer / 0.5);
+    const yOffset = (1 - game.messageTimer / 2) * 30;
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 6;
+    ctx.fillText(game.messageText, GAME_W / 2, GAME_H / 2 - 60 + yOffset);
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawMenu() {
+  // 半透明遮罩
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  // 标题
+  ctx.fillStyle = '#ff4444';
+  ctx.font = 'bold 48px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(255,68,68,0.5)';
+  ctx.shadowBlur = 20;
+  ctx.fillText('消灭病毒', GAME_W / 2, GAME_H / 2 - 80);
+  ctx.shadowBlur = 0;
+
+  // 副标题
+  ctx.fillStyle = '#cccccc';
+  ctx.font = '16px Arial';
+  ctx.fillText('Virus Killer', GAME_W / 2, GAME_H / 2 - 35);
+
+  // 操作说明
+  ctx.fillStyle = '#aaaaaa';
+  ctx.font = '14px Arial';
+  ctx.fillText('🖱 鼠标拖拽控制战机移动', GAME_W / 2, GAME_H / 2 + 20);
+  ctx.fillText('🔫 战机自动向上方射击', GAME_W / 2, GAME_H / 2 + 42);
+  ctx.fillText('💊 消灭病毒获取道具强化', GAME_W / 2, GAME_H / 2 + 64);
+
+  // 开始按钮
+  const btnY = GAME_H / 2 + 120;
+  const pulse = Math.sin(performance.now() * 0.003) * 0.2 + 0.8;
+  ctx.fillStyle = `rgba(255,68,68,${pulse})`;
+  ctx.beginPath();
+  roundRect(GAME_W / 2 - 80, btnY - 22, 160, 44, 22);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Arial';
+  ctx.fillText('点击开始游戏', GAME_W / 2, btnY);
+}
+
+function drawGameOver() {
+  // 半透明遮罩
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  // 标题
+  ctx.fillStyle = '#ff4444';
+  ctx.font = 'bold 42px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('游戏结束', GAME_W / 2, GAME_H / 2 - 70);
+
+  // 分数
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 28px Arial';
+  ctx.fillText(`最终得分: ${game.score}`, GAME_W / 2, GAME_H / 2 - 15);
+
+  // 最高分
+  if (game.score >= game.highScore && game.score > 0) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText('🏆 新纪录！', GAME_W / 2, GAME_H / 2 + 25);
+  } else {
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '16px Arial';
+    ctx.fillText(`最高分: ${game.highScore}`, GAME_W / 2, GAME_H / 2 + 25);
+  }
+
+  // 达到的阶段
+  ctx.fillStyle = '#cccccc';
+  ctx.font = '14px Arial';
+  ctx.fillText(`到达阶段: ${game.stage}`, GAME_W / 2, GAME_H / 2 + 50);
+
+  // 重新开始
+  const btnY = GAME_H / 2 + 100;
+  ctx.fillStyle = '#4488ff';
+  ctx.beginPath();
+  roundRect(GAME_W / 2 - 80, btnY - 22, 160, 44, 22);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Arial';
+  ctx.fillText('点击重新开始', GAME_W / 2, btnY);
+}
+
+function drawStageTransition() {
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 32px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`阶段 ${game.stage + 1}`, GAME_W / 2, GAME_H / 2);
+
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = '16px Arial';
+  ctx.fillText('准备迎战更强病毒...', GAME_W / 2, GAME_H / 2 + 40);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+}
+
+// ============================================================
+//  消息系统
+// ============================================================
+function showMessage(text, color) {
+  game.messageText = text;
+  game.messageTimer = 2; // 2秒显示
+  game.msgColor = color || '#ffffff';
+}
+
+function updateMessage(dt) {
+  if (game.messageTimer > 0) {
+    game.messageTimer -= dt;
+  }
+}
+
+// ============================================================
+//  游戏流程
+// ============================================================
+function startGame() {
+  game.state = STATE.PLAYING;
+  game.score = 0;
+  game.stage = 1;
+  game.wave = 0;
+  game.viruses = [];
+  game.bullets = [];
+  game.powerUps = [];
+  game.particles = [];
+  game.player = createPlayer();
+  game.messageTimer = 0;
+
+  startWave();
+}
+
+function gameOver() {
+  game.state = STATE.GAME_OVER;
+
+  // 爆炸粒子
+  if (game.player) {
+    spawnDeathParticles(game.player.x, game.player.y, 30);
+  }
+
+  // 更新最高分
+  if (game.score > game.highScore) {
+    game.highScore = game.score;
+  }
+}
+
+// ============================================================
+//  主循环
+// ============================================================
+function update(dt) {
+  // 限制最大帧间隔（防止切tab后dt过大）
+  const clampedDt = Math.min(dt, 0.1);
+
+  updateStars(clampedDt);
+  updateMessage(clampedDt);
+  updateParticles(clampedDt);
+
+  if (game.state === STATE.PLAYING) {
+    updatePlayer(clampedDt);
+    updateViruses(clampedDt);
+
+    // 更新子弹
+    for (const b of game.bullets) {
+      if (!b.alive) continue;
+      b.y -= b.speed;
+      if (b.y < -b.h) b.alive = false;
+    }
+    game.bullets = game.bullets.filter(b => b.alive);
+
+    updatePowerUps(clampedDt);
+    updateStageSystem(performance.now());
+    checkCollisions();
+  }
+
+  if (game.state === STATE.STAGE_TRANSITION) {
+    game.stageTransitionTimer -= clampedDt * 1000;
+    if (game.stageTransitionTimer <= 0) {
+      advanceStage();
+    }
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, GAME_W, GAME_H);
+  drawBackground();
+  drawStars();
+  drawParticles();
+  drawPowerUps();
+  drawBullets();
+  drawViruses();
+  drawPlayer();
+  drawHUD();
+
+  if (game.state === STATE.MENU) {
+    drawMenu();
+  } else if (game.state === STATE.GAME_OVER) {
+    drawGameOver();
+  } else if (game.state === STATE.STAGE_TRANSITION) {
+    drawStageTransition();
+  }
+}
+
+function gameLoop(timestamp) {
+  if (game.lastTime === 0) game.lastTime = timestamp;
+  game.deltaTime = (timestamp - game.lastTime) / 1000;
+  game.lastTime = timestamp;
+
+  update(game.deltaTime);
+  render();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ============================================================
+//  初始化
+// ============================================================
+function init() {
+  initStars();
+  game.player = createPlayer();
+  game.lastTime = performance.now();
+  requestAnimationFrame(gameLoop);
+}
+
+init();
+</script>
+</body>
+</html>

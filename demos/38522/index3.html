@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>药物物流平台看板</title>
+    <!-- 注意：在生产环境中，应该使用Tailwind CSS的本地安装方式，而不是CDN引用 -->
+    <!-- 本地安装方法：npm install tailwindcss @tailwindcss/vite 并配置vite.config.ts -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1e40af',
+                        secondary: '#64748b',
+                        success: '#10b981',
+                        warning: '#f59e0b',
+                        danger: '#ef4444',
+                        info: '#3b82f6'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .pulse-warning {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        .transition-theme {
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .scrollbar-thin {
+            scrollbar-width: thin;
+        }
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .dark .scrollbar-thin::-webkit-scrollbar-track {
+            background: #334155;
+        }
+        .dark .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #475569;
+        }
+        #orderMap, #routeMap {
+            height: 350px;
+            border-radius: 0.5rem;
+        }
+    </style>
+    <script>
+        let hospitalType = 'tertiary';
+        let currentModule = 'inventory';
+        let orderMap, routeMap;
+        let charts = {};
+        let allOrders = [];
+        let filteredOrders = [];
+        let allAlarms = [];
+
+        const hospitals = [
+            { name: '北京协和医院', type: 'tertiary', location: '北京' },
+            { name: '上海瑞金医院', type: 'tertiary', location: '上海' },
+            { name: '广州中山医院', type: 'tertiary', location: '广州' },
+            { name: '成都华西医院', type: 'tertiary', location: '成都' }
+        ];
+
+        const drugs = [
+            { name: '阿莫西林', category: 'general', requiresCold: false, unit: '盒' },
+            { name: '布洛芬', category: 'chronic', requiresCold: false, unit: '盒' },
+            { name: '胰岛素', category: 'emergency', requiresCold: true, unit: '支' },
+            { name: '头孢曲松钠', category: 'chronic', requiresCold: false, unit: '支' },
+            { name: '阿卡波糖', category: 'chronic', requiresCold: false, unit: '盒' },
+            { name: '氯吡格雷', category: 'chronic', requiresCold: false, unit: '盒' },
+            { name: '阿司匹林', category: 'general', requiresCold: false, unit: '盒' },
+            { name: '硝酸甘油', category: 'emergency', requiresCold: false, unit: '瓶' },
+            { name: '维生素C', category: 'general', requiresCold: false, unit: '瓶' },
+            { name: '感冒灵', category: 'general', requiresCold: false, unit: '盒' }
+        ];
+
+        function generateMockData() {
+            const statuses = ['received', 'verified', 'allocated', 'shipped', 'in_transit', 'delivered'];
+            const carriers = ['顺丰医药', '京东物流', '德邦医药', '邮政医药'];
+
+            allOrders = [];
+            for (let i = 0; i < 50; i++) {
+                const hospital = hospitals[Math.floor(Math.random() * hospitals.length)];
+                const drug = drugs[Math.floor(Math.random() * drugs.length)];
+                const status = statuses[Math.floor(Math.random() * statuses.length)];
+                const carrier = carriers[Math.floor(Math.random() * carriers.length)];
+                const daysOffset = Math.floor(Math.random() * 10) - 3;
+                const etaDate = new Date();
+                etaDate.setDate(etaDate.getDate() + daysOffset);
+
+                let temp = drug.requiresCold ? (3 + Math.random() * 2).toFixed(1) : (20 + Math.random() * 5).toFixed(1);
+                let anomaly = null;
+                if (status === 'in_transit' && Math.random() < 0.15) {
+                    anomaly = Math.random() < 0.5 ? 'delay' : 'temp_warning';
+                }
+
+                allOrders.push({
+                    id: 'ORD2024' + String(i + 1).padStart(4, '0'),
+                    drug: drug.name,
+                    drugType: drug.category,
+                    batch: 'B2024' + String.fromCharCode(65 + Math.floor(Math.random() * 26)) + String(Math.floor(Math.random() * 1000)).padStart(3, '0'),
+                    hospital: hospital.name,
+                    hospitalType: hospital.type,
+                    hospitalLocation: hospital.location,
+                    status: status,
+                    carrier: carrier,
+                    eta: etaDate.toISOString().slice(0, 16).replace('T', ' '),
+                    temp: temp + '℃',
+                    tempValue: parseFloat(temp),
+                    anomaly: anomaly,
+                    quantity: Math.floor(Math.random() * 500) + 50
+                });
+            }
+
+            filteredOrders = allOrders.slice();
+
+            allAlarms = [];
+            for (let i = 0; i < 20; i++) {
+                const hospital = hospitals[Math.floor(Math.random() * hospitals.length)];
+                const drug = drugs[Math.floor(Math.random() * drugs.length)];
+                const safetyDays = drug.category === 'emergency' ? 11 : drug.category === 'chronic' ? 22 : 45;
+                const avgConsumption = Math.floor(Math.random() * 100) + 20;
+                const safeStock = Math.floor(avgConsumption * safetyDays);
+                const currentStock = Math.floor(Math.random() * safeStock);
+                const percent = Math.floor((currentStock / safeStock) * 100);
+
+                allAlarms.push({
+                    name: drug.name,
+                    type: drug.category === 'emergency' ? '急救/冷链' : drug.category === 'chronic' ? '慢性病/常用药' : '普通/低频',
+                    hospital: hospital.name,
+                    hospitalType: hospital.type,
+                    current: currentStock,
+                    safe: safeStock,
+                    percent: percent,
+                    unit: drug.unit
+                });
+            }
+        }
+
+        function getOrderStats() {
+            return {
+                all: allOrders.length,
+                received: allOrders.filter(function(o) { return o.status === 'received'; }).length,
+                verified: allOrders.filter(function(o) { return o.status === 'verified'; }).length,
+                allocated: allOrders.filter(function(o) { return o.status === 'allocated'; }).length,
+                shipped: allOrders.filter(function(o) { return o.status === 'shipped'; }).length,
+                delivered: allOrders.filter(function(o) { return o.status === 'delivered'; }).length
+            };
+        }
+
+        function updateOrderStats() {
+            const stats = getOrderStats();
+            document.getElementById('orders-all').textContent = stats.all;
+            document.getElementById('orders-received').textContent = stats.received;
+            document.getElementById('orders-verified').textContent = stats.verified;
+            document.getElementById('orders-allocated').textContent = stats.allocated;
+            document.getElementById('orders-shipped').textContent = stats.shipped;
+            document.getElementById('orders-delivered').textContent = stats.delivered;
+        }
+
+        function initOrderTable(orders) {
+            if (!orders) {
+                orders = filteredOrders;
+            }
+            renderOrderTable(orders);
+        }
+
+        function renderOrderTable(orders) {
+            const tbody = document.getElementById('order-table-body');
+            const statusMap = {
+                received: { text: '已接收', class: 'bg-purple-100 text-purple-800' },
+                verified: { text: '已审核', class: 'bg-indigo-100 text-indigo-800' },
+                allocated: { text: '已分配', class: 'bg-cyan-100 text-cyan-800' },
+                shipped: { text: '已出库', class: 'bg-blue-100 text-blue-800' },
+                in_transit: { text: '在途', class: 'bg-warning/20 text-warning' },
+                delivered: { text: '已签收', class: 'bg-success/20 text-success' }
+            };
+
+            if (orders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">暂无订单数据</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = orders.map(function(order) {
+                const status = statusMap[order.status] || statusMap.received;
+                const anomalyBadge = order.anomaly === 'delay' ? '<span class="ml-2 px-2 py-0.5 bg-red-100 text-red-800 text-xs rounded">延迟</span>' :
+                                     order.anomaly === 'temp_warning' ? '<span class="ml-2 px-2 py-0.5 bg-orange-100 text-orange-800 text-xs rounded">温控预警</span>' : '';
+                return '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700">' +
+                    '<td class="px-4 py-3 text-sm font-medium text-gray-900 dark:text-white">' + order.id + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + order.drug + '<br><span class="text-xs text-gray-400">批号: ' + order.batch + '</span></td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + order.hospital + '</td>' +
+                    '<td class="px-4 py-3"><span class="px-2 py-1 text-xs rounded-full ' + status.class + '">' + status.text + anomalyBadge + '</span></td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + order.eta + '</td>' +
+                    '<td class="px-4 py-3 text-sm ' + (order.tempValue > 5 ? 'text-danger font-medium' : 'text-gray-600 dark:text-gray-300') + '">' + order.temp + '</td>' +
+                    '<td class="px-4 py-3"><button onclick="viewOrderDetail(\'' + order.id + '\')" class="text-primary hover:text-primary-dark"><i class="fa fa-eye"></i></button></td>' +
+                    '</tr>';
+            }).join('');
+        }
+
+        function filterOrders(status) {
+            if (status && status !== 'all') {
+                document.getElementById('order-status-filter').value = status;
+                filteredOrders = allOrders.filter(function(o) { return o.status === status; });
+            } else {
+                document.getElementById('order-status-filter').value = '';
+                filteredOrders = allOrders.slice();
+            }
+            renderOrderTable(filteredOrders);
+        }
+
+        function refreshOrders() {
+            generateMockData();
+            updateOrderStats();
+            initOrderTable();
+        }
+
+        function viewOrderDetail(orderId) {
+            const modal = document.getElementById('orderModal');
+            const content = document.getElementById('orderModalContent');
+            
+            // 查找订单详情
+            const order = allOrders.find(o => o.id === orderId);
+            const drugName = order ? order.drug : '阿莫西林胶囊';
+            const batch = order ? order.batch : 'B2024A001';
+            const hospital = order ? order.hospital : '北京协和医院';
+            const quantity = order ? order.quantity : 500;
+            
+            content.innerHTML = '<div class="space-y-4">' +
+                '<div class="grid grid-cols-2 gap-4">' +
+                    '<div><label class="text-sm text-gray-500">订单号</label><p class="font-medium">' + orderId + '</p></div>' +
+                    '<div><label class="text-sm text-gray-500">当前状态</label><p class="font-medium text-success">在途运输</p></div>' +
+                    '<div><label class="text-sm text-gray-500">药品名称</label><p class="font-medium">' + drugName + '</p></div>' +
+                    '<div><label class="text-sm text-gray-500">规格</label><p class="font-medium">0.25g×24粒/盒</p></div>' +
+                    '<div><label class="text-sm text-gray-500">数量</label><p class="font-medium">' + quantity + '盒</p></div>' +
+                    '<div><label class="text-sm text-gray-500">批次号</label><p class="font-medium">' + batch + '</p></div>' +
+                '</div>' +
+                '<div class="border-t pt-4">' +
+                    '<h4 class="font-medium mb-2">物流轨迹</h4>' +
+                    '<div class="space-y-3 text-sm">' +
+                        '<div class="flex items-start">' +
+                            '<span class="w-2 h-2 bg-success rounded-full mt-2 mr-2"></span>' +
+                            '<div>' +
+                                '<div>2024-01-19 08:00 上海仓库已出库</div>' +
+                                '<div class="text-xs text-gray-500 mt-1">具体位置: 上海市浦东新区张江高科技园区科苑路88号</div>' +
+                                '<div class="text-xs text-gray-500">操作人: 张师傅 (138****1234)</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="flex items-start">' +
+                            '<span class="w-2 h-2 bg-primary rounded-full mt-2 mr-2"></span>' +
+                            '<div>' +
+                                '<div>2024-01-19 12:30 运输中</div>' +
+                                '<div class="text-xs text-gray-500 mt-1">具体位置: G2京沪高速 江苏苏州段 (GPS: 31.2988°N, 120.5853°E)</div>' +
+                                '<div class="text-xs text-gray-500">运输车辆: 沪A12345 (司机: 李师傅)</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="flex items-start">' +
+                            '<span class="w-2 h-2 bg-primary rounded-full mt-2 mr-2"></span>' +
+                            '<div>' +
+                                '<div>2024-01-19 18:00 运输中</div>' +
+                                '<div class="text-xs text-gray-500 mt-1">具体位置: G2京沪高速 山东济南段 (GPS: 36.6512°N, 117.1201°E)</div>' +
+                                '<div class="text-xs text-gray-500">温度正常: 22.5℃ | 湿度: 45%</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="flex items-start">' +
+                            '<span class="w-2 h-2 bg-gray-300 rounded-full mt-2 mr-2"></span>' +
+                            '<div>' +
+                                '<div>预计 2024-01-20 14:00 到达' + hospital + '</div>' +
+                                '<div class="text-xs text-gray-500 mt-1">具体位置: ' + (hospital.includes('北京') ? '北京市东城区帅府园1号' : hospital.includes('上海') ? '上海市黄浦区瑞金二路197号' : hospital.includes('广州') ? '广州市中山二路58号' : '成都市武侯区国学巷37号') + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+            modal.classList.remove('hidden');
+        }
+
+        function closeOrderModal() {
+            document.getElementById('orderModal').classList.add('hidden');
+        }
+
+        function initAlarmTable() {
+            const tbody = document.getElementById('alarm-table-body');
+
+            if (allAlarms.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">暂无报警数据</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = allAlarms.map(function(a) {
+                const level = a.percent < 50 ? 'danger' : a.percent < 80 ? 'warning' : 'success';
+                const levelText = a.percent < 50 ? '红色预警' : a.percent < 80 ? '橙色预警' : '绿色正常';
+                const levelBg = a.percent < 50 ? 'bg-red-100 text-red-800' : a.percent < 80 ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800';
+                return '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700">' +
+                    '<td class="w-1/6 px-4 py-3 text-sm font-medium text-gray-900 dark:text-white">' + a.name + '</td>' +
+                    '<td class="w-1/6 px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + a.type + '</td>' +
+                    '<td class="w-1/8 px-4 py-3 text-sm font-medium ' + (level === 'danger' ? 'text-danger' : 'text-gray-900 dark:text-white') + '">' + a.current + a.unit + '</td>' +
+                    '<td class="w-1/8 px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + a.safe + a.unit + '</td>' +
+                    '<td class="w-1/4 px-4 py-3">' +
+                        '<div class="flex items-center">' +
+                            '<div class="w-24 h-2 bg-gray-200 rounded-full mr-2">' +
+                                '<div class="h-2 rounded-full bg-' + level + '" style="width: ' + Math.min(a.percent, 100) + '%"></div>' +
+                            '</div>' +
+                            '<span class="text-sm font-medium">' + a.percent + '%</span>' +
+                        '</div>' +
+                    '</td>' +
+                    '<td class="w-1/8 px-4 py-3"><span class="px-2 py-1 text-xs rounded-full ' + levelBg + ' ' + (level === 'danger' ? 'pulse-warning' : '') + '">' + levelText + '</span></td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        function initExceptionTable() {
+            const exceptions = [
+                { id: 'ORD202401002', type: '运输延迟', method: '改派', time: '2024-01-19 15:30', drugInfo: '胰岛素', status: '处理中' },
+                { id: 'ORD202401008', type: '温度异常', method: '拦截', time: '2024-01-18 22:15', drugInfo: '阿莫西林', status: '已完成' },
+                { id: 'ORD202401015', type: '运输延迟', method: '补救', time: '2024-01-17 09:45', drugInfo: '布洛芬', status: '已完成' }
+            ];
+
+            const tbody = document.getElementById('exception-table-body');
+            tbody.innerHTML = exceptions.map(function(e) {
+                return '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700">' +
+                    '<td class="px-4 py-3 text-sm font-medium text-gray-900 dark:text-white">' + e.id + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-danger">' + e.type + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + e.method + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + e.time + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">' + e.drugInfo + '</td>' +
+                    '<td class="px-4 py-3"><span class="px-2 py-1 text-xs rounded-full ' + (e.status === '处理中' ? 'bg-warning/20 text-warning' : 'bg-success/20 text-success') + '">' + e.status + '</span></td>' +
+                '</tr>';
+            }).join('');
+        }
+
+
+
+        function showModule(module) {
+            currentModule = module;
+            const sections = ['inventory', 'orders', 'transport'];
+            sections.forEach(function(s) {
+                document.getElementById(s + '-module').classList.toggle('hidden', s !== module);
+            });
+
+            document.querySelectorAll('.module-btn').forEach(function(btn) {
+                const isActive = btn.dataset.module === module;
+                btn.classList.toggle('bg-primary', isActive);
+                btn.classList.toggle('text-white', isActive);
+                btn.classList.toggle('bg-gray-200', !isActive);
+                btn.classList.toggle('dark:bg-gray-700', !isActive);
+                btn.classList.toggle('text-gray-700', !isActive);
+                btn.classList.toggle('dark:text-gray-300', !isActive);
+            });
+
+            // 当切换到包含地图的模块时，重新初始化地图
+            if (module === 'orders') {
+                setTimeout(function() {
+                    reinitMaps();
+                }, 100);
+            }
+        }
+
+        function initCharts() {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top'
+                    }
+                }
+            };
+
+            if (document.getElementById('inventoryHealthChart')) {
+                charts.inventoryHealth = new Chart(document.getElementById('inventoryHealthChart'), {
+                    type: 'line',
+                    data: {
+                        labels: ['1月', '2月', '3月', '4月', '5月'],
+                        datasets: [{
+                            label: '库存周转率',
+                            data: [85, 88, 92, 90, 95],
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)'
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+
+            if (document.getElementById('alarmTrendChart')) {
+                charts.alarmTrend = new Chart(document.getElementById('alarmTrendChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: ['1月', '2月', '3月', '4月', '5月'],
+                        datasets: [{
+                            label: '报警数量',
+                            data: [12, 8, 15, 10, 5],
+                            backgroundColor: '#ef4444'
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+
+            if (document.getElementById('orderStatusChart')) {
+                charts.orderStatus = new Chart(document.getElementById('orderStatusChart'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['已接收', '已审核', '已分配', '已出库', '在途', '已签收'],
+                        datasets: [{
+                            data: [12, 10, 8, 15, 3, 2],
+                            backgroundColor: ['#8b5cf6', '#6366f1', '#06b6d4', '#3b82f6', '#f59e0b', '#10b981']
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+
+            if (document.getElementById('inventoryTrendChart')) {
+                charts.inventoryTrend = new Chart(document.getElementById('inventoryTrendChart'), {
+                    type: 'line',
+                    data: {
+                        labels: ['1月', '2月', '3月', '4月', '5月', '6月'],
+                        datasets: [{
+                            label: '实际库存',
+                            data: [1200, 1100, 1300, 1250, 1400, 1350],
+                            borderColor: '#3b82f6'
+                        }, {
+                            label: '安全库存',
+                            data: [950, 1000, 1050, 980, 1020, 990],
+                            borderColor: '#10b981',
+                            borderDash: [5, 5]
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+
+            if (document.getElementById('demandForecastChart')) {
+                charts.demandForecast = new Chart(document.getElementById('demandForecastChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: ['1月', '2月', '3月', '4月', '5月'],
+                        datasets: [{
+                            label: '实际需求',
+                            data: [850, 720, 680, 550, 480],
+                            backgroundColor: '#3b82f6'
+                        }, {
+                            label: '预测需求',
+                            data: [865, 738, 692, 569, 490],
+                            backgroundColor: '#10b981'
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+
+            if (document.getElementById('deliveryTimeChart')) {
+                charts.deliveryTime = new Chart(document.getElementById('deliveryTimeChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: ['24h内', '24-48h', '48-72h', '72h以上'],
+                        datasets: [{
+                            data: [58, 28, 10, 4],
+                            backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444']
+                        }]
+                    },
+                    options: { ...chartOptions, indexAxis: 'y' }
+                });
+            }
+
+            if (document.getElementById('tempComplianceChart')) {
+                charts.tempCompliance = new Chart(document.getElementById('tempComplianceChart'), {
+                    type: 'pie',
+                    data: {
+                        labels: ['完全达标', '轻微波动', '严重异常'],
+                        datasets: [{
+                            data: [92, 6, 2],
+                            backgroundColor: ['#10b981', '#f59e0b', '#ef4444']
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+
+            // 承运商对比图表
+            if (document.getElementById('carrierRateChart')) {
+                const rateData = [98.5, 96.8, 94.2];
+                const rateLabels = ['顺丰医药', '京东物流', '德邦医药'];
+                const maxRateIndex = rateData.indexOf(Math.max(...rateData));
+                document.getElementById('carrierRateBest').textContent = rateLabels[maxRateIndex] + ' (' + rateData[maxRateIndex] + '%)';
+                
+                charts.carrierRate = new Chart(document.getElementById('carrierRateChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: rateLabels,
+                        datasets: [{
+                            label: '履约率',
+                            data: rateData,
+                            backgroundColor: '#3b82f6'
+                        }]
+                    },
+                    options: { ...chartOptions, scales: { y: { beginAtZero: true, max: 100 } } }
+                });
+            }
+
+            if (document.getElementById('carrierDeliveryChart')) {
+                const deliveryData = [97.2, 95.5, 93.8];
+                const deliveryLabels = ['顺丰医药', '京东物流', '德邦医药'];
+                const maxDeliveryIndex = deliveryData.indexOf(Math.max(...deliveryData));
+                document.getElementById('carrierDeliveryBest').textContent = deliveryLabels[maxDeliveryIndex] + ' (' + deliveryData[maxDeliveryIndex] + '%)';
+                
+                charts.carrierDelivery = new Chart(document.getElementById('carrierDeliveryChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: deliveryLabels,
+                        datasets: [{
+                            label: '及时率',
+                            data: deliveryData,
+                            backgroundColor: '#10b981'
+                        }]
+                    },
+                    options: { ...chartOptions, scales: { y: { beginAtZero: true, max: 100 } } }
+                });
+            }
+
+            if (document.getElementById('carrierColdChart')) {
+                const coldData = [97.5, 99.2, 95.5];
+                const coldLabels = ['顺丰医药', '京东物流', '德邦医药'];
+                const maxColdIndex = coldData.indexOf(Math.max(...coldData));
+                document.getElementById('carrierColdBest').textContent = coldLabels[maxColdIndex] + ' (' + coldData[maxColdIndex] + '%)';
+                
+                charts.carrierCold = new Chart(document.getElementById('carrierColdChart'), {   type: 'bar',
+                    data: {
+                        labels: coldLabels,
+                        datasets: [{
+                            label: '温控达标率',
+                            data: coldData,
+                            backgroundColor: '#f59e0b'
+                        }]
+                    },
+                    options: { ...chartOptions, scales: { y: { beginAtZero: true, max: 100 } } }
+                });
+            }
+        }
+
+        function updateChartsTheme() {
+            const textColor = document.documentElement.classList.contains('dark') ? '#e5e7eb' : '#374151';
+            Object.values(charts).forEach(function(chart) {
+                if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                    chart.options.plugins.legend.labels.color = textColor;
+                }
+                if (chart.options.scales) {
+                    if (chart.options.scales.x && chart.options.scales.x.ticks) {
+                        chart.options.scales.x.ticks.color = textColor;
+                    }
+                    if (chart.options.scales.y && chart.options.scales.y.ticks) {
+                        chart.options.scales.y.ticks.color = textColor;
+                    }
+                }
+                chart.update();
+            });
+        }
+
+        function initMaps() {
+            if (typeof L === 'undefined') {
+                console.error('Leaflet库未加载');
+                return;
+            }
+
+            try {
+                const orderMapElement = document.getElementById('orderMap');
+                if (orderMapElement) {
+                    orderMapElement.style.height = '350px';
+                    orderMapElement.innerHTML = '';
+                    
+                    orderMap = L.map('orderMap', {
+                        center: [35, 105],
+                        zoom: 4,
+                        minZoom: 3,
+                        maxZoom: 18
+                    });
+                    
+                    L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', {
+                        subdomains: '1234',
+                        attribution: '&copy; <a href="http://lbs.amap.com">高德地图</a>'
+                    }).addTo(orderMap);
+
+                    // 仓库位置
+                    const warehouse = { lat: 31.23, lng: 121.47, title: '上海仓', status: 'warehouse' };
+
+                    // 为仓库添加标记
+                    const warehouseIcon = L.divIcon({
+                        html: '<div style="background:#3b82f6;width:24px;height:24px;border-radius:50%;border:3px solid white;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;"><i class="fa fa-warehouse"></i></div>',
+                        className: '',
+                        iconSize: [24, 24]
+                    });
+                    L.marker([warehouse.lat, warehouse.lng], { icon: warehouseIcon }).addTo(orderMap).bindPopup(warehouse.title);
+
+                    // 医院位置映射
+                    const hospitalLocations = {
+                        '北京协和医院': { lat: 39.91, lng: 116.39 },
+                        '上海瑞金医院': { lat: 31.23, lng: 121.47 },
+                        '广州中山医院': { lat: 23.13, lng: 113.26 },
+                        '成都华西医院': { lat: 30.67, lng: 104.06 }
+                    };
+
+                    // 存储所有路线
+                    orderMap.routes = {};
+
+                    // 为每个在途订单添加路线
+                    allOrders.forEach(function(order) {
+                        if (order.status === 'in_transit' && hospitalLocations[order.hospital]) {
+                            const hospitalLoc = hospitalLocations[order.hospital];
+                            
+                            // 生成中间点，模拟真实路线
+                            const midpoint = {
+                                lat: (warehouse.lat + hospitalLoc.lat) / 2 + (Math.random() - 0.5) * 2,
+                                lng: (warehouse.lng + hospitalLoc.lng) / 2 + (Math.random() - 0.5) * 2
+                            };
+
+                            // 路线坐标
+                            const routeCoords = [
+                                [warehouse.lat, warehouse.lng],
+                                [midpoint.lat, midpoint.lng],
+                                [hospitalLoc.lat, hospitalLoc.lng]
+                            ];
+
+                            // 为医院添加标记
+                            const hospitalIcon = L.divIcon({
+                                html: '<div style="background:#10b981;width:20px;height:20px;border-radius:50%;border:2px solid white;display:flex;align-items:center;justify-content:center;color:white;font-size:10px;"><i class="fa fa-hospital-o"></i></div>',
+                                className: '',
+                                iconSize: [20, 20]
+                            });
+                            L.marker([hospitalLoc.lat, hospitalLoc.lng], { icon: hospitalIcon }).addTo(orderMap).bindPopup(order.hospital);
+
+                            // 绘制路线
+                            const route = L.polyline(routeCoords, {
+                                color: '#3b82f6',
+                                weight: 3,
+                                opacity: 0.6
+                            }).addTo(orderMap);
+
+                            // 存储路线信息
+                            orderMap.routes[order.id] = {
+                                route: route,
+                                order: order,
+                                coordinates: routeCoords
+                            };
+
+                            // 添加路线点击事件
+                            route.on('click', function() {
+                                // 取消所有路线的高亮
+                                Object.values(orderMap.routes).forEach(function(routeData) {
+                                    routeData.route.setStyle({ weight: 3, opacity: 0.6 });
+                                });
+
+                                // 高亮当前路线
+                                route.setStyle({ weight: 6, opacity: 1 });
+
+                                // 显示订单信息
+                                const popupContent = `
+                                    <b>订单号:</b> ${order.id}<br>
+                                    <b>药品:</b> ${order.drug}<br>
+                                    <b>医院:</b> ${order.hospital}<br>
+                                    <b>承运商:</b> ${order.carrier}<br>
+                                    <b>预计到达:</b> ${order.eta}<br>
+                                    <b>温度:</b> ${order.temp}
+                                `;
+                                route.bindPopup(popupContent).openPopup();
+                            });
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('订单地图初始化错误:', error);
+            }
+
+
+        }
+
+        function reinitMaps() {
+            if (orderMap) {
+                orderMap.remove();
+                orderMap = null;
+            }
+            setTimeout(initMaps, 100);
+        }
+
+        function updateThresholdDisplay() {
+            const thresholds = {
+                emergency: { min: 7, max: 15, name: '急救/冷链药品' },
+                chronic: { min: 15, max: 30, name: '慢性病/常用药' },
+                general: { min: 30, max: 60, name: '普通/低频药品' }
+            };
+
+            const container = document.getElementById('threshold-display');
+            container.innerHTML = Object.entries(thresholds).map(function(entry) {
+                const key = entry[0];
+                const val = entry[1];
+                const bgColor = key === 'emergency' ? 'red' : key === 'chronic' ? 'orange' : 'gray';
+                return '<div class="flex justify-between items-center p-3 bg-' + bgColor + '-50 dark:bg-' + bgColor + '-900/30 rounded-lg">' +
+                    '<div>' +
+                        '<span class="font-medium text-gray-800 dark:text-white">' + val.name + '</span>' +
+
+                    '</div>' +
+                    '<div class="text-right">' +
+                        '<span class="text-lg font-bold text-primary">' + val.min + '-' + val.max + '</span>' +
+                        '<span class="text-sm text-gray-500">天</span>' +
+                    '</div>' +
+                '</div>';
+            }).join('');
+        }
+
+        function initThemeToggle() {
+            const themeToggle = document.getElementById('theme-toggle');
+            const themeIconDark = document.getElementById('theme-icon-dark');
+            const themeIconLight = document.getElementById('theme-icon-light');
+            const themeText = document.getElementById('theme-text');
+
+            if (localStorage.getItem('theme') === 'dark') {
+                document.documentElement.classList.add('dark');
+                themeIconDark.classList.add('hidden');
+                themeIconLight.classList.remove('hidden');
+                themeText.textContent = '浅色';
+            } else {
+                document.documentElement.classList.remove('dark');
+                themeIconDark.classList.remove('hidden');
+                themeIconLight.classList.add('hidden');
+                themeText.textContent = '深色';
+            }
+
+            themeToggle.addEventListener('click', function() {
+                document.documentElement.classList.toggle('dark');
+                const isDark = document.documentElement.classList.contains('dark');
+                themeIconDark.classList.toggle('hidden', isDark);
+                themeIconLight.classList.toggle('hidden', !isDark);
+                themeText.textContent = isDark ? '浅色' : '深色';
+                localStorage.setItem('theme', isDark ? 'dark' : 'light');
+                setTimeout(updateChartsTheme, 100);
+            });
+        }
+
+        function init() {
+            generateMockData();
+            initCharts();
+            initMaps();
+            initOrderTable();
+            initAlarmTable();
+            initExceptionTable();
+            updateOrderStats();
+            updateThresholdDisplay();
+            initThemeToggle();
+            
+            // 添加模块切换按钮事件监听
+            document.querySelectorAll('.module-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    showModule(this.dataset.module);
+                });
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <header class="bg-primary dark:bg-gray-800 text-white shadow-md transition-theme">
+        <div class="container mx-auto px-4 py-3">
+            <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+                <div class="flex items-center space-x-3">
+                    <i class="fa fa-medkit text-2xl"></i>
+                    <div>
+                        <h1 class="text-xl font-bold">药物物流平台</h1>
+                        <p class="text-xs opacity-80">实时监控 · 智能分析 · 高效管理</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4 w-full lg:w-auto">
+                    <button id="theme-toggle" class="flex items-center space-x-2 px-3 py-1 rounded-md bg-white/10 hover:bg-white/20 transition-theme">
+                        <i id="theme-icon-dark" class="fa fa-moon-o"></i>
+                        <i id="theme-icon-light" class="fa fa-sun-o hidden"></i>
+                        <span id="theme-text">深色</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <nav class="bg-white dark:bg-gray-800 shadow-sm">
+        <div class="container mx-auto px-4">
+            <div class="flex overflow-x-auto scrollbar-thin py-2 space-x-2">
+                <button data-module="inventory" class="module-btn px-4 py-2 rounded-md bg-primary text-white whitespace-nowrap">
+                    <i class="fa fa-cubes mr-2"></i>库存监控
+                </button>
+                <button data-module="orders" class="module-btn px-4 py-2 rounded-md bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                    <i class="fa fa-truck mr-2"></i>订单跟踪
+                </button>
+                <button data-module="transport" class="module-btn px-4 py-2 rounded-md bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                    <i class="fa fa-map mr-2"></i>运输计划
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto px-4 py-6">
+        <!-- 库存监控模块 -->
+        <section id="inventory-module" class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">报警阈值设置</h3>
+                    <div id="threshold-display" class="space-y-3"></div>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">库存健康度</h3>
+                    <div class="h-64">
+                        <canvas id="inventoryHealthChart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">报警趋势</h3>
+                    <div class="h-64">
+                        <canvas id="alarmTrendChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-semibold">库存报警列表</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full">
+                        <thead>
+                            <tr class="border-b border-gray-200 dark:border-gray-700">
+                                <th class="w-1/6 px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">药品名称</th>
+                                <th class="w-1/6 px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">药品类型</th>
+                                <th class="w-1/8 px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">当前库存</th>
+                                <th class="w-1/8 px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">安全库存</th>
+                                <th class="w-1/4 px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">库存占比</th>
+                                <th class="w-1/8 px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">预警等级</th>
+                            </tr>
+                        </thead>
+                        <tbody id="alarm-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- 订单跟踪模块 -->
+        <section id="orders-module" class="space-y-6 hidden">
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                    <p class="text-sm text-gray-500 dark:text-gray-400">总订单数</p>
+                    <p id="orders-all" class="text-2xl font-bold">0</p>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                    <p class="text-sm text-gray-500 dark:text-gray-400">已接收</p>
+                    <p id="orders-received" class="text-2xl font-bold">0</p>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                    <p class="text-sm text-gray-500 dark:text-gray-400">已审核</p>
+                    <p id="orders-verified" class="text-2xl font-bold">0</p>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                    <p class="text-sm text-gray-500 dark:text-gray-400">已分配</p>
+                    <p id="orders-allocated" class="text-2xl font-bold">0</p>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                    <p class="text-sm text-gray-500 dark:text-gray-400">已出库</p>
+                    <p id="orders-shipped" class="text-2xl font-bold">0</p>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                    <p class="text-sm text-gray-500 dark:text-gray-400">已签收</p>
+                    <p id="orders-delivered" class="text-2xl font-bold">0</p>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="md:col-span-2">
+                    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-semibold">订单列表</h3>
+                            <div class="flex space-x-2">
+                                <select id="order-status-filter" class="px-3 py-1 border rounded-md bg-white dark:bg-gray-700">
+                                    <option value="">全部状态</option>
+                                    <option value="received">已接收</option>
+                                    <option value="verified">已审核</option>
+                                    <option value="allocated">已分配</option>
+                                    <option value="shipped">已出库</option>
+                                    <option value="in_transit">在途</option>
+                                    <option value="delivered">已签收</option>
+                                </select>
+                                <button onclick="filterOrders(document.getElementById('order-status-filter').value)" class="px-3 py-1 bg-primary text-white rounded-md hover:bg-primary/90">
+                                    筛选
+                                </button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full">
+                                <thead>
+                                    <tr class="border-b border-gray-200 dark:border-gray-700">
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">订单号</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">药品信息</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">医院</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">状态</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">预计到达</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">温度</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="order-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                        <h3 class="text-lg font-semibold mb-4">订单状态分布</h3>
+                        <div class="h-64">
+                            <canvas id="orderStatusChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md mt-6">
+                        <h3 class="text-lg font-semibold mb-4">物流轨迹</h3>
+                        <div id="orderMap"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 运输计划模块 -->
+        <section id="transport-module" class="space-y-6 hidden">
+            <div class="grid grid-cols-1 gap-6">
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">运输异常处理</h3>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full">
+                            <thead>
+                                <tr class="border-b border-gray-200 dark:border-gray-700">
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">订单号</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">异常类型</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">处理方式</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">处理时间</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">药品信息</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody id="exception-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">承运商对比</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <div class="flex justify-start items-center mb-2 gap-4">
+                                <h4 class="text-sm font-medium">履约率对比</h4>
+                                <p id="carrierRateBest" class="text-xs text-white font-medium"></p>
+                            </div>
+                            <div class="h-64">
+                                <canvas id="carrierRateChart"></canvas>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-start items-center mb-2 gap-4">
+                                <h4 class="text-sm font-medium">及时率对比</h4>
+                                <p id="carrierDeliveryBest" class="text-xs text-white font-medium"></p>
+                            </div>
+                            <div class="h-64">
+                                <canvas id="carrierDeliveryChart"></canvas>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-start items-center mb-2 gap-4">
+                                <h4 class="text-sm font-medium">温控达标率对比</h4>
+                                <p id="carrierColdBest" class="text-xs text-white font-medium"></p>
+                            </div>
+                            <div class="h-64">
+                                <canvas id="carrierColdChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">库存趋势分析</h3>    
+                    <div class="h-64">
+                        <canvas id="inventoryTrendChart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">需求预测分析</h3>    
+                    <div class="h-64">
+                        <canvas id="demandForecastChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md">
+                    <h3 class="text-lg font-semibold mb-4">温控达标率</h3>      
+                    <div class="h-64">
+                        <canvas id="tempComplianceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <!-- 订单详情模态框 -->
+    <div id="orderModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold">订单详情</h3>
+                <button onclick="closeOrderModal()" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"><i class="fa fa-times"></i></button>
+            </div>
+            <div id="orderModalContent"></div>
+            <div class="mt-4 flex justify-end">
+                <button onclick="closeOrderModal()" class="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600">关闭</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

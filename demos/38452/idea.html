@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>瞬息战棋 (Flash Tactics) - 核心机制演示</title>
+    <style>
+        :root {
+            --grid-size: 60px;
+            --grid-cols: 6;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b0f19;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* 游戏外壳 */
+        .game-container {
+            position: relative;
+            background: rgba(15, 23, 42, 0.8);
+            border: 2px solid #1e293b;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+            transition: transform 0.1s ease;
+        }
+
+        /* 屏幕震动效果 */
+        .shake {
+            animation: screen-shake 0.15s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        @keyframes screen-shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+
+        /* 状态栏 */
+        .hud {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        .stat-box {
+            background: #1e293b;
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+
+        .combo-counter {
+            font-size: 1.5rem;
+            color: #f59e0b;
+            font-weight: bold;
+            text-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+            animation: pulse 0.2s ease-out;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.3); }
+            100% { transform: scale(1); }
+        }
+
+        /* 战棋网格 */
+        .board {
+            position: relative;
+            width: calc(var(--grid-size) * var(--grid-cols));
+            height: calc(var(--grid-size) * var(--grid-cols));
+            background: #0f172a;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+
+        /* 网格背景线 */
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(var(--grid-cols), 1fr);
+            grid-template-rows: repeat(var(--grid-cols), 1fr);
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        .cell-bg {
+            border: 1px solid rgba(51, 65, 85, 0.3);
+            box-sizing: border-box;
+        }
+
+        /* 交互响应层 */
+        .interactive-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: grid;
+            grid-template-columns: repeat(var(--grid-cols), var(--grid-size));
+            grid-template-rows: repeat(var(--grid-cols), var(--grid-size));
+            z-index: 10;
+        }
+
+        .cell {
+            width: var(--grid-size);
+            height: var(--grid-size);
+            cursor: pointer;
+            box-sizing: border-box;
+            transition: background-color 0.1s ease;
+        }
+
+        .cell:hover {
+            background-color: rgba(56, 189, 248, 0.15);
+            box-shadow: inset 0 0 8px rgba(56, 189, 248, 0.3);
+        }
+
+        /* 角色类通用样式（利用 absolute 顺滑移动） */
+        .entity {
+            position: absolute;
+            width: calc(var(--grid-size) - 10px);
+            height: calc(var(--grid-size) - 10px);
+            margin: 5px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transition: left 0.12s cubic-bezier(0.25, 1, 0.5, 1), top 0.12s cubic-bezier(0.25, 1, 0.5, 1);
+            z-index: 5;
+            box-sizing: border-box;
+        }
+
+        /* 玩家：迅捷勇士 */
+        .player {
+            background: radial-gradient(circle, #38bdf8 0%, #0284c7 100%);
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.6);
+            border: 2px solid #e0f2fe;
+            color: #ffffff;
+            font-size: 1.2rem;
+        }
+
+        /* 敌方：史莱姆/小怪 */
+        .enemy {
+            background: radial-gradient(circle, #f87171 0%, #dc2626 100%);
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.5);
+            border: 2px solid #fee2e2;
+            color: #ffffff;
+            font-size: 1rem;
+            animation: idle-float 1.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes idle-float {
+            0% { transform: scale(0.95); }
+            100% { transform: scale(1.05); }
+        }
+
+        /* 飘字特效 */
+        .damage-popup {
+            position: absolute;
+            font-weight: 900;
+            font-size: 1.2rem;
+            color: #f43f5e;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none;
+            z-index: 100;
+            animation: float-up 0.5s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
+        }
+
+        @keyframes float-up {
+            0% { transform: translateY(0) scale(0.7); opacity: 1; }
+            100% { transform: translateY(-35px) scale(1.2); opacity: 0; }
+        }
+
+        /* 粒子特效 */
+        .particle {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #fbbf24;
+            pointer-events: none;
+            z-index: 99;
+            animation: explode 0.4s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+        }
+
+        @keyframes explode {
+            0% { transform: translate(0, 0) scale(1); opacity: 1; }
+            100% { transform: translate(var(--tx), var(--ty)) scale(0); opacity: 0; }
+        }
+
+        /* 提示说明 */
+        .instructions {
+            margin-top: 20px;
+            max-width: 400px;
+            text-align: center;
+            font-size: 0.9rem;
+            color: #64748b;
+            line-height: 1.5;
+        }
+
+        .highlight {
+            color: #38bdf8;
+            font-weight: bold;
+        }
+
+        .highlight-enemy {
+            color: #f87171;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud" style="width: 380px;">
+        <div class="stat-box">得分: <span id="score">0</span></div>
+        <div id="combo-container" class="stat-box" style="visibility: hidden;">
+            <span id="combo-text" class="combo-counter">0 COMBO!</span>
+        </div>
+    </div>
+
+    <!-- 游戏主容器 -->
+    <div id="game-shell" class="game-container">
+        <div class="board" id="game-board">
+            <!-- 静态格子背景 -->
+            <div class="board-grid" id="grid-bg"></div>
+            <!-- 动态实体与特效渲染区 -->
+            <div id="entities-container"></div>
+            <!-- 交互响应格子层 -->
+            <div class="interactive-layer" id="click-layer"></div>
+        </div>
+    </div>
+
+    <div class="instructions">
+        <p>🎮 <span class="highlight">操作说明</span>：点击空白网格可进行<span class="highlight">高速瞬移</span>；<br>点击相邻或斜向2格内的<span class="highlight-enemy">红色敌兵</span>将触发<span class="highlight-enemy">瞬杀连击</span>！</p>
+        <p style="font-size: 0.8rem; margin-top: 5px;">（注：点击任意网格即可激活浏览器音频合成器接口）</p>
+    </div>
+
+    <script>
+        // 游戏基础配置
+        const GRID_SIZE = 60;
+        const COLS = 6;
+        
+        // 游戏状态
+        let player = { x: 1, y: 4, hp: 10 };
+        let enemies = [];
+        let score = 0;
+        let combo = 0;
+        let comboTimer = null;
+        let nextEnemyId = 1;
+
+        // 音频上下文（懒加载，避免现代浏览器阻止自动播放）
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        // Web Audio API 街机风格音效合成器
+        function playSound(type) {
+            initAudio();
+            if (!audioCtx || audioCtx.state === 'suspended') return;
+
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'move') {
+                // 快速轻盈的向上滑音（表示瞬移）
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(700, now + 0.08);
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.linearRampToValueAtTime(0.001, now + 0.08);
+                osc.start(now);
+                osc.stop(now + 0.08);
+            } else if (type === 'hit') {
+                // 具有爆发力的打击音（低频爆发 + 高频金属擦音）
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(180, now);
+                osc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.12);
+                osc.start(now);
+                osc.stop(now + 0.12);
+            } else if (type === 'combo') {
+                // 随着 Combo 叠加而升调的悦耳电子音
+                osc.type = 'sawtooth';
+                const pitch = 400 + (combo * 60);
+                osc.frequency.setValueAtTime(pitch, now);
+                osc.frequency.linearRampToValueAtTime(pitch * 1.2, now + 0.1);
+                gain.gain.setValueAtTime(0.12, now);
+                gain.gain.linearRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            } else if (type === 'spawn') {
+                // 敌人入场哨音
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, now);
+                osc.frequency.exponentialRampToValueAtTime(300, now + 0.2);
+                gain.gain.setValueAtTime(0.05, now);
+                gain.gain.linearRampToValueAtTime(0.001, now + 0.2);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            }
+        }
+
+        // 初始化棋盘背景
+        function createBoard() {
+            const bgContainer = document.getElementById('grid-bg');
+            const clickLayer = document.getElementById('click-layer');
+            bgContainer.innerHTML = '';
+            clickLayer.innerHTML = '';
+
+            for (let y = 0; y < COLS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    // 背景格
+                    const cellBg = document.createElement('div');
+                    cellBg.className = 'cell-bg';
+                    bgContainer.appendChild(cellBg);
+
+                    // 交互格
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.x = x;
+                    cell.dataset.y = y;
+                    cell.addEventListener('click', () => handleGridClick(x, y));
+                    clickLayer.appendChild(cell);
+                }
+            }
+        }
+
+        // 刷新实体（玩家和敌人）位置
+        function renderEntities() {
+            const container = document.getElementById('entities-container');
+            container.innerHTML = '';
+
+            // 绘制玩家
+            const pElem = document.createElement('div');
+            pElem.className = 'entity player';
+            pElem.id = 'player-unit';
+            pElem.style.left = `${player.x * GRID_SIZE}px`;
+            pElem.style.top = `${player.y * GRID_SIZE}px`;
+            pElem.innerText = '⚔️';
+            container.appendChild(pElem);
+
+            // 绘制所有存活的敌兵
+            enemies.forEach(enemy => {
+                const eElem = document.createElement('div');
+                eElem.className = 'entity enemy';
+                eElem.id = `enemy-${enemy.id}`;
+                eElem.style.left = `${enemy.x * GRID_SIZE}px`;
+                eElem.style.top = `${enemy.y * GRID_SIZE}px`;
+                eElem.innerText = '💀';
+                container.appendChild(eElem);
+            });
+        }
+
+        // 触发连击系统计算
+        function triggerCombo() {
+            combo++;
+            document.getElementById('combo-text').innerText = `${combo} COMBO!`;
+            const container = document.getElementById('combo-container');
+            container.style.visibility = 'visible';
+            
+            // 播放连击递进音效
+            playSound('combo');
+
+            // 动效重置重播
+            const textElem = document.getElementById('combo-text');
+            textElem.style.animation = 'none';
+            textElem.offsetHeight; /* trigger reflow */
+            textElem.style.animation = 'pulse 0.2s ease-out';
+
+            // 3秒无击杀则断Combo
+            clearTimeout(comboTimer);
+            comboTimer = setTimeout(() => {
+                combo = 0;
+                container.style.visibility = 'hidden';
+            }, 3000);
+        }
+
+        // 视觉爽感特效1：飘字
+        function spawnFloatingText(x, y, text) {
+            const board = document.getElementById('game-board');
+            const popup = document.createElement('div');
+            popup.className = 'damage-popup';
+            popup.innerText = text;
+            popup.style.left = `${x * GRID_SIZE + 15}px`;
+            popup.style.top = `${y * GRID_SIZE}px`;
+            board.appendChild(popup);
+
+            // 动画播放完自动销毁
+            setTimeout(() => {
+                popup.remove();
+            }, 500);
+        }
+
+        // 视觉爽感特效2：爆裂粒子
+        function spawnImpactParticles(x, y) {
+            const board = document.getElementById('game-board');
+            const particleCount = 12;
+            const centerX = x * GRID_SIZE + GRID_SIZE / 2;
+            const centerY = y * GRID_SIZE + GRID_SIZE / 2;
+
+            for (let i = 0; i < particleCount; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = `${centerX}px`;
+                particle.style.top = `${centerY}px`;
+
+                // 随机发散角度和距离
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 40 + Math.random() * 50;
+                const tx = Math.cos(angle) * distance;
+                const ty = Math.sin(angle) * distance;
+
+                particle.style.setProperty('--tx', `${tx}px`);
+                particle.style.setProperty('--ty', `${ty}px`);
+                
+                // 粒子颜色随机红黄交替
+                particle.style.background = Math.random() > 0.5 ? '#f43f5e' : '#fbbf24';
+
+                board.appendChild(particle);
+
+                setTimeout(() => {
+                    particle.remove();
+                }, 400);
+            }
+        }
+
+        // 视觉爽感特效3：整屏颤抖
+        function triggerScreenShake() {
+            const shell = document.getElementById('game-shell');
+            shell.classList.add('shake');
+            setTimeout(() => {
+                shell.classList.remove('shake');
+            }, 150);
+        }
+
+        // 处理点击格子行为
+        function handleGridClick(tx, ty) {
+            // 点击激活/恢复音频上下文
+            initAudio();
+
+            // 检查目标格是否有敌人
+            const enemyIndex = enemies.findIndex(e => e.x === tx && e.y === ty);
+
+            if (enemyIndex !== -1) {
+                // 如果是敌人，计算距离
+                const dist = Math.max(Math.abs(player.x - tx), Math.abs(player.y - ty));
+                if (dist <= 2) {
+                    // 在斩击射程内（两格以内）：发起迅猛冲锋斩击
+                    // 1. 瞬移到敌人格以便展示对撞感
+                    const oldX = player.x;
+                    const oldY = player.y;
+                    player.x = tx;
+                    player.y = ty;
+                    renderEntities();
+
+                    setTimeout(() => {
+                        // 2. 产生打击特效与声音
+                        playSound('hit');
+                        triggerCombo();
+                        triggerScreenShake();
+                        spawnImpactParticles(tx, ty);
+                        
+                        const isCrit = Math.random() > 0.6;
+                        const damage = isCrit ? 99 : 45;
+                        spawnFloatingText(tx, ty, isCrit ? `CRIT! -${damage}` : `-${damage}`);
+
+                        // 3. 移除敌人并反弹到安全相邻格（模拟格斗受击位移反馈）
+                        enemies.splice(enemyIndex, 1);
+                        score += 100 * (combo > 0 ? combo : 1);
+                        document.getElementById('score').innerText = score;
+
+                        // 击退/反弹回原路径临近位置
+                        player.x = oldX + Math.sign(tx - oldX) * (dist - 1);
+                        player.y = oldY + Math.sign(ty - oldY) * (dist - 1);
+                        
+                        renderEntities();
+
+                        // 4. 判定是否击杀全图，若全清则快速补充下一波
+                        if (enemies.length === 0) {
+                            setTimeout(spawnEnemiesWave, 300);
+                        }
+                    }, 120);
+                } else {
+                    spawnFloatingText(tx, ty, "太远了!");
+                }
+            } else {
+                // 空白格子：进行高速瞬步位移
+                player.x = tx;
+                player.y = ty;
+                playSound('move');
+                renderEntities();
+            }
+        }
+
+        // 批量快速生成敌兵波动
+        function spawnEnemiesWave() {
+            const count = 3;
+            let spawned = 0;
+            while (spawned < count) {
+                const rx = Math.floor(Math.random() * COLS);
+                const ry = Math.floor(Math.random() * COLS);
+
+                // 确保不刷在玩家格且不重叠
+                if ((rx !== player.x || ry !== player.y) && !enemies.some(e => e.x === rx && e.y === ry)) {
+                    enemies.push({
+                        id: nextEnemyId++,
+                        x: rx,
+                        y: ry
+                    });
+                    spawned++;
+                }
+            }
+            playSound('spawn');
+            renderEntities();
+        }
+
+        // 初始化启动
+        window.onload = () => {
+            createBoard();
+            spawnEnemiesWave();
+        };
+    </script>
+</body>
+</html>

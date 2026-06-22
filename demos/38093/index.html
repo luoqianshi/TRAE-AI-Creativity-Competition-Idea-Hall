@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>评点地图 · 让每一条评价都长在地图上</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --bg: #0f1220;
+    --panel: rgba(22, 26, 46, 0.92);
+    --panel-solid: #1a1e30;
+    --accent: #ff6a3d;
+    --accent-2: #ffb13d;
+    --text: #e8ecf5;
+    --muted: #9aa3bd;
+    --border: rgba(255, 255, 255, 0.08);
+    --good: #3dc77f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+      "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+    color: var(--text); background: var(--bg); overflow: hidden;
+  }
+  .top-bar {
+    position: absolute; top: 0; left: 0; right: 0; height: 76px;
+    background: linear-gradient(180deg, #151932 0%, #101328 100%);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px; z-index: 1000;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand .logo {
+    font-size: 32px; color: var(--accent);
+    text-shadow: 0 0 14px rgba(255,106,61,0.6);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{transform:scale(1);} 50%{transform:scale(1.12);} }
+  .brand-text h1 { margin: 0; font-size: 20px; letter-spacing: 1px; font-weight: 700; }
+  .brand-text p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .filters select, .panel select, .panel input, .panel textarea {
+    background: var(--panel-solid); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; font-size: 13px; outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .filters select:focus, .panel select:focus,
+  .panel input:focus, .panel textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(255,106,61,0.2);
+  }
+  .primary-btn {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+    color: #fff; border: none; border-radius: 10px;
+    padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+    box-shadow: 0 6px 14px rgba(255,106,61,0.3);
+  }
+  .primary-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px rgba(255,106,61,0.4); }
+  .primary-btn.active {
+    background: linear-gradient(135deg, #3dc77f 0%, #3dabff 100%);
+    box-shadow: 0 6px 14px rgba(61,199,127,0.3);
+  }
+  .ghost-btn {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 14px; font-size: 13px; cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .ghost-btn:hover { color: var(--text); border-color: var(--accent); }
+  #map { position: absolute; top: 76px; left: 0; right: 0; bottom: 0; }
+  .leaflet-container { background: #14182b; font-family: inherit; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: var(--panel-solid); color: var(--text);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .leaflet-popup-content { margin: 12px 14px; font-size: 13px; line-height: 1.5; }
+  .leaflet-control-zoom a {
+    background: var(--panel-solid) !important; color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+  .legend {
+    position: absolute; left: 20px; bottom: 24px;
+    background: var(--panel); border: 1px solid var(--border);
+    backdrop-filter: blur(10px); border-radius: 14px;
+    padding: 14px 18px; min-width: 230px; font-size: 12.5px;
+    z-index: 999; box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .legend-title {
+    font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--accent);
+  }
+  .legend ul { list-style: none; padding: 0; margin: 0 0 10px; }
+  .legend li { display: flex; align-items: center; gap: 10px; margin: 5px 0; }
+  .dot {
+    display: inline-block; border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #ffc18a, #ff6a3d);
+    box-shadow: 0 0 10px rgba(255,106,61,0.55);
+  }
+  .size-s  { width: 8px; height: 8px; }
+  .size-m  { width: 12px; height: 12px; }
+  .size-l  { width: 18px; height: 18px; }
+  .size-xl { width: 26px; height: 26px; }
+  .legend-tip {
+    border-top: 1px dashed var(--border); padding-top: 10px;
+    color: var(--muted); font-size: 11.5px; line-height: 1.6;
+  }
+  .panel {
+    position: absolute; right: 20px; top: 96px; width: 360px;
+    max-height: calc(100vh - 120px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border);
+    backdrop-filter: blur(10px); border-radius: 16px;
+    padding: 18px; z-index: 998;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.45);
+  }
+  .hidden { display: none !important; }
+  .panel-title {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 15px; font-weight: 700; color: var(--accent); margin-bottom: 10px;
+  }
+  .close-btn {
+    background: transparent; border: none; color: var(--muted);
+    font-size: 22px; cursor: pointer; line-height: 1; padding: 0 4px;
+  }
+  .close-btn:hover { color: var(--text); }
+  .panel-hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .panel form label {
+    display: block; font-size: 12px; color: var(--muted); margin-bottom: 14px;
+  }
+  .panel form input, .panel form select, .panel form textarea {
+    width: 100%; margin-top: 6px;
+  }
+  .panel form textarea { min-height: 70px; resize: vertical; }
+  .stars {
+    display: flex; gap: 4px; margin-top: 6px;
+    font-size: 24px; color: #3a3f58; cursor: pointer; user-select: none;
+  }
+  .stars span { transition: color 0.15s, transform 0.15s; }
+  .stars span.active { color: var(--accent-2); }
+  .stars span:hover { transform: scale(1.15); }
+  .detail-meta {
+    display: flex; gap: 14px; flex-wrap: wrap;
+    padding: 10px 0 14px;
+    border-bottom: 1px dashed var(--border); margin-bottom: 12px;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .detail-meta .chip {
+    background: rgba(255,106,61,0.12); color: var(--accent);
+    border: 1px solid rgba(255,106,61,0.3);
+    padding: 3px 10px; border-radius: 20px; font-size: 11.5px;
+  }
+  .review-list { list-style: none; padding: 0; margin: 0; }
+  .review-item {
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; margin-bottom: 10px;
+    transition: border-color 0.2s, transform 0.15s;
+  }
+  .review-item:hover {
+    border-color: rgba(255,106,61,0.4); transform: translateX(2px);
+  }
+  .review-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px; font-size: 12px;
+  }
+  .review-author { font-weight: 600; }
+  .review-rating { color: var(--accent-2); letter-spacing: 2px; }
+  .review-content { font-size: 13px; line-height: 1.55; }
+  .review-date { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .review-cluster {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 35% 30%, #ffd1a8, #ff6a3d 70%, #b83410);
+    color: #fff; border-radius: 50%; font-weight: 700;
+    box-shadow: 0 4px 14px rgba(255,106,61,0.55), inset 0 -4px 8px rgba(0,0,0,0.2);
+    cursor: pointer; border: 2px solid rgba(255,255,255,0.35);
+    animation: breathe 3s ease-in-out infinite;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+    font-size: 12px;
+  }
+  .review-cluster .count { font-size: 14px; line-height: 1; }
+  .review-cluster .label { font-size: 9.5px; opacity: 0.9; margin-top: 2px; }
+  @keyframes breathe { 0%,100%{transform:scale(1);} 50%{transform:scale(1.06);} }
+  .review-marker {
+    background: radial-gradient(circle at 35% 30%, #ffd1a8, #ff6a3d 70%);
+    border: 2px solid #fff; border-radius: 50%;
+    box-shadow: 0 3px 10px rgba(255,106,61,0.5);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+  }
+  .review-marker:hover {
+    transform: scale(1.25);
+    box-shadow: 0 4px 14px rgba(255,106,61,0.75);
+  }
+  .add-pin {
+    width: 22px; height: 22px; background: #3dc77f;
+    border: 3px solid #fff; border-radius: 50%;
+    box-shadow: 0 4px 12px rgba(61,199,127,0.6);
+    animation: pinDrop 0.6s ease-out;
+  }
+  @keyframes pinDrop {
+    from { transform: translateY(-18px) scale(0.6); opacity: 0; }
+    to   { transform: translateY(0) scale(1); opacity: 1; }
+  }
+  .mode-banner {
+    position: absolute; top: 90px; left: 50%; transform: translateX(-50%);
+    background: rgba(61,199,127,0.95); color: #fff;
+    padding: 8px 20px; border-radius: 24px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 8px 22px rgba(61,199,127,0.4); z-index: 999;
+    animation: slideDown 0.3s ease-out;
+  }
+  @keyframes slideDown {
+    from { opacity: 0; transform: translate(-50%,-10px); }
+    to   { opacity: 1; transform: translate(-50%,0); }
+  }
+  .leaflet-tooltip {
+    background: var(--panel-solid); border: 1px solid var(--border);
+    color: var(--text); box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    font-size: 12px; padding: 8px 12px; border-radius: 8px; max-width: 260px;
+  }
+  .leaflet-tooltip-top:before { border-top-color: var(--panel-solid) !important; }
+  @media (max-width: 860px) {
+    .top-bar { flex-wrap: wrap; height: auto; padding: 12px; gap: 10px; }
+    #map { top: 140px; }
+    .panel { right: 10px; left: 10px; width: auto; top: 160px; }
+    .legend { left: 10px; right: 10px; bottom: 10px; }
+  }
+</style>
+</head>
+<body>
+  <header class="top-bar">
+    <div class="brand">
+      <span class="logo">◆</span>
+      <div class="brand-text">
+        <h1>评点地图</h1>
+        <p>生活娱乐 · 让每一条评价都长在地图上</p>
+      </div>
+    </div>
+    <div class="filters">
+      <select id="category-filter">
+        <option value="all">全部分类</option>
+        <option value="美食">美食</option>
+        <option value="咖啡">咖啡</option>
+        <option value="景点">景点</option>
+        <option value="购物">购物</option>
+        <option value="娱乐">娱乐</option>
+        <option value="其他">其他</option>
+      </select>
+      <select id="rating-filter">
+        <option value="0">全部评分</option>
+        <option value="3">3 星以上</option>
+        <option value="4">4 星以上</option>
+        <option value="4.5">4.5 星以上</option>
+      </select>
+      <button id="reset-btn" class="ghost-btn">重置视图</button>
+      <button id="add-mode-btn" class="primary-btn">+ 发布评价</button>
+    </div>
+  </header>
+
+  <main id="map"></main>
+
+  <aside class="legend">
+    <div class="legend-title">怎么读这张地图</div>
+    <ul>
+      <li><span class="dot size-s"></span>评价少的地点（1–3 条）</li>
+      <li><span class="dot size-m"></span>评价中等的地点（4–10 条）</li>
+      <li><span class="dot size-l"></span>口碑聚集区（11–25 条）</li>
+      <li><span class="dot size-xl"></span>热门区域（25+ 条）</li>
+    </ul>
+    <div class="legend-tip">
+      · 点击大点 → 自动聚焦并放大<br>
+      · 悬停小点 → 预览评价内容<br>
+      · 点击小点 → 查看所有评价<br>
+      · "发布评价" → 再点击地图任意位置
+    </div>
+  </aside>
+
+  <section id="add-panel" class="panel hidden">
+    <div class="panel-title">
+      <span>发布新评价</span>
+      <button id="close-add-panel" class="close-btn">×</button>
+    </div>
+    <p class="panel-hint" id="add-hint">请先点击地图上要评价的位置</p>
+    <form id="review-form">
+      <label>地点名称
+        <input type="text" id="field-name" placeholder="例如：巷口小面馆" required>
+      </label>
+      <label>分类
+        <select id="field-category">
+          <option value="美食">美食</option>
+          <option value="咖啡">咖啡</option>
+          <option value="景点">景点</option>
+          <option value="购物">购物</option>
+          <option value="娱乐">娱乐</option>
+          <option value="其他">其他</option>
+        </select>
+      </label>
+      <label>评分
+        <div class="stars" id="star-input">
+          <span data-star="1">★</span>
+          <span data-star="2">★</span>
+          <span data-star="3">★</span>
+          <span data-star="4">★</span>
+          <span data-star="5">★</span>
+        </div>
+      </label>
+      <label>评价内容
+        <textarea id="field-content" placeholder="说点什么吧，比如：汤底很鲜，老板很热情……" required></textarea>
+      </label>
+      <label>你的昵称
+        <input type="text" id="field-author" placeholder="游客小王" maxlength="20">
+      </label>
+      <button type="submit" class="primary-btn">提交评价</button>
+    </form>
+  </section>
+
+  <section id="detail-panel" class="panel hidden">
+    <div class="panel-title">
+      <span id="detail-title">地点评价</span>
+      <button id="close-detail-panel" class="close-btn">×</button>
+    </div>
+    <div class="detail-meta" id="detail-meta"></div>
+    <ul class="review-list" id="review-list"></ul>
+  </section>
+
+  <div id="mode-banner" class="mode-banner hidden">
+    发布模式：点击地图上任意位置来添加评价
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    // ========== 1. 示例数据（以上海人民广场/南京路为中心，展示"街区口碑"概念） ==========
+    // 坐标：lat = 纬度, lng = 经度
+    var CENTER = [31.2304, 121.4737]; // 上海人民广场
+    var STORAGE_KEY = 'pingdian_map_reviews_v1';
+
+    // 预设的"街区热点"，围绕上海中心，批量生成随机评价
+    var HOTSPOTS = [
+      { name: '人民广场美食街', lat: 31.2335, lng: 121.4750, category: '美食', count: 22, seed: 1 },
+      { name: '南京东路步行街', lat: 31.2355, lng: 121.4810, category: '购物', count: 30, seed: 2 },
+      { name: '外滩', lat: 31.2397, lng: 121.4908, category: '景点', count: 28, seed: 3 },
+      { name: '豫园', lat: 31.2273, lng: 121.4923, category: '景点', count: 18, seed: 4 },
+      { name: '新天地', lat: 31.2210, lng: 121.4755, category: '娱乐', count: 15, seed: 5 },
+      { name: '田子坊', lat: 31.2108, lng: 121.4665, category: '咖啡', count: 12, seed: 6 },
+      { name: '武康路梧桐区', lat: 31.2150, lng: 121.4485, category: '咖啡', count: 14, seed: 7 },
+      { name: '静安寺', lat: 31.2237, lng: 121.4458, category: '购物', count: 20, seed: 8 },
+      { name: '徐家汇', lat: 31.1982, lng: 121.4383, category: '购物', count: 16, seed: 9 },
+      { name: '陆家嘴', lat: 31.2397, lng: 121.5060, category: '景点', count: 25, seed: 10 },
+      { name: '老西门小面馆', lat: 31.2185, lng: 121.4845, category: '美食', count: 5, seed: 11 },
+      { name: '巨鹿路酒吧', lat: 31.2155, lng: 121.4565, category: '娱乐', count: 6, seed: 12 }
+    ];
+
+    var SAMPLE_AUTHORS = ['阿楠', '周末探险家', '吃遍魔都', '咖啡探店人', '小李', '老饕', '路人甲', '背包客小张', '本地居民', '城市漫游者'];
+    var SAMPLE_TEMPLATES = {
+      '美食': ['汤底很鲜，面条有嚼劲，性价比超高！', '排队半小时，味道确实值得，老板很热情', '环境一般但味道惊艳，下次还来', '地道本帮味，浓油赤酱', '分量足，一个人吃不完', '菜上来还冒着热气，好吃'],
+      '咖啡': ['手冲很专业，豆子新鲜', '空间小但很安静，适合看书', '拿铁拉花很漂亮，甜而不腻', '小众宝藏店，老板很会聊', '意式浓缩焦香适中', '美式清爽，提神正好'],
+      '景点': ['夜景绝了，拍照圣地', '人多但值得一看，建筑很有年代感', '免费开放，傍晚最美', '闹中取静，散步舒服', '老街区很有味道，出片率高', '可以慢慢逛两三个小时'],
+      '购物': ['品牌齐全，打折时性价比高', '小店很多，可以淘货', '服务员态度好，不推销', '商场很大，动线清晰', '橱窗设计感强，拍照好看'],
+      '娱乐': ['氛围不错，音乐好听', '小酌好去处，调酒有创意', '周末很热闹，年轻人多', '清吧，适合聊天', '现场演出加分，氛围拉满'],
+      '其他': ['意外发现的宝藏地方', '会推荐给朋友', '路过来打卡，还不错']
+    };
+
+    // 简单伪随机（保证每次刷新数据一致）
+    function seededRand(seed) {
+      var x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    }
+
+    function buildInitialReviews() {
+      var list = [];
+      var idCounter = 1;
+      HOTSPOTS.forEach(function (h) {
+        for (var i = 0; i < h.count; i++) {
+          var r = seededRand(h.seed * 100 + i);
+          var r2 = seededRand(h.seed * 137 + i + 99);
+          // 每一条评价的坐标在热点附近偏移
+          var jitterLat = (r - 0.5) * 0.0035;
+          var jitterLng = (r2 - 0.5) * 0.0035;
+          var templates = SAMPLE_TEMPLATES[h.category] || SAMPLE_TEMPLATES['其他'];
+          var content = templates[Math.floor(seededRand(h.seed + i * 7) * templates.length)];
+          var author = SAMPLE_AUTHORS[Math.floor(seededRand(h.seed + i * 11) * SAMPLE_AUTHORS.length)];
+          var rating = 3.5 + seededRand(h.seed + i * 3) * 1.5; // 3.5 ~ 5.0
+          rating = Math.round(rating * 10) / 10;
+          var daysAgo = Math.floor(seededRand(h.seed + i * 5) * 60);
+          var date = new Date();
+          date.setDate(date.getDate() - daysAgo);
+          list.push({
+            id: idCounter++,
+            placeName: h.name,
+            category: h.category,
+            lat: h.lat + jitterLat,
+            lng: h.lng + jitterLng,
+            rating: rating,
+            content: content,
+            author: author,
+            date: date.toISOString().slice(0, 10)
+          });
+        }
+      });
+      return list;
+    }
+
+    // ========== 2. 存储（localStorage） ==========
+    function loadReviews() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) {}
+      var init = buildInitialReviews();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(init));
+      return init;
+    }
+    function saveReviews(list) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    }
+
+    // ========== 3. 地图初始化 ==========
+    var map = L.map('map', {
+      center: CENTER,
+      zoom: 13,
+      zoomControl: true,
+      scrollWheelZoom: true
+    });
+
+    // 使用 CartoDB 深色瓦片，与 UI 风格一致；回退到 OSM
+    var baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd'
+    }).addTo(map);
+
+    // 若 CartoDB 加载失败（如离线），使用 OSM
+    baseLayer.on('tileerror', function () {
+      map.removeLayer(baseLayer);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+      baseLayer.off('tileerror');
+    });
+
+    // ========== 4. 聚合逻辑 ==========
+    // 策略：根据当前缩放级别把经纬度"栅格化"到固定格子中
+    // 每个格子中若有多条评价 → 聚合点；若只有 1 条 → 小点
+    // 这样点击大点时，缩放到更高缩放级别后，格子变小，自然拆成多个小点
+    var reviews = loadReviews();
+    var markerLayer = null;
+    var addMode = false;
+    var pendingLatLng = null;
+    var currentRating = 4;
+    var filterCategory = 'all';
+    var filterMinRating = 0;
+
+    function getCellSize(zoom) {
+      // 经验值：缩放每高一级，格子变小一半
+      // zoom 11 → 0.06, 13 → 0.015, 15 → 0.004, 17 → 0.001
+      var base = 0.02;
+      var factor = Math.pow(2, 13 - zoom);
+      return base * factor;
+    }
+
+    function getFiltered() {
+      return reviews.filter(function (r) {
+        if (filterCategory !== 'all' && r.category !== filterCategory) return false;
+        if (r.rating < filterMinRating) return false;
+        return true;
+      });
+    }
+
+    function avgRating(arr) {
+      if (!arr.length) return 0;
+      var sum = 0;
+      for (var i = 0; i < arr.length; i++) sum += arr[i].rating;
+      return Math.round((sum / arr.length) * 10) / 10;
+    }
+
+    function clusterSizeByCount(count) {
+      if (count <= 3) return { size: 22, className: 'size-s' };
+      if (count <= 10) return { size: 30, className: 'size-m' };
+      if (count <= 25) return { size: 44, className: 'size-l' };
+      return { size: 62, className: 'size-xl' };
+    }
+
+    function buildIcon(type, data) {
+      if (type === 'cluster') {
+        var s = clusterSizeByCount(data.count).size;
+        var html =
+          '<div class="review-cluster" style="width:' + s + 'px;height:' + s + 'px">' +
+            '<div class="count">' + data.count + '</div>' +
+            '<div class="label">' + data.avgRating + '★</div>' +
+          '</div>';
+        return L.divIcon({
+          html: html,
+          className: 'leaflet-marker-custom',
+          iconSize: [s, s],
+          iconAnchor: [s / 2, s / 2]
+        });
+      } else {
+        var s2 = 16;
+        var html2 = '<div class="review-marker" style="width:' + s2 + 'px;height:' + s2 + 'px" title=""></div>';
+        return L.divIcon({
+          html: html2,
+          className: 'leaflet-marker-custom',
+          iconSize: [s2, s2],
+          iconAnchor: [s2 / 2, s2 / 2]
+        });
+      }
+    }
+
+    function groupIntoCells(list, cellSize) {
+      var cells = {};
+      list.forEach(function (r) {
+        var clat = Math.floor(r.lat / cellSize) * cellSize + cellSize / 2;
+        var clng = Math.floor(r.lng / cellSize) * cellSize + cellSize / 2;
+        var key = clat.toFixed(6) + ',' + clng.toFixed(6);
+        if (!cells[key]) cells[key] = { lat: clat, lng: clng, items: [] };
+        cells[key].items.push(r);
+      });
+      return cells;
+    }
+
+    function render() {
+      if (markerLayer) map.removeLayer(markerLayer);
+      markerLayer = L.layerGroup().addTo(map);
+
+      var list = getFiltered();
+      var zoom = map.getZoom();
+      var cellSize = getCellSize(zoom);
+      var cells = groupIntoCells(list, cellSize);
+
+      Object.keys(cells).forEach(function (key) {
+        var cell = cells[key];
+        var items = cell.items;
+        var avg = avgRating(items);
+
+        if (items.length === 1) {
+          // 单条评价 —— 小点
+          var r = items[0];
+          var marker = L.marker([r.lat, r.lng], { icon: buildIcon('single') });
+          var tipText =
+            '<b>' + escapeHtml(r.placeName) + '</b> · ' + r.category + '<br>' +
+            '<span style="color:#ffb13d">' + r.rating + '★</span> ' +
+            '<span style="opacity:0.7">by ' + escapeHtml(r.author) + '</span><br>' +
+            '<span style="font-size:12px">' + escapeHtml(r.content) + '</span>';
+          marker.bindTooltip(tipText, { direction: 'top', sticky: true });
+          marker.on('click', function () {
+            // 查找同一地点（placeName + 相近坐标）的所有评价合并显示
+            openDetailForPlace(r);
+          });
+          marker.addTo(markerLayer);
+        } else {
+          // 聚合点 —— 大点，显示评价数
+          var clusterIcon = buildIcon('cluster', { count: items.length, avgRating: avg });
+          var clusterMarker = L.marker([cell.lat, cell.lng], { icon: clusterIcon });
+          var countTip =
+            '<b>' + items.length + ' 条评价</b> · 平均 ' + avg + '★<br>' +
+            '<span style="opacity:0.7">点击放大查看具体分布</span>';
+          clusterMarker.bindTooltip(countTip, { direction: 'top', sticky: true });
+          clusterMarker.on('click', function () {
+            map.flyTo([cell.lat, cell.lng], Math.min(zoom + 2, 18), { duration: 0.8 });
+          });
+          clusterMarker.addTo(markerLayer);
+        }
+      });
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    }
+
+    function openDetailForPlace(r) {
+      // 把"相近位置+同名称"视为同一地点聚合展示
+      var same = reviews.filter(function (x) {
+        return x.placeName === r.placeName &&
+               Math.abs(x.lat - r.lat) < 0.004 &&
+               Math.abs(x.lng - r.lng) < 0.004;
+      });
+      same.sort(function (a, b) { return b.rating - a.rating; });
+      showDetailPanel(r.placeName, same);
+    }
+
+    function showDetailPanel(placeName, list) {
+      document.getElementById('detail-panel').classList.remove('hidden');
+      document.getElementById('add-panel').classList.add('hidden');
+      document.getElementById('detail-title').textContent = placeName || '地点评价';
+      var avg = avgRating(list);
+      var categoryCount = {};
+      list.forEach(function (r) { categoryCount[r.category] = (categoryCount[r.category] || 0) + 1; });
+      var topCategory = '其他';
+      var topCount = 0;
+      Object.keys(categoryCount).forEach(function (k) {
+        if (categoryCount[k] > topCount) { topCount = categoryCount[k]; topCategory = k; }
+      });
+      var meta = document.getElementById('detail-meta');
+      meta.innerHTML =
+        '<span class="chip">' + escapeHtml(topCategory) + '</span>' +
+        '<span>' + list.length + ' 条评价</span>' +
+        '<span>平均 ' + avg + ' ★</span>' +
+        '<span>坐标 ' + list[0].lat.toFixed(4) + ', ' + list[0].lng.toFixed(4) + '</span>';
+      var ul = document.getElementById('review-list');
+      ul.innerHTML = '';
+      list.slice(0, 30).forEach(function (r) {
+        var li = document.createElement('li');
+        li.className = 'review-item';
+        var stars = '';
+        for (var i = 1; i <= 5; i++) stars += i <= Math.round(r.rating) ? '★' : '☆';
+        li.innerHTML =
+          '<div class="review-head">' +
+            '<span class="review-author">' + escapeHtml(r.author || '匿名') + '</span>' +
+            '<span class="review-rating">' + stars + '</span>' +
+          '</div>' +
+          '<div class="review-content">' + escapeHtml(r.content) + '</div>' +
+          '<div class="review-date">' + escapeHtml(r.date) + ' · ' + escapeHtml(r.category) + '</div>';
+        ul.appendChild(li);
+      });
+    }
+
+    map.on('zoomend moveend', function () {
+      // 防抖：移动结束后重新渲染
+      render();
+    });
+
+    // 初次渲染
+    render();
+
+    // ========== 5. 发布评价交互 ==========
+    var addBtn = document.getElementById('add-mode-btn');
+    var addPanel = document.getElementById('add-panel');
+    var banner = document.getElementById('mode-banner');
+    var addHint = document.getElementById('add-hint');
+
+    function setAddMode(on) {
+      addMode = on;
+      if (on) {
+        addBtn.classList.add('active');
+        addBtn.textContent = '× 取消发布';
+        banner.classList.remove('hidden');
+        addPanel.classList.remove('hidden');
+        document.getElementById('detail-panel').classList.add('hidden');
+        pendingLatLng = null;
+        addHint.textContent = '请点击地图上要评价的位置';
+        map.getContainer().style.cursor = 'crosshair';
+      } else {
+        addBtn.classList.remove('active');
+        addBtn.textContent = '+ 发布评价';
+        banner.classList.add('hidden');
+        map.getContainer().style.cursor = '';
+      }
+    }
+
+    addBtn.addEventListener('click', function () { setAddMode(!addMode); });
+    document.getElementById('close-add-panel').addEventListener('click', function () {
+      addPanel.classList.add('hidden');
+      setAddMode(false);
+    });
+    document.getElementById('close-detail-panel').addEventListener('click', function () {
+      document.getElementById('detail-panel').classList.add('hidden');
+    });
+
+    map.on('click', function (e) {
+      if (!addMode) return;
+      pendingLatLng = e.latlng;
+      addHint.textContent = '已选位置：' + e.latlng.lat.toFixed(4) + ', ' + e.latlng.lng.toFixed(4) + ' —— 请填写下方表单并提交';
+      // 临时展示一个绿色标记
+      if (window._pendingPin) map.removeLayer(window._pendingPin);
+      var pinIcon = L.divIcon({
+        html: '<div class="add-pin"></div>',
+        className: 'leaflet-marker-custom',
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+      });
+      window._pendingPin = L.marker([e.latlng.lat, e.latlng.lng], { icon: pinIcon }).addTo(map);
+    });
+
+    // 星级输入
+    (function initStars() {
+      var stars = document.querySelectorAll('#star-input span');
+      function paint(val) {
+        stars.forEach(function (s) {
+          var v = parseInt(s.getAttribute('data-star'), 10);
+          if (v <= val) s.classList.add('active');
+          else s.classList.remove('active');
+        });
+      }
+      paint(currentRating);
+      stars.forEach(function (s) {
+        s.addEventListener('click', function () {
+          currentRating = parseInt(s.getAttribute('data-star'), 10);
+          paint(currentRating);
+        });
+      });
+    })();
+
+    document.getElementById('review-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!pendingLatLng) {
+        addHint.textContent = '⚠ 请先点击地图选择位置';
+        addHint.style.color = '#ff6a3d';
+        return;
+      }
+      var name = document.getElementById('field-name').value.trim();
+      var content = document.getElementById('field-content').value.trim();
+      var author = document.getElementById('field-author').value.trim() || '匿名';
+      var category = document.getElementById('field-category').value;
+      if (!name || !content) return;
+      var newReview = {
+        id: (reviews.length ? Math.max.apply(null, reviews.map(function (r) { return r.id; })) : 0) + 1,
+        placeName: name,
+        category: category,
+        lat: pendingLatLng.lat,
+        lng: pendingLatLng.lng,
+        rating: currentRating,
+        content: content,
+        author: author,
+        date: new Date().toISOString().slice(0, 10)
+      };
+      reviews.unshift(newReview);
+      saveReviews(reviews);
+      // 重置表单
+      document.getElementById('review-form').reset();
+      currentRating = 4;
+      document.querySelectorAll('#star-input span').forEach(function (s) {
+        var v = parseInt(s.getAttribute('data-star'), 10);
+        if (v <= 4) s.classList.add('active');
+        else s.classList.remove('active');
+      });
+      addHint.textContent = '✓ 评价已发布！你可以继续点击地图添加，或关闭发布面板。';
+      addHint.style.color = '#3dc77f';
+      if (window._pendingPin) { map.removeLayer(window._pendingPin); window._pendingPin = null; }
+      pendingLatLng = null;
+      render();
+      // 飞到刚发布的点
+      map.flyTo([newReview.lat, newReview.lng], Math.max(map.getZoom(), 16), { duration: 0.6 });
+    });
+
+    // ========== 6. 筛选与重置 ==========
+    document.getElementById('category-filter').addEventListener('change', function (e) {
+      filterCategory = e.target.value;
+      render();
+    });
+    document.getElementById('rating-filter').addEventListener('change', function (e) {
+      filterMinRating = parseFloat(e.target.value);
+      render();
+    });
+    document.getElementById('reset-btn').addEventListener('click', function () {
+      map.flyTo(CENTER, 13, { duration: 0.8 });
+      document.getElementById('category-filter').value = 'all';
+      document.getElementById('rating-filter').value = '0';
+      filterCategory = 'all';
+      filterMinRating = 0;
+      render();
+    });
+
+    // 若用户缩放级别过低（<11），提示 zoom in
+    if (map.getZoom() < 11) map.setZoom(12);
+
+  })();
+  </script>
+</body>
+</html>

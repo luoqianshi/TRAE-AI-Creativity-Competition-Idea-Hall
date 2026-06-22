@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片对比</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1e1e1e; color: #ddd; overflow: hidden; }
+        #app { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+        
+        /* 顶部工具栏 */
+        .toolbar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; padding: 14px 16px; z-index: 100; pointer-events: none; }
+        .toolbar-left, .toolbar-right { display: flex; flex-direction: column; gap: 8px; pointer-events: auto; }
+        .toolbar button {
+            padding: 6px 14px; font-size: 13px; color: #ddd; background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; cursor: pointer;
+            transition: background 0.2s; text-align: left;
+        }
+        .toolbar button:hover { background: rgba(255,255,255,0.2); }
+        
+        /* 对比区域 */
+        .compare-container { flex: 1; position: relative; overflow: hidden; background: #1e1e1e; }
+        .compare-area { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+        .image-container { position: absolute; width: 100%; height: 100%; overflow: hidden; }
+        .compare-image {
+            position: absolute; max-width: 100%; max-height: 100%;
+            object-fit: contain; transform-origin: center center;
+        }
+        .image-overlay {
+            position: absolute; top: 0; left: 0; width: 50%; height: 100%;
+            overflow: hidden; z-index: 2;
+        }
+        .image-overlay .compare-image { position: relative; }
+        
+        /* 分割线和手柄 */
+        .split-line {
+            position: absolute; top: 0; bottom: 0; left: 50%; width: 2px;
+            background: rgba(255,255,255,0.8); z-index: 10;
+            cursor: col-resize;
+        }
+        .handle {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 36px; height: 36px; background: rgba(255,255,255,0.9);
+            border-radius: 50%; border: 2px solid rgba(0,0,0,0.3);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 11; cursor: col-resize;
+        }
+        .handle::before, .handle::after {
+            content: ''; position: absolute; width: 0; height: 0;
+            border-style: solid;
+        }
+        .handle::before {
+            left: 8px; border-width: 6px 8px 6px 0; border-color: transparent #1e1e1e transparent transparent;
+        }
+        .handle::after {
+            right: 8px; border-width: 6px 0 6px 8px; border-color: transparent transparent transparent #1e1e1e;
+        }
+        
+        /* 空状态 */
+        .empty-state {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            border: 2px dashed #5a5a5a; border-radius: 14px; margin: 40px;
+            cursor: pointer; transition: border-color 0.3s;
+        }
+        .empty-state:hover { border-color: #888; }
+        .empty-state::before {
+            content: '拖入图片或点击选择'; color: #888; font-size: 16px;
+        }
+        
+        /* 标题栏信息 */
+        .title-bar {
+            position: absolute; bottom: 50px; left: 0; right: 0;
+            text-align: center; font-size: 12px; color: #888;
+            pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        
+        /* 历史条 */
+        .history-bar {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            height: 120px; background: #181818; border-top: 1px solid #2a2a2a;
+            display: flex; align-items: center; padding: 6px 8px;
+            overflow-x: auto; overflow-y: hidden;
+            scrollbar-width: none;
+        }
+        .history-bar::-webkit-scrollbar { display: none; }
+        .history-item {
+            flex-shrink: 0; width: 108px; height: 108px; margin: 0 3px;
+            background: #2a2a2a; border-radius: 6px; cursor: pointer;
+            position: relative; overflow: hidden;
+            transition: transform 0.2s;
+        }
+        .history-item:hover { transform: translateY(-4px); }
+        .history-item.active { background: #4a8eff; }
+        .history-thumb { width: 100%; height: 100%; object-fit: cover; }
+        .history-item::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(90deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+        }
+        
+        /* 文件选择隐藏 */
+        #file-input { display: none; }
+        
+        /* Toast提示 */
+        .toast {
+            position: fixed; bottom: 140px; left: 50%; transform: translateX(-50%);
+            padding: 10px 18px; background: rgba(0,0,0,0.8); color: #fff;
+            border-radius: 10px; font-size: 11px; opacity: 0; transition: opacity 0.4s;
+            z-index: 1000;
+        }
+        .toast.show { opacity: 1; }
+        
+        /* 批量面板 */
+        .batch-panel {
+            position: absolute; inset: 0; background: #1e1e1e; z-index: 200;
+            display: none; flex-direction: column;
+        }
+        .batch-panel.show { display: flex; }
+        .batch-header {
+            display: flex; justify-content: space-between; padding: 16px;
+            border-bottom: 1px solid #333;
+        }
+        .batch-header h2 { font-size: 16px; font-weight: normal; }
+        .batch-close { cursor: pointer; color: #888; }
+        .batch-content { flex: 1; display: flex; gap: 16px; padding: 16px; }
+        .batch-group {
+            flex: 1; background: #222; border: 1px solid #3a3a3a; border-radius: 8px;
+            padding: 12px;
+        }
+        .batch-group h3 { font-size: 13px; margin-bottom: 8px; color: #aaa; }
+        .batch-images {
+            display: flex; flex-wrap: wrap; gap: 4px; max-height: 300px; overflow-y: auto;
+        }
+        .batch-img-item {
+            width: 100px; height: 120px; background: #2a2a2a; border-radius: 6px;
+            position: relative; overflow: hidden; cursor: pointer;
+        }
+        .batch-img-item img { width: 100%; height: 96px; object-fit: cover; }
+        .batch-img-item .name {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            padding: 4px; font-size: 8px; text-align: center;
+            background: rgba(0,0,0,0.7); white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .batch-img-item .remove {
+            position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
+            background: rgba(0,0,0,0.7); border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: #e66; font-size: 10px; display: none;
+        }
+        .batch-img-item:hover .remove { display: flex; }
+        .batch-actions {
+            display: flex; gap: 8px; padding: 16px; border-top: 1px solid #333;
+        }
+        .batch-actions button {
+            flex: 1; padding: 10px; border: none; border-radius: 6px;
+            cursor: pointer; font-size: 13px;
+        }
+        .batch-actions .btn-primary { background: #4a8eff; color: #fff; }
+        .batch-actions .btn-secondary { background: #3a3a3a; color: #ddd; }
+        
+        /* 配对预览 */
+        .pair-preview {
+            margin-top: 16px; padding: 12px; background: #222; border-radius: 8px;
+            max-height: 150px; overflow-y: auto;
+        }
+        .pair-preview h3 { font-size: 13px; margin-bottom: 8px; color: #aaa; }
+        .pair-slots { display: flex; flex-wrap: wrap; gap: 8px; }
+        .pair-slot {
+            width: 120px; height: 100px; background: #2a2a2a; border-radius: 6px;
+            position: relative; overflow: hidden;
+        }
+        .pair-slot img { width: 100%; height: 50%; object-fit: cover; }
+        .pair-slot .swap {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 24px; height: 24px; background: rgba(0,0,0,0.7);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; display: none;
+        }
+        .pair-slot:hover .swap { display: flex; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- 工具栏 -->
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <button id="batch-btn">批量</button>
+                <button id="history-btn">历史</button>
+            </div>
+            <div class="toolbar-right">
+                <button id="clear-btn">清除</button>
+                <button id="reset-btn">复位</button>
+                <button id="swap-btn">换位</button>
+            </div>
+        </div>
+
+        <!-- 对比区域 -->
+        <div class="compare-container" id="compare-container">
+            <div class="compare-area" id="compare-area">
+                <!-- 空状态 -->
+                <div class="empty-state" id="empty-state"></div>
+                
+                <!-- 图片容器 -->
+                <div class="image-container" id="image-before">
+                    <img class="compare-image" id="img1" src="" style="display: none;">
+                </div>
+                <div class="image-overlay" id="overlay">
+                    <img class="compare-image" id="img2" src="" style="display: none;">
+                </div>
+                
+                <!-- 分割线和手柄 -->
+                <div class="split-line" id="split-line" style="display: none;">
+                    <div class="handle" id="handle"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 标题栏信息 -->
+        <div class="title-bar" id="title-bar">图片对比</div>
+
+        <!-- 历史条 -->
+        <div class="history-bar" id="history-bar" style="display: none;">
+            <!-- 历史项将动态添加 -->
+        </div>
+
+        <!-- Toast提示 -->
+        <div class="toast" id="toast"></div>
+
+        <!-- 批量面板 -->
+        <div class="batch-panel" id="batch-panel">
+            <div class="batch-header">
+                <h2>批量配对</h2>
+                <span class="batch-close" id="batch-close">×</span>
+            </div>
+            <div class="batch-content">
+                <div class="batch-group">
+                    <h3>对照组</h3>
+                    <div class="batch-images" id="left-group"></div>
+                </div>
+                <div class="batch-group">
+                    <h3>实验组</h3>
+                    <div class="batch-images" id="right-group"></div>
+                </div>
+            </div>
+            <div class="pair-preview">
+                <h3>配对预览</h3>
+                <div class="pair-slots" id="pair-slots"></div>
+            </div>
+            <div class="batch-actions">
+                <button class="btn-secondary" id="batch-clear">清空</button>
+                <button class="btn-secondary" id="batch-auto">自动配对</button>
+                <button class="btn-secondary" id="batch-cancel">取消</button>
+                <button class="btn-primary" id="batch-done">完成</button>
+            </div>
+        </div>
+
+        <!-- 文件选择 -->
+        <input type="file" id="file-input" accept="image/*" multiple>
+    </div>
+
+    <script>
+        // 全局状态
+        const state = {
+            img1: null, img2: null,
+            name1: '', name2: '',
+            path1: '', path2: '',
+            userScale: 1.0,
+            offsetX: 0, offsetY: 0,
+            splitX: null,
+            history: [],
+            sequence: [],
+            index: -1,
+            mode: 'history'
+        };
+
+        // DOM元素
+        const compareContainer = document.getElementById('compare-container');
+        const compareArea = document.getElementById('compare-area');
+        const emptyState = document.getElementById('empty-state');
+        const img1 = document.getElementById('img1');
+        const img2 = document.getElementById('img2');
+        const overlay = document.getElementById('overlay');
+        const splitLine = document.getElementById('split-line');
+        const handle = document.getElementById('handle');
+        const titleBar = document.getElementById('title-bar');
+        const historyBar = document.getElementById('history-bar');
+        const toast = document.getElementById('toast');
+        const batchPanel = document.getElementById('batch-panel');
+        const leftGroup = document.getElementById('left-group');
+        const rightGroup = document.getElementById('right-group');
+        const pairSlots = document.getElementById('pair-slots');
+        const fileInput = document.getElementById('file-input');
+
+        // 按钮
+        const batchBtn = document.getElementById('batch-btn');
+        const historyBtn = document.getElementById('history-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const swapBtn = document.getElementById('swap-btn');
+        const batchClose = document.getElementById('batch-close');
+        const batchClear = document.getElementById('batch-clear');
+        const batchAuto = document.getElementById('batch-auto');
+        const batchCancel = document.getElementById('batch-cancel');
+        const batchDone = document.getElementById('batch-done');
+
+        // 工具函数
+        function formatBytes(n) {
+            if (n === null || n < 0) return '?';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let f = parseFloat(n);
+            for (let u of units) {
+                if (f < 1024 || u === units[units.length - 1]) {
+                    return u === 'B' ? `${Math.round(f)} ${u}` : `${f.toFixed(2)} ${u}`;
+                }
+                f /= 1024;
+            }
+            return `${n} B`;
+        }
+
+        function elide(text, limit = 28) {
+            return text.length <= limit ? text : text.slice(0, limit - 1) + '…';
+        }
+
+        function showToast(msg) {
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        function loadImage(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => resolve({
+                        src: e.target.result,
+                        name: file.name,
+                        size: file.size,
+                        width: img.width,
+                        height: img.height
+                    });
+                    img.onerror = () => resolve(null);
+                    img.src = e.target.result;
+                };
+                reader.onerror = () => resolve(null);
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // 保存历史
+        function saveHistory() {
+            localStorage.setItem('imageCompareHistory', JSON.stringify(state.history));
+        }
+
+        // 加载历史
+        function loadHistory() {
+            try {
+                const saved = localStorage.getItem('imageCompareHistory');
+                if (saved) {
+                    state.history = JSON.parse(saved);
+                    updateHistoryBar();
+                }
+            } catch (e) {
+                state.history = [];
+            }
+        }
+
+        // 添加到历史
+        function addToHistory(img1, img2) {
+            const entry = {
+                img1: img1.src,
+                img2: img2.src,
+                name1: img1.name,
+                name2: img2.name,
+                size1: img1.size,
+                size2: img2.size,
+                width1: img1.width,
+                height1: img1.height,
+                width2: img2.width,
+                height2: img2.height,
+                ts: Date.now()
+            };
+            
+            // 去重
+            state.history = state.history.filter(h => 
+                !(h.img1 === entry.img1 && h.img2 === entry.img2) &&
+                !(h.img1 === entry.img2 && h.img2 === entry.img1)
+            );
+            
+            state.history.unshift(entry);
+            if (state.history.length > 50) state.history.pop();
+            saveHistory();
+            updateHistoryBar();
+        }
+
+        // 更新历史条
+        function updateHistoryBar() {
+            historyBar.innerHTML = '';
+            
+            if (state.history.length === 0) {
+                historyBar.style.display = 'none';
+                return;
+            }
+            
+            historyBar.style.display = 'flex';
+            
+            state.history.forEach((entry, index) => {
+                const item = document.createElement('div');
+                item.className = `history-item ${state.index === index && state.mode === 'history' ? 'active' : ''}`;
+                item.dataset.index = index;
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = 108;
+                canvas.height = 108;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(0, 0, 108, 108);
+                
+                const img = new Image();
+                img.onload = () => {
+                    const scale = Math.min(108 / img.width, 108 / img.height);
+                    const w = img.width * scale;
+                    const h = img.height * scale;
+                    const x = (108 - w) / 2;
+                    const y = (108 - h) / 2;
+                    ctx.drawImage(img, x, y, w, h);
+                    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                    ctx.fillRect(54, 0, 54, 108);
+                };
+                img.src = entry.img1;
+                
+                item.appendChild(canvas);
+                item.addEventListener('click', () => loadFromHistory(index));
+                historyBar.appendChild(item);
+            });
+        }
+
+        // 从历史加载
+        function loadFromHistory(index) {
+            const entry = state.history[index];
+            if (!entry) return;
+            
+            state.img1 = {
+                src: entry.img1,
+                name: entry.name1,
+                size: entry.size1,
+                width: entry.width1,
+                height: entry.height1
+            };
+            state.img2 = {
+                src: entry.img2,
+                name: entry.name2,
+                size: entry.size2,
+                width: entry.width2,
+                height: entry.height2
+            };
+            
+            displayImages();
+            resetView();
+            
+            state.sequence = state.history;
+            state.index = index;
+            state.mode = 'history';
+            updateHistoryBar();
+        }
+
+        // 显示图片
+        function displayImages() {
+            emptyState.style.display = 'none';
+            splitLine.style.display = 'block';
+            
+            if (state.img1) {
+                img1.src = state.img1.src;
+                img1.style.display = 'block';
+            } else {
+                img1.style.display = 'none';
+            }
+            
+            if (state.img2) {
+                img2.src = state.img2.src;
+                img2.style.display = 'block';
+            } else {
+                img2.style.display = 'none';
+            }
+            
+            updateTitle();
+            updateSplitPosition();
+            applyTransform();
+        }
+
+        // 更新标题
+        function updateTitle() {
+            if (!state.img1 && !state.img2) {
+                titleBar.textContent = '图片对比';
+                return;
+            }
+            
+            const zoom = `${Math.round(state.userScale * 100)}%`;
+            
+            if (!state.img2) {
+                const img = state.img1;
+                const size = `${img.width}×${img.height}`;
+                const fsize = formatBytes(img.size);
+                titleBar.textContent = `${elide(img.name)} | ${size} | ${fsize} | ${zoom}`;
+            } else if (!state.img1) {
+                const img = state.img2;
+                const size = `${img.width}×${img.height}`;
+                const fsize = formatBytes(img.size);
+                titleBar.textContent = `${elide(img.name)} | ${size} | ${fsize} | ${zoom}`;
+            } else {
+                const s1 = `${state.img1.width}×${state.img1.height}`;
+                const m1 = formatBytes(state.img1.size);
+                const s2 = `${state.img2.width}×${state.img2.height}`;
+                const m2 = formatBytes(state.img2.size);
+                titleBar.textContent = `${elide(state.img1.name)} | ${s1} | ${m1} | ${zoom} | ${m2} | ${s2} | ${elide(state.img2.name)}`;
+            }
+        }
+
+        // 更新分割位置
+        function updateSplitPosition() {
+            if (state.splitX === null) {
+                state.splitX = compareContainer.clientWidth / 2;
+            }
+            
+            overlay.style.width = `${state.splitX}px`;
+            splitLine.style.left = `${state.splitX}px`;
+        }
+
+        // 应用变换
+        function applyTransform() {
+            const scale = state.userScale;
+            const tx = state.offsetX;
+            const ty = state.offsetY;
+            
+            const transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+            img1.style.transform = transform;
+            img2.style.transform = transform;
+        }
+
+        // 复位视图
+        function resetView() {
+            state.userScale = 1.0;
+            state.offsetX = 0;
+            state.offsetY = 0;
+            state.splitX = null;
+            updateSplitPosition();
+            applyTransform();
+            updateTitle();
+        }
+
+        // 交换图片
+        function swapImages() {
+            if (!state.img1 || !state.img2) return;
+            
+            const temp = state.img1;
+            state.img1 = state.img2;
+            state.img2 = temp;
+            
+            img1.src = state.img1.src;
+            img2.src = state.img2.src;
+            updateTitle();
+        }
+
+        // 清空
+        function clearAll() {
+            state.img1 = null;
+            state.img2 = null;
+            img1.style.display = 'none';
+            img2.style.display = 'none';
+            splitLine.style.display = 'none';
+            emptyState.style.display = 'flex';
+            resetView();
+            state.index = -1;
+            state.mode = 'history';
+            state.sequence = state.history;
+            updateHistoryBar();
+        }
+
+        // 处理文件
+        async function handleFiles(files) {
+            if (files.length >= 3) {
+                openBatchWithFiles(files);
+                return;
+            }
+            
+            const loaded = [];
+            for (let file of files) {
+                const result = await loadImage(file);
+                if (result) loaded.push(result);
+            }
+            
+            if (loaded.length === 0) return;
+            
+            // 如果已有两张图，先清空
+            if (state.img1 && state.img2) {
+                clearAll();
+            }
+            
+            if (!state.img1) {
+                state.img1 = loaded[0];
+            }
+            if (loaded.length >= 2 && !state.img2) {
+                state.img2 = loaded[1];
+            } else if (!state.img2 && loaded.length === 1) {
+                state.img2 = loaded[0];
+            }
+            
+            displayImages();
+            
+            if (state.img1 && state.img2) {
+                addToHistory(state.img1, state.img2);
+                state.sequence = state.history;
+                state.index = 0;
+                state.mode = 'history';
+            }
+        }
+
+        // 导航
+        function navigate(step) {
+            if (!state.sequence.length || state.index < 0) return;
+            
+            const n = state.sequence.length;
+            state.index = (state.index + step + n) % n;
+            
+            const entry = state.sequence[state.index];
+            state.img1 = {
+                src: entry.img1,
+                name: entry.name1,
+                size: entry.size1,
+                width: entry.width1,
+                height: entry.height1
+            };
+            state.img2 = {
+                src: entry.img2,
+                name: entry.name2,
+                size: entry.size2,
+                width: entry.width2,
+                height: entry.height2
+            };
+            
+            displayImages();
+            resetView();
+            updateHistoryBar();
+        }
+
+        // 批量相关
+        const batchState = {
+            left: [],
+            right: [],
+            pairs: []
+        };
+
+        function openBatch() {
+            batchPanel.classList.add('show');
+            historyBar.style.display = 'none';
+            updateBatchGroups();
+        }
+
+        function openBatchWithFiles(files) {
+            batchState.left = [];
+            batchState.right = [];
+            batchState.pairs = [];
+            
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    batchState.left.push({
+                        src: e.target.result,
+                        name: file.name,
+                        file: file
+                    });
+                    updateBatchGroups();
+                };
+                reader.readAsDataURL(file);
+            });
+            
+            batchPanel.classList.add('show');
+            historyBar.style.display = 'none';
+        }
+
+        function closeBatch() {
+            batchPanel.classList.remove('show');
+            historyBar.style.display = state.history.length > 0 ? 'flex' : 'none';
+        }
+
+        function updateBatchGroups() {
+            leftGroup.innerHTML = '';
+            batchState.left.forEach((item, index) => {
+                const el = createBatchItem(item, 'left', index);
+                leftGroup.appendChild(el);
+            });
+            
+            rightGroup.innerHTML = '';
+            batchState.right.forEach((item, index) => {
+                const el = createBatchItem(item, 'right', index);
+                rightGroup.appendChild(el);
+            });
+            
+            updatePairSlots();
+        }
+
+        function createBatchItem(item, group, index) {
+            const el = document.createElement('div');
+            el.className = 'batch-img-item';
+            el.dataset.group = group;
+            el.dataset.index = index;
+            
+            const img = document.createElement('img');
+            img.src = item.src;
+            
+            const name = document.createElement('div');
+            name.className = 'name';
+            name.textContent = item.name;
+            
+            const remove = document.createElement('div');
+            remove.className = 'remove';
+            remove.textContent = '×';
+            remove.addEventListener('click', () => removeBatchItem(group, index));
+            
+            el.appendChild(img);
+            el.appendChild(name);
+            el.appendChild(remove);
+            
+            el.addEventListener('click', () => addToPair(group, index));
+            
+            return el;
+        }
+
+        function removeBatchItem(group, index) {
+            batchState[group].splice(index, 1);
+            
+            // 从配对中移除
+            batchState.pairs = batchState.pairs.filter(p => 
+                !(p.left && p.left.group === group && p.left.index === index) &&
+                !(p.right && p.right.group === group && p.right.index === index)
+            );
+            
+            updateBatchGroups();
+        }
+
+        function addToPair(group, index) {
+            const item = batchState[group][index];
+            if (!item) return;
+            
+            // 找一个空槽
+            const emptySlot = batchState.pairs.find(p => !p.left || !p.right);
+            
+            if (emptySlot) {
+                if (group === 'left' && !emptySlot.left) {
+                    emptySlot.left = { group, index, item };
+                } else if (group === 'right' && !emptySlot.right) {
+                    emptySlot.right = { group, index, item };
+                } else {
+                    batchState.pairs.push({
+                        left: group === 'left' ? { group, index, item } : null,
+                        right: group === 'right' ? { group, index, item } : null
+                    });
+                }
+            } else {
+                batchState.pairs.push({
+                    left: group === 'left' ? { group, index, item } : null,
+                    right: group === 'right' ? { group, index, item } : null
+                });
+            }
+            
+            updatePairSlots();
+        }
+
+        function updatePairSlots() {
+            pairSlots.innerHTML = '';
+            
+            batchState.pairs.forEach((pair, index) => {
+                const slot = document.createElement('div');
+                slot.className = 'pair-slot';
+                slot.dataset.index = index;
+                
+                if (pair.left) {
+                    const img = document.createElement('img');
+                    img.src = pair.left.item.src;
+                    slot.appendChild(img);
+                } else {
+                    const placeholder = document.createElement('div');
+                    placeholder.style.height = '50%';
+                    slot.appendChild(placeholder);
+                }
+                
+                if (pair.right) {
+                    const img = document.createElement('img');
+                    img.src = pair.right.item.src;
+                    slot.appendChild(img);
+                } else {
+                    const placeholder = document.createElement('div');
+                    placeholder.style.height = '50%';
+                    slot.appendChild(placeholder);
+                }
+                
+                const swap = document.createElement('div');
+                swap.className = 'swap';
+                swap.textContent = '↔';
+                swap.addEventListener('click', () => swapPair(index));
+                slot.appendChild(swap);
+                
+                pairSlots.appendChild(slot);
+            });
+        }
+
+        function swapPair(index) {
+            const pair = batchState.pairs[index];
+            if (!pair) return;
+            
+            const temp = pair.left;
+            pair.left = pair.right;
+            pair.right = temp;
+            
+            updatePairSlots();
+        }
+
+        function clearBatch() {
+            batchState.left = [];
+            batchState.right = [];
+            batchState.pairs = [];
+            updateBatchGroups();
+        }
+
+        function autoPair() {
+            const leftStems = batchState.left.map((item, index) => ({
+                stem: item.name.replace(/\.[^.]+$/, '').toLowerCase(),
+                index
+            }));
+            
+            const rightStems = batchState.right.map((item, index) => ({
+                stem: item.name.replace(/\.[^.]+$/, '').toLowerCase(),
+                index
+            }));
+            
+            batchState.pairs = [];
+            
+            leftStems.forEach(left => {
+                const match = rightStems.find(r => r.stem === left.stem);
+                if (match) {
+                    batchState.pairs.push({
+                        left: { group: 'left', index: left.index, item: batchState.left[left.index] },
+                        right: { group: 'right', index: match.index, item: batchState.right[match.index] }
+                    });
+                }
+            });
+            
+            updatePairSlots();
+            showToast('自动配对完成');
+        }
+
+        function finishBatch() {
+            const validPairs = batchState.pairs.filter(p => p.left && p.right);
+            
+            if (validPairs.length === 0) {
+                showToast('没有有效的配对');
+                return;
+            }
+            
+            // 保存第一对到主视图
+            const first = validPairs[0];
+            state.img1 = {
+                src: first.left.item.src,
+                name: first.left.item.name,
+                size: first.left.item.file?.size || 0,
+                width: 0,
+                height: 0
+            };
+            state.img2 = {
+                src: first.right.item.src,
+                name: first.right.item.name,
+                size: first.right.item.file?.size || 0,
+                width: 0,
+                height: 0
+            };
+            
+            // 所有配对加入历史
+            const batchRecords = [];
+            validPairs.forEach(pair => {
+                const entry = {
+                    img1: pair.left.item.src,
+                    img2: pair.right.item.src,
+                    name1: pair.left.item.name,
+                    name2: pair.right.item.name,
+                    size1: pair.left.item.file?.size || 0,
+                    size2: pair.right.item.file?.size || 0,
+                    width1: 0, height1: 0,
+                    width2: 0, height2: 0,
+                    ts: Date.now()
+                };
+                
+                // 去重
+                state.history = state.history.filter(h => 
+                    !(h.img1 === entry.img1 && h.img2 === entry.img2)
+                );
+                
+                state.history.unshift(entry);
+                batchRecords.push(entry);
+            });
+            
+            if (state.history.length > 50) state.history = state.history.slice(0, 50);
+            saveHistory();
+            
+            closeBatch();
+            displayImages();
+            resetView();
+            
+            // 设置为批量模式
+            state.sequence = batchRecords;
+            state.index = 0;
+            state.mode = 'batch';
+            updateHistoryBar();
+            
+            showToast(`已完成 ${validPairs.length} 对配对`);
+        }
+
+        // 事件监听
+        // 空状态点击
+        emptyState.addEventListener('click', () => fileInput.click());
+
+        // 文件选择
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFiles(Array.from(e.target.files));
+            }
+            e.target.value = '';
+        });
+
+        // 拖放
+        compareContainer.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        compareContainer.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const files = Array.from(e.dataTransfer.files).filter(f => 
+                f.type.startsWith('image/')
+            );
+            if (files.length > 0) {
+                handleFiles(files);
+            }
+        });
+
+        // 分割线拖动
+        let isDragging = false;
+        let isPanning = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        handle.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastX = e.clientX;
+            e.preventDefault();
+        });
+
+        compareContainer.addEventListener('mousedown', (e) => {
+            if (!isDragging && e.target !== handle && e.target !== splitLine) {
+                isPanning = true;
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const dx = e.clientX - lastX;
+                state.splitX = Math.max(20, Math.min(compareContainer.clientWidth - 20, state.splitX + dx));
+                updateSplitPosition();
+                lastX = e.clientX;
+            } else if (isPanning && (state.img1 || state.img2)) {
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+                state.offsetX += dx;
+                state.offsetY += dy;
+                applyTransform();
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            isPanning = false;
+        });
+
+        // 滚轮缩放
+        compareContainer.addEventListener('wheel', (e) => {
+            if (!state.img1 && !state.img2) return;
+            
+            e.preventDefault();
+            const delta = e.deltaY;
+            const factor = delta > 0 ? 0.95 : 1.05;
+            const oldScale = state.userScale;
+            const newScale = Math.max(0.05, Math.min(40, oldScale * factor));
+            
+            if (newScale !== oldScale) {
+                const rect = compareContainer.getBoundingClientRect();
+                const cx = rect.width / 2 + state.offsetX;
+                const cy = rect.height / 2 + state.offsetY;
+                const ratio = newScale / oldScale;
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                
+                state.offsetX = mouseX + (cx - mouseX) * ratio - rect.width / 2;
+                state.offsetY = mouseY + (cy - mouseY) * ratio - rect.height / 2;
+                state.userScale = newScale;
+                
+                applyTransform();
+                updateTitle();
+            }
+        });
+
+        // 键盘事件
+        document.addEventListener('keydown', (e) => {
+            if (batchPanel.classList.contains('show')) return;
+            
+            switch (e.key) {
+                case 'ArrowLeft':
+                    if (state.img1 && state.img2) {
+                        state.splitX = 0;
+                        updateSplitPosition();
+                    }
+                    break;
+                case 'ArrowRight':
+                    if (state.img1 && state.img2) {
+                        state.splitX = compareContainer.clientWidth;
+                        updateSplitPosition();
+                    }
+                    break;
+                case 'ArrowUp':
+                    navigate(-1);
+                    break;
+                case 'ArrowDown':
+                    navigate(1);
+                    break;
+                case 'r':
+                case 'R':
+                    if (e.ctrlKey || e.metaKey) {
+                        resetView();
+                    }
+                    break;
+                case 's':
+                case 'S':
+                    if (e.ctrlKey || e.metaKey) {
+                        swapImages();
+                    }
+                    break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (batchPanel.classList.contains('show')) return;
+            
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                state.splitX = null;
+                updateSplitPosition();
+            }
+        });
+
+        // 按钮点击
+        batchBtn.addEventListener('click', openBatch);
+        historyBtn.addEventListener('click', () => {
+            historyBar.style.display = historyBar.style.display === 'none' ? 'flex' : 'none';
+        });
+        clearBtn.addEventListener('click', clearAll);
+        resetBtn.addEventListener('click', resetView);
+        swapBtn.addEventListener('click', swapImages);
+        batchClose.addEventListener('click', closeBatch);
+        batchClear.addEventListener('click', clearBatch);
+        batchAuto.addEventListener('click', autoPair);
+        batchCancel.addEventListener('click', closeBatch);
+        batchDone.addEventListener('click', finishBatch);
+
+        // 窗口大小变化
+        window.addEventListener('resize', () => {
+            updateSplitPosition();
+            applyTransform();
+        });
+
+        // 初始化
+        loadHistory();
+    </script>
+</body>
+</html>
