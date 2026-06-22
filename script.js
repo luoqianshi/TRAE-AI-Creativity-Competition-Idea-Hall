@@ -400,7 +400,7 @@ function createCardHTML(demo, highlightTokens) {
   let activeTag = 'all';
   let searchQuery = '';
   let sortBy = 'newest';
-  let approvedOnly = false;
+  let approvedOnly = true;
   let tokens = [];
 
   // ---- Restore from sessionStorage
