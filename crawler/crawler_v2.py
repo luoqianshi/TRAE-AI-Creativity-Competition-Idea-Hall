@@ -764,7 +764,6 @@ class DemoHallCrawler:
             frontend_demos.append({
                 "topic_id": d["topic_id"],
                 "title": strip_html(d.get("title", "")),
-                "excerpt": clean_excerpt,
                 "insight": insight,
                 "tags": d.get("tags", []),
                 "views": d.get("views", 0),
