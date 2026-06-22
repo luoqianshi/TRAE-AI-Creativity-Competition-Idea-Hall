@@ -14,19 +14,19 @@
 
 | 维度 | 数量 |
 |---|---|
-| 总报名帖 | **11,817** |
-| 含 HTML Demo | **9,634** |
-| 官方审核通过 | **2,569** |
-| 暂无 Demo / 未审核 | **2,183** |
-| 生活娱乐 | 3,896 |
-| 学习工作 | 5,742 |
-| 社会服务 | 2,084 |
-| 硬件交互 | 568 |
-| 社会公益 | 1,742 |
+| 总报名帖 | **13,879** |
+| 含 HTML Demo | **11,302** |
+| 官方审核通过 | **7,170** |
+| 暂无 Demo / 未审核 | **2,577** |
+| 学习工作 | 6,559 |
+| 生活娱乐 | 4,579 |
+| 社会服务 | 2,465 |
+| 社会公益 | 2,069 |
+| 硬件交互 | 666 |
 | 野蛮生长（未分类） | 33 |
-| 已生成 Insight 洞见 | 11,815 |
+| 已生成 Insight 洞见 | 13,879 |
 
-> 数据更新时间：2026-06-21 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
+> 数据更新时间：2026-06-22 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单
 
 ---
 
@@ -57,7 +57,7 @@
 ### 分类展示
 
 - 按五大赛道自动分类：生活娱乐、学习工作、社会服务、硬件交互、社会公益，无法识别的帖子归入「野蛮生长」
-- **赛道推断**：对无标签帖子（929 条），通过标题/摘要关键词匹配自动推断赛道（96.4% 成功率）
+- **赛道推断**：对无标签帖子，通过标题/摘要关键词匹配自动推断赛道（96.4% 成功率）
 - 支持按赛道筛选、关键词搜索（标题 + 洞见 + 摘要）、按时间/浏览量/点赞数排序
 - **审核状态筛选**：Toggle 开关切换「仅展示官方审核通过」/「展示全部」
 - **已删除帖子过滤**：自动识别「话题已被作者删除」的帖子，前端不展示
@@ -71,11 +71,13 @@
 
 ### 前端性能优化
 
-- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 7.4MB），index.html 仅 6.0KB 骨架
+- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 5.5MB），index.html 仅 6.0KB 骨架
+- **数据字段精简**：前端数据文件仅包含渲染必需字段（移除 excerpt），体积减少 39%
 - **手动加载更多**：首屏渲染 50 张卡片，底部「加载更多」按钮手动触发下一批（每批 50 张）
 - **DOM 回收**：卡片超过 200 张时自动移除顶部批次（保留 150 张缓冲），保持 DOM 轻量
 - **数据层过滤**：搜索/排序/标签筛选在 JS 数组上完成（O(n)），不操作 DOM
 - **CSS 渲染优化**：`content-visibility: auto` 跳过离屏卡片渲染，`contain-intrinsic-size` 预留空间
+- **Gzip 压缩**：GitHub Pages 自动启用 Gzip，传输体积压缩至原始大小的 23%
 
 ### TRAE 深色科技风 UI
 
@@ -109,7 +111,7 @@ Python 爬虫（双数据源）
     ▼
 Jinja2 模板渲染
     ├── 生成 index.html（骨架 HTML，约 6.0KB）
-    ├── 生成 data/demos.min.js（前端数据文件，约 7.4MB）
+    ├── 生成 data/demos.min.js（前端数据文件，约 5.5MB）
     │   └── 含 insight 洞见字段（规则引擎自动生成）
     └── Insight 生成（规则引擎，无外部 API 依赖）
     │
@@ -119,7 +121,7 @@ Git push → GitHub Actions → GitHub Pages
     ▼
 浏览器加载
     ├── index.html（骨架）+ styles.css
-    ├── data/demos.min.js（11,817 条卡片数据）
+    ├── data/demos.min.js（13,879 条卡片数据）
     └── script.js（手动加载 + 筛选 + 搜索 + 排序）
 ```
 
@@ -190,10 +192,10 @@ URL 校验规则：
 
 ```json
 {
-  "last_updated": "2026-06-21T14:25:00.000000+00:00",
-  "total_count": 11817,
-  "approved_count": 2569,
-  "unapproved_count": 9248,
+  "last_updated": "2026-06-22T14:25:00.000000+00:00",
+  "total_count": 13879,
+  "approved_count": 7170,
+  "unapproved_count": 6736,
   "demos": [
     {
       "topic_id": 34392,
@@ -246,7 +248,7 @@ URL 校验规则：
 
 渲染输出两个文件：
 - `index.html`：骨架 HTML（约 6.0KB），不含卡片数据
-- `data/demos.min.js`：前端数据文件（约 7.4MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, excerpt, insight, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
+- `data/demos.min.js`：前端数据文件（约 5.5MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, insight, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
 
 ### 4. 前端交互（script.js）
 
@@ -276,14 +278,14 @@ URL 校验规则：
 - **DOM 回收**：卡片超过 200 张（`MAX_DOM_CARDS`）时移除顶部多余卡片，保留 150 张缓冲（`BUFFER_CARDS`）
 - **入场动画**：`IntersectionObserver`（阈值 0.1）逐张添加 `.visible` 类，每张延迟 30ms
 - **按钮状态**：
-  - **可加载**：绿色边框，显示「加载更多（已加载 50 / 2569）」
+  - **可加载**：绿色边框，显示「加载更多（已加载 50 / 7170）」
   - **加载中**：灰色 + 旋转 spinner + 「加载中...」，按钮禁用
-  - **已完成**：灰色半透明 + 「已展示全部 2569 个作品」，按钮禁用
+  - **已完成**：灰色半透明 + 「已展示全部 7170 个作品」，按钮禁用
 
 #### 筛选 / 搜索 / 排序
 - **数据层过滤**：在 JS 数组上完成（O(n)），不操作 DOM
 - **赛道筛选**：点击 tag-pill 切换 active 状态，按 `tags` 数组过滤
-- **关键词搜索**：300ms 防抖，匹配 `title` + `excerpt`（大小写不敏感）
+- **关键词搜索**：300ms 防抖，匹配 `title` + `insight`（大小写不敏感）
 - **排序**：支持最新发布（`created_at`）、最多浏览（`views`）、最多点赞（`like_count`）
 - **审核筛选**：Toggle 开关控制 `approved` 字段过滤（默认仅展示审核通过）
 - 过滤/排序后调用 `setFilteredDemos()` 重新渲染，清空网格并从头加载
@@ -363,9 +365,9 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 │   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
 │   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   ├── demos.json                       # 所有帖子的结构化数据（11,817 条，含 insight 字段）
-│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 7.4MB）
-│   └── approved_projects.json          # 飞书多维表格审批数据源
+│   ├── demos.json                       # 所有帖子的结构化数据（13,879 条，含 insight 字段）
+│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 5.5MB）
+│   └── approved_projects.json          # 飞书多维表格审批数据源（6月16日 + 6月22日）
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
 │   ├── trae-logo.png                    # Logo & Favicon
