@@ -120,7 +120,7 @@ cat > .env.production << 'EOF'
 PORT=3000
 
 # Supabase
-SUPABASE_URL=https://idyjfaxcyrrxhkigxhpl.supabase.co
+SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 # 阿里云 OSS

@@ -1,0 +1,97 @@
+name: Build & Release HiYa! (v1.0+)
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*' # 只要推送到以 v 开头的标签（如 v1.0, v1.1）就会触发
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Web Project
+        run: npm run build
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Add Android Platform & Sync
+        run: |
+          npm install @capacitor/cli @capacitor/core @capacitor/app @capacitor/filesystem
+          npx cap init hiya com.hiya.app --web-dir dist
+          npm install @capacitor/android
+          npx cap add android
+          
+          # 精准注入文件关联逻辑
+          node -e "
+          const fs = require('fs');
+          const file = 'android/app/src/main/AndroidManifest.xml';
+          let xml = fs.readFileSync(file, 'utf8');
+          const intentFilter = \`
+              <intent-filter>
+                  <action android:name=\\\"android.intent.action.VIEW\\\" />
+                  <category android:name=\\\"android.intent.category.DEFAULT\\\" />
+                  <category android:name=\\\"android.intent.category.BROWSABLE\\\" />
+                  <data android:scheme=\\\"content\\\" />
+                  <data android:scheme=\\\"file\\\" />
+                  <data android:mimeType=\\\"application/json\\\" />
+                  <data android:host=\\\"*\\\" />
+              </intent-filter>
+          \`;
+          xml = xml.replace('</activity>', intentFilter + '</activity>');
+          fs.writeFileSync(file, xml);
+          "
+
+          # 处理图标
+          mkdir -p assets
+          if [ -f "icon.png" ]; then
+            mv icon.png assets/icon.png
+            npm install @capacitor/assets --save-dev
+            npx capacitor-assets generate --android
+          fi
+          npx cap sync
+
+      - name: Build & Rename APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          
+          # 获取当前 Tag 名字（如果没有 Tag 则默认叫 v1.0）
+          VERSION_NAME=${{ github.ref_name }}
+          if [[ $VERSION_NAME == main ]]; then VERSION_NAME="V1.0-dev"; fi
+          
+          # 将生成的 apk 重新命名为漂亮的格式
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/HiYa_${VERSION_NAME}.apk
+          echo "NEW_APK_NAME=HiYa_${VERSION_NAME}.apk" >> $GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') 
+        with:
+          files: android/app/build/outputs/apk/debug/HiYa_${{ github.ref_name }}.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

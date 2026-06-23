@@ -1,0 +1,1466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>阈值·工业解压模拟器</title>
+    <style>
+        /* ========== 全局样式 ========== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+            background: #f5f5f8;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+        }
+
+        /* ========== 屏幕闪烁效果 ========== */
+        #flash-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 1000;
+            transition: opacity 0.08s ease-out;
+        }
+
+        #flash-overlay.active {
+            opacity: 0.8;
+        }
+
+        /* ========== UI 遮罩层 ========== */
+        #ui-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        /* ========== 顶部区域 ========== */
+        .top-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 24px 32px;
+        }
+
+        /* 标题区域 */
+        .title-section {
+            pointer-events: auto;
+        }
+
+        .main-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #2a2a2a;
+            letter-spacing: 4px;
+            margin-bottom: 4px;
+        }
+
+        .sub-title {
+            font-size: 12px;
+            color: #888;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* 状态和进度区域 */
+        .status-section {
+            text-align: right;
+            pointer-events: auto;
+        }
+
+        .status-text {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            min-height: 24px;
+        }
+
+        .status-text.crushing { color: #ff6644; }
+        .status-text.holding { color: #ff9933; }
+        .status-text.complete { color: #44aa44; }
+
+        /* 填满进度条 */
+        .fill-progress-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .fill-label {
+            font-size: 13px;
+            color: #666;
+            white-space: nowrap;
+        }
+
+        .fill-progress-bar {
+            width: 160px;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .fill-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667799, #334466);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .fill-percent {
+            font-size: 13px;
+            color: #444;
+            font-weight: 600;
+            min-width: 45px;
+        }
+
+        /* ========== 底部区域 ========== */
+        .bottom-section {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding: 24px 32px;
+        }
+
+        /* 物品信息 */
+        .item-info {
+            font-size: 14px;
+            color: #555;
+            background: rgba(255,255,255,0.85);
+            padding: 10px 16px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+        }
+
+        .item-info-icon {
+            margin-right: 6px;
+        }
+
+        /* 控制按钮 */
+        .button-group {
+            display: flex;
+            gap: 12px;
+            pointer-events: auto;
+        }
+
+        .ctrl-btn {
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        .ctrl-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .ctrl-btn:active {
+            transform: translateY(0);
+        }
+
+        .ctrl-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-generate {
+            background: #556677;
+            color: white;
+        }
+
+        .btn-press {
+            background: #dd7733;
+            color: white;
+        }
+
+        .btn-reset {
+            background: #667799;
+            color: white;
+        }
+
+        /* 操作提示 */
+        .control-hint {
+            font-size: 13px;
+            color: #666;
+            background: rgba(255,255,255,0.85);
+            padding: 10px 16px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+        }
+    </style>
+
+    <!-- importmap 配置 -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+            "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+        }
+    }
+    </script>
+</head>
+<body>
+    <!-- 画布容器 -->
+    <div id="canvas-container"></div>
+
+    <!-- 屏幕闪烁效果 -->
+    <div id="flash-overlay"></div>
+
+    <!-- UI 遮罩 -->
+    <div id="ui-overlay">
+        <!-- 顶部区域 -->
+        <div class="top-section">
+            <div class="title-section">
+                <div class="main-title">阈值·工业解压模拟器</div>
+                <div class="sub-title">Threshold · Industrial Stress Relief Simulator</div>
+            </div>
+            <div class="status-section">
+                <div class="status-text" id="status-text">就绪</div>
+                <div class="fill-progress-container">
+                    <span class="fill-label">收集坑</span>
+                    <div class="fill-progress-bar">
+                        <div class="fill-progress-fill" id="fill-progress"></div>
+                    </div>
+                    <span class="fill-percent" id="fill-percent">0%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部区域 -->
+        <div class="bottom-section">
+            <div class="item-info" id="item-info">
+                <span class="item-info-icon">⚙</span>
+                <span id="current-item">等待生成物品...</span>
+            </div>
+            <div class="button-group">
+                <button class="ctrl-btn btn-generate" id="btn-generate">生成新物品</button>
+                <button class="ctrl-btn btn-press" id="btn-press" disabled>开始压制</button>
+                <button class="ctrl-btn btn-reset" id="btn-reset">重置</button>
+            </div>
+            <div class="control-hint">鼠标左键旋转 · 滚轮缩放</div>
+        </div>
+    </div>
+
+    <!-- 主程序 -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import * as CANNON from 'cannon-es';
+
+        // ==================== 全局配置 ====================
+        const CONFIG = {
+            // 物理配置
+            GRAVITY: -30,
+            PRESS_SPEED: 1.8,
+            HOLD_TIME: 0.4,
+
+            // 碎片配置
+            MIN_FRAGMENTS: 15,
+            MAX_FRAGMENTS: 25,
+            FRAGMENT_HORIZONTAL_SPEED_MIN: 4,
+            FRAGMENT_HORIZONTAL_SPEED_MAX: 10,
+            FRAGMENT_VERTICAL_SPEED_MIN: 3,
+            FRAGMENT_VERTICAL_SPEED_MAX: 9,
+            MAX_FRAGMENTS_IN_PIT: 200,
+
+            // 坑配置
+            PIT_WIDTH: 6,
+            PIT_DEPTH: 5,
+            PIT_DEPTH_VALUE: 0.8,
+            PIT_WALL_THICKNESS: 0.1,
+            PIT_WALL_HEIGHT: 0.8,
+
+            // 物品配置
+            ITEM_BASE_Y: 0.6,
+
+            // 颜色配置 - 工业黄黑风格
+            COLORS: {
+                BACKGROUND: 0xf5f5f8,
+                GROUND: 0xe8e8ec,
+                // 压力机主体 - 工业深灰
+                BASE: 0x2a2a2a,
+                COLUMN: 0x333333,
+                TOP_PLATE: 0x252525,
+                // 警示黄色条纹
+                WARNING_YELLOW: 0xffcc00,
+                // 运动部件 - 银色金属
+                CYLINDER: 0x4a4a4a,
+                PISTON: 0x777777,
+                // 压头 - 黑色主体 + 黄色警示
+                PRESS_HEAD: 0x1a1a1a,
+                PRESS_HEAD_EMISSIVE: 0x442200,
+                // 收集坑
+                PIT_FLOOR: 0x2a2a2e,
+                PIT_EDGE: 0x333333
+            },
+
+            // 物品形状列表
+            SHAPES: [
+                { name: '立方体', type: 'box', create: (s) => new THREE.BoxGeometry(s, s, s) },
+                { name: '球体', type: 'sphere', create: (r) => new THREE.SphereGeometry(r, 32, 32) },
+                { name: '圆柱体', type: 'cylinder', create: (r, h) => new THREE.CylinderGeometry(r, r, h, 32) },
+                { name: '圆锥体', type: 'cone', create: (r, h) => new THREE.ConeGeometry(r, h, 32) },
+                { name: '圆环', type: 'torus', create: (r, t) => new THREE.TorusGeometry(r, t, 16, 48) },
+                { name: '圆环结', type: 'torusknot', create: (r, t) => new THREE.TorusKnotGeometry(r, t, 64, 8) }
+            ],
+
+            // 物品材质列表
+            MATERIALS: [
+                { name: '生铁', color: 0x556677, metalness: 0.9, roughness: 0.6 },
+                { name: '黄铜', color: 0xcc9944, metalness: 0.8, roughness: 0.3, emissive: 0x442200, emissiveIntensity: 0.12 },
+                { name: '铸铁', color: 0x444444, metalness: 0.7, roughness: 0.7 },
+                { name: '不锈钢', color: 0x8899aa, metalness: 0.95, roughness: 0.2 },
+                { name: '紫铜', color: 0xcc6644, metalness: 0.7, roughness: 0.4, emissive: 0x331100, emissiveIntensity: 0.1 },
+                { name: '钛合金', color: 0x667799, metalness: 0.85, roughness: 0.25 },
+                { name: '暗红漆面', color: 0x883333, metalness: 0.3, roughness: 0.5 },
+                { name: '军绿漆面', color: 0x556644, metalness: 0.3, roughness: 0.6 },
+                { name: '亮橙色', color: 0xdd7733, metalness: 0.2, roughness: 0.4, emissive: 0x441100, emissiveIntensity: 0.08 },
+                { name: '深蓝漆面', color: 0x334466, metalness: 0.3, roughness: 0.5 }
+            ]
+        };
+
+        // ==================== 全局变量 ====================
+        let scene, camera, renderer, controls;
+        let world;
+        let pressHead, pistonRod, hydraulicCylinder;
+        let currentItem = null;
+        let currentItemShape = null;
+        let currentItemMaterial = null;
+        let fragments = [];
+        let pressState = 'idle'; // idle, pressing, holding, returning
+        let pressHeadTargetY = 8.5;
+        let pressHeadStartY = 8.5;
+        let pitFragments = 0;
+        let isPitFilled = false;
+        let clock = new THREE.Clock();
+
+        // DOM 元素
+        const statusText = document.getElementById('status-text');
+        const fillProgress = document.getElementById('fill-progress');
+        const fillPercent = document.getElementById('fill-percent');
+        const currentItemText = document.getElementById('current-item');
+        const btnGenerate = document.getElementById('btn-generate');
+        const btnPress = document.getElementById('btn-press');
+        const btnReset = document.getElementById('btn-reset');
+        const flashOverlay = document.getElementById('flash-overlay');
+
+        // ==================== 初始化函数 ====================
+        function init() {
+            initThreeJS();
+            initCannon();
+            initScene();
+            initPress();
+            initPit();
+            initLighting();
+            initEventListeners();
+            generateNewItem();
+            animate();
+        }
+
+        // 初始化 Three.js
+        function initThreeJS() {
+            // 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(CONFIG.COLORS.BACKGROUND);
+
+            // 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(12, 10, 12);
+
+            // 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 控制器
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.target.set(0, 3, 0);
+            controls.update();
+
+            // 窗口调整
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // 初始化 Cannon-es 物理世界
+        function initCannon() {
+            world = new CANNON.World();
+            world.gravity.set(0, CONFIG.GRAVITY, 0);
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+        }
+
+        // 初始化场景（地面 - 在坑位置留洞）
+        function initScene() {
+            const groundMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.GROUND,
+                roughness: 0.9,
+                metalness: 0.1
+            });
+
+            // 坑的范围: x[-3, 3], z[-2.5, 2.5]
+            // 创建四块地面，在坑的四周 - 地面顶部在 y=0，与底座底部对齐
+            const groundThickness = 0.1;
+            const groundY = -groundThickness / 2; // 地面中心在 -0.05，顶部在 0
+
+            // 前面地面 (坑前面)
+            const frontGround = new THREE.Mesh(
+                new THREE.BoxGeometry(30, groundThickness, 12.5),
+                groundMaterial
+            );
+            frontGround.position.set(0, groundY, 8.75);
+            frontGround.receiveShadow = true;
+            scene.add(frontGround);
+
+            // 后面地面 (坑后面)
+            const backGround = new THREE.Mesh(
+                new THREE.BoxGeometry(30, groundThickness, 12.5),
+                groundMaterial
+            );
+            backGround.position.set(0, groundY, -8.75);
+            backGround.receiveShadow = true;
+            scene.add(backGround);
+
+            // 左面地面 (坑左面)
+            const leftGround = new THREE.Mesh(
+                new THREE.BoxGeometry(12, groundThickness, 5),
+                groundMaterial
+            );
+            leftGround.position.set(-9, groundY, 0);
+            leftGround.receiveShadow = true;
+            scene.add(leftGround);
+
+            // 右面地面 (坑右面)
+            const rightGround = new THREE.Mesh(
+                new THREE.BoxGeometry(12, groundThickness, 5),
+                groundMaterial
+            );
+            rightGround.position.set(9, groundY, 0);
+            rightGround.receiveShadow = true;
+            scene.add(rightGround);
+
+            // 物理地面（四块）
+            // 前面
+            const frontBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(15, groundThickness/2, 6.25)),
+                position: new CANNON.Vec3(0, groundY, 8.75)
+            });
+            world.addBody(frontBody);
+
+            // 后面
+            const backBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(15, groundThickness/2, 6.25)),
+                position: new CANNON.Vec3(0, groundY, -8.75)
+            });
+            world.addBody(backBody);
+
+            // 左面
+            const leftBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(6, groundThickness/2, 2.5)),
+                position: new CANNON.Vec3(-9, groundY, 0)
+            });
+            world.addBody(leftBody);
+
+            // 右面
+            const rightBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(6, groundThickness/2, 2.5)),
+                position: new CANNON.Vec3(9, groundY, 0)
+            });
+            world.addBody(rightBody);
+        }
+
+        // 初始化压力机模型
+        function initPress() {
+            // 材质
+            const baseMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.BASE,
+                roughness: 0.6,
+                metalness: 0.8
+            });
+            const columnMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.COLUMN,
+                roughness: 0.5,
+                metalness: 0.85
+            });
+            const topPlateMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.TOP_PLATE,
+                roughness: 0.5,
+                metalness: 0.85
+            });
+            const cylinderMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.CYLINDER,
+                roughness: 0.4,
+                metalness: 0.9
+            });
+            const pistonMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.PISTON,
+                roughness: 0.3,
+                metalness: 0.95
+            });
+            const pressHeadMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.COLORS.PRESS_HEAD,
+                roughness: 0.35,
+                metalness: 0.7,
+                emissive: CONFIG.COLORS.PRESS_HEAD_EMISSIVE,
+                emissiveIntensity: 0.5
+            });
+
+            // 使用 Canvas 生成黄黑斜向条纹贴图（45度角）
+            function createWarningStripeTexture() {
+                const canvas = document.createElement('canvas');
+                canvas.width = 512;
+                canvas.height = 512;
+                const ctx = canvas.getContext('2d');
+
+                // 黑色背景
+                ctx.fillStyle = '#111111';
+                ctx.fillRect(0, 0, 512, 512);
+
+                // 黄色斜条纹 - 45度角（从左上到右下）
+                ctx.fillStyle = '#ffcc00';
+                const stripeWidth = 64; // 条纹宽度
+                const diagonal = Math.sqrt(512 * 512 + 512 * 512); // 对角线长度
+                
+                ctx.save();
+                ctx.translate(256, 256);
+                ctx.rotate(-Math.PI / 4); // 旋转45度
+                
+                for (let i = -diagonal; i < diagonal; i += stripeWidth * 2) {
+                    ctx.fillRect(i - diagonal/2, -diagonal/2, stripeWidth, diagonal);
+                }
+                
+                ctx.restore();
+
+                const texture = new THREE.CanvasTexture(canvas);
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.repeat.set(1, 1);
+                texture.rotation = 0;
+                return texture;
+            }
+
+            const warningTexture = createWarningStripeTexture();
+
+            // 带条纹的材质
+            const stripedMaterial = new THREE.MeshStandardMaterial({
+                map: warningTexture,
+                roughness: 0.4,
+                metalness: 0.5
+            });
+
+            // 底座 (4×0.6×3) - 底部放在地面上方(y=0)
+            const baseGeometry = new THREE.BoxGeometry(4, 0.6, 3);
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.set(0, 0.3, 0);
+            base.castShadow = true;
+            base.receiveShadow = true;
+            scene.add(base);
+
+            // 底座顶面条纹 - 使用一个稍大的平面覆盖顶面
+            const baseTopStripeGeo = new THREE.PlaneGeometry(4, 3);
+            const baseTopStripe = new THREE.Mesh(baseTopStripeGeo, stripedMaterial);
+            baseTopStripe.rotation.x = -Math.PI / 2;
+            baseTopStripe.position.set(0, 0.601, 0); // 略高于底座顶面
+            baseTopStripe.receiveShadow = true;
+            scene.add(baseTopStripe);
+
+            // 底座侧面条纹
+            const baseW = 4;
+            const baseD = 3;
+            const baseH = 0.6;
+            const baseOffset = 0.001;
+
+            // 前面
+            const baseFrontStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(baseW, baseH),
+                stripedMaterial
+            );
+            baseFrontStripe.position.set(0, 0, baseD / 2 + baseOffset);
+            base.add(baseFrontStripe);
+
+            // 后面
+            const baseBackStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(baseW, baseH),
+                stripedMaterial
+            );
+            baseBackStripe.rotation.y = Math.PI;
+            baseBackStripe.position.set(0, 0, -baseD / 2 - baseOffset);
+            base.add(baseBackStripe);
+
+            // 左面
+            const baseLeftStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(baseD, baseH),
+                stripedMaterial
+            );
+            baseLeftStripe.rotation.y = -Math.PI / 2;
+            baseLeftStripe.position.set(-baseW / 2 - baseOffset, 0, 0);
+            base.add(baseLeftStripe);
+
+            // 右面
+            const baseRightStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(baseD, baseH),
+                stripedMaterial
+            );
+            baseRightStripe.rotation.y = Math.PI / 2;
+            baseRightStripe.position.set(baseW / 2 + baseOffset, 0, 0);
+            base.add(baseRightStripe);
+
+            // 底座物理体
+            const baseBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(2, 0.3, 1.5)),
+                position: new CANNON.Vec3(0, 0.3, 0)
+            });
+            world.addBody(baseBody);
+
+            // 四根立柱 (高 6.2，位置在底座四角) - 添加黄色警示环
+            const columnRadius = 0.15;
+            const columnHeight = 6.2;
+            const columnPositions = [
+                [-1.7, 0.3 + columnHeight/2, -1.2],
+                [1.7, 0.3 + columnHeight/2, -1.2],
+                [-1.7, 0.3 + columnHeight/2, 1.2],
+                [1.7, 0.3 + columnHeight/2, 1.2]
+            ];
+
+            columnPositions.forEach((pos) => {
+                const columnGeometry = new THREE.CylinderGeometry(columnRadius, columnRadius, columnHeight, 16);
+                const column = new THREE.Mesh(columnGeometry, columnMaterial);
+                column.position.set(...pos);
+                column.castShadow = true;
+                column.receiveShadow = true;
+                scene.add(column);
+
+                // 立柱物理体
+                const columnBody = new CANNON.Body({
+                    mass: 0,
+                    shape: new CANNON.Cylinder(columnRadius, columnRadius, columnHeight, 8),
+                    position: new CANNON.Vec3(...pos)
+                });
+                world.addBody(columnBody);
+            });
+
+            // 顶板 (4.5×0.4×3.5)
+            const topPlateGeometry = new THREE.BoxGeometry(4.5, 0.4, 3.5);
+            const topPlate = new THREE.Mesh(topPlateGeometry, topPlateMaterial);
+            topPlate.position.set(0, 0.3 + columnHeight + 0.2, 0);
+            topPlate.castShadow = true;
+            topPlate.receiveShadow = true;
+            scene.add(topPlate);
+
+            // 顶板底面条纹 - 使用一个稍大的平面覆盖底面（面向下方）
+            const topBottomStripeGeo = new THREE.PlaneGeometry(4.5, 3.5);
+            const topBottomStripe = new THREE.Mesh(topBottomStripeGeo, stripedMaterial);
+            topBottomStripe.rotation.x = Math.PI / 2; // 面向下方
+            topBottomStripe.position.set(0, 0.3 + columnHeight + 0.2 - 0.201, 0); // 略低于顶板底面
+            topBottomStripe.receiveShadow = true;
+            scene.add(topBottomStripe);
+
+            // 顶板侧面条纹
+            const topW = 4.5;
+            const topD = 3.5;
+            const topH = 0.4;
+            const topOffset = 0.001;
+
+            // 前面
+            const topFrontStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(topW, topH),
+                stripedMaterial
+            );
+            topFrontStripe.position.set(0, 0, topD / 2 + topOffset);
+            topPlate.add(topFrontStripe);
+
+            // 后面
+            const topBackStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(topW, topH),
+                stripedMaterial
+            );
+            topBackStripe.rotation.y = Math.PI;
+            topBackStripe.position.set(0, 0, -topD / 2 - topOffset);
+            topPlate.add(topBackStripe);
+
+            // 左面
+            const topLeftStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(topD, topH),
+                stripedMaterial
+            );
+            topLeftStripe.rotation.y = -Math.PI / 2;
+            topLeftStripe.position.set(-topW / 2 - topOffset, 0, 0);
+            topPlate.add(topLeftStripe);
+
+            // 右面
+            const topRightStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(topD, topH),
+                stripedMaterial
+            );
+            topRightStripe.rotation.y = Math.PI / 2;
+            topRightStripe.position.set(topW / 2 + topOffset, 0, 0);
+            topPlate.add(topRightStripe);
+
+            // 顶板物理体
+            const topPlateBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(2.25, 0.2, 1.75)),
+                position: new CANNON.Vec3(0, 0.3 + columnHeight + 0.2, 0)
+            });
+            world.addBody(topPlateBody);
+
+            // 液压缸筒 (半径 0.35，高 1.5) - 坐落在顶板上
+            const cylinderGeometry = new THREE.CylinderGeometry(0.35, 0.35, 1.5, 24);
+            hydraulicCylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+            hydraulicCylinder.position.set(0, 0.3 + columnHeight + 0.4 + 0.75, 0);
+            hydraulicCylinder.castShadow = true;
+            hydraulicCylinder.receiveShadow = true;
+            scene.add(hydraulicCylinder);
+
+            // 缸筒物理体
+            const cylinderBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Cylinder(0.35, 0.35, 1.5, 12),
+                position: new CANNON.Vec3(0, 0.3 + columnHeight + 0.4 + 0.75, 0)
+            });
+            world.addBody(cylinderBody);
+
+            // 压头 (2.2×0.6×1.6) - 先计算正确的初始位置
+            pressHeadStartY = 0.3 + columnHeight + 0.4 + 1.5 - 3.5 - 0.3;
+            pressHeadTargetY = pressHeadStartY;
+
+            // 活塞杆 (半径 0.22，长 5.0) - 从缸筒底部伸出，连接到压头顶部
+            // 缸筒底部y=6.9, 压头顶部y=4.9，让杆深入缸筒内
+            const rodLength = 5.0;
+            const pressHeadTopY = pressHeadStartY + 0.3; // 压头顶部y
+            const rodCenterY = pressHeadTopY + rodLength / 2; // 活塞杆中心y
+
+            const pistonRodGeometry = new THREE.CylinderGeometry(0.22, 0.22, rodLength, 16);
+            pistonRod = new THREE.Mesh(pistonRodGeometry, pistonMaterial);
+            pistonRod.position.set(0, rodCenterY, 0);
+            pistonRod.castShadow = true;
+            pistonRod.receiveShadow = true;
+            scene.add(pistonRod);
+
+            // 保存活塞杆初始中心Y（用于恢复位置）
+            pistonRod.userData.initialCenterY = rodCenterY;
+
+            // 压头网格 - 主体使用纯色
+            const pressHeadGeometry = new THREE.BoxGeometry(2.2, 0.6, 1.6);
+            pressHead = new THREE.Mesh(pressHeadGeometry, pressHeadMaterial);
+            pressHead.position.set(0, pressHeadStartY, 0);
+            pressHead.castShadow = true;
+            pressHead.receiveShadow = true;
+            scene.add(pressHead);
+
+            // 压头侧面条纹 - 使用平面覆盖四个侧面
+            const headStripeW = 2.2;
+            const headStripeH = 1.6;
+            const headStripeD = 0.6;
+            const headOffset = 0.001;
+
+            // 前面
+            const headFrontStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(headStripeW, headStripeD),
+                stripedMaterial
+            );
+            headFrontStripe.position.set(0, 0, headStripeH / 2 + headOffset);
+            pressHead.add(headFrontStripe);
+
+            // 后面
+            const headBackStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(headStripeW, headStripeD),
+                stripedMaterial
+            );
+            headBackStripe.rotation.y = Math.PI;
+            headBackStripe.position.set(0, 0, -headStripeH / 2 - headOffset);
+            pressHead.add(headBackStripe);
+
+            // 左面
+            const headLeftStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(headStripeH, headStripeD),
+                stripedMaterial
+            );
+            headLeftStripe.rotation.y = -Math.PI / 2;
+            headLeftStripe.position.set(-headStripeW / 2 - headOffset, 0, 0);
+            pressHead.add(headLeftStripe);
+
+            // 右面
+            const headRightStripe = new THREE.Mesh(
+                new THREE.PlaneGeometry(headStripeH, headStripeD),
+                stripedMaterial
+            );
+            headRightStripe.rotation.y = Math.PI / 2;
+            headRightStripe.position.set(headStripeW / 2 + headOffset, 0, 0);
+            pressHead.add(headRightStripe);
+
+            // 压头物理体
+            const pressHeadBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(1.1, 0.3, 0.8)),
+                position: new CANNON.Vec3(0, pressHeadStartY, 0)
+            });
+            pressHeadBody.type = CANNON.Body.KINEMATIC;
+            pressHead.userData.body = pressHeadBody;
+            world.addBody(pressHeadBody);
+        }
+
+        // 初始化收集坑
+        function initPit() {
+            const { PIT_WIDTH, PIT_DEPTH, PIT_DEPTH_VALUE, COLORS } = CONFIG;
+
+            // 坑底 - 深色，有明显对比
+            const pitFloorGeometry = new THREE.BoxGeometry(PIT_WIDTH, 0.1, PIT_DEPTH);
+            const pitFloorMaterial = new THREE.MeshStandardMaterial({
+                color: 0x2a2a2e,
+                roughness: 0.9,
+                metalness: 0.1
+            });
+            const pitFloor = new THREE.Mesh(pitFloorGeometry, pitFloorMaterial);
+            pitFloor.position.set(0, -PIT_DEPTH_VALUE, 0);
+            pitFloor.receiveShadow = true;
+            scene.add(pitFloor);
+
+            // 坑底物理体
+            const pitFloorBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(PIT_WIDTH/2, 0.05, PIT_DEPTH/2)),
+                position: new CANNON.Vec3(0, -PIT_DEPTH_VALUE, 0)
+            });
+            world.addBody(pitFloorBody);
+
+            // 坑壁 - 从坑底到地面的四面墙壁（深色，有立体感）
+            const wallThickness = 0.15;
+            const wallHeight = PIT_DEPTH_VALUE; // 从-0.8到0
+            const darkWallMat = new THREE.MeshStandardMaterial({
+                color: 0x1a1a1f,
+                roughness: 0.85,
+                metalness: 0.2
+            });
+
+            // 前墙
+            const frontWall = new THREE.Mesh(
+                new THREE.BoxGeometry(PIT_WIDTH + wallThickness * 2, wallHeight, wallThickness),
+                darkWallMat
+            );
+            frontWall.position.set(0, -PIT_DEPTH_VALUE / 2, PIT_DEPTH / 2 + wallThickness / 2);
+            frontWall.castShadow = true;
+            frontWall.receiveShadow = true;
+            scene.add(frontWall);
+
+            const frontWallBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3((PIT_WIDTH + wallThickness * 2)/2, wallHeight/2, wallThickness/2)),
+                position: new CANNON.Vec3(0, -PIT_DEPTH_VALUE / 2, PIT_DEPTH / 2 + wallThickness / 2)
+            });
+            world.addBody(frontWallBody);
+
+            // 后墙
+            const backWall = new THREE.Mesh(
+                new THREE.BoxGeometry(PIT_WIDTH + wallThickness * 2, wallHeight, wallThickness),
+                darkWallMat
+            );
+            backWall.position.set(0, -PIT_DEPTH_VALUE / 2, -PIT_DEPTH / 2 - wallThickness / 2);
+            backWall.castShadow = true;
+            backWall.receiveShadow = true;
+            scene.add(backWall);
+
+            const backWallBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3((PIT_WIDTH + wallThickness * 2)/2, wallHeight/2, wallThickness/2)),
+                position: new CANNON.Vec3(0, -PIT_DEPTH_VALUE / 2, -PIT_DEPTH / 2 - wallThickness / 2)
+            });
+            world.addBody(backWallBody);
+
+            // 左墙
+            const leftWall = new THREE.Mesh(
+                new THREE.BoxGeometry(wallThickness, wallHeight, PIT_DEPTH),
+                darkWallMat
+            );
+            leftWall.position.set(-PIT_WIDTH / 2 - wallThickness / 2, -PIT_DEPTH_VALUE / 2, 0);
+            leftWall.castShadow = true;
+            leftWall.receiveShadow = true;
+            scene.add(leftWall);
+
+            const leftWallBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(wallThickness/2, wallHeight/2, PIT_DEPTH/2)),
+                position: new CANNON.Vec3(-PIT_WIDTH / 2 - wallThickness / 2, -PIT_DEPTH_VALUE / 2, 0)
+            });
+            world.addBody(leftWallBody);
+
+            // 右墙
+            const rightWall = new THREE.Mesh(
+                new THREE.BoxGeometry(wallThickness, wallHeight, PIT_DEPTH),
+                darkWallMat
+            );
+            rightWall.position.set(PIT_WIDTH / 2 + wallThickness / 2, -PIT_DEPTH_VALUE / 2, 0);
+            rightWall.castShadow = true;
+            rightWall.receiveShadow = true;
+            scene.add(rightWall);
+
+            const rightWallBody = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(wallThickness/2, wallHeight/2, PIT_DEPTH/2)),
+                position: new CANNON.Vec3(PIT_WIDTH / 2 + wallThickness / 2, -PIT_DEPTH_VALUE / 2, 0)
+            });
+            world.addBody(rightWallBody);
+
+            // 坑口边框 - 在地面y=0处画一个粗边框，明确显示坑的范围
+            const edgeSize = 0.08;
+            const edgeMaterial = new THREE.MeshStandardMaterial({
+                color: 0x333333,
+                roughness: 0.7,
+                metalness: 0.4
+            });
+
+            // 前边框
+            const frontEdge = new THREE.Mesh(
+                new THREE.BoxGeometry(PIT_WIDTH + 0.3, 0.02, 0.12),
+                edgeMaterial
+            );
+            frontEdge.position.set(0, -0.005, PIT_DEPTH / 2 + 0.06);
+            frontEdge.receiveShadow = true;
+            scene.add(frontEdge);
+
+            // 后边框
+            const backEdge = new THREE.Mesh(
+                new THREE.BoxGeometry(PIT_WIDTH + 0.3, 0.02, 0.12),
+                edgeMaterial
+            );
+            backEdge.position.set(0, -0.005, -PIT_DEPTH / 2 - 0.06);
+            backEdge.receiveShadow = true;
+            scene.add(backEdge);
+
+            // 左边框
+            const leftEdge = new THREE.Mesh(
+                new THREE.BoxGeometry(0.12, 0.02, PIT_DEPTH),
+                edgeMaterial
+            );
+            leftEdge.position.set(-PIT_WIDTH / 2 - 0.06, -0.005, 0);
+            leftEdge.receiveShadow = true;
+            scene.add(leftEdge);
+
+            // 右边框
+            const rightEdge = new THREE.Mesh(
+                new THREE.BoxGeometry(0.12, 0.02, PIT_DEPTH),
+                edgeMaterial
+            );
+            rightEdge.position.set(PIT_WIDTH / 2 + 0.06, -0.005, 0);
+            rightEdge.receiveShadow = true;
+            scene.add(rightEdge);
+        }
+
+        // 初始化灯光
+        function initLighting() {
+            // 环境光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            // 主光源
+            const mainLight = new THREE.DirectionalLight(0xffffff, 1);
+            mainLight.position.set(8, 15, 10);
+            mainLight.castShadow = true;
+            mainLight.shadow.mapSize.width = 2048;
+            mainLight.shadow.mapSize.height = 2048;
+            mainLight.shadow.camera.near = 0.5;
+            mainLight.shadow.camera.far = 50;
+            mainLight.shadow.camera.left = -15;
+            mainLight.shadow.camera.right = 15;
+            mainLight.shadow.camera.top = 15;
+            mainLight.shadow.camera.bottom = -15;
+            mainLight.shadow.bias = -0.0001;
+            scene.add(mainLight);
+
+            // 补光
+            const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+            fillLight.position.set(-5, 8, -5);
+            scene.add(fillLight);
+
+            // 背光
+            const backLight = new THREE.DirectionalLight(0xffffff, 0.2);
+            backLight.position.set(0, 5, -10);
+            scene.add(backLight);
+        }
+
+        // 初始化事件监听
+        function initEventListeners() {
+            btnGenerate.addEventListener('click', generateNewItem);
+            btnPress.addEventListener('click', startPressing);
+            btnReset.addEventListener('click', resetScene);
+        }
+
+        // ==================== 物品系统 ====================
+        function generateNewItem() {
+            // 如果坑已填满，自动重置后生成
+            if (isPitFilled) {
+                resetScene();
+                return;
+            }
+
+            // 执行生成逻辑
+            generateNewItemInternal();
+        }
+
+        // ==================== 压制系统 ====================
+        function startPressing() {
+            if (pressState !== 'idle' || !currentItem || isPitFilled) return;
+
+            pressState = 'pressing';
+            statusText.textContent = '压制中';
+            statusText.className = 'status-text crushing';
+            btnPress.disabled = true;
+            btnGenerate.disabled = true;
+
+            // 压头目标位置 = 物品顶部 y，让压头刚好接触到物品顶部时触发压碎
+            pressHeadTargetY = currentItem.userData.initialTopY;
+        }
+
+        function updatePress() {
+            if (pressState === 'idle') return;
+
+            const delta = Math.min(clock.getDelta(), 0.05); // 限制最大 delta，避免跳帧
+
+            if (pressState === 'pressing') {
+                if (!currentItem) {
+                    pressState = 'idle';
+                    return;
+                }
+
+                if (pressHead.position.y > pressHeadTargetY) {
+                    pressHead.position.y -= CONFIG.PRESS_SPEED * delta;
+                    pressHead.userData.body.position.set(
+                        pressHead.position.x,
+                        pressHead.position.y,
+                        pressHead.position.z
+                    );
+                    pressHead.userData.body.quaternion.copy(pressHead.quaternion);
+
+                    pistonRod.position.y -= CONFIG.PRESS_SPEED * delta;
+
+                    const pressBottomY = pressHead.position.y - 0.3;
+                    const itemTopY = currentItem.position.y + currentItem.userData.halfHeight;
+
+                    if (pressBottomY <= itemTopY) {
+                        triggerCrush();
+                    }
+                }
+            } else if (pressState === 'holding') {
+                pressHead.holdTime -= delta;
+                if (pressHead.holdTime <= 0) {
+                    pressState = 'returning';
+                    statusText.textContent = '返回中';
+                    statusText.className = 'status-text';
+                    pressHeadTargetY = pressHeadStartY;
+                    btnGenerate.disabled = false;
+                }
+            } else if (pressState === 'returning') {
+                if (pressHead.position.y < pressHeadStartY) {
+                    pressHead.position.y += CONFIG.PRESS_SPEED * delta;
+                    pressHead.userData.body.position.set(
+                        pressHead.position.x,
+                        pressHead.position.y,
+                        pressHead.position.z
+                    );
+                    pressHead.userData.body.quaternion.copy(pressHead.quaternion);
+
+                    pistonRod.position.y += CONFIG.PRESS_SPEED * delta;
+                } else {
+                    pressHead.position.y = pressHeadStartY;
+                    pressHead.userData.body.position.set(
+                        pressHead.position.x,
+                        pressHead.position.y,
+                        pressHead.position.z
+                    );
+                    pressHead.userData.body.quaternion.copy(pressHead.quaternion);
+
+                    pistonRod.position.y = pistonRod.userData.initialCenterY;
+
+                    pressState = 'idle';
+                    statusText.textContent = '就绪';
+                    statusText.className = 'status-text';
+                    btnPress.disabled = false;
+                }
+            }
+        }
+
+        function triggerCrush() {
+            if (!currentItem) return;
+
+            // 更新状态
+            pressState = 'holding';
+            pressHead.holdTime = CONFIG.HOLD_TIME;
+            statusText.textContent = '保压中';
+            statusText.className = 'status-text holding';
+
+            // 保存物品颜色
+            const itemColor = currentItem.material.color.getHex();
+
+            // 移除原物品
+            scene.remove(currentItem);
+
+            // 生成碎片
+            const fragmentCount = CONFIG.MIN_FRAGMENTS +
+                Math.floor(Math.random() * (CONFIG.MAX_FRAGMENTS - CONFIG.MIN_FRAGMENTS + 1));
+
+            for (let i = 0; i < fragmentCount && pitFragments < CONFIG.MAX_FRAGMENTS_IN_PIT; i++) {
+                createFragment(itemColor);
+            }
+
+            // 更新碎片计数
+            updatePitProgress();
+
+            // 屏幕效果
+            triggerScreenEffects();
+
+            // 更新状态文字
+            setTimeout(() => {
+                if (statusText.textContent === '保压中') {
+                    statusText.textContent = '压碎！';
+                    statusText.className = 'status-text complete';
+                }
+            }, CONFIG.HOLD_TIME * 1000);
+
+            currentItem = null;
+        }
+
+        function createFragment(color) {
+            // 随机大小
+            const size = 0.08 + Math.random() * 0.15;
+
+            // 碎片几何体
+            const fragmentGeometry = new THREE.BoxGeometry(size, size, size);
+            const fragmentMaterial = new THREE.MeshStandardMaterial({
+                color: color,
+                roughness: 0.6,
+                metalness: 0.5
+            });
+
+            const fragment = new THREE.Mesh(fragmentGeometry, fragmentMaterial);
+
+            // 位置：在压头底部位置生成（压头压到底时y约0.9，底部0.9-0.3=0.6）
+            fragment.position.set(
+                (Math.random() - 0.5) * 1.5,
+                pressHead.position.y - 0.5,
+                (Math.random() - 0.5) * 1.0
+            );
+
+            // 随机旋转
+            fragment.rotation.set(
+                Math.random() * Math.PI,
+                Math.random() * Math.PI,
+                Math.random() * Math.PI
+            );
+
+            fragment.castShadow = true;
+            fragment.receiveShadow = true;
+            scene.add(fragment);
+
+            // 物理体
+            const fragmentBody = new CANNON.Body({
+                mass: size * size * size * 2,
+                shape: new CANNON.Box(new CANNON.Vec3(size/2, size/2, size/2)),
+                position: new CANNON.Vec3(fragment.position.x, fragment.position.y, fragment.position.z)
+            });
+
+            // 爆炸速度
+            const horizontalAngle = Math.random() * Math.PI * 2;
+            const horizontalSpeed = CONFIG.FRAGMENT_HORIZONTAL_SPEED_MIN +
+                Math.random() * (CONFIG.FRAGMENT_HORIZONTAL_SPEED_MAX - CONFIG.FRAGMENT_HORIZONTAL_SPEED_MIN);
+            const verticalSpeed = CONFIG.FRAGMENT_VERTICAL_SPEED_MIN +
+                Math.random() * (CONFIG.FRAGMENT_VERTICAL_SPEED_MAX - CONFIG.FRAGMENT_VERTICAL_SPEED_MIN);
+
+            fragmentBody.velocity.set(
+                Math.cos(horizontalAngle) * horizontalSpeed,
+                verticalSpeed,
+                Math.sin(horizontalAngle) * horizontalSpeed
+            );
+
+            // 随机角速度
+            fragmentBody.angularVelocity.set(
+                (Math.random() - 0.5) * 15,
+                (Math.random() - 0.5) * 15,
+                (Math.random() - 0.5) * 15
+            );
+
+            world.addBody(fragmentBody);
+            fragment.userData.body = fragmentBody;
+            fragments.push(fragment);
+            pitFragments++;
+        }
+
+        function triggerScreenEffects() {
+            // 屏幕震动
+            const container = document.getElementById('canvas-container');
+            container.style.transition = 'transform 0.05s';
+            container.style.transform = `translate(${(Math.random() - 0.5) * 10}px, ${(Math.random() - 0.5) * 10}px)`;
+
+            setTimeout(() => {
+                container.style.transform = `translate(${(Math.random() - 0.5) * 6}px, ${(Math.random() - 0.5) * 6}px)`;
+            }, 50);
+            setTimeout(() => {
+                container.style.transform = `translate(${(Math.random() - 0.5) * 3}px, ${(Math.random() - 0.5) * 3}px)`;
+            }, 100);
+            setTimeout(() => {
+                container.style.transform = '';
+            }, 150);
+
+            // 屏幕闪白
+            flashOverlay.classList.add('active');
+            setTimeout(() => {
+                flashOverlay.classList.remove('active');
+            }, 80);
+        }
+
+        function updatePitProgress() {
+            const progress = Math.min((pitFragments / CONFIG.MAX_FRAGMENTS_IN_PIT) * 100, 100);
+            fillProgress.style.width = `${progress}%`;
+            fillPercent.textContent = `${Math.round(progress)}%`;
+
+            if (progress >= 100 && !isPitFilled) {
+                isPitFilled = true;
+                statusText.textContent = '坑已填满！请重置';
+                statusText.className = 'status-text complete';
+                btnPress.disabled = true;
+                btnGenerate.disabled = true;
+            }
+        }
+
+        // ==================== 重置系统 ====================
+        function resetScene(skipGenerate = false) {
+            // 移除所有碎片
+            fragments.forEach(fragment => {
+                scene.remove(fragment);
+                if (fragment.userData.body) {
+                    world.removeBody(fragment.userData.body);
+                }
+            });
+            fragments = [];
+            pitFragments = 0;
+
+            // 重置进度
+            fillProgress.style.width = '0%';
+            fillPercent.textContent = '0%';
+
+            // 重置状态
+            isPitFilled = false;
+            btnPress.disabled = false;
+            btnGenerate.disabled = false;
+
+            // 生成新物品（除非明确跳过）
+            if (!skipGenerate) {
+                generateNewItemInternal();
+            }
+        }
+
+        // 内部生成函数（供 resetScene 调用，避免循环）
+        function generateNewItemInternal() {
+            // 移除当前物品
+            if (currentItem) {
+                scene.remove(currentItem);
+                currentItem = null;
+            }
+
+            // 随机选择形状
+            const shapeIndex = Math.floor(Math.random() * CONFIG.SHAPES.length);
+            const shapeInfo = CONFIG.SHAPES[shapeIndex];
+            // 随机选择材质
+            const matInfo = CONFIG.MATERIALS[Math.floor(Math.random() * CONFIG.MATERIALS.length)];
+            console.log('生成形状:', shapeInfo.name, '索引:', shapeIndex);
+
+            // 随机尺寸
+            let size, radius, height;
+            let boundingRadius;
+
+            switch (shapeInfo.type) {
+                case 'box':
+                    size = 0.85 + Math.random() * 0.35;
+                    break;
+                case 'sphere':
+                    radius = 0.5 + Math.random() * 0.3;
+                    boundingRadius = radius * 1.2;
+                    break;
+                case 'cylinder':
+                    radius = 0.5 + Math.random() * 0.2;
+                    height = 0.85 + Math.random() * 0.35;
+                    break;
+                case 'cone':
+                    radius = 0.5 + Math.random() * 0.3;
+                    height = 0.9 + Math.random() * 0.4;
+                    break;
+                case 'torus':
+                    radius = 0.5 + Math.random() * 0.2;
+                    size = 0.2 + Math.random() * 0.1;
+                    break;
+                case 'torusknot':
+                    radius = 0.4 + Math.random() * 0.2;
+                    size = 0.15 + Math.random() * 0.1;
+                    break;
+            }
+
+            // 创建几何体
+            let geometry;
+            switch (shapeInfo.type) {
+                case 'box':
+                    geometry = shapeInfo.create(size);
+                    boundingRadius = size * 0.866;
+                    break;
+                case 'sphere':
+                    geometry = shapeInfo.create(radius);
+                    boundingRadius = radius;
+                    break;
+                case 'cylinder':
+                    geometry = shapeInfo.create(radius, height);
+                    boundingRadius = Math.sqrt(radius * radius + (height/2) * (height/2));
+                    break;
+                case 'cone':
+                    geometry = shapeInfo.create(radius, height);
+                    boundingRadius = Math.sqrt(radius * radius + height * height);
+                    break;
+                case 'torus':
+                    geometry = shapeInfo.create(radius, size);
+                    boundingRadius = radius + size;
+                    break;
+                case 'torusknot':
+                    geometry = shapeInfo.create(radius, size);
+                    boundingRadius = radius + size * 2;
+                    break;
+            }
+
+            // 根据形状类型计算物品实际高度的一半（用于放置和碰撞检测）
+            let itemHalfHeight;
+            switch (shapeInfo.type) {
+                case 'box':
+                    itemHalfHeight = size / 2;
+                    break;
+                case 'sphere':
+                    itemHalfHeight = radius;
+                    break;
+                case 'cylinder':
+                    itemHalfHeight = height / 2;
+                    break;
+                case 'cone':
+                    itemHalfHeight = height / 2;
+                    break;
+                case 'torus':
+                    itemHalfHeight = radius + size;
+                    break;
+                case 'torusknot':
+                    itemHalfHeight = radius + size;
+                    break;
+            }
+
+            // 创建材质
+            const materialParams = {
+                color: matInfo.color,
+                roughness: matInfo.roughness,
+                metalness: matInfo.metalness
+            };
+            if (matInfo.emissive) {
+                materialParams.emissive = matInfo.emissive;
+                materialParams.emissiveIntensity = matInfo.emissiveIntensity || 0.1;
+            }
+            const material = new THREE.MeshStandardMaterial(materialParams);
+
+            // 创建网格 - 物品底部在底座顶部（y=0.6）上方一点点
+            const baseTopY = 0.6;
+            currentItem = new THREE.Mesh(geometry, material);
+            currentItem.position.set(0, baseTopY + itemHalfHeight, 0);
+            currentItem.castShadow = true;
+            currentItem.receiveShadow = true;
+            scene.add(currentItem);
+
+            // 保存物品信息
+            currentItemShape = shapeInfo.name;
+            currentItemMaterial = matInfo.name;
+            currentItem.userData.boundingRadius = boundingRadius;
+            currentItem.userData.halfHeight = itemHalfHeight;
+            currentItem.userData.initialTopY = baseTopY + itemHalfHeight + itemHalfHeight;
+
+            // 不添加物品物理体（纯视觉，避免被压头撞飞）
+
+            // 更新 UI
+            currentItemText.textContent = `${currentItemShape} · ${currentItemMaterial}`;
+            statusText.textContent = '就绪';
+            statusText.className = 'status-text';
+            btnPress.disabled = false;
+
+            // 重置压头和活塞杆位置
+            pressHead.position.y = pressHeadStartY;
+            pressHeadTargetY = pressHeadStartY;
+            pressHead.userData.body.position.set(0, pressHeadStartY, 0);
+            pistonRod.position.y = pistonRod.userData.initialCenterY;
+            pressState = 'idle';
+        }
+        function updatePhysics() {
+            world.step(1/60);
+
+            // 更新碎片
+            fragments.forEach(fragment => {
+                if (fragment.userData.body) {
+                    fragment.position.copy(fragment.userData.body.position);
+                    fragment.quaternion.copy(fragment.userData.body.quaternion);
+                }
+            });
+        }
+
+        // ==================== 动画循环 ====================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            controls.update();
+            updatePhysics();
+            updatePress();
+            renderer.render(scene, camera);
+        }
+
+        // ==================== 工具函数 ====================
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 启动
+        init();
+    </script>
+</body>
+</html>
