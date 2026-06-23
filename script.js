@@ -399,7 +399,7 @@ function createCardHTML(demo, highlightTokens) {
 
   let activeTag = 'all';
   let searchQuery = '';
-  let sortBy = 'newest';
+  let sortBy = 'views';
   let approvedOnly = true;
   let tokens = [];
 
