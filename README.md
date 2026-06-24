@@ -14,17 +14,17 @@
 
 | 维度 | 数量 |
 |---|---|
-| 总报名帖 | **15,473** |
-| 含 HTML Demo | **12,961** |
-| 官方审核通过 | **12,350** |
-| 暂无 Demo / 未审核 | **3,123** |
-| 学习工作 | 7,078 |
-| 生活娱乐 | 5,079 |
-| 社会服务 | 2,743 |
-| 社会公益 | 2,343 |
-| 硬件交互 | 786 |
-| 野蛮生长（未分类） | 387 |
-| 已生成 Insight 洞见 | 15,473 |
+| 总报名帖 | **16,913** |
+| 含 HTML Demo | **13,879** |
+| 官方审核通过 | **12,387** |
+| 暂无 Demo / 未审核 | **4,034** |
+| 学习工作 | 7,615 |
+| 生活娱乐 | 5,557 |
+| 社会服务 | 3,000 |
+| 社会公益 | 2,567 |
+| 硬件交互 | 850 |
+| 野蛮生长（未分类） | 324 |
+| 已生成 Insight 洞见 | 16,886 |
 
 > 数据更新时间：2026-06-24 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单（6月16日 + 6月18日 + 6月22日 + 6月23日 + 6月24日）
 
@@ -121,7 +121,7 @@ Git push → GitHub Actions → GitHub Pages
     ▼
 浏览器加载
     ├── index.html（骨架）+ styles.css
-    ├── data/demos.min.js（13,879 条卡片数据）
+    ├── data/demos.min.js（16,886 条卡片数据）
     └── script.js（手动加载 + 筛选 + 搜索 + 排序）
 ```
 
@@ -365,9 +365,9 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 │   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
 │   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   ├── demos.json                       # 所有帖子的结构化数据（13,879 条，含 insight 字段）
-│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 5.5MB）
-│   └── approved_projects.json          # 飞书多维表格审批数据源（6月16日 + 6月18日 + 6月22日）
+│   ├── demos.json                       # 所有帖子的结构化数据（16,913 条，含 insight 字段）
+│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 7.0MB）
+│   └── approved_projects.json          # 飞书多维表格审批数据源（6月16日 + 6月18日 + 6月22日 + 6月23日 + 6月24日）
 ├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
 ├── assets/
 │   ├── trae-logo.png                    # Logo & Favicon
