@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI智能故障诊断 - 让设备开口说话</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-dark: #0d0d0d;
+    --bg-card: #141414;
+    --alert-red: #ff3333;
+    --alert-dim: #cc0000;
+    --green-ok: #00ff66;
+    --gray-text: #777;
+    --white: #e0e0e0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Noto Sans SC', sans-serif;
+    background: var(--bg-dark);
+    color: var(--white);
+    overflow-x: hidden;
+  }
+  .font-mono { font-family: 'Share Tech Mono', monospace; }
+
+  /* ECG background */
+  .ecg-bg {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='200'%3E%3Cpath d='M0,100 L200,100 L220,60 L240,140 L260,40 L280,160 L300,100 L800,100' fill='none' stroke='%23ff3333' stroke-width='1' opacity='0.06'/%3E%3C/svg%3E") repeat;
+    pointer-events: none; z-index: 0;
+  }
+
+  /* Scan line animation */
+  .scan-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 4px;
+    background: linear-gradient(90deg, transparent, var(--alert-red), transparent);
+    animation: scan-vertical 5s linear infinite; opacity: 0.3; z-index: 1; pointer-events: none;
+  }
+  @keyframes scan-vertical {
+    0% { top: 0; }
+    100% { top: 100%; }
+  }
+
+  /* Navigation */
+  nav {
+    position: fixed; top: 0; width: 100%; z-index: 100;
+    background: rgba(13,13,13,0.95); backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255,51,51,0.2);
+    padding: 14px 48px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .logo { font-family: 'Share Tech Mono', monospace; font-size: 1.3rem; color: var(--alert-red); letter-spacing: 3px; }
+  .logo span { color: var(--white); }
+  .nav-links { display: flex; gap: 32px; list-style: none; }
+  .nav-links a { color: var(--gray-text); text-decoration: none; font-size: 0.9rem; transition: color 0.3s; }
+  .nav-links a:hover { color: var(--alert-red); }
+
+  /* Hero */
+  .hero {
+    position: relative; min-height: 100vh; display: flex; align-items: center;
+    padding: 120px 48px 80px; z-index: 1; overflow: hidden;
+  }
+  .hero-content { max-width: 640px; }
+  .hero-tag {
+    display: inline-block; border: 1px solid var(--alert-red); color: var(--alert-red);
+    padding: 4px 14px; font-family: 'Share Tech Mono', monospace; font-size: 0.8rem;
+    letter-spacing: 3px; margin-bottom: 24px;
+  }
+  .hero h1 { font-size: 2.8rem; font-weight: 700; line-height: 1.2; margin-bottom: 24px; }
+  .hero h1 .font-mono { color: var(--alert-red); font-size: 2.4rem; }
+  .hero p { font-size: 1.1rem; color: var(--gray-text); line-height: 1.8; margin-bottom: 40px; }
+  .hero-cta {
+    display: inline-flex; align-items: center; gap: 12px;
+    background: var(--alert-red); color: #fff; padding: 14px 36px;
+    font-family: 'Share Tech Mono', monospace; font-size: 0.95rem;
+    letter-spacing: 2px; text-decoration: none;
+    transition: all 0.3s;
+  }
+  .hero-cta:hover { background: var(--alert-dim); transform: translateY(-2px); }
+
+  /* Heartbeat decoration */
+  .heartbeat-deco {
+    position: absolute; right: 5%; top: 50%; transform: translateY(-50%);
+    width: 400px; height: 200px;
+  }
+  .heartbeat-line {
+    width: 100%; height: 2px; background: rgba(255,51,51,0.15); position: relative; overflow: hidden;
+  }
+  .heartbeat-line::after {
+    content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, var(--alert-red), transparent);
+    animation: heartbeat-move 2s linear infinite;
+  }
+  @keyframes heartbeat-move {
+    0% { left: -100%; }
+    100% { left: 100%; }
+  }
+  .status-lights {
+    display: flex; gap: 12px; margin-top: 30px; justify-content: center;
+  }
+  .status-light {
+    width: 14px; height: 14px; border-radius: 50%; background: var(--alert-red);
+    animation: blink 1.5s ease-in-out infinite;
+  }
+  .status-light:nth-child(2) { animation-delay: 0.3s; background: var(--green-ok); }
+  .status-light:nth-child(3) { animation-delay: 0.6s; }
+  @keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
+
+  /* Sections */
+  section { position: relative; z-index: 1; padding: 100px 48px; }
+  .section-title {
+    font-size: 2.2rem; font-weight: 700; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .section-title .font-mono { color: var(--alert-red); font-size: 0.9rem; letter-spacing: 3px; }
+  .section-sub { color: var(--gray-text); font-size: 1rem; margin-bottom: 60px; max-width: 600px; }
+
+  /* Pain points */
+  .pain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
+  .pain-card {
+    background: var(--bg-card); border: 1px solid rgba(255,51,51,0.12);
+    padding: 32px; position: relative; overflow: hidden;
+    transition: all 0.4s;
+  }
+  .pain-card::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+    background: var(--alert-red); transform: scaleY(0); transition: transform 0.4s;
+  }
+  .pain-card:hover::before { transform: scaleY(1); }
+  .pain-card:hover { border-color: rgba(255,51,51,0.3); }
+  .pain-num {
+    font-family: 'Share Tech Mono', monospace; font-size: 2rem;
+    color: rgba(255,51,51,0.2); position: absolute; top: 16px; right: 20px;
+  }
+  .pain-card h3 { font-size: 1.1rem; margin-bottom: 12px; color: var(--white); }
+  .pain-card p { font-size: 0.9rem; color: var(--gray-text); line-height: 1.7; }
+
+  /* Features */
+  .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
+  .feature-card {
+    background: var(--bg-card); padding: 40px 32px;
+    border: 1px solid rgba(255,255,255,0.04); transition: all 0.4s;
+    position: relative;
+  }
+  .feature-card:hover { border-color: rgba(255,51,51,0.25); }
+  .feature-icon {
+    width: 52px; height: 52px; border: 1px solid var(--alert-red);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 24px; font-family: 'Share Tech Mono', monospace;
+    font-size: 1.1rem; color: var(--alert-red);
+  }
+  .feature-card h3 { font-size: 1.15rem; margin-bottom: 12px; }
+  .feature-card p { font-size: 0.9rem; color: var(--gray-text); line-height: 1.7; }
+
+  /* Architecture */
+  .arch-stack { display: flex; flex-direction: column; gap: 0; max-width: 600px; margin: 0 auto; }
+  .arch-level {
+    background: var(--bg-card); border: 1px solid rgba(255,51,51,0.15);
+    padding: 24px 32px; text-align: center;
+  }
+  .arch-level .font-mono { color: var(--alert-red); font-size: 0.85rem; letter-spacing: 2px; display: block; margin-bottom: 6px; }
+  .arch-divider { height: 2px; background: linear-gradient(90deg, transparent, var(--alert-red), transparent); }
+
+  /* Process */
+  .process-steps { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 24px; }
+  .step {
+    flex: 1; min-width: 160px; text-align: center; position: relative;
+  }
+  .step-num {
+    width: 56px; height: 56px; border: 1px solid var(--alert-red);
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 20px; font-family: 'Share Tech Mono', monospace;
+    font-size: 1.3rem; color: var(--alert-red);
+  }
+  .step h4 { font-size: 1rem; margin-bottom: 8px; }
+  .step p { font-size: 0.85rem; color: var(--gray-text); }
+  .step::after {
+    content: '>>'; position: absolute; right: -18px; top: 18px;
+    color: var(--alert-red); font-family: 'Share Tech Mono', monospace; font-size: 0.9rem; opacity: 0.4;
+  }
+  .step:last-child::after { display: none; }
+
+  /* CTA */
+  .cta-section {
+    text-align: center; padding: 120px 48px;
+    background: linear-gradient(180deg, var(--bg-dark) 0%, rgba(255,51,51,0.04) 100%);
+  }
+  .cta-section h2 { font-size: 2.4rem; margin-bottom: 20px; }
+  .cta-section p { color: var(--gray-text); margin-bottom: 40px; font-size: 1.1rem; }
+  .cta-btn {
+    display: inline-block; background: transparent; color: var(--alert-red);
+    border: 1px solid var(--alert-red); padding: 14px 48px;
+    font-family: 'Share Tech Mono', monospace; font-size: 1rem;
+    letter-spacing: 3px; text-decoration: none;
+    transition: all 0.3s;
+  }
+  .cta-btn:hover { background: var(--alert-red); color: #fff; }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid rgba(255,51,51,0.1); padding: 40px 48px;
+    text-align: center; color: var(--gray-text); font-size: 0.85rem;
+  }
+
+  /* Scroll animation */
+  .reveal { opacity: 0; transform: translateY(40px); transition: all 0.8s ease-out; }
+  .reveal.active { opacity: 1; transform: translateY(0); }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    nav { padding: 14px 24px; }
+    .nav-links { display: none; }
+    .hero { padding: 100px 24px 60px; }
+    .hero h1 { font-size: 2rem; }
+    .hero h1 .font-mono { font-size: 1.7rem; }
+    .heartbeat-deco { display: none; }
+    section { padding: 60px 24px; }
+    .section-title { font-size: 1.6rem; }
+    .step::after { display: none; }
+    .process-steps { flex-direction: column; }
+  }
+  @media (max-width: 480px) {
+    .hero h1 { font-size: 1.6rem; }
+    .hero h1 .font-mono { font-size: 1.4rem; }
+    .section-title { font-size: 1.3rem; }
+    .cta-section h2 { font-size: 1.8rem; }
+  }
+</style>
+</head>
+<body>
+<div class="ecg-bg"></div>
+<div class="scan-overlay"></div>
+
+<nav>
+  <div class="logo">DIAG<span>AI</span></div>
+  <ul class="nav-links">
+    <li><a href="#pain">痛点</a></li>
+    <li><a href="#features">功能</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#process">流程</a></li>
+  </ul>
+</nav>
+
+<section class="hero">
+  <div class="hero-content">
+    <div class="hero-tag font-mono">PREDICTIVE MAINTENANCE</div>
+    <h1>AI智能故障诊断<br><span class="font-mono">LISTEN TO YOUR MACHINE</span></h1>
+    <p>基于多源传感器数据和深度学习模型的设备健康管理系统，提前预警潜在故障，精准定位问题根因，让非计划停机成为历史。</p>
+    <a href="#features" class="hero-cta font-mono">START DIAGNOSIS -></a>
+  </div>
+  <div class="heartbeat-deco">
+    <div class="heartbeat-line"></div>
+    <div class="status-lights">
+      <div class="status-light"></div>
+      <div class="status-light"></div>
+      <div class="status-light"></div>
+    </div>
+  </div>
+</section>
+
+<section id="pain">
+  <h2 class="section-title reveal">行业痛点 <span class="font-mono">PAIN POINTS</span></h2>
+  <p class="section-sub reveal">设备故障是制造企业的噩梦，传统维护方式难以应对</p>
+  <div class="pain-grid">
+    <div class="pain-card reveal">
+      <span class="pain-num font-mono">01</span>
+      <h3>故障突发难预防</h3>
+      <p>设备故障多为突发，缺乏有效预警手段，停机损失巨大。</p>
+    </div>
+    <div class="pain-card reveal">
+      <span class="pain-num font-mono">02</span>
+      <h3>诊断依赖老师傅</h3>
+      <p>故障现象与原因对应复杂，诊断高度依赖个人经验，知识传承困难。</p>
+    </div>
+    <div class="pain-card reveal">
+      <span class="pain-num font-mono">03</span>
+      <h3>数据孤岛难关联</h3>
+      <p>振动、温度、电流等数据分散在不同系统，难以关联分析。</p>
+    </div>
+    <div class="pain-card reveal">
+      <span class="pain-num font-mono">04</span>
+      <h3>维护计划僵化</h3>
+      <p>定期维护一刀切，过度维护浪费资源，维护不足埋下隐患。</p>
+    </div>
+    <div class="pain-card reveal">
+      <span class="pain-num font-mono">05</span>
+      <h3>同类问题反复发</h3>
+      <p>故障历史记录不完整，缺乏知识沉淀，同类故障反复发生。</p>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <h2 class="section-title reveal">核心功能 <span class="font-mono">CORE FEATURES</span></h2>
+  <p class="section-sub reveal">从数据采集到智能诊断的完整设备健康管理方案</p>
+  <div class="features-grid">
+    <div class="feature-card reveal">
+      <div class="feature-icon font-mono">01</div>
+      <h3>多源数据采集</h3>
+      <p>集成振动、温度、电流、声音等多维度传感器数据，构建设备数字孪生。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-icon font-mono">02</div>
+      <h3>异常检测预警</h3>
+      <p>基于无监督学习和统计模型，自动识别运行参数偏离，提前数天至数周预警。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-icon font-mono">03</div>
+      <h3>故障根因定位</h3>
+      <p>结合知识图谱和推理引擎，精准定位故障部件和根因，缩短排查时间。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-icon font-mono">04</div>
+      <h3>维护策略优化</h3>
+      <p>基于设备健康状态动态调整维护计划，实现从定期维护到状态维护的转变。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-icon font-mono">05</div>
+      <h3>知识库沉淀</h3>
+      <p>自动记录故障案例和处置方案，构建企业级设备故障知识库。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-icon font-mono">06</div>
+      <h3>寿命预测评估</h3>
+      <p>基于退化模型预测关键部件剩余寿命，支持备件采购和更换计划。</p>
+    </div>
+  </div>
+</section>
+
+<section id="arch">
+  <h2 class="section-title reveal">系统架构 <span class="font-mono">ARCHITECTURE</span></h2>
+  <p class="section-sub reveal">边缘感知、云端智能、业务闭环的设备健康管理体系</p>
+  <div class="arch-stack reveal">
+    <div class="arch-level">
+      <span class="font-mono">APPLICATION PORTAL</span>
+      <div>监控大屏 / 工单系统 / 知识库</div>
+    </div>
+    <div class="arch-divider"></div>
+    <div class="arch-level">
+      <span class="font-mono">AI DIAGNOSIS ENGINE</span>
+      <div>异常检测 / 故障诊断 / 寿命预测</div>
+    </div>
+    <div class="arch-divider"></div>
+    <div class="arch-level">
+      <span class="font-mono">DATA PLATFORM</span>
+      <div>时序数据库 / 特征工程 / 数据治理</div>
+    </div>
+    <div class="arch-divider"></div>
+    <div class="arch-level">
+      <span class="font-mono">EDGE GATEWAY</span>
+      <div>传感器 / PLC / 边缘计算节点</div>
+    </div>
+  </div>
+</section>
+
+<section id="process">
+  <h2 class="section-title reveal">实施流程 <span class="font-mono">PROCESS</span></h2>
+  <p class="section-sub reveal">五步构建设备智能诊断体系</p>
+  <div class="process-steps">
+    <div class="step reveal">
+      <div class="step-num font-mono">1</div>
+      <h4>设备接入</h4>
+      <p>传感器部署、数据采集、协议对接</p>
+    </div>
+    <div class="step reveal">
+      <div class="step-num font-mono">2</div>
+      <h4>基线建立</h4>
+      <p>正常运行数据积累、特征提取、基线建模</p>
+    </div>
+    <div class="step reveal">
+      <div class="step-num font-mono">3</div>
+      <h4>模型训练</h4>
+      <p>故障样本标注、算法训练、效果验证</p>
+    </div>
+    <div class="step reveal">
+      <div class="step-num font-mono">4</div>
+      <h4>预警上线</h4>
+      <p>阈值配置、告警推送、工单联动</p>
+    </div>
+    <div class="step reveal">
+      <div class="step-num font-mono">5</div>
+      <h4>持续进化</h4>
+      <p>案例积累、模型迭代、知识库丰富</p>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section reveal">
+  <h2>让设备提前告诉你它哪里不舒服</h2>
+  <p>立即部署AI故障诊断系统，告别非计划停机</p>
+  <a href="#" class="cta-btn font-mono">GET STARTED</a>
+</section>
+
+<footer>
+  <p> AI智能故障诊断平台 | 硬件交互/工业赛道 | 项目26</p>
+</footer>
+
+<script>
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('active');
+      }
+    });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

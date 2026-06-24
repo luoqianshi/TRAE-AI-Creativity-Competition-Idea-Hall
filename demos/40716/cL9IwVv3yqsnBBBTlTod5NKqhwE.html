@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuickLaunch — 鼠标触发应用快速启动器</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Orbitron:wght@500;700&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --bg-deep: #05070a;
+      --bg-panel: rgba(16, 22, 36, 0.72);
+      --bg-glass: rgba(255, 255, 255, 0.06);
+      --border-glass: rgba(255, 255, 255, 0.1);
+      --accent: #22d3ee;
+      --accent-dim: rgba(34, 211, 238, 0.18);
+      --accent-glow: rgba(34, 211, 238, 0.45);
+      --text-primary: #f0f4f8;
+      --text-secondary: #94a3b8;
+      --success: #4ade80;
+      --radius-menu: clamp(220px, 28vmin, 360px);
+      --item-size: clamp(58px, 6.8vmin, 84px);
+      --font-display: 'Orbitron', sans-serif;
+      --font-body: 'Noto Sans SC', sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--font-body);
+      background: var(--bg-deep);
+      color: var(--text-primary);
+    }
+
+    /* Desktop wallpaper */
+    .desktop {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(circle at 20% 30%, rgba(34, 211, 238, 0.12) 0%, transparent 35%),
+        radial-gradient(circle at 80% 70%, rgba(99, 102, 241, 0.1) 0%, transparent 40%),
+        linear-gradient(160deg, #0b0f19 0%, #05070a 100%);
+    }
+
+    .desktop::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(circle at center, black 0%, transparent 80%);
+      pointer-events: none;
+    }
+
+    /* Hero text */
+    .hero {
+      position: absolute;
+      top: 14%;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      pointer-events: none;
+      opacity: 0.9;
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 5vw, 4rem);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: linear-gradient(90deg, #fff 0%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 24px var(--accent-glow));
+    }
+
+    .hero p {
+      margin-top: 0.75rem;
+      color: var(--text-secondary);
+      font-size: clamp(0.9rem, 1.4vw, 1.15rem);
+      letter-spacing: 0.04em;
+    }
+
+    /* Fake open windows */
+    .windows {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .fake-window {
+      position: absolute;
+      width: clamp(180px, 18vw, 280px);
+      aspect-ratio: 16 / 10;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-glass);
+      border-radius: 12px;
+      backdrop-filter: blur(14px);
+      box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+      opacity: 0;
+      transform: translateY(20px) scale(0.96);
+      transition: opacity 0.4s ease, transform 0.4s ease;
+      overflow: hidden;
+    }
+
+    .fake-window.active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .fake-window::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, transparent 50%);
+    }
+
+    .fake-window .bar {
+      height: 24px;
+      border-bottom: 1px solid var(--border-glass);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+    }
+
+    .fake-window .bar span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+    }
+
+    .fake-window .bar span:first-child { background: #ff5f57; }
+    .fake-window .bar span:nth-child(2) { background: #febc2e; }
+    .fake-window .bar span:nth-child(3) { background: #28c840; }
+
+    .fake-window .content {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: calc(100% - 24px);
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+
+    .fake-window:nth-child(1) { top: 16%; left: 10%; transition-delay: 0ms; }
+    .fake-window:nth-child(2) { top: 22%; right: 12%; transition-delay: 80ms; }
+    .fake-window:nth-child(3) { top: 46%; left: 16%; transition-delay: 160ms; }
+
+    /* Taskbar */
+    .taskbar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 56px;
+      background: rgba(11, 15, 25, 0.82);
+      border-top: 1px solid var(--border-glass);
+      backdrop-filter: blur(18px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      z-index: 5;
+    }
+
+    .taskbar-left, .taskbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+
+    .taskbar-center {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .taskbar-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: var(--text-secondary);
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .taskbar-icon:hover {
+      background: var(--bg-glass);
+      color: var(--text-primary);
+    }
+
+    .clock {
+      font-family: var(--font-display);
+      font-size: 0.85rem;
+      letter-spacing: 0.04em;
+    }
+
+    /* Trigger hotspot */
+    .trigger-zone {
+      position: absolute;
+      bottom: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .trigger-hint {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      letter-spacing: 0.08em;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.25s, transform 0.25s;
+      text-transform: uppercase;
+    }
+
+    .trigger-zone:hover .trigger-hint,
+    .trigger-zone.active .trigger-hint {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .trigger-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, rgba(34,211,238,0.35), rgba(34,211,238,0.05));
+      border: 1px solid rgba(34,211,238,0.45);
+      box-shadow: 0 0 30px var(--accent-glow), inset 0 0 20px rgba(34,211,238,0.12);
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      position: relative;
+      transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s;
+      animation: breathe 2.4s ease-in-out infinite;
+    }
+
+    .trigger-zone:hover .trigger-btn,
+    .trigger-zone.active .trigger-btn {
+      transform: scale(1.12);
+      box-shadow: 0 0 50px var(--accent-glow), inset 0 0 28px rgba(34,211,238,0.2);
+      animation: none;
+    }
+
+    @keyframes breathe {
+      0%, 100% { transform: scale(1); opacity: 0.85; }
+      50% { transform: scale(1.12); opacity: 1; }
+    }
+
+    .trigger-btn::before {
+      content: '';
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      border: 1px solid rgba(34,211,238,0.15);
+      animation: ripple-ring 2.4s ease-out infinite;
+    }
+
+    @keyframes ripple-ring {
+      0% { transform: scale(0.9); opacity: 0.5; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+
+    .trigger-zone.active .trigger-btn::before {
+      display: none;
+    }
+
+    /* Radial menu overlay */
+    .launcher-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 15;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      background: radial-gradient(circle at 50% 100%, rgba(34,211,238,0.06) 0%, transparent 50%);
+    }
+
+    .launcher-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .menu-center {
+      position: absolute;
+      left: 50%;
+      bottom: 102px;
+      width: 0;
+      height: 0;
+      transform: translateX(-50%);
+    }
+
+    .menu-guide {
+      position: absolute;
+      left: 50%;
+      bottom: 102px;
+      width: calc(var(--radius-menu) * 2.15);
+      height: calc(var(--radius-menu) * 1.05);
+      transform: translateX(-50%);
+      border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+      border: 1px dashed rgba(34,211,238,0.18);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    }
+
+    .launcher-overlay.active .menu-guide {
+      opacity: 1;
+    }
+
+    .menu-item {
+      position: absolute;
+      left: 50%;
+      bottom: 102px;
+      width: var(--item-size);
+      height: var(--item-size);
+      margin-left: calc(var(--item-size) / -2);
+      margin-bottom: calc(var(--item-size) / -2);
+      border-radius: 50%;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-glass);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: pointer;
+      opacity: 0;
+      transform: translate(0, 0) scale(0.4);
+      transition:
+        transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+        opacity 0.3s ease,
+        background 0.2s,
+        border-color 0.2s,
+        box-shadow 0.2s;
+      pointer-events: auto;
+    }
+
+    .menu-item i {
+      color: var(--text-primary);
+      transition: color 0.2s, transform 0.2s;
+    }
+
+    .menu-item span {
+      font-size: 0.65rem;
+      color: var(--text-secondary);
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 0.25s, transform 0.25s, color 0.2s;
+      white-space: nowrap;
+    }
+
+    .launcher-overlay.active .menu-item {
+      opacity: 1;
+    }
+
+    .menu-item:hover {
+      background: var(--accent-dim);
+      border-color: rgba(34,211,238,0.55);
+      box-shadow: 0 0 28px var(--accent-glow);
+      transform: translate(var(--tx), var(--ty)) scale(1.12) translateY(-4px);
+    }
+
+    .menu-item:hover i {
+      color: var(--accent);
+    }
+
+    .menu-item:hover span {
+      opacity: 1;
+      transform: translateY(0);
+      color: var(--text-primary);
+    }
+
+    .menu-item.running::after {
+      content: '';
+      position: absolute;
+      bottom: 6px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    /* Tooltip */
+    .tooltip {
+      position: fixed;
+      z-index: 30;
+      padding: 6px 12px;
+      border-radius: 8px;
+      background: rgba(5, 7, 10, 0.92);
+      border: 1px solid var(--border-glass);
+      color: var(--text-primary);
+      font-size: 0.78rem;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -120%) scale(0.95);
+      transition: opacity 0.15s, transform 0.15s;
+      white-space: nowrap;
+    }
+
+    .tooltip.visible {
+      opacity: 1;
+      transform: translate(-50%, -140%) scale(1);
+    }
+
+    /* Toast */
+    .toast-container {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      z-index: 40;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .toast {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      border-radius: 12px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-glass);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.35);
+      color: var(--text-primary);
+      font-size: 0.88rem;
+      transform: translateX(120%);
+      opacity: 0;
+      transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s;
+    }
+
+    .toast.show {
+      transform: translateX(0);
+      opacity: 1;
+    }
+
+    .toast i {
+      color: var(--accent);
+    }
+
+    /* Settings panel */
+    .settings-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 340px;
+      max-width: 85vw;
+      height: 100%;
+      background: rgba(8, 12, 20, 0.92);
+      border-left: 1px solid var(--border-glass);
+      backdrop-filter: blur(24px);
+      z-index: 50;
+      transform: translateX(100%);
+      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .settings-panel.open {
+      transform: translateX(0);
+    }
+
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .settings-header h2 {
+      font-family: var(--font-display);
+      font-size: 1.2rem;
+      letter-spacing: 0.04em;
+    }
+
+    .close-settings {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      border: none;
+      background: var(--bg-glass);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .close-settings:hover {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .setting-group label {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: var(--bg-glass);
+      border: 1px solid var(--border-glass);
+    }
+
+    .setting-row span {
+      font-size: 0.85rem;
+    }
+
+    .toggle {
+      width: 42px;
+      height: 22px;
+      border-radius: 11px;
+      background: rgba(255,255,255,0.12);
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .toggle.active {
+      background: var(--accent);
+    }
+
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+    }
+
+    .toggle.active::after {
+      transform: translateX(20px);
+    }
+
+    .app-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .app-list-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--bg-glass);
+      border: 1px solid var(--border-glass);
+      font-size: 0.85rem;
+    }
+
+    .app-list-item i {
+      color: var(--accent);
+    }
+
+    .settings-btn {
+      position: fixed;
+      top: 24px;
+      left: 24px;
+      z-index: 25;
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-glass);
+      backdrop-filter: blur(12px);
+      color: var(--text-secondary);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, transform 0.2s;
+    }
+
+    .settings-btn:hover {
+      background: var(--accent-dim);
+      color: var(--accent);
+      transform: rotate(30deg);
+    }
+
+    /* Intro hint */
+    .intro-hint {
+      position: absolute;
+      bottom: 148px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--accent);
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      opacity: 0.7;
+      animation: float 2.5s ease-in-out infinite;
+      pointer-events: none;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(-6px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="desktop">
+    <button class="settings-btn" id="settingsBtn" aria-label="设置">
+      <i data-lucide="settings" style="width:20px;height:20px;"></i>
+    </button>
+
+    <div class="hero">
+      <h1>QuickLaunch</h1>
+      <p>鼠标一触，应用即达 · Windows 快速启动与切换工具</p>
+    </div>
+
+    <div class="windows">
+      <div class="fake-window" data-app="chrome">
+        <div class="bar"><span></span><span></span><span></span></div>
+        <div class="content">Chrome 浏览器</div>
+      </div>
+      <div class="fake-window" data-app="code">
+        <div class="bar"><span></span><span></span><span></span></div>
+        <div class="content">VS Code</div>
+      </div>
+      <div class="fake-window" data-app="terminal">
+        <div class="bar"><span></span><span></span><span></span></div>
+        <div class="content">终端</div>
+      </div>
+    </div>
+
+    <div class="intro-hint">将鼠标移到下方光点体验启动器</div>
+
+    <div class="trigger-zone" id="triggerZone">
+      <div class="trigger-hint">悬停 / 按住呼出</div>
+      <div class="trigger-btn" id="triggerBtn">
+        <i data-lucide="crosshair" style="width:26px;height:26px;"></i>
+      </div>
+    </div>
+
+    <div class="taskbar">
+      <div class="taskbar-left">
+        <div class="taskbar-icon"><i data-lucide="grid-3x3" style="width:18px;height:18px;"></i></div>
+        <div class="taskbar-icon"><i data-lucide="search" style="width:18px;height:18px;"></i></div>
+      </div>
+      <div class="taskbar-center">
+        <div class="taskbar-icon"><i data-lucide="chrome" style="width:20px;height:20px;"></i></div>
+        <div class="taskbar-icon"><i data-lucide="folder" style="width:20px;height:20px;"></i></div>
+        <div class="taskbar-icon"><i data-lucide="mail" style="width:20px;height:20px;"></i></div>
+      </div>
+      <div class="taskbar-right">
+        <div class="taskbar-icon"><i data-lucide="wifi" style="width:18px;height:18px;"></i></div>
+        <div class="taskbar-icon"><i data-lucide="volume-2" style="width:18px;height:18px;"></i></div>
+        <div class="clock" id="clock">12:00</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="launcher-overlay" id="launcherOverlay">
+    <div class="menu-guide"></div>
+    <div class="menu-center"></div>
+    <div id="menuItems"></div>
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <div class="settings-panel" id="settingsPanel">
+    <div class="settings-header">
+      <h2>设置</h2>
+      <button class="close-settings" id="closeSettings">
+        <i data-lucide="x" style="width:18px;height:18px;"></i>
+      </button>
+    </div>
+    <div class="setting-group">
+      <label>触发方式</label>
+      <div class="setting-row">
+        <span>悬停触发</span>
+        <div class="toggle active" id="toggleHover"></div>
+      </div>
+      <div class="setting-row">
+        <span>按住触发</span>
+        <div class="toggle" id="toggleHold"></div>
+      </div>
+    </div>
+    <div class="setting-group">
+      <label>外观</label>
+      <div class="setting-row">
+        <span>霓虹光效</span>
+        <div class="toggle active" id="toggleGlow"></div>
+      </div>
+      <div class="setting-row">
+        <span>窗口预览</span>
+        <div class="toggle active" id="togglePreview"></div>
+      </div>
+    </div>
+    <div class="setting-group">
+      <label>常用应用</label>
+      <div class="app-list">
+        <div class="app-list-item"><i data-lucide="chrome" style="width:16px;height:16px;"></i> Chrome</div>
+        <div class="app-list-item"><i data-lucide="code-2" style="width:16px;height:16px;"></i> VS Code</div>
+        <div class="app-list-item"><i data-lucide="folder" style="width:16px;height:16px;"></i> 文件资源管理器</div>
+        <div class="app-list-item"><i data-lucide="terminal" style="width:16px;height:16px;"></i> 终端</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const APPS = [
+      { id: 'chrome', name: 'Chrome', icon: 'chrome', running: true },
+      { id: 'code', name: 'VS Code', icon: 'code-2', running: true },
+      { id: 'folder', name: '文件管理', icon: 'folder', running: false },
+      { id: 'mail', name: '邮件', icon: 'mail', running: false },
+      { id: 'music', name: '音乐', icon: 'music', running: false },
+      { id: 'calculator', name: '计算器', icon: 'calculator', running: false },
+      { id: 'terminal', name: '终端', icon: 'terminal', running: true },
+      { id: 'settings', name: '设置', icon: 'settings', running: false },
+    ];
+
+    const triggerZone = document.getElementById('triggerZone');
+    const triggerBtn = document.getElementById('triggerBtn');
+    const launcherOverlay = document.getElementById('launcherOverlay');
+    const menuItemsContainer = document.getElementById('menuItems');
+    const tooltip = document.getElementById('tooltip');
+    const toastContainer = document.getElementById('toastContainer');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const closeSettings = document.getElementById('closeSettings');
+    const clock = document.getElementById('clock');
+
+    let isOpen = false;
+    let holdTimer = null;
+    const HOLD_DELAY = 180;
+
+    function buildMenu() {
+      menuItemsContainer.innerHTML = '';
+      const count = APPS.length;
+      const radius = Math.min(window.innerWidth, window.innerHeight) * 0.26;
+      // Use a 210° arc from left to right, centered upward from trigger
+      const startAngle = Math.PI;
+      const endAngle = 2 * Math.PI;
+      const totalArc = endAngle - startAngle;
+
+      APPS.forEach((app, index) => {
+        const angle = startAngle + (totalArc / (count - 1)) * index;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+
+        const item = document.createElement('div');
+        item.className = `menu-item${app.running ? ' running' : ''}`;
+        item.style.setProperty('--tx', `${x}px`);
+        item.style.setProperty('--ty', `${-y}px`);
+        item.style.setProperty('--delay', `${index * 35}ms`);
+        item.dataset.app = app.id;
+        item.dataset.name = app.name;
+        item.dataset.running = app.running ? '1' : '0';
+
+        item.innerHTML = `
+          <i data-lucide="${app.icon}" style="width:24px;height:24px;"></i>
+          <span>${app.name}</span>
+        `;
+
+        item.addEventListener('mouseenter', (e) => showTooltip(e, app.name, app.running));
+        item.addEventListener('mouseleave', hideTooltip);
+        item.addEventListener('click', (e) => handleAppClick(app, item, e));
+
+        menuItemsContainer.appendChild(item);
+      });
+
+      lucide.createIcons();
+    }
+
+    function openMenu() {
+      if (isOpen) return;
+      isOpen = true;
+      triggerZone.classList.add('active');
+      launcherOverlay.classList.add('active');
+
+      const radius = Math.min(window.innerWidth, window.innerHeight) * 0.26;
+      const startAngle = Math.PI;
+      const endAngle = 2 * Math.PI;
+      const totalArc = endAngle - startAngle;
+
+      Array.from(menuItemsContainer.children).forEach((item, index) => {
+        const angle = startAngle + (totalArc / (APPS.length - 1)) * index;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        item.style.transitionDelay = `${index * 35}ms`;
+        item.style.transform = `translate(${x}px, ${-y}px) scale(1)`;
+      });
+    }
+
+    function closeMenu() {
+      if (!isOpen) return;
+      isOpen = false;
+      triggerZone.classList.remove('active');
+      launcherOverlay.classList.remove('active');
+      hideTooltip();
+
+      Array.from(menuItemsContainer.children).forEach((item) => {
+        item.style.transitionDelay = '0ms';
+        item.style.transform = 'translate(0, 0) scale(0.4)';
+      });
+    }
+
+    function showTooltip(e, name, running) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      tooltip.textContent = `${name} ${running ? '· 正在运行' : ''}`;
+      tooltip.style.left = `${rect.left + rect.width / 2}px`;
+      tooltip.style.top = `${rect.top}px`;
+      tooltip.classList.add('visible');
+    }
+
+    function hideTooltip() {
+      tooltip.classList.remove('visible');
+    }
+
+    function handleAppClick(app, item, e) {
+      e.stopPropagation();
+      const rect = item.getBoundingClientRect();
+      createRipple(rect.left + rect.width / 2, rect.top + rect.height / 2);
+
+      if (app.id === 'settings') {
+        closeMenu();
+        settingsPanel.classList.add('open');
+        showToast('已打开 设置');
+        return;
+      }
+
+      const action = app.running ? '已切换到' : '已打开';
+      showToast(`${action} ${app.name}`);
+
+      const win = document.querySelector(`.fake-window[data-app="${app.id}"]`);
+      if (win) {
+        document.querySelectorAll('.fake-window').forEach(w => w.classList.remove('active'));
+        win.classList.add('active');
+      }
+
+      closeMenu();
+    }
+
+    function createRipple(x, y) {
+      const ripple = document.createElement('div');
+      ripple.style.position = 'fixed';
+      ripple.style.left = `${x}px`;
+      ripple.style.top = `${y}px`;
+      ripple.style.width = '10px';
+      ripple.style.height = '10px';
+      ripple.style.marginLeft = '-5px';
+      ripple.style.marginTop = '-5px';
+      ripple.style.borderRadius = '50%';
+      ripple.style.border = '2px solid var(--accent)';
+      ripple.style.boxShadow = '0 0 20px var(--accent)';
+      ripple.style.pointerEvents = 'none';
+      ripple.style.zIndex = '35';
+      ripple.style.opacity = '1';
+      ripple.style.transition = 'transform 0.5s ease-out, opacity 0.5s ease-out';
+      document.body.appendChild(ripple);
+
+      requestAnimationFrame(() => {
+        ripple.style.transform = 'scale(16)';
+        ripple.style.opacity = '0';
+      });
+
+      setTimeout(() => ripple.remove(), 520);
+    }
+
+    function showToast(message) {
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.innerHTML = `
+        <i data-lucide="zap" style="width:18px;height:18px;"></i>
+        <span>${message}</span>
+      `;
+      toastContainer.appendChild(toast);
+      lucide.createIcons();
+
+      requestAnimationFrame(() => toast.classList.add('show'));
+
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 350);
+      }, 2200);
+    }
+
+    function updateClock() {
+      const now = new Date();
+      clock.textContent = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Trigger interactions
+    triggerZone.addEventListener('mouseenter', () => {
+      if (document.getElementById('toggleHover').classList.contains('active')) {
+        openMenu();
+      }
+    });
+
+    triggerZone.addEventListener('mouseleave', () => {
+      if (document.getElementById('toggleHover').classList.contains('active')) {
+        closeMenu();
+      }
+    });
+
+    triggerBtn.addEventListener('mousedown', () => {
+      if (document.getElementById('toggleHold').classList.contains('active')) {
+        holdTimer = setTimeout(openMenu, HOLD_DELAY);
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      if (isOpen && document.getElementById('toggleHold').classList.contains('active')) {
+        closeMenu();
+      }
+    });
+
+    launcherOverlay.addEventListener('click', (e) => {
+      if (e.target === launcherOverlay) closeMenu();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeMenu();
+        settingsPanel.classList.remove('open');
+      }
+    });
+
+    // Settings toggles
+    document.querySelectorAll('.toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => toggle.classList.toggle('active'));
+    });
+
+    settingsBtn.addEventListener('click', () => settingsPanel.classList.add('open'));
+    closeSettings.addEventListener('click', () => settingsPanel.classList.remove('open'));
+
+    window.addEventListener('resize', () => {
+      if (isOpen) closeMenu();
+      buildMenu();
+    });
+
+    // Init
+    buildMenu();
+    updateClock();
+    setInterval(updateClock, 1000);
+    lucide.createIcons();
+  </script>
+</body>
+</html>

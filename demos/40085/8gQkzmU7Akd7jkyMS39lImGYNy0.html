@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>梯度回流：AI浪费资源再利用模型</title>
+<style>
+  /* ========== 全局样式：深色科技感背景 ========== */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(ellipse at top, #1a1040 0%, #07031a 60%, #000 100%);
+    color: #e5e7ff;
+    user-select: none;
+  }
+
+  /* 顶部标题 */
+  .header {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    background: linear-gradient(90deg, rgba(80,60,200,0.0), rgba(120,80,255,0.15), rgba(80,60,200,0.0));
+    border-bottom: 1px solid rgba(120,120,255,0.15);
+    z-index: 10;
+  }
+  .header h1 {
+    font-size: 19px;
+    font-weight: 500;
+    letter-spacing: 3px;
+    background: linear-gradient(90deg, #7aa2ff, #c9a8ff, #7aa2ff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 12px rgba(120,100,255,0.3);
+    line-height: 1.3;
+  }
+  .header .sub {
+    font-size: 11px;
+    color: #8b93c8;
+    letter-spacing: 1px;
+    margin-top: 1px;
+  }
+
+  /* ========== 主体布局：左中右三栏 ========== */
+  .stage {
+    position: absolute;
+    top: 56px;
+    left: 0; right: 0;
+    bottom: 90px;
+    display: grid;
+    grid-template-columns: 1fr 320px 1fr;
+    gap: 0;
+    padding: 16px;
+  }
+
+  .panel {
+    position: relative;
+    background: linear-gradient(160deg, rgba(40,30,90,0.45), rgba(20,15,50,0.75));
+    border: 1px solid rgba(120,120,255,0.18);
+    border-radius: 14px;
+    padding: 16px;
+    overflow: hidden;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 0 30px rgba(80,60,200,0.12) inset, 0 8px 30px rgba(0,0,0,0.4);
+  }
+
+  /* 面板标题 */
+  .panel-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 14px;
+    letter-spacing: 1px;
+    color: #c9c9ff;
+  }
+  .panel-title .tag {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: rgba(120,100,255,0.15);
+    border: 1px solid rgba(160,140,255,0.25);
+    color: #b5a8ff;
+    letter-spacing: 1px;
+  }
+
+  /* 面板顶部指标 */
+  .metric {
+    font-family: "Courier New", "Consolas", monospace;
+    text-align: center;
+    padding: 6px 0 10px;
+    border-bottom: 1px dashed rgba(140,130,220,0.2);
+    margin-bottom: 10px;
+  }
+  .metric .label {
+    font-size: 11px;
+    color: #8b93c8;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+  }
+  .metric .value {
+    font-size: 22px;
+    font-weight: bold;
+    color: #7fffd4;
+    text-shadow: 0 0 8px rgba(127,255,212,0.55), 0 0 18px rgba(127,255,212,0.25);
+    letter-spacing: 1px;
+  }
+  .metric.warn .value {
+    color: #ff9566;
+    text-shadow: 0 0 8px rgba(255,120,80,0.55), 0 0 18px rgba(255,120,80,0.2);
+  }
+
+  /* Canvas 容器 */
+  .canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: calc(100% - 130px);
+    border-radius: 10px;
+    background: radial-gradient(ellipse at center, rgba(40,25,90,0.6), rgba(5,0,20,0.9));
+    border: 1px solid rgba(140,120,240,0.15);
+    overflow: hidden;
+  }
+  .canvas-wrap canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* 按钮组 */
+  .controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    padding-top: 10px;
+  }
+  .btn {
+    background: linear-gradient(135deg, #4a3f9a, #6a4fd0);
+    color: #f0ecff;
+    border: 1px solid rgba(180,160,255,0.4);
+    padding: 7px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 10px rgba(90,70,200,0.3);
+  }
+  .btn:hover {
+    background: linear-gradient(135deg, #5a4faa, #7a5fe0);
+    box-shadow: 0 2px 14px rgba(120,90,230,0.5);
+    transform: translateY(-1px);
+  }
+  .btn:active { transform: translateY(0); }
+  .btn.ghost {
+    background: transparent;
+    border-color: rgba(160,160,220,0.4);
+    color: #c9c9ff;
+  }
+  .btn.ghost:hover {
+    background: rgba(160,160,220,0.1);
+  }
+  .btn.active-mode {
+    background: linear-gradient(135deg, #5a4faa, #7a5fe0);
+    border-color: rgba(200,180,255,0.7);
+    box-shadow: 0 0 14px rgba(120,90,230,0.6);
+  }
+
+  /* 中间管道区 */
+  .pipe-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pipe-label {
+    text-align: center;
+    font-size: 13px;
+    letter-spacing: 2px;
+    color: #c9c9ff;
+    padding: 6px 0;
+  }
+  .pipe-arrow-graphic {
+    flex: 1;
+    position: relative;
+    margin: 4px 0;
+  }
+  .pipe-status {
+    padding: 8px;
+    font-size: 12px;
+    color: #9ba8e0;
+    text-align: center;
+    border-top: 1px dashed rgba(140,130,220,0.2);
+    letter-spacing: 1px;
+  }
+
+  /* 回流注入标签（右侧面板内） */
+  .inject-hint {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: #ffb07a;
+    letter-spacing: 1px;
+    writing-mode: vertical-rl;
+    z-index: 5;
+    pointer-events: none;
+    opacity: 0.7;
+  }
+
+  /* ========== 底部指标栏 ========== */
+  .footer {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    background: linear-gradient(0deg, rgba(20,10,60,0.8), rgba(40,20,100,0.3));
+    border-top: 1px solid rgba(120,120,255,0.2);
+    padding: 0 20px;
+    z-index: 10;
+  }
+  .foot-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 120px;
+  }
+  .foot-item .name {
+    font-size: 11px;
+    color: #9ba8e0;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+  .foot-item .number {
+    font-family: "Courier New", monospace;
+    font-size: 24px;
+    font-weight: bold;
+    color: #7fffd4;
+    text-shadow: 0 0 10px rgba(127,255,212,0.5);
+  }
+  .foot-item .number.warn { color: #ffb07a; text-shadow: 0 0 10px rgba(255,170,100,0.5); }
+  .foot-item .number.pulse {
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+
+  /* 状态小灯 */
+  .led {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #7fffd4;
+    box-shadow: 0 0 8px #7fffd4;
+    margin-right: 6px;
+    animation: blink 1.2s infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* 模式切换按钮行 */
+  .mode-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .mode-row .mode-label {
+    font-size: 11px;
+    color: #9ba8e0;
+    letter-spacing: 1px;
+    margin-right: 4px;
+  }
+  .mode-btn {
+    background: transparent;
+    color: #9ba8e0;
+    border: 1px solid rgba(160,160,220,0.3);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 1px;
+  }
+  .mode-btn:hover {
+    background: rgba(160,160,220,0.1);
+    border-color: rgba(200,180,255,0.5);
+  }
+  .mode-btn.active {
+    background: rgba(120,90,230,0.3);
+    border-color: rgba(200,180,255,0.7);
+    color: #c9c9ff;
+    box-shadow: 0 0 10px rgba(120,90,230,0.4);
+  }
+
+  /* 重置按钮 */
+  .reset-btn {
+    background: linear-gradient(135deg, #3a2f6a, #5a3fa0);
+    color: #e6e0ff;
+    border: 1px solid rgba(180,160,255,0.4);
+    padding: 10px 22px;
+    border-radius: 8px;
+    font-size: 13px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .reset-btn:hover {
+    background: linear-gradient(135deg, #4a3f7a, #6a4fb0);
+    box-shadow: 0 0 16px rgba(120,90,230,0.5);
+  }
+
+  /* ========== 版本信息 ========== */
+  .version-info {
+    position: absolute;
+    right: 16px;
+    bottom: 96px;
+    font-family: "Courier New", "Consolas", monospace;
+    font-size: 10px;
+    color: rgba(140, 150, 220, 0.35);
+    letter-spacing: 1px;
+    z-index: 10;
+    pointer-events: none;
+    transition: opacity 0.5s;
+  }
+
+  /* 响应式：小屏幕时堆叠 */
+  @media (max-width: 900px) {
+    .stage { grid-template-columns: 1fr; grid-template-rows: 1fr 160px 1fr; bottom: 140px; }
+    .footer { height: 140px; flex-wrap: wrap; gap: 8px; padding: 10px; flex-direction: column; }
+    .foot-item { min-width: 100px; }
+    .inject-hint { display: none; }
+    .version-info { bottom: 146px; right: 10px; }
+  }
+
+  /* 装饰性网格背景 */
+  .grid-bg {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(120,120,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(120,120,255,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- 顶部标题 -->
+<div class="header">
+  <h1>梯度回流：AI浪费资源再利用模型</h1>
+  <span class="sub">利用被浪费的梯度势能，零成本驱动学生模型学习</span>
+</div>
+
+<div class="grid-bg"></div>
+
+<!-- 版本标识 -->
+<div class="version-info" id="versionInfo"></div>
+
+<!-- 主体舞台 -->
+<div class="stage">
+
+  <!-- ====================== 左侧：主模型训练区 ====================== -->
+  <div class="panel">
+    <div class="panel-title">
+      <span>大模型训练（梯度被丢弃）</span>
+      <span class="tag">TEACHER · GRADIENT</span>
+    </div>
+
+    <div class="metric warn">
+      <div class="label">已浪费梯度势能 / WASTED POTENTIAL</div>
+      <div class="value"><span id="gradientValue">0.00</span> 单位</div>
+    </div>
+
+    <div class="canvas-wrap">
+      <canvas id="teacherCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="startBtn">▶ 开始训练</button>
+      <button class="btn ghost" id="pauseBtn">❚❚ 暂停</button>
+    </div>
+  </div>
+
+  <!-- ====================== 中间：梯度回流管道 ====================== -->
+  <div class="panel pipe-panel">
+    <div class="panel-title" style="justify-content:center;">
+      <span class="tag">PIPE · BACKFLOW</span>
+    </div>
+    <div class="pipe-label">
+      <span style="color:#ff6b6b;">梯度势能</span>
+      <span style="color:#ffb07a;"> → </span>
+      <span style="color:#ffd700;">驱动动能</span>
+    </div>
+    <div class="pipe-arrow-graphic">
+      <canvas id="pipeCanvas"></canvas>
+    </div>
+    <div class="pipe-status">
+      <span class="led"></span>梯度回流管 · <span id="pipeFlow">0</span> 粒子/sec
+    </div>
+  </div>
+
+  <!-- ====================== 右侧：学生模型学习区 ====================== -->
+  <div class="panel">
+    <div class="panel-title">
+      <span>回流驱动学习（学生模型）</span>
+      <span class="tag">STUDENT · BACKFLOW</span>
+    </div>
+
+    <div class="metric">
+      <div class="label">学生模型准确率 / ACCURACY</div>
+      <div class="value"><span id="accuracyValue">0.0</span> % <span style="font-size:12px;color:#8b93c8;">(零标签)</span></div>
+    </div>
+
+    <div class="canvas-wrap">
+      <span class="inject-hint" id="injectHint">← 回流梯度注入</span>
+      <canvas id="studentCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+      <button class="btn ghost" id="patternBtn">⟳ 切换目标图案</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====================== 底部全局指标栏 ====================== -->
+<div class="footer">
+  <div class="foot-item">
+    <div class="name">梯度回收率</div>
+    <div class="number pulse"><span id="gradientRecycleRate">0.0</span>%</div>
+  </div>
+  <div class="foot-item">
+    <div class="name">节省算力</div>
+    <div class="number warn"><span id="savedPower">0.0</span>%</div>
+  </div>
+  <div class="foot-item">
+    <div class="name">零标签知识蒸馏</div>
+    <div class="number" style="font-size:16px; letter-spacing:2px;">
+      <span class="led"></span><span id="distillStatus">待激活</span>
+    </div>
+  </div>
+  <div class="mode-row">
+    <span class="mode-label">回流模式：</span>
+    <button class="mode-btn active" id="mode0">无回流</button>
+    <button class="mode-btn" id="mode1">部分回流</button>
+    <button class="mode-btn" id="mode2">全回流</button>
+  </div>
+  <button class="reset-btn" id="resetBtn">↻ 重置</button>
+</div>
+
+<script>
+/* ======================================================================
+ * 梯度回流：AI浪费资源再利用模型
+ * - 三个独立 Canvas：teacher（梯度产生）/ pipe（回流管）/ student（回流驱动学习）
+ * - 粒子运动基于简单物理模拟（位置 + 速度 + 随机漂移）
+ * - 被丢弃的梯度粒子通过回流管道注入学生模型，驱动零标签学习
+ * - 学生模型使用权重网格，从"无序"逐渐演化成目标图案
+ * ====================================================================== */
+
+(function () {
+  'use strict';
+
+  // ---------- 版本信息 ----------
+  const APP_VERSION = "1.0";
+  const LAST_UPDATED = "2026-06-22 21:38:57";
+
+  // ---------- 全局状态 ----------
+  const state = {
+    running: false,              // 是否处于训练中
+    backflowMode: 0,             // 回流模式：0=无回流, 1=部分回流, 2=全回流
+    wastedGradient: 0,           // 已浪费梯度势能（虚拟单位）
+    accuracy: 0,                 // 学生模型准确率
+    gradientsInPipe: 0,          // 当前管道传输速率
+    gradientTotal: 0,            // 总共产出梯度粒子
+    recycledTotal: 0,            // 被学生模型回收的梯度粒子
+    targetPatternIndex: 0,       // 当前目标图案索引
+    time: 0                      // 累积时间戳
+  };
+
+  // ---------- 工具函数 ----------
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // ---------- 目标图案：10x10 网格，1 代表"亮"，0 代表"暗" ----------
+  // 图案 0：数字 "7"
+  // 图案 1：简化 "AI" 图标
+  // 图案 2：闪电/能量符号
+  const PATTERNS = [
+    // "7"
+    [
+      [0,0,1,1,1,1,1,1,0,0],
+      [0,0,1,1,1,1,1,1,0,0],
+      [0,0,0,0,0,0,1,1,0,0],
+      [0,0,0,0,0,1,1,0,0,0],
+      [0,0,0,0,1,1,0,0,0,0],
+      [0,0,0,1,1,0,0,0,0,0],
+      [0,0,1,1,0,0,0,0,0,0],
+      [0,1,1,0,0,0,0,0,0,0],
+      [1,1,0,0,0,0,0,0,0,0],
+      [1,0,0,0,0,0,0,0,0,0],
+    ],
+    // "AI"
+    [
+      [0,0,1,1,0,0,0,1,1,0],
+      [0,1,1,1,1,0,0,1,1,0],
+      [1,1,0,0,1,1,0,1,1,0],
+      [1,1,0,0,1,1,0,1,1,0],
+      [1,1,1,1,1,1,0,1,1,0],
+      [1,1,1,1,1,1,0,1,1,0],
+      [1,1,0,0,1,1,0,1,1,0],
+      [1,1,0,0,1,1,0,1,1,0],
+      [1,1,0,0,1,1,0,1,1,0],
+      [1,1,0,0,1,1,0,1,1,0],
+    ],
+    // 闪电/能量符号
+    [
+      [0,0,0,0,1,1,0,0,0,0],
+      [0,0,0,1,1,1,0,0,0,0],
+      [0,0,1,1,1,0,0,0,0,0],
+      [0,1,1,1,1,1,1,0,0,0],
+      [1,1,1,1,1,1,1,1,0,0],
+      [0,0,0,1,1,1,1,0,0,0],
+      [0,0,1,1,1,0,0,0,0,0],
+      [0,1,1,1,0,0,0,0,0,0],
+      [1,1,0,0,0,0,0,0,0,0],
+      [1,0,0,0,0,0,0,0,0,0],
+    ]
+  ];
+
+  // ============================================================
+  // 左侧：主模型训练 Canvas —— 大量训练粒子随机运动，梯度粒子被丢弃逃逸
+  // ============================================================
+  const teacherCanvas = document.getElementById('teacherCanvas');
+  const teacherCtx = teacherCanvas.getContext('2d');
+  const trainParticles = [];     // 内部训练粒子（蓝紫色）
+  const gradientParticles = [];  // 被丢弃的梯度粒子（红色，向右逃逸）
+  const TEACHER_INNER_COUNT = 80;
+
+  function resizeTeacher() {
+    const rect = teacherCanvas.parentElement.getBoundingClientRect();
+    teacherCanvas.width = rect.width;
+    teacherCanvas.height = rect.height;
+  }
+
+  // 初始化训练粒子
+  for (let i = 0; i < TEACHER_INNER_COUNT; i++) {
+    trainParticles.push({
+      x: rand(0, 400),
+      y: rand(0, 300),
+      vx: rand(-0.8, 0.8),
+      vy: rand(-0.8, 0.8),
+      r: rand(1.2, 2.5),
+      hue: rand(200, 280),     // 蓝紫色调
+      life: rand(100, 400)
+    });
+  }
+
+  function updateTeacher() {
+    const W = teacherCanvas.width;
+    const H = teacherCanvas.height;
+
+    // 内部训练粒子：随机漂移 + 边界反弹
+    for (const p of trainParticles) {
+      p.vx += rand(-0.05, 0.05);
+      p.vy += rand(-0.05, 0.05);
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+      const sp = Math.hypot(p.vx, p.vy);
+      if (sp > 2.0) { p.vx = p.vx / sp * 2.0; p.vy = p.vy / sp * 2.0; }
+
+      p.x += p.vx;
+      p.y += p.vy;
+
+      if (p.x < 0) { p.x = 0; p.vx *= -1; }
+      if (p.x > W) { p.x = W; p.vx *= -1; }
+      if (p.y < 0) { p.y = 0; p.vy *= -1; }
+      if (p.y > H) { p.y = H; p.vy *= -1; }
+    }
+
+    // 训练运行中：根据回流模式产生梯度粒子
+    if (state.running && state.backflowMode > 0) {
+      // 模式1（部分回流）：较低频率；模式2（全回流）：高频
+      const spawnRate = state.backflowMode === 2 ? 0.12 : 0.06;
+      if (Math.random() < spawnRate) {
+        const origin = trainParticles[Math.floor(Math.random() * trainParticles.length)];
+        gradientParticles.push({
+          x: origin ? origin.x : rand(W * 0.5, W * 0.8),
+          y: origin ? origin.y : rand(20, H - 20),
+          vx: rand(1.0, 2.2),
+          vy: rand(-0.4, 0.4),
+          r: rand(2, 3.2),
+          baseHue: rand(0, 15),   // 红→橙起始色调
+          life: 400,
+          inPipe: false
+        });
+        state.gradientTotal += 1;
+        state.wastedGradient += rand(0.05, 0.2);
+      }
+    }
+    // 模式0：无回流，只产生极少量"丢弃"粒子（视觉上几乎不产生）
+    if (state.running && state.backflowMode === 0) {
+      if (Math.random() < 0.015) {
+        const origin = trainParticles[Math.floor(Math.random() * trainParticles.length)];
+        gradientParticles.push({
+          x: origin ? origin.x : rand(W * 0.5, W * 0.8),
+          y: origin ? origin.y : rand(20, H - 20),
+          vx: rand(1.0, 2.2),
+          vy: rand(-0.4, 0.4),
+          r: rand(2, 3.2),
+          baseHue: rand(0, 15),
+          life: 400,
+          inPipe: false
+        });
+        state.gradientTotal += 1;
+        state.wastedGradient += rand(0.02, 0.08);
+      }
+    }
+
+    // 梯度粒子：向右移动，漂出右侧后进入管道
+    for (let i = gradientParticles.length - 1; i >= 0; i--) {
+      const p = gradientParticles[i];
+      if (!p.inPipe) {
+        p.x += p.vx;
+        p.y += p.vy + Math.sin((state.time + p.x) * 0.03) * 0.2;
+        p.life -= 1;
+
+        if (p.x >= W - 2) {
+          p.inPipe = true;
+          // 传递位置比例和色调给管道
+          pipeQueue.push({ fromY: p.y / H, baseHue: p.baseHue, r: p.r, life: p.life });
+          gradientParticles.splice(i, 1);
+          continue;
+        }
+
+        if (p.life <= 0) gradientParticles.splice(i, 1);
+      }
+    }
+  }
+
+  function drawTeacher() {
+    const ctx = teacherCtx;
+    const W = teacherCanvas.width;
+    const H = teacherCanvas.height;
+
+    ctx.fillStyle = 'rgba(5, 0, 20, 0.18)';
+    ctx.fillRect(0, 0, W, H);
+
+    // ---- 隐喻：虚线箭头表示梯度本应流向损失函数，但被截取 ----
+    const arrowX = W * 0.65;
+    const arrowY = H * 0.75;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(255, 150, 100, 0.35)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    // 从区域中部向下 → 再向右（表示梯度本应下降却被截走）
+    ctx.moveTo(arrowX, arrowY - 30);
+    ctx.lineTo(arrowX, arrowY + 10);
+    ctx.lineTo(arrowX + 40, arrowY + 10);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 箭头尖端
+    ctx.fillStyle = 'rgba(255, 150, 100, 0.4)';
+    ctx.beginPath();
+    ctx.moveTo(arrowX + 40, arrowY + 10);
+    ctx.lineTo(arrowX + 32, arrowY + 5);
+    ctx.lineTo(arrowX + 32, arrowY + 15);
+    ctx.closePath();
+    ctx.fill();
+    // 标注文字
+    ctx.fillStyle = 'rgba(255, 160, 110, 0.5)';
+    ctx.font = '10px "PingFang SC", sans-serif';
+    ctx.fillText('梯度被截取', arrowX - 20, arrowY - 38);
+
+    // ---- 灵感图示：左下角"重力→机械能"极简符号 ----
+    const inspX = 20;
+    const inspY = H - 60;
+    // 虚线方块（被浪费的势能）
+    ctx.strokeStyle = 'rgba(180, 180, 220, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.strokeRect(inspX, inspY, 18, 18);
+    ctx.setLineDash([]);
+    // 向下箭头（重力方向）
+    ctx.strokeStyle = 'rgba(180, 180, 220, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(inspX + 9, inspY + 22);
+    ctx.lineTo(inspX + 9, inspY + 34);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(180, 180, 220, 0.5)';
+    ctx.beginPath();
+    ctx.moveTo(inspX + 9, inspY + 34);
+    ctx.lineTo(inspX + 5, inspY + 28);
+    ctx.lineTo(inspX + 13, inspY + 28);
+    ctx.closePath();
+    ctx.fill();
+    // 齿轮符号（⚙ 简化：两个交叉椭圆）
+    ctx.strokeStyle = 'rgba(255, 200, 130, 0.5)';
+    ctx.lineWidth = 1.2;
+    const gearX = inspX + 30;
+    const gearY = inspY + 28;
+    // 旋转的齿轮（用时间变化）
+    const gearAngle = state.time * 0.03;
+    ctx.save();
+    ctx.translate(gearX, gearY);
+    ctx.rotate(gearAngle);
+    ctx.beginPath();
+    ctx.arc(0, 0, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    for (let g = 0; g < 4; g++) {
+      const a = (g / 4) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 5, Math.sin(a) * 5);
+      ctx.lineTo(Math.cos(a) * 10, Math.sin(a) * 10);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // 标注文字
+    ctx.fillStyle = 'rgba(180, 180, 220, 0.45)';
+    ctx.font = '9px "PingFang SC", sans-serif';
+    ctx.fillText('灵感：被浪费的重力，弹出小熊', inspX - 2, inspY - 8);
+
+    // ---- 右侧"梯度逃逸口"发光条 ----
+    if (state.running && state.backflowMode > 0) {
+      const grad = ctx.createLinearGradient(W - 30, 0, W, 0);
+      grad.addColorStop(0, 'rgba(255, 100, 70, 0)');
+      grad.addColorStop(1, 'rgba(255, 100, 70, 0.45)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(W - 30, 0, 30, H);
+    }
+
+    // ---- 绘制内部训练粒子（带发光） ----
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of trainParticles) {
+      const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 3);
+      grd.addColorStop(0, `hsla(${p.hue}, 90%, 70%, 0.9)`);
+      grd.addColorStop(1, `hsla(${p.hue}, 90%, 60%, 0)`);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `hsla(${p.hue}, 100%, 85%, 1)`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ---- 绘制梯度粒子（红色，被丢弃的梯度） ----
+    for (const p of gradientParticles) {
+      const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4);
+      grd.addColorStop(0, `hsla(${p.baseHue}, 100%, 70%, 0.95)`);
+      grd.addColorStop(1, `hsla(${p.baseHue}, 100%, 55%, 0)`);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `hsla(${p.baseHue}, 100%, 85%, 1)`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ============================================================
+  // 中间：梯度回流管道 Canvas —— 从左到右的粒子流，红色渐变为金色
+  // ============================================================
+  const pipeCanvas = document.getElementById('pipeCanvas');
+  const pipeCtx = pipeCanvas.getContext('2d');
+  const pipeParticles = [];   // 管道内部流动的梯度粒子
+  const pipeQueue = [];       // 从 teacher 传入的待处理梯度粒子
+
+  function resizePipe() {
+    const rect = pipeCanvas.parentElement.getBoundingClientRect();
+    pipeCanvas.width = rect.width;
+    pipeCanvas.height = rect.height;
+  }
+
+  function updatePipe() {
+    const W = pipeCanvas.width;
+    const H = pipeCanvas.height;
+
+    // 把从 teacher 传入的梯度粒子转换为管道粒子
+    while (pipeQueue.length > 0) {
+      const info = pipeQueue.shift();
+      pipeParticles.push({
+        x: 0,
+        y: info.fromY * H,
+        targetY: H / 2,          // 向管道中线聚拢
+        vx: rand(2.5, 3.5),
+        baseHue: info.baseHue,   // 起始色调（红）
+        currentHue: info.baseHue, // 当前色调（向右渐变到金色）
+        r: info.r,
+        life: info.life,
+        delivered: false
+      });
+      state.gradientsInPipe += 1;
+    }
+
+    // 更新管道粒子：色调从红→金渐变
+    for (let i = pipeParticles.length - 1; i >= 0; i--) {
+      const p = pipeParticles[i];
+      p.x += p.vx;
+      // 向中线聚拢 + 轻微波动
+      p.y += (p.targetY - p.y) * 0.03 + Math.sin((state.time + p.x) * 0.05) * 0.6;
+      p.life -= 1;
+
+      // 色调渐变：从红 (0~15) 逐渐过渡到金色 (45~55)
+      const progress = p.x / W;
+      p.currentHue = p.baseHue + progress * 45;  // 红→橙→金
+
+      if (p.x >= W - 2 && !p.delivered) {
+        // 到达学生模型一侧，注入回流梯度
+        const injectPower = state.backflowMode === 2 ? 1.5 : 1.0;
+        studentGrid.inject(injectPower);
+        state.recycledTotal += 1;
+        p.delivered = true;
+      }
+
+      if (p.delivered || p.life <= 0 || p.x > W) {
+        pipeParticles.splice(i, 1);
+      }
+    }
+
+    // 平滑管道速率显示
+    if (state.gradientsInPipe > 0) {
+      state.gradientsInPipe = Math.max(0, state.gradientsInPipe - 0.08);
+    }
+  }
+
+  function drawPipe() {
+    const ctx = pipeCtx;
+    const W = pipeCanvas.width;
+    const H = pipeCanvas.height;
+
+    ctx.fillStyle = 'rgba(5, 0, 20, 0.15)';
+    ctx.fillRect(0, 0, W, H);
+
+    const midY = H / 2;
+    const pipeHeight = 40;
+
+    // 管道底部光带（左侧红→右侧金）
+    const pipeGlow = ctx.createLinearGradient(0, 0, W, 0);
+    pipeGlow.addColorStop(0, 'rgba(255, 80, 60, 0.08)');
+    pipeGlow.addColorStop(0.5, 'rgba(255, 160, 80, 0.15)');
+    pipeGlow.addColorStop(1, 'rgba(255, 200, 80, 0.08)');
+    ctx.fillStyle = pipeGlow;
+    ctx.fillRect(0, midY - pipeHeight, W, pipeHeight * 2);
+
+    // 外光晕
+    const glow = ctx.createLinearGradient(0, midY - pipeHeight, 0, midY + pipeHeight);
+    glow.addColorStop(0, 'rgba(127, 90, 255, 0)');
+    glow.addColorStop(0.45, 'rgba(127, 90, 255, 0.2)');
+    glow.addColorStop(0.5, 'rgba(200, 170, 255, 0.35)');
+    glow.addColorStop(0.55, 'rgba(127, 90, 255, 0.2)');
+    glow.addColorStop(1, 'rgba(127, 90, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, midY - pipeHeight, W, pipeHeight * 2);
+
+    // 管道边缘虚线
+    ctx.strokeStyle = 'rgba(180, 160, 255, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(0, midY - pipeHeight / 2);
+    ctx.lineTo(W, midY - pipeHeight / 2);
+    ctx.moveTo(0, midY + pipeHeight / 2);
+    ctx.lineTo(W, midY + pipeHeight / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // ---- 齿轮动画：管道中心旋转齿轮，象征"势能→动能"机械转换 ----
+    const gearCX = W / 2;
+    const gearCY = midY;
+    const gearAngle = state.time * 0.04;
+    ctx.save();
+    ctx.translate(gearCX, gearCY);
+    ctx.rotate(gearAngle);
+    // 外齿圈
+    ctx.strokeStyle = 'rgba(255, 200, 130, 0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let t = 0; t < 8; t++) {
+      const a = (t / 8) * Math.PI * 2;
+      const aNext = ((t + 0.5) / 8) * Math.PI * 2;
+      ctx.arc(0, 0, 10, a, aNext - 0.08);
+      ctx.lineTo(Math.cos(aNext) * 13, Math.sin(aNext) * 13);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    // 内齿轮圈
+    ctx.strokeStyle = 'rgba(255, 200, 130, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    // 辐条
+    for (let s = 0; s < 4; s++) {
+      const a = (s / 4) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 4, Math.sin(a) * 4);
+      ctx.lineTo(Math.cos(a) * 9, Math.sin(a) * 9);
+      ctx.stroke();
+    }
+    // 中心点
+    ctx.fillStyle = 'rgba(255, 220, 150, 0.8)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 齿轮两侧标注
+    ctx.fillStyle = 'rgba(255, 200, 130, 0.4)';
+    ctx.font = '9px "PingFang SC", sans-serif';
+    ctx.fillText('势能', gearCX - 38, gearCY - 14);
+    ctx.fillText('动能', gearCX + 20, gearCY - 14);
+
+    // 箭头动画（流动方向指示）
+    const arrowOffset = (state.time * 2) % 30;
+    ctx.fillStyle = 'rgba(255, 180, 120, 0.5)';
+    for (let x = -30 + arrowOffset; x < W; x += 30) {
+      ctx.beginPath();
+      ctx.moveTo(x, midY);
+      ctx.lineTo(x + 8, midY - 6);
+      ctx.lineTo(x + 8, midY + 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // ---- 绘制回流梯度粒子（红→金渐变） ----
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of pipeParticles) {
+      const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4);
+      grd.addColorStop(0, `hsla(${p.currentHue}, 100%, 75%, 1)`);
+      grd.addColorStop(1, `hsla(${p.currentHue}, 100%, 55%, 0)`);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `hsla(${p.currentHue}, 100%, 90%, 1)`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ============================================================
+  // 右侧：学生模型 Canvas —— 10x10 权重网格，回流梯度驱动学习
+  // ============================================================
+  const studentCanvas = document.getElementById('studentCanvas');
+  const studentCtx = studentCanvas.getContext('2d');
+
+  function resizeStudent() {
+    const rect = studentCanvas.parentElement.getBoundingClientRect();
+    studentCanvas.width = rect.width;
+    studentCanvas.height = rect.height;
+  }
+
+  // 学生网格对象 —— 回流梯度驱动每个网格单元的权重从无序走向目标图案
+  const studentGrid = {
+    cols: 10,
+    rows: 10,
+    cells: [],    // { target, weight, noise }
+    init() {
+      this.cells = [];
+      const pattern = PATTERNS[state.targetPatternIndex % PATTERNS.length];
+      for (let r = 0; r < this.rows; r++) {
+        for (let c = 0; c < this.cols; c++) {
+          this.cells.push({
+            target: pattern[r][c],
+            weight: rand(0, 0.2),   // 初始权重很低（暗淡随机）
+            noise: rand(0, 1)       // 随机波动种子
+          });
+        }
+      }
+    },
+    // 回流梯度注入：每次注入驱动权重向目标图案靠拢
+    inject(power) {
+      const n = Math.floor(rand(5, 15));
+      for (let k = 0; k < n; k++) {
+        const idx = Math.floor(Math.random() * this.cells.length);
+        const cell = this.cells[idx];
+        const delta = (cell.target - cell.weight) * rand(0.02, 0.06) * power;
+        cell.weight = clamp(cell.weight + delta, 0, 1);
+      }
+    },
+    // 计算当前准确率：权重与目标的平均相似度
+    getAccuracy() {
+      if (this.cells.length === 0) return 0;
+      let sum = 0;
+      for (const cell of this.cells) {
+        const similarity = 1 - Math.abs(cell.target - cell.weight);
+        sum += similarity;
+      }
+      return sum / this.cells.length;
+    }
+  };
+
+  function drawStudent() {
+    const ctx = studentCtx;
+    const W = studentCanvas.width;
+    const H = studentCanvas.height;
+
+    ctx.fillStyle = 'rgba(5, 0, 20, 0.25)';
+    ctx.fillRect(0, 0, W, H);
+
+    const padding = 20;
+    const gridW = W - padding * 2;
+    const gridH = H - padding * 2;
+    const cellSize = Math.min(gridW / studentGrid.cols, gridH / studentGrid.rows);
+    const startX = (W - cellSize * studentGrid.cols) / 2;
+    const startY = (H - cellSize * studentGrid.rows) / 2;
+
+    // 绘制每个单元格圆点（权重越高越亮，从紫→青绿）
+    ctx.globalCompositeOperation = 'lighter';
+    for (let r = 0; r < studentGrid.rows; r++) {
+      for (let c = 0; c < studentGrid.cols; c++) {
+        const cell = studentGrid.cells[r * studentGrid.cols + c];
+        const cx = startX + c * cellSize + cellSize / 2;
+        const cy = startY + r * cellSize + cellSize / 2;
+
+        const lerpedHue = 260 - cell.weight * 120;   // 260 紫 → 140 青绿
+        const alpha = 0.15 + cell.weight * 0.85;
+        const radius = cellSize * 0.25 + cell.weight * cellSize * 0.18;
+        const flicker = 0.85 + 0.15 * Math.sin(state.time * 0.05 + cell.noise * 10);
+
+        // 外发光
+        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 2.5);
+        grd.addColorStop(0, `hsla(${lerpedHue}, 90%, 70%, ${alpha * flicker})`);
+        grd.addColorStop(1, `hsla(${lerpedHue}, 90%, 60%, 0)`);
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 核心点
+        ctx.fillStyle = `hsla(${lerpedHue}, 100%, ${75 + cell.weight * 15}%, ${0.4 + alpha * 0.6})`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 网格外框淡线
+    ctx.strokeStyle = 'rgba(140, 130, 220, 0.12)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(startX, startY, cellSize * studentGrid.cols, cellSize * studentGrid.rows);
+  }
+
+  // ============================================================
+  // UI 更新：数字指标显示（平滑插值动画）
+  // ============================================================
+  const elGradient = document.getElementById('gradientValue');
+  const elAccuracy = document.getElementById('accuracyValue');
+  const elRecycle = document.getElementById('gradientRecycleRate');
+  const elSavedPower = document.getElementById('savedPower');
+  const elStatus = document.getElementById('distillStatus');
+  const elPipeFlow = document.getElementById('pipeFlow');
+  const elInjectHint = document.getElementById('injectHint');
+
+  const display = {
+    gradient: 0,
+    accuracy: 0,
+    recycle: 0,
+    saved: 0
+  };
+
+  function updateUI() {
+    // 向真实值靠拢（平滑动画）
+    display.gradient += (state.wastedGradient - display.gradient) * 0.1;
+    display.accuracy += (state.accuracy - display.accuracy) * 0.08;
+
+    // 梯度回收率
+    const recycleRaw = state.gradientTotal > 0
+      ? (state.recycledTotal / state.gradientTotal) * 100
+      : 0;
+    const recycleShown = recycleRaw * 0.6 + 50 + state.accuracy * 0.35;
+    display.recycle += (clamp(recycleShown, 0, 99) - display.recycle) * 0.08;
+
+    // 节省算力
+    const savedRaw = 15 + state.accuracy * 0.55 + Math.min(state.wastedGradient * 0.05, 30);
+    display.saved += (clamp(savedRaw, 0, 85) - display.saved) * 0.08;
+
+    elGradient.textContent = display.gradient.toFixed(2);
+    elAccuracy.textContent = display.accuracy.toFixed(1);
+    elRecycle.textContent = display.recycle.toFixed(1);
+    elSavedPower.textContent = display.saved.toFixed(1);
+    elPipeFlow.textContent = Math.round(state.gradientsInPipe);
+    elStatus.textContent = state.running && state.backflowMode > 0
+      ? '激活中...'
+      : (state.accuracy > 1 ? '已完成蒸馏' : '待激活');
+
+    // 回流注入标签可见性
+    if (elInjectHint) {
+      elInjectHint.style.opacity = (state.backflowMode > 0 && state.gradientsInPipe > 0.5) ? '0.7' : '0.15';
+    }
+  }
+
+  // ============================================================
+  // 主循环
+  // ============================================================
+  function tick() {
+    state.time += 1;
+    state.accuracy = studentGrid.getAccuracy() * 100;
+
+    updateTeacher();
+    updatePipe();
+
+    drawTeacher();
+    drawPipe();
+    drawStudent();
+    updateUI();
+
+    requestAnimationFrame(tick);
+  }
+
+  // ============================================================
+  // 按钮绑定
+  // ============================================================
+  document.getElementById('startBtn').addEventListener('click', () => {
+    state.running = true;
+  });
+  document.getElementById('pauseBtn').addEventListener('click', () => {
+    state.running = false;
+  });
+  document.getElementById('patternBtn').addEventListener('click', () => {
+    state.targetPatternIndex += 1;
+    studentGrid.init();
+    state.accuracy = 0;
+    display.accuracy = 0;
+  });
+
+  // ---- 回流模式切换按钮 ----
+  const modeBtns = [
+    document.getElementById('mode0'),
+    document.getElementById('mode1'),
+    document.getElementById('mode2'),
+  ];
+  const modeLabels = { 0: '无回流', 1: '部分回流', 2: '全回流' };
+
+  modeBtns.forEach((btn, idx) => {
+    btn.addEventListener('click', () => {
+      state.backflowMode = idx;
+      // 更新按钮高亮
+      modeBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // ---- 重置按钮 ----
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    state.running = false;
+    state.backflowMode = 0;
+    state.wastedGradient = 0;
+    state.accuracy = 0;
+    state.gradientsInPipe = 0;
+    state.gradientTotal = 0;
+    state.recycledTotal = 0;
+    gradientParticles.length = 0;
+    pipeParticles.length = 0;
+    pipeQueue.length = 0;
+    studentGrid.init();
+    display.gradient = 0;
+    display.accuracy = 0;
+    display.recycle = 0;
+    display.saved = 0;
+    // 重置模式按钮高亮
+    modeBtns.forEach(b => b.classList.remove('active'));
+    modeBtns[0].classList.add('active');
+  });
+
+  // ============================================================
+  // 窗口尺寸变化
+  // ============================================================
+  function resizeAll() {
+    resizeTeacher();
+    resizePipe();
+    resizeStudent();
+  }
+  window.addEventListener('resize', resizeAll);
+
+  // ============================================================
+  // 初始化
+  // ============================================================
+  function init() {
+    resizeAll();
+    studentGrid.init();
+    // 设置版本显示
+    document.getElementById('versionInfo').textContent =
+      '版本: v' + APP_VERSION + ' | 更新: ' + LAST_UPDATED;
+    tick();
+  }
+
+  window.addEventListener('load', init);
+
+})();
+</script>
+</body>
+</html>

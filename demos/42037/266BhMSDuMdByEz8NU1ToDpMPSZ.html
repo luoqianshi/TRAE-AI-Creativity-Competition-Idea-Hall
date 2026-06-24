@@ -1,0 +1,2750 @@
+
+<!DOCTYPE html>
+<!-- ⚠️ 本文件包含 apiSecret，仅限内部测试使用，禁止公网部署 -->
+<!--
+  Demo snapshot · D.2.x 治理标注
+  baseVersion : D.4.0（D.3.x + §F TEXT_BUILDER_REGISTRY 加 en_chapter_section；§F.5 中文字典替换为英文 WERR/SERR/GWPP 适配块）
+  schemaId    : 06_en_read_sentence
+  generatedAt : 2026-05-09
+  status      : ✅ 离线 fixture 3/3 + 真录音验证通过（D.4.0 初版 2026-05-09 · D.5.2 word.index 修复版 2026-05-09 双重验证）
+  说明        : 第二个英文题；首次启用 A' 模式 drillPath（内层 tag = read_chapter，与 category=read_sentence 错位）；
+                xmlExtractor 主流程已支持 {childByIndex,expectedTag} 对象式 step（D.2.0 加，D.4 复用）；
+                §F.5 复用 demo/05 英文 WERR/SERR/GWPP 适配块（同属 ②' 题型差分块，05/06/07 共用）
+  真录音特征   : "The early bird catches the worm." 6 词读 5 词漏 1 词「the」→
+                paper 6 项分数齐 + sentence 4 项分数无 integrityScore（sentenceHasNoIntegrity=true 生效）；
+                dp=16 漏读反模式精确复现：word[4] "the" totalScore=0 / dpMessage="16" / begPos===endPos / phone gwpp=null（numberAttr 守住 §4.4 契约）；
+                gwpp 实测下限 -8.700（低于 06.md 标注的 -8.16）；early 两 syll 触发 serrMsg=1 与极低 gwpp 互证
+
+  修复记录    : 2026-05-09 D.5.1 底座修复 word.index undefined bug · D.5.2 追改本 demo 代码（治理例外）
+                · 原症: 本 demo 内嵌的 parseSentence/parseWord 不传 idx → word.index = undefined（被 JSON.stringify 省略 + Object.keys 仍含 'index' → G3 假阳性通过）
+                · D.5.1 底座修复: §B extractByCamelFields 改 'index' XML 属性优先 + 数组下标 String(idx) fallback + 类型一律字符串
+                · D.5.2 追改本 demo: 同步底座修复到本 demo 内嵌的 §B extractByCamelFields + §F parseSentence/parseWord（治理 §3.0.5 例外：bug 影响 UI 实际可用性，非"落后于底座"）
+                · 影响范围（仅声明 word.index 的题型）: 06 + 07（02/03/04/05 word.fields 未声明 'index' 不受影响）
+                · 修复后行为: word.index = XML 属性字符串（与 globalIndex 类型一致）；sentence.index 也变字符串（与 word.globalIndex 类型一致 · UI 需数字时显式 Number()）
+
+  D.5.2 真录音验证: "The early bird catches the worm." 6 词读 5 词 + 多读一遍 bird + 漏 1 词「the」→
+                · word.index/sentence.index 全部 XML 属性字符串 ✓（与 globalIndex 类型一致）
+                · paper 5 项 + sentence 4 项 + 无 integrityScore ✓
+                · dp=16 漏读「the」精确复现 ✓（totalScore=0 / dpMessage="16" / begPos===endPos="466" / phone gwpp=null）
+                · gwpp 实测 -8.09（early 的 l 音）
+                · ⚠️ dp=32 增读双记录预期保留：sent[0].words 同时含 bird (dp=0) + bird (dp=32, totalScore=null, syllScore=null)，同 globalIndex="2" / index="2"
+                  06 schema 没启用 mergeDp32（仅 07 启用）→ 引擎原始数据直接进 words 数组 → UI 业务层自行决定是否折叠（按 globalIndex 分组）
+                  这是 06 schema 的明示设计：06.md 契约未要求 schema 层折叠
+
+                2026-05-09 D.7.2 §1.6 STRING_FIELD_DEFAULTS 补 werrMsg/serrMsg/syllAccent 三键（治理 §3.0.5 例外追改 · 仿 D.5.2 word.index 单点修复模式）
+                · 原症: 缺 default 时这三字段落空串 '' → decodeBitmask 走 NaN 路径 / §3 短路 `syll.serrMsg !== '0'` 对 '' 永真，正常词全标"音节读错"
+                · 当前 demo/06 §3 短路用 `if (syl.serrMsg && syl.serrMsg !== '0')` 隐式 `&&` 守卫意外挡住，属实装兜底而非根治；下游若改写为契约直白 `if (syl.serrMsg !== '0')` 立刻引爆
+                · 追改本 demo: §B STRING_FIELD_DEFAULTS 补三键 = '0'，与底座 D.7.2_string_defaults 快照一致
+                · 影响范围: 05/06/07 三个英文有 syll/phone 题型；其余不消费这三字段不受影响
+                · 不重生不验证: 单点常量修复，零结构变化，fixture XML 大都带真实属性，回归输出不变；阶段 ④ 重生时一次性清掉本段补丁标注
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unit 1 · English Sentence Reading</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+
+<!-- ============================================================================
+     引擎区 · 请勿修改下方 <script>
+     UI 通过 window.QuizEngine 调用：
+       QuizEngine.start(formData?)              开始（建 WS + 录音）
+       QuizEngine.stop()                        正常结束（发尾帧、等评分）
+       QuizEngine.cancel()                      中断（不要分数）
+       QuizEngine.getState()                    'idle'|'connecting'|'recording'|'scoring'|'done'|'error'
+       QuizEngine.on(event, cb)                 订阅 'recording'|'result'|'rejected'|'except'|'error'
+       QuizEngine.schema                        题型基本信息 { id, category, ent, displayName }
+     注意：开发调试时访问 ?debug=1 会挂载最简调试 UI；老师拿到的产物里 ?debug=1 入口由生成器删除
+     ============================================================================ -->
+
+<!-- ============================================================================
+     底座三层架构边界（D.2.x 治理 · 2026-05-08 立）
+
+     ┌─────────────────────────────────────────────────────────────────────────┐
+     │ ① 公共引擎模板（13 题真共用 · 演进时必须跑全题 fixture 回归）             │
+     │   §B 工具 / §C 鉴权 / §D 音频 Worker / §E WebSocket 状态机              │
+     │   §G 公共字典（ENGINE_ERROR / EXCEPT_INFO / DP_MESSAGE）                │
+     │   §H 状态机+事件总线 / §I 主流程 / §J debug+fixture 回放 / §K 公共 API  │
+     │                                                                          │
+     │   ⚠️ 任何 PR 修这一层 → 必须在 _snapshots 新建快照前跑 scripts/regress  │
+     │   ⚠️ 单题特殊字段（如英文 werr_msg / 中文 perr_msg）禁止进公共区！      │
+     │                                                                          │
+     │ ② 题型适配层注册表（dispatch · 按 SCHEMA 字符串名查表）                   │
+     │   §F TEXT_BUILDER_REGISTRY                                              │
+     │     · cn_unit_csv / cn_sentence_lines / cn_chapter（中文 01-04）        │
+     │     · 英文/自由题接入时按差异分流原则补登记                              │
+     │   §G' BUSINESS_LOGIC_REGISTRY                                           │
+     │     · merge_dp32_by_global_index (07) / keyword_soft_hit (08)           │
+     │     · keyword_contiguous_match (09) 等 — 按需补登记                     │
+     │   §F xmlExtractor + parseSentence/Word/Syllable/Phone                   │
+     │     · 已 schema-driven（按 resultSchema.children[].fields 提取）        │
+     │     · G1 契约：禁止在 helper 函数体写死中文/英文专属字段名               │
+     │                                                                          │
+     │   ⚠️ 新增题型若需 textBuilder/businessLogic：在 REGISTRY 加一行即可    │
+     │   ⚠️ 仅 N 题共用的字典（如英文 WERR/SERR/GWPP，中文 PERR/MONO_TONE）：  │
+     │       属 §F 题型差分块，由对应语种 demo 替换 §F 时自带，禁进公共区      │
+     │                                                                          │
+     │ ③ 题型默认 SCHEMA（§A · 当前是 01 cn_read_syllable 默认填实）            │
+     │   每个 demo 复制底座后由生成器整体替换此对象（id/protocol/textBuilder/  │
+     │   xmlConfig/resultSchema/vocab/fixtures 等）                             │
+     │                                                                          │
+     │   ⚠️ 底座的 SCHEMA 不会跟着 demo 演进；底座永远以 01 为默认参考         │
+     └─────────────────────────────────────────────────────────────────────────┘
+
+     差异分流决策表（方案 §3 治理章节同步维护）：
+
+     | 新增内容                                  | 应放位置                          |
+     |------------------------------------------|----------------------------------|
+     | 13 题共享能力（音频/鉴权/WS/状态机/API）  | ① 公共引擎区                     |
+     | 某语种/类别的 text 拼装函数               | ② TEXT_BUILDER_REGISTRY          |
+     | 某题型业务派生（07/08/09 等）             | ② BUSINESS_LOGIC_REGISTRY        |
+     | 某语种诊断字典（英文 WERR/SERR/GWPP；    | ②' 题型差分块（demo §F 替换）    |
+     |   中文 PERR/MONO_TONE）                  |    禁进公共区                    |
+     | 单题字段集 / vocab / resultSchema        | ③ schema                         |
+     | demo 默认题目 / 凭据 / fixture 路径       | ③ demo 产物 SCHEMA               |
+
+     回滚指引：cp _snapshots/D2.0_2026-05-08/底座/底座.html ./底座.html
+     ============================================================================ -->
+<script>
+;(function(){
+'use strict';
+
+/* ============================================================================
+ * §A · SCHEMA 配置（题型差分点 · 层 ③）
+ *      D.2.x 治理后语义：
+ *        · 此 SCHEMA 是「题型默认 SCHEMA」，每个 demo 由生成器整体替换
+ *        · SCHEMA.textBuilder 是字符串名（指向 §F TEXT_BUILDER_REGISTRY 的某个 builder）
+ *          → demo 不再替换 textBuilder 函数体，只换字符串名 + 必要时往 REGISTRY 加新 builder
+ *        · SCHEMA.businessLogic 同理（dispatch §G' BUSINESS_LOGIC_REGISTRY）
+ *        · SCHEMA.xmlConfig.drillPath / paperFields / pupilExtraFields / flags + resultSchema
+ *          → 驱动 §F xmlExtractor 与 schema-driven parsers，无需替换 §F 函数体
+ *        · 仅当 demo 属语种差分（如英文 05/06/07 / 自由题 08-13）：替换 §F.5 中文诊断字典 +
+ *          summarizeWord/phoneProblem 实现为对应语种版（参见三层边界注释 ②' 差分块）
+ *      其余 §B-§E 工具/鉴权/音频/WS、§G 共用字典、§H-§K 状态机/主流程/调试/公共 API 与题型无关
+ * ============================================================================ */
+
+const SCHEMA = /* === SCHEMA START === */ {
+  id:          '06_en_read_sentence',
+  displayName: 'English Sentence Reading',
+  language:    'en',
+
+  protocol: {
+    category:      'read_sentence',     //! 与 03 cn_read_sentence 同 category，靠 ent 区分
+    ent:           'en_vip',
+    allowedParams: [],                  //! 英文 05-13 完全不暴露 group/grade/check_type
+  },
+
+  defaults: {
+    promptText: "Hello! I'm Mike Black.\nHi! My name is Wu Binbin.\nNice to meet you.\nNice to meet you too.\nOh no!\nIt's OK, Chen Jie.\nHey, Sarah! We can share.\nThanks, Sarah. / Thank you, Chen Jie.\nI listen with care.\nI am nice to my friends.",
+    group:      null,
+    grade:      null,
+    checkType:  null,
+  },
+
+  textConfig: {},                       //! 英文无顿号归一化等中文专属；保留空对象供未来扩展
+
+  xmlConfig: {
+    //! A' 模式：drillPath 第三步 {childByIndex, expectedTag}
+    //  外层 tag = read_sentence（与 category 同），但内层 rec_paper 下评分节点 tag = read_chapter（与 category 错位）
+    //  禁止把第三步写成 'read_chapter' 字符串——内层节点名与 category 不一致是 06 独有事实，
+    //  对象式 step 既按位置取节点又校验 tag，避免硬编码 tag 名
+    drillPath:   ['read_sentence', 'rec_paper', { childByIndex: 0, expectedTag: 'read_chapter' }],
+    paperFields: ['total_score', 'accuracy_score', 'standard_score', 'fluency_score', 'integrity_score', 'word_count'],   //! 06 题级 5 项分数 + word_count 结构属性
+    sentenceLevel: { has: true },        //! 06 句级 4 项分数（无 integrity_score）
+    wordLevel:     { has: true, hasSyllables: true, hasPhones: true },
+    flags: {
+      // 朗读类共用
+      dpBeforePerr:               false,   //! 英文无 perr_msg；只有 werr_msg/serr_msg 位掩码
+      filterSyllByRecNodeType:    false,   //! 中文 01-04 反向过滤；英文 06 不启用（英文 syll 无 rec_node_type 属性）
+      filterWordBySilFilContent:  true,    //! 06/07 word 层：content ∈ {'sil','fil'} 跳过；fixture sample 已含 <word content="sil">
+      sentenceHasNoIntegrity:     true,    //! 06 句级无 integrity_score（仅题级有）；与 03/04/07 同
+      sentenceFluencyAlwaysZero:  false,
+      groupAwareScoreMasking:     false,
+      // 英文朗读专用
+      werrMsgBitmask:             true,    //! word.werr_msg 位掩码（含未知位 raw fallback）
+      serrMsgBitmask:             true,    //! syll.serr_msg 位掩码（如 2049 = 2048|1）
+      gwppIsNegativeScale:        true,    //! 06.md L48 标"约 -10 ~ 0" 且 §4.5 实测低至 -8.16，禁百分比
+      syllScoreZeroIsNotOmit:     true,    //! syll_score=0 不等于漏读（漏读看 dp_message=16）
+      unknownBitsKeepRaw:         true,    //! werr/serr 未知位保留 `bit=N` 兜底
+      mergeDp32:                  false,   //! 仅 07 启用增读折叠
+      // 自由题
+      paperOnlyDiagnostic:        false,
+      preserveSpeekingTypo:       false,
+      sentenceHasNoBegEnd:        false,
+      wordHasNoChildren:          false,
+      contentTrimRequired:        false,
+      standardScoreNotReturned:   false,
+      paperContentIsLiteral:      false,
+      // 业务侧
+      pictureNotUploaded:         false,
+      chineseUploadIsForbidden:   false,
+      keywordHitIsBusinessLayer:  false,
+      correctnessByContentMatch:  false,
+      // 节点形态
+      leafNode:                   false,
+    },
+  },
+
+  vocab: {
+    total_score:     'Total',
+    accuracy_score:  'Accuracy',
+    standard_score:  'Standard',
+    fluency_score:   'Fluency',          //! 英文 06/07 = 流利度；中文 03/04 = 流畅度（跨语种术语锁定不同）
+    integrity_score: 'Integrity',
+    is_rejected:     'Rejected by engine',
+    except_info:     'Evaluation exception',
+  },
+
+  textBuilder:   'en_chapter_section',  //! BOM + [content]\n + 句子（en_chapter_section ∈ TEXT_BUILDER_REGISTRY，与 07 共用；不归一化标点）
+  businessLogic: null,
+
+  // ⚠️ 英文 word/syll/phone 层无 symbol、无 timeLen（A.15 修订）；schema 字段定义 §8 G6 表「英文 05/06/07 必含」列
+  resultSchema: {
+    paper: {
+      fields: ['totalScore', 'accuracyScore', 'standardScore', 'fluencyScore', 'integrityScore', 'wordCount', 'content', 'begPos', 'endPos', 'isRejected', 'exceptInfo'],
+    },
+    children: [
+      {
+        name: 'sentences',
+        //! 句级 4 项分数 total/accuracy/standard/fluency（md §1 sentenceShow 明列 standard_score）+ wordCount；无 integrity（sentenceHasNoIntegrity=true）；无 timeLen
+        fields: ['index', 'content', 'begPos', 'endPos', 'wordCount', 'totalScore', 'accuracyScore', 'standardScore', 'fluencyScore'],
+        children: [
+          {
+            name: 'words',
+            //! word 层英文专属字段：index=句内序号、globalIndex=篇内序号（与 07 字段集对齐，06 篇内单句时 index===globalIndex）
+            fields: ['content', 'index', 'totalScore', 'dpMessage', 'werrMsg', 'globalIndex', 'begPos', 'endPos'],
+            children: [
+              {
+                name: 'syllables',
+                fields: ['content', 'syllScore', 'serrMsg', 'syllAccent', 'begPos', 'endPos'],
+                children: [
+                  {
+                    name: 'phones',
+                    fields: ['content', 'dpMessage', 'gwpp', 'begPos', 'endPos'],
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+
+  fixtures: {
+    sample:   '../fixtures/06_en_read_sentence/sample.xml',
+    rejected: '../fixtures/06_en_read_sentence/rejected.xml',
+    except:   '../fixtures/06_en_read_sentence/except.xml',
+  },
+} /* === SCHEMA END === */;
+
+const ENGINE_CONFIG = /* === ENGINE_CONFIG START === */ {
+  appId:     "e4a81227",
+  apiKey:    "8142139b28920dd54340a6d3c89c761c",
+  apiSecret: "M2FiMDE4ZTcxMjg2ZWI0YjczYzY3OTYx",
+} /* === ENGINE_CONFIG END === */;
+
+/* ============================================================================
+ * §B · 基础工具
+ * ============================================================================ */
+
+const BOM = '﻿';
+
+function childByName(parent, localName) {
+  if (!parent) return null;
+  return Array.from(parent.children).find(el => el.localName === localName) || null;
+}
+
+function attr(el, name, fallback = '') {
+  return el && el.hasAttribute(name) ? el.getAttribute(name) : fallback;
+}
+
+function numberAttr(el, name) {
+  if (!el || !el.hasAttribute(name)) return null;   //! 必须先判 hasAttribute；Number('') === 0 会把缺失误判为 0
+  const v = Number(el.getAttribute(name));
+  return Number.isFinite(v) ? v : null;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function decodeBase64Utf8(base64) {
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+function snakeToCamel(s) {
+  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+function camelToSnake(s) {
+  return s.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
+}
+
+//! 哪些 result 字段从 XML 走 numberAttr（其余字段一律 attr→string）
+//  schema-driven 子层 parser（§F.parseSentence/Word/Syllable/Phone）按此分流；
+//  若新增数值类字段（如英文 05/06/07 的 syllScore/gwpp），在此白名单里加一行即可——禁止在 helper 函数体里写死字段名（G1 契约）
+const NUMERIC_SCORE_FIELDS = new Set([
+  'totalScore', 'phoneScore', 'toneScore', 'fluencyScore', 'integrityScore',
+  'accuracyScore', 'emotionScore', 'standardScore', 'syllScore', 'gwpp',
+]);
+
+//! 字符串型字段的默认 fallback：缺 attr 时不能给空串（会破坏诊断短路逻辑：syl.dpMessage !== '0'、syl.recNodeType !== 'paper' 等）
+//! D.7.2 §1.6 补强（2026-05-09 · 追改本冻结 demo · 治理 §3.0.5 例外路径）：
+//! werrMsg/serrMsg/syllAccent 三字段 06.md L432/L451-452 + 07.md L451/L500-501 明示「缺省按 '0' 处理」；
+//! 缺 default 时落空串 ''，会让 ① decodeBitmask(parseInt('',10)) = NaN 让所有未带属性 word 误判
+//!                          ② 06.md §3 短路 syll.serrMsg !== '0' 对 '' 永真 → 让正常词都标"音节读错"
+//! 06 demo 当前 §3 短路代码用 `if (syl.serrMsg && syl.serrMsg !== '0')` 隐式守卫意外挡住误判；下游若改写为契约直白 `if (syl.serrMsg !== '0')` 会立刻引爆
+const STRING_FIELD_DEFAULTS = {
+  dpMessage:   '0',
+  perrMsg:     '0',
+  perrLevel:   '0',
+  recNodeType: 'paper',
+  werrMsg:     '0',
+  serrMsg:     '0',
+  syllAccent:  '0',
+};
+
+//! schema-driven 字段提取器：按 camelFields 列表从 XML 元素抽属性
+//  · NUMERIC_SCORE_FIELDS 走 numberAttr（缺 attr 返回 null，禁误判为 0）
+//  · 其他字段走 attr（fallback 优先取 STRING_FIELD_DEFAULTS，否则 ''）
+//  · 'index' 字段 D.5.2 修正（2026-05-09 · 追改本冻结 demo）：
+//    优先 attr(el, 'index')（XML 引擎权威标号 · 与 globalIndex 类型一致字符串）
+//    XML 没 index 属性时 fallback String(idx)
+//    都没则不创建 key（让 G3 双向 keys 集合断言抓未传参漏传）
+//    旧实现 obj.index = idx 数组下标会写入 undefined → JSON.stringify 省略 + Object.keys 仍含 → G3 假阳性通过 → 静默 bug
+function extractByCamelFields(el, camelFields, idx) {
+  const obj = {};
+  for (const camel of camelFields) {
+    if (camel === 'index') {
+      if (el.hasAttribute('index')) {
+        obj.index = attr(el, 'index');           //! XML 权威标号
+      } else if (idx !== undefined) {
+        obj.index = String(idx);                 //! 数组下标 fallback（字符串化保持类型一致）
+      }
+      continue;
+    }
+    const snake = camelToSnake(camel);
+    if (NUMERIC_SCORE_FIELDS.has(camel)) {
+      obj[camel] = numberAttr(el, snake);
+    } else {
+      obj[camel] = attr(el, snake, STRING_FIELD_DEFAULTS[camel] ?? '');
+    }
+  }
+  return obj;
+}
+
+/* ============================================================================
+ * §C · 鉴权 URL
+ *      HMAC-SHA256 签名 host/date/request-line
+ * ============================================================================ */
+
+async function getWebSocketUrl(apiKey, apiSecret) {
+  const host = 'ise-api.xfyun.cn';
+  const path = '/v2/open-ise';
+  const date = new Date().toGMTString();
+  const signOrigin = `host: ${host}\ndate: ${date}\nGET ${path} HTTP/1.1`;
+  const enc = new TextEncoder();
+  const ck = await crypto.subtle.importKey('raw', enc.encode(apiSecret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', ck, enc.encode(signOrigin));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)));
+  const auth = `api_key="${apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${sigB64}"`;
+  return `wss://${host}${path}?authorization=${encodeURIComponent(btoa(auth))}`
+       + `&date=${encodeURIComponent(date)}&host=${host}`;
+}
+
+/* ============================================================================
+ * §D · 音频管线（重采样 + 1280B 切帧）
+ *      AudioContext 多返回 44.1k/48k 而非请求的 16k → 必须 Worker 内重采样
+ * ============================================================================ */
+
+const WORKER_CODE = `
+var frameBuffer = [], frameSize = 0, fromRate = 0, toRate = 0;
+function resample(input, fr, tr) {
+  if (fr === tr) return input;
+  var ratio = fr / tr, len = Math.ceil(input.length / ratio);
+  var out = new Float32Array(len);
+  for (var i = 0; i < len; i++) {
+    var pos = i * ratio, idx = Math.floor(pos), frac = pos - idx;
+    var next = Math.min(idx + 1, input.length - 1);
+    out[i] = input[idx] * (1 - frac) + input[next] * frac;
+  }
+  return out;
+}
+function toInt16(buf) {
+  var ab = new ArrayBuffer(buf.length * 2), view = new DataView(ab);
+  for (var i = 0; i < buf.length; i++) {
+    var s = Math.max(-1, Math.min(1, buf[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return ab;
+}
+self.onmessage = function(e) {
+  var msg = e.data;
+  if (msg.type === 'init') {
+    fromRate = msg.data.fromSampleRate; toRate = msg.data.toSampleRate;
+    frameSize = msg.data.frameSize; frameBuffer = [];
+    console.log('[Worker] 初始化: 采样率 ' + fromRate + ' -> ' + toRate + ', 帧大小: ' + frameSize);
+  } else if (msg.type === 'message') {
+    //! 检查输入数据是否有效
+    if (!msg.data || msg.data.length === 0) {
+      console.warn('[Worker] 收到空音频数据');
+      return;
+    }
+    var resampled = resample(msg.data, fromRate, toRate);
+    //! 检查重采样结果是否有效
+    if (!resampled || resampled.length === 0) {
+      console.warn('[Worker] 重采样结果为空');
+      return;
+    }
+    var int16 = new Int16Array(toInt16(resampled));
+    for (var i = 0; i < int16.length; i++) frameBuffer.push(int16[i]);
+
+    //! 发送完整的 1280 字节帧（640 个 Int16 样本）
+    var samplesPerFrame = frameSize / 2; // 640 样本 = 1280 字节
+    while (frameBuffer.length >= samplesPerFrame) {
+      var frame = new Int16Array(frameBuffer.splice(0, samplesPerFrame));
+      self.postMessage({ frameBuffer: frame.buffer, isLastFrame: false });
+    }
+  } else if (msg.type === 'stop') {
+    console.log('[Worker] 停止录音, 剩余缓冲区: ' + frameBuffer.length + ' 样本');
+    if (frameBuffer.length > 0) {
+      var frame = new Int16Array(frameBuffer);
+      self.postMessage({ frameBuffer: frame.buffer, isLastFrame: true });
+    } else {
+      //! 即使缓冲区为空，也要发送结束帧
+      self.postMessage({ frameBuffer: new ArrayBuffer(0), isLastFrame: true });
+    }
+    frameBuffer = [];
+  }
+};`;
+
+let _audioCtx = null, _mediaStream = null, _scriptNode = null, _recWorker = null;
+
+async function startRecording(onFrame) {
+  _mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = _audioCtx.createMediaStreamSource(_mediaStream);
+
+  const blob = new Blob([WORKER_CODE], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  _recWorker = new Worker(url);
+  URL.revokeObjectURL(url);
+  _recWorker.postMessage({ type: 'init',
+    data: { frameSize: 1280, toSampleRate: 16000, fromSampleRate: _audioCtx.sampleRate } });
+
+  //! 添加调试日志
+  console.log(`[startRecording] 音频上下文采样率: ${_audioCtx.sampleRate}Hz, 目标采样率: 16000Hz`);
+  _recWorker.onmessage = e => onFrame(e.data.frameBuffer, e.data.isLastFrame);
+
+  //! 使用 1280 样本的缓冲区，对应 40ms 的音频数据（16000Hz * 0.04s = 640 样本，但 ScriptProcessor 需要 2 的幂次）
+  //! 实际使用 2048 作为缓冲区大小，Worker 会内部缓冲并切分成 1280 字节的帧
+  _scriptNode = _audioCtx.createScriptProcessor(2048, 1, 1);
+  _scriptNode.onaudioprocess = e => {
+    const channelData = e.inputBuffer.getChannelData(0);
+    //! 检查音频数据是否有效
+    if (channelData && channelData.length > 0) {
+      //! 计算音频数据的平均音量，用于调试
+      let sum = 0;
+      for (let i = 0; i < channelData.length; i++) {
+        sum += Math.abs(channelData[i]);
+      }
+      const avgVolume = sum / channelData.length;
+      if (avgVolume > 0.001) {
+        console.log(`[onaudioprocess] 音频数据: ${channelData.length} 样本, 平均音量: ${avgVolume.toFixed(4)}`);
+      }
+      _recWorker.postMessage({ type: 'message', data: channelData });
+    } else {
+      console.warn('[onaudioprocess] 收到空音频数据');
+    }
+  };
+  source.connect(_scriptNode);
+  _scriptNode.connect(_audioCtx.destination);   //! 不可省：部分浏览器不接 destination 不触发 onaudioprocess
+}
+
+function stopRecording() {
+  if (_scriptNode) { _scriptNode.disconnect(); _scriptNode = null; }
+  if (_mediaStream) { _mediaStream.getTracks().forEach(t => t.stop()); _mediaStream = null; }
+  if (_audioCtx && _audioCtx.state !== 'closed') { _audioCtx.close(); _audioCtx = null; }
+  //! Worker stop 异步；尾帧 aus=4/status=2 此时还没离开 Worker，禁止在此处或调用方立刻 ws.close()
+  if (_recWorker) _recWorker.postMessage({ type: 'stop' });
+}
+
+/* ============================================================================
+ * §E · WebSocket 状态机
+ *      关闭点 A（正常评测唯一）：onmessage 收到 data.status === 2 后关
+ *      关闭点 B（取消/超时）   ：尾帧 ws.send() 完成 + bufferedAmount === 0 后关
+ *      严禁：stopRecording() 后立刻 ws.close()
+ *      严禁：正常链路发完尾帧立刻 ws.close()
+ * ============================================================================ */
+
+let _firstAudioFrame = true;
+let _tailFrameSent = false;
+let _closeAfterTail = false;
+let _ws = null;
+
+function sendAudioFrame(ws, frameBuffer, isLastFrame) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    console.warn('[sendAudioFrame] WebSocket 未连接，跳过发送');
+    return false;
+  }
+
+  //! 检查音频数据是否为空
+  if (!frameBuffer || frameBuffer.byteLength === 0) {
+    if (isLastFrame) {
+      //! 最后一帧为空也要发送结束标记
+      _tailFrameSent = true;
+    }
+    console.warn('[sendAudioFrame] 音频数据为空，跳过发送');
+    return false;
+  }
+
+  //! 检查音频帧大小：必须是 1280 字节（640 个 Int16 样本）
+  //! 最后一帧可以小于 1280 字节
+  if (!isLastFrame && frameBuffer.byteLength !== 1280) {
+    console.warn(`[sendAudioFrame] 音频帧大小异常: ${frameBuffer.byteLength} 字节，期望 1280 字节`);
+    //! 如果数据有效但大小不对，仍然尝试发送
+  }
+
+  const aus = isLastFrame ? 4 : (_firstAudioFrame ? 1 : 2);   //! 完整 1→2→4，首帧不能漏
+  const status = isLastFrame ? 2 : 1;
+  _firstAudioFrame = false;
+
+  try {
+    const base64Data = arrayBufferToBase64(frameBuffer);
+    if (!base64Data || base64Data.length === 0) {
+      console.warn('[sendAudioFrame] Base64编码结果为空');
+      return false;
+    }
+
+    const payload = {
+      business: { cmd: 'auw', aus, aue: 'raw' },
+      data: { status, data: base64Data }   // 裸 PCM，无 WAV 头
+    };
+
+    console.log(`[sendAudioFrame] 发送音频帧: ${frameBuffer.byteLength} 字节, aus=${aus}, status=${status}, base64长度=${base64Data.length}`);
+
+    ws.send(JSON.stringify(payload));
+
+    if (isLastFrame) {
+      _tailFrameSent = true;
+      if (_closeAfterTail) closeWhenBufferedAmountDrains(ws);    //! 仅取消/超时；正常链路绝不进
+    }
+    return true;
+  } catch (e) {
+    console.error('[sendAudioFrame] 发送音频帧失败:', e);
+    return false;
+  }
+}
+
+function closeWhenBufferedAmountDrains(ws) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (ws.bufferedAmount === 0) { ws.close(); return; }
+  setTimeout(() => closeWhenBufferedAmountDrains(ws), 20);
+}
+
+/* ============================================================================
+ * §F · 业务装配（题型差分区）
+ *      阶段 D 替换边界：
+ *        ① TEXT_BUILDER 块：textBuilder 函数体
+ *        ② XML_EXTRACTOR 块：xmlExtractor 函数体 + 全部 parser helper（parseSentence/parseWord/parseSyllable/parsePhone/summarizeWord/phoneProblem）+ 中文诊断码字典（PERR_MESSAGE_LABEL/MONO_TONE_LABEL）
+ *      buildBusiness 是 schema 驱动的通用层，不替换
+ *      ⚠️ helper 必须随 xmlExtractor 一起替换：
+ *         · 自由题 08/10/11/12/13 的 <word> 无 syll/phone 子层，且 sentence 无 beg_pos/end_pos → 默认 helper 会输出冗余 `symbol:''/syllables:[]/begPos:''` 字段，违反精确字段集断言
+ *         · 英文 05/06/07 朗读类用的是 werr_msg/syll_score/serr_msg/gwpp 等完全不同字段集（默认 helper 读 dp_message/perr_msg/is_yun/mono_tone 中文专用字段）
+ *         · 中文诊断码字典 PERR_MESSAGE_LABEL/MONO_TONE_LABEL 仅 01-04 适用；英文题替换体须自带 WERR_MSG_BITS/SERR_MSG_BITS/GWPP_THRESHOLDS；自由题替换体此整段删除
+ * ============================================================================ */
+
+/* === TEXT_BUILDER START === */
+//! 阶段 D.2 起：textBuilder 改为按 SCHEMA.textBuilder 字符串名 dispatch（G1 契约 · 不在函数体写死归一化规则）
+//  每个 builder 必须返回 BOM + 已归一化的字符串；BOM 漏掉不报错但分数显著偏低
+//  阶段 D 替换边界：生成器只在产物里保留对应题型的 builder 函数（其他可删，避免冗余）
+const TEXT_BUILDER_REGISTRY = {
+  // 01/02 中文字/词：BOM + 英文逗号→中文逗号 + 顿号→中文逗号（避免引擎报 10163）
+  cn_unit_csv(formData) {
+    const promptText = formData.promptText ?? SCHEMA.defaults.promptText;
+    const normalized = String(promptText)
+      .replace(/^﻿/, '')
+      .replace(/,/g, '，')
+      .replace(/、/g, '，')
+      .replace(/，+/g, '，')
+      .replace(/^，|，$/g, '')
+      .trim();
+    return BOM + normalized;
+  },
+
+  // 03 中文句子：BOM + 多句保留所有结构标点
+  //! ⚠️ 与 01/02/04 相反——03 顿号「、」是切句结构标点，必须保留（03.md L184 反模式明令「不要动 `、`」）
+  //  归一化仅限英文逗号→中文逗号；句末 。？！ 全部保留供引擎自切句
+  cn_sentence_lines(formData) {
+    const promptText = formData.promptText ?? SCHEMA.defaults.promptText;
+    const normalized = String(promptText)
+      .replace(/^﻿/, '')
+      .replace(/,/g, '，')
+      .trim();
+    return BOM + normalized;
+  },
+
+  // 04 中文篇章：BOM + 篇章正文（归一化顿号 与 01/02 同）
+  //! 04.md L173-174 normalizePromptText 实测把顿号归一化为中文逗号（与 03 相反）
+  cn_chapter(formData) {
+    const promptText = formData.promptText ?? SCHEMA.defaults.promptText;
+    const normalized = String(promptText)
+      .replace(/^﻿/, '')
+      .replace(/,/g, '，')
+      .replace(/、/g, '，')
+      .trim();
+    return BOM + normalized;
+  },
+
+  // 05 英文单词：BOM + `[word]\n` 节标头 + 英文/中文逗号/顿号/分号/空白 → 换行
+  //! 漏 [word] 节标头会触发 48195；用户粘贴的 [word] 头会被先剥离再统一在外层重加（避免重复）
+  //  05.md §2.1 normalizePromptText 一次性归一英文 + 中文 + 顿号 + 空白
+  en_word_section(formData) {
+    const promptText = formData.promptText ?? SCHEMA.defaults.promptText;
+    const normalized = String(promptText)
+      .replace(/^﻿/, '')
+      .replace(/^\[word\]\s*/i, '')
+      .split(/[\n,，、;；\s]+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join('\n');
+    return BOM + '[word]\n' + normalized;
+  },
+
+  // 06/07 英文句子/篇章：BOM + `[content]\n` 节标头 + 保留全部原文标点
+  //! 06.md L141-145 / 07.md L153-160 normalize 实测仅做剥 BOM、剥已有 [content] 头、trim
+  //  ⚠️ 不归一化任何标点（句号/问号/感叹号是引擎切句标点）、不替用户切句、不压空格
+  //  漏 [content] 头会触发 48195（英文缺特殊标记）
+  en_chapter_section(formData) {
+    const promptText = formData.promptText ?? SCHEMA.defaults.promptText;
+    const normalized = String(promptText)
+      .replace(/^﻿/, '')
+      .replace(/^\[content\]\s*/i, '')
+      .trim();
+    return BOM + '[content]\n' + normalized;
+  },
+};
+
+function textBuilder(formData) {
+  const fn = TEXT_BUILDER_REGISTRY[SCHEMA.textBuilder];
+  if (typeof fn !== 'function') {
+    throw new Error(`未注册的 textBuilder: '${SCHEMA.textBuilder}'`);
+  }
+  return fn(formData);
+}
+/* === TEXT_BUILDER END === */
+
+function buildBusiness(formData) {
+  const business = {
+    sub: 'ise',
+    ent: SCHEMA.protocol.ent,
+    category: SCHEMA.protocol.category,
+    cmd: 'ssb',
+    aue: 'raw',
+    auf: 'audio/L16;rate=16000',
+    tte: 'utf-8',
+    rstcd: 'utf8',
+    ttp_skip: true,
+    text: textBuilder(formData),
+  };
+  //! 协议参数 per-schema 白名单：英文 05-13 schema.allowedParams=[] 时即便 formData 误传 group/grade/check_type 也不会带上
+  const allowed = SCHEMA.protocol.allowedParams || [];
+  let group = null;
+  if (allowed.includes('group')) {
+    group = formData.group ?? SCHEMA.defaults.group;
+    if (group) business.group = group;
+  }
+  if (allowed.includes('grade')) {
+    const grade = formData.grade ?? SCHEMA.defaults.grade;
+    if (grade && group === 'pupil') business.grade = grade;   //! grade 仅 pupil 时发送（仅 03/04 适用）
+  }
+  if (allowed.includes('check_type')) {
+    const checkType = formData.checkType ?? SCHEMA.defaults.checkType;
+    if (checkType) business.check_type = checkType;
+  }
+  return business;
+}
+
+function xmlExtractor(rootEl, formData) {
+  /* === XML_EXTRACTOR START === */
+  //! formData 透传给提取器：03/04 (groupAwareScoreMasking=true) 按 formData.group 显式屏蔽 accuracy/emotion
+  //  成人 XML 也返回 accuracy_score/emotion_score=0，必须按 group 显式置 null（禁按 v>0 隐式过滤）
+  const result = { paper: {}, sentences: [] };
+
+  for (const f of SCHEMA.xmlConfig.paperFields) {
+    result.paper[snakeToCamel(f)] = numberAttr(rootEl, f);
+  }
+
+  //! pupilExtraFields · 仅 03/04 (groupAwareScoreMasking=true) 启用
+  //  group=pupil → 读真实值；非 pupil → 显式 null（XML 也返回但恒 0，禁按 v>0 隐式过滤）
+  if (SCHEMA.xmlConfig.flags?.groupAwareScoreMasking && SCHEMA.xmlConfig.pupilExtraFields) {
+    const isPupil = formData?.group === 'pupil';
+    for (const f of SCHEMA.xmlConfig.pupilExtraFields) {
+      result.paper[snakeToCamel(f)] = isPupil ? numberAttr(rootEl, f) : null;
+    }
+  }
+
+  //! 13 题 paper 通用字段（基于 13 份 md fixture 实测核验 · A.15 修订 2026-05-08）：
+  //   ✅ content / begPos / endPos / isRejected / exceptInfo —— 13 题真共享，所有 md 实测均有
+  //   ⚠️ timeLen —— 仅中文 01-04 paper 实测有 time_len 属性；英文 05/06/07 与自由题 08-13
+  //                引擎不返回（三份英文 md grep `time_len` 全 0 处 + B 模式自由题题级也无）
+  //                → 加 SCHEMA 守卫，与 G3 source of truth 闭环（schema 声明 timeLen 才提取，
+  //                  避免 result.paper 多吐 timeLen='' 让 G3 双向 keys 断言"形式通过"陷阱）
+  result.paper.content    = attr(rootEl, 'content');
+  result.paper.begPos     = attr(rootEl, 'beg_pos');
+  result.paper.endPos     = attr(rootEl, 'end_pos');
+  if (SCHEMA.resultSchema.paper.fields.includes('timeLen')) {
+    result.paper.timeLen  = attr(rootEl, 'time_len');
+  }
+  result.paper.isRejected = attr(rootEl, 'is_rejected', 'false') === 'true';
+  result.paper.exceptInfo = attr(rootEl, 'except_info', '0');
+
+  if (SCHEMA.xmlConfig.sentenceLevel?.has) {
+    //! G1 schema-driven：parseSentence/Word/Syllable/Phone 按 resultSchema.children[].fields 提取
+    //  禁止在 helper 函数体内写死字段名（中文专属 perr_msg / 英文专属 gwpp 不能强加给对方）
+    const sentSchema = SCHEMA.resultSchema?.children?.find(c => c.name === 'sentences');
+    result.sentences = Array.from(rootEl.children)
+      .filter(el => el.localName === 'sentence')
+      .map((el, idx) => parseSentence(el, idx, sentSchema))
+      .filter(Boolean);
+  }
+  return result;
+  // ↓ XML_EXTRACTOR 块 END marker 在最末（PERR/MONO_TONE 字典之后）
+  //   阶段 D 替换时连同所有 parser helper + 中文诊断码字典一并替换
+}
+
+//! G1 契约：sub-layer parser 全部按 schema.fields 驱动提取，禁止写死中文专属字段名
+//  04 中文 phone 与 05/06/07 英文 phone 字段集完全不同，靠 schema 数据驱动避免函数体歧义
+//  perr_level_msg → perrLevel 是缩写（schema 字段定义 §设计原则 4 G2 缩写细则）
+function parseSentence(sentEl, idx, sentSchema) {
+  const wordEls = Array.from(sentEl.children).filter(el => el.localName === 'word');
+  //! 06/07 英文朗读：<word content="sil"|"fil"> 是静音/噪音占位，按 content 正向过滤；中文 01-04 不启用此 flag（中文走 syll 层 rec_node_type 反向过滤）
+  const filterSilFil = SCHEMA.xmlConfig.flags?.filterWordBySilFilContent;
+  const wordsKept = filterSilFil
+    ? wordEls.filter(el => attr(el, 'content') !== 'sil' && attr(el, 'content') !== 'fil')
+    : wordEls;
+  //! 仅 06/07：当原本有 word 但全被 sil/fil 过滤时丢弃整句；其他题型保留空 word[]（允许 03/04 pupil fixture 仅含题级数据）
+  if (filterSilFil && wordEls.length > 0 && wordsKept.length === 0) return null;
+
+  const sent = extractByCamelFields(sentEl, sentSchema?.fields || ['index', 'content', 'begPos', 'endPos'], idx);
+  const wordSchema = sentSchema?.children?.find(c => c.name === 'words');
+  //! D.5.2 修复（追改 · 2026-05-09）：传入 i 作 word.index fallback —— XML attr 才是主来源（与 D.5.1 底座一致）
+  sent.words = wordsKept.map((el, i) => parseWord(el, wordSchema, i));    //! 02/03/04/06/07 多 word 流；01 单字数组长度=1
+  return sent;
+}
+
+//! D.5.2：加 idx 参数作 word.index fallback（XML 没 index 属性时启用）。XML attr 才是主来源 —— 引擎权威句内序号
+function parseWord(wordEl, wordSchema, idx) {
+  //! 02/03/04 拼音渲染请勿直接读 word.symbol：会出现 le5/lai7 类轻声后缀；权威拼音从 syllables[].symbol 中 recNodeType==='paper' 的 syll 聚合
+  const word = extractByCamelFields(wordEl, wordSchema?.fields || ['content', 'symbol', 'begPos', 'endPos'], idx);
+  const syllSchema = wordSchema?.children?.find(c => c.name === 'syllables');
+  word.syllables = Array.from(wordEl.children)
+    .filter(el => el.localName === 'syll')
+    .map(el => parseSyllable(el, syllSchema));
+  return word;
+}
+
+function parseSyllable(syllEl, syllSchema) {
+  const syl = extractByCamelFields(syllEl, syllSchema?.fields || ['content', 'symbol', 'dpMessage', 'recNodeType']);
+  const phoneSchema = syllSchema?.children?.find(c => c.name === 'phones');
+  syl.phones = Array.from(syllEl.children)
+    .filter(el => el.localName === 'phone')
+    .map(phoneEl => parsePhone(phoneEl, syllEl, phoneSchema));
+  return syl;
+}
+
+function parsePhone(phoneEl, syllEl, phoneSchema) {
+  const fields = phoneSchema?.fields
+    || ['content', 'dpMessage', 'perrMsg', 'perrLevel', 'isYun', 'monoTone', 'recNodeType', 'begPos', 'endPos', 'timeLen'];
+  const phone = extractByCamelFields(phoneEl, fields);
+  //! recNodeType 继承：phone 偶发缺 attr 时回落到 syll（避免被强制识别为 'paper' 而漏过反向过滤）
+  if (fields.includes('recNodeType') && !phoneEl.hasAttribute('rec_node_type') && syllEl?.hasAttribute('rec_node_type')) {
+    phone.recNodeType = attr(syllEl, 'rec_node_type', 'paper');
+  }
+  return phone;
+}
+
+//! 字级诊断聚合（英文版）：word.werr_msg 位掩码 + 内部 syll.serr_msg 位掩码 → 标签数组
+//  与中文 summarizeWord 的差异：英文 word 自身带 werrMsg + 内部 syll 带 serrMsg（位掩码）；不走 dp 优先短路（英文无 perr 污染问题）
+function summarizeWord(word) {
+  const labels = [];
+  // word 层 werr_msg：意群停顿/连读/重读/句末调
+  if (word.werrMsg && word.werrMsg !== '0') {
+    for (const lbl of decodeBitmask(word.werrMsg, WERR_MSG_BITS)) labels.push(lbl);
+  }
+  // word 层 dp_message：漏读/增读/回读/替换
+  if (word.dpMessage && word.dpMessage !== '0') {
+    labels.push(DP_MESSAGE_LABEL[word.dpMessage] || `dp=${word.dpMessage}`);
+  }
+  // syll 层 serr_msg：读错/该重读未重
+  for (const syl of (word.syllables || [])) {
+    for (const lbl of syllProblem(syl)) labels.push(lbl);
+  }
+  return { wrong: labels.length > 0, labels: Array.from(new Set(labels)) };
+}
+
+function syllProblem(syl) {
+  const labels = [];
+  if (syl.serrMsg && syl.serrMsg !== '0') {
+    for (const lbl of decodeBitmask(syl.serrMsg, SERR_MSG_BITS)) labels.push(lbl);
+  }
+  //! syll_score === 0 ≠ 漏读（漏读看 word.dp_message=16）；不在此抛 0 分标签
+  return labels;
+}
+
+/* ----------------------------------------------------------------------------
+ * §F.5 · 英文朗读题适配块（05/06/07 适用）
+ *        从中文 PERR_MESSAGE_LABEL/MONO_TONE_LABEL 替换而来；按 §3.0 治理决策表 ②' 题型差分块
+ *          · 仅 N 题共用诊断字典：进 demo §F 替换块自带，禁进 13 题公共区
+ *          · WERR_MSG_BITS / SERR_MSG_BITS：位掩码字典（按位 & 拆解；未知位保留 raw `bit=N` 兜底）
+ *          · GWPP_THRESHOLDS / gwppLevel：gwpp 负数刻度分档（仅 UI 染色参考；非官方评分）
+ *          · decodeBitmask：通用位掩码解码工具（05.md §0 反模式明令对未知位保留 raw fallback）
+ * ---------------------------------------------------------------------------- */
+
+const WERR_MSG_BITS = {                  // word.werr_msg 位字典
+  256:  '意群停顿未停',
+  512:  '连读未连',
+  2048: '该重读未重',
+  4096: '句末升降调错',
+};
+
+const SERR_MSG_BITS = {                  // syll.serr_msg 位字典；2049 = 2048 | 1
+  1:    '读错',
+  2048: '该重读未重',
+};
+
+//! gwpp 负数刻度分档（非官方阈值；06.md L48 标"约 -10 ~ 0" §4.5 实测低至 -8.16，越接近 0 越标准）
+//  05/06/07 共用阈值；句子题动态范围比单词题大，bad 区间会更频繁出现
+const GWPP_THRESHOLDS = {
+  good:   -1.0,    // gwpp >= -1.0  → good
+  medium: -2.5,    // -2.5 <= gwpp < -1.0 → medium
+  // 否则 → bad
+};
+
+//! 位掩码解码：raw 数字 → 标签数组；未知位保留 `bit=N` 兜底
+//  05.md §0 反模式明令：实跑 goodbye werr_msg=8192 未列，必须保留 raw fallback
+function decodeBitmask(raw, dict) {
+  const n = Number(raw) || 0;
+  if (n === 0) return [];
+  const labels = [];
+  let remaining = n;
+  for (const bit of Object.keys(dict).map(Number).sort((a, b) => b - a)) {
+    if ((remaining & bit) === bit) {
+      labels.push(dict[bit]);
+      remaining &= ~bit;
+    }
+  }
+  for (let bit = 1; bit <= remaining; bit <<= 1) {
+    if (remaining & bit) labels.push(`bit=${bit}`);
+  }
+  return labels;
+}
+
+//! gwpp → 'good' | 'medium' | 'bad'（仅 UI 染色参考）
+function gwppLevel(g) {
+  const v = Number(g);
+  if (!Number.isFinite(v)) return 'unknown';
+  if (v >= GWPP_THRESHOLDS.good)   return 'good';
+  if (v >= GWPP_THRESHOLDS.medium) return 'medium';
+  return 'bad';
+}
+/* === XML_EXTRACTOR END === */
+
+/* ============================================================================
+ * §G · 共用错误码 / 异常码字典（13 题真共用）
+ *      ENGINE_ERROR_LABEL：讯飞顶层 code（13 题统一）
+ *      EXCEPT_INFO_LABEL：paper.except_info（13 题统一）
+ *      DP_MESSAGE_LABEL：朗读类 dp_message（中文 01-04 + 英文 05-07 共用；自由题不消费）
+ *      诊断码字典 PERR_MESSAGE_LABEL/MONO_TONE_LABEL 已迁入 §F XML_EXTRACTOR 替换块（中文专用）
+ * ============================================================================ */
+
+const ENGINE_ERROR_LABEL = {
+  '10163': '参数校验失败（检查文本格式、BOM、帧大小；原始帧不超过 19200B / base64 后不超过 26000B）',
+  '11200': '题型未开通权限',
+  '48195': '音频数据错误（ret=8195）：音频格式不正确、数据为空或损坏。请检查：1.麦克风权限 2.音频采样率16kHz 3.帧大小1280字节',
+  '68675': '采样率不匹配（须 16k 单声道 16bit）',
+  '68676': '乱说',
+};
+
+const EXCEPT_INFO_LABEL = {
+  '0':     '正常',
+  '28673': '无语音 / 音量过小',
+  '28676': '乱说',
+  '28680': '信噪比低',
+  '28689': '无音频输入',
+  '28690': '截幅（音量过大）',
+};
+
+const DP_MESSAGE_LABEL = {
+  '0':   '正常',
+  '16':  '漏读',
+  '32':  '增读',
+  '64':  '回读',
+  '128': '替换',
+};
+
+/* ============================================================================
+ * §G' · 业务派生逻辑注册表（按 SCHEMA.businessLogic 字符串名调用）
+ *      引擎不返回的客户端业务派生：09 答对/答错连续匹配、08 关键词软命中、07 dp=32 增读折叠等
+ *      签名统一：(result, formData) => result（必须返回新 result，不可原地改）
+ *      阶段 D 由生成器替换：把题型用到的函数体注入此对象
+ * ============================================================================ */
+
+const BUSINESS_LOGIC_REGISTRY = {
+  // 07 en_read_chapter：同 global_index 的 dp=32（增读）+ dp=0（正常）按 global_index 单 key 合并，dp=32 折叠到 extraReadings
+  // merge_dp32_by_global_index: (result, formData) => { ...; return result; },
+
+  // 08 simple_expression：关键词命中 = 业务侧软匹配（引擎不返回单词分；按 ASR content 与 keywords 软匹配）
+  // keyword_soft_hit: (result, formData) => { ...; return result; },
+
+  // 09 read_choice：答对/答错 = ASR free_choice.content × keywords 任一连续匹配
+  // keyword_contiguous_match: (result, formData) => { ...; return result; },
+};
+
+/* ============================================================================
+ * §H · 状态机 + 事件总线
+ *      states: idle | connecting | recording | scoring | done | error
+ *      events: recording | result | rejected | except | error
+ * ============================================================================ */
+
+const _listeners = {};
+let _state = 'idle';
+let _formData = {};
+let _recordingStartedAt = 0;
+
+function emit(event, payload) {
+  (_listeners[event] || []).forEach(cb => {
+    try { cb(payload); } catch (e) { console.error('[QuizEngine] listener error', e); }
+  });
+}
+
+function on(event, cb) {
+  if (typeof cb !== 'function') return;
+  (_listeners[event] = _listeners[event] || []).push(cb);
+}
+
+function setState(next) {
+  _state = next;
+  emit('state', next);
+}
+
+function getState() { return _state; }
+
+function resetSessionFlags() {
+  _firstAudioFrame = true;
+  _tailFrameSent = false;
+  _closeAfterTail = false;
+  _ws = null;
+}
+
+/* ============================================================================
+ * §I · 主流程：start / stop / cancel
+ * ============================================================================ */
+
+async function start(formData) {
+  if (_state === 'connecting' || _state === 'recording' || _state === 'scoring') {
+    throw new Error(`不能在 ${_state} 状态下 start`);
+  }
+  _formData = formData || {};
+  //! 把 SCHEMA.defaults 推断后的 group 回写到 _formData，使 xmlExtractor 能拿到（03/04 cn 句/篇 accuracyScore/emotionScore null 哨兵架构依赖此值）
+  //  英文 05-13 schema.protocol.allowedParams 不含 group → 不进此分支；中文 01-04 必进
+  if (SCHEMA.protocol.allowedParams?.includes('group')) {
+    _formData.group = _formData.group ?? SCHEMA.defaults.group;
+  }
+  resetSessionFlags();
+  setState('connecting');
+
+  let url;
+  try {
+    url = await getWebSocketUrl(ENGINE_CONFIG.apiKey, ENGINE_CONFIG.apiSecret);
+  } catch (e) {
+    setState('error');
+    emit('error', { code: 'sign_failed', message: '签名失败：' + (e?.message || e) });
+    return;
+  }
+
+  const ws = new WebSocket(url);
+  _ws = ws;
+
+  ws.onopen = async () => {
+    try {
+      // ① 业务首帧：携带 business + text，不含音频
+      const initFrame = {
+        common:   { app_id: ENGINE_CONFIG.appId },
+        business: buildBusiness(_formData),
+        data:     { status: 0 },
+      };
+      console.log('[ws.onopen] 发送业务首帧:', JSON.stringify(initFrame));
+      ws.send(JSON.stringify(initFrame));
+
+      // 等待一小段时间确保服务器准备好接收音频
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // ② 录音 + 逐帧发送（录音内部会自动发首帧 aus:1）
+      _recordingStartedAt = Date.now();
+      setState('recording');
+
+      let frameCount = 0;
+      await startRecording((buf, isLast) => {
+        frameCount++;
+        if (frameCount <= 3) {
+          console.log(`[ws.onopen] 收到音频帧 #${frameCount}: ${buf.byteLength} 字节, isLast=${isLast}`);
+        }
+        const sent = sendAudioFrame(ws, buf, isLast);
+        if (frameCount <= 3) {
+          console.log(`[ws.onopen] 音频帧 #${frameCount} 发送结果: ${sent}`);
+        }
+        emit('recording', {
+          isLastFrame: isLast,
+          elapsedMs:   Date.now() - _recordingStartedAt,
+        });
+      });
+    } catch (e) {
+      setState('error');
+      emit('error', { code: 'mic_or_send_failed', message: e?.message || String(e) });
+      try { ws.close(); } catch {}
+    }
+  };
+
+  ws.onmessage = e => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    if (msg.code !== 0) {
+      // 顶层错误码 → 触发取消/超时收尾
+      const label = ENGINE_ERROR_LABEL[msg.code] || `未知错误 (code=${msg.code})`;
+      setState('error');
+      emit('error', { code: msg.code, message: msg.message || label });
+      _closeAfterTail = true;
+      if (!_tailFrameSent) stopRecording();
+      else closeWhenBufferedAmountDrains(ws);
+      return;
+    }
+
+    if (msg.data?.data) {
+      try {
+        const xml = decodeBase64Utf8(msg.data.data);
+        const doc = new DOMParser().parseFromString(xml, 'text/xml');
+        if (doc.querySelector('parsererror')) throw new Error('XML 解析失败');
+
+        // 按 SCHEMA.xmlConfig.drillPath 逐层下钻；元素可为字符串（按 localName）或
+        //   {childByIndex, expectedTag}（A'/C 模式：内层 tag 与 category 错位时按位置取，再校验 tag）
+        let node = doc.documentElement;
+        for (const step of SCHEMA.xmlConfig.drillPath) {
+          if (typeof step === 'string') {
+            node = childByName(node, step);
+            if (!node) throw new Error(`drillPath 未找到节点：${step}`);
+          } else if (step && typeof step === 'object') {
+            const child = node?.children?.[step.childByIndex];
+            if (!child) throw new Error(`drillPath 索引越界：children[${step.childByIndex}]`);
+            if (step.expectedTag && child.localName !== step.expectedTag) {
+              throw new Error(`drillPath tag 不匹配：期望 ${step.expectedTag}，实际 ${child.localName}`);
+            }
+            node = child;
+          } else {
+            throw new Error(`drillPath 步骤格式错误：${JSON.stringify(step)}`);
+          }
+        }
+        let result = xmlExtractor(node, _formData);                       //! let：businessLogic hook 可能整体替换 result（如 09 答对、07 增读折叠）
+
+        if (result.paper.isRejected) {
+          emit('rejected', { paper: result.paper });
+        } else if (result.paper.exceptInfo && result.paper.exceptInfo !== '0') {
+          emit('except', {
+            code:  result.paper.exceptInfo,
+            label: EXCEPT_INFO_LABEL[result.paper.exceptInfo] || '未知异常',
+            paper: result.paper,
+          });
+        } else {
+          //! 业务派生逻辑 hook（07 增读折叠 / 08 关键词命中 / 09 答对算法等引擎不返回的客户端逻辑）
+          if (SCHEMA.businessLogic) {
+            const businessFn = BUSINESS_LOGIC_REGISTRY[SCHEMA.businessLogic];
+            if (typeof businessFn === 'function') {
+              try { result = businessFn(result, _formData); }
+              catch (bizErr) { console.error('[QuizEngine] businessLogic 执行失败', bizErr); }
+            } else {
+              console.warn(`[QuizEngine] BUSINESS_LOGIC_REGISTRY 未注册：${SCHEMA.businessLogic}`);
+            }
+          }
+          emit('result', result);
+        }
+      } catch (parseErr) {
+        setState('error');   //! 解析失败必须流转状态，否则 UI 卡在 scoring 不动
+        emit('error', { code: 'parse_failed', message: parseErr?.message || String(parseErr) });
+      }
+    }
+
+    //! 关闭点 A · 正常评测唯一关闭点
+    if (msg.data?.status === 2) {
+      setState('done');
+      try { ws.close(); } catch {}
+    }
+  };
+
+  ws.onerror = () => {
+    setState('error');
+    emit('error', { code: 'ws_error', message: 'WebSocket 错误' });
+  };
+
+  ws.onclose = () => {
+    if (_state === 'recording' || _state === 'scoring' || _state === 'connecting') {
+      // 异常关闭：可能 ws_error / 网络中断
+      setState('error');
+    }
+    if (_recWorker) {
+      try { _recWorker.terminate(); } catch {}
+      _recWorker = null;
+    }
+  };
+}
+
+function stop() {
+  if (_state !== 'recording') return;
+  setState('scoring');
+  //! 正常提交：只停录音让 Worker flush 尾帧；ws 继续等服务端 data.status === 2
+  stopRecording();
+}
+
+function cancel() {
+  if (_state === 'idle' || _state === 'done' || _state === 'error') return;
+  //! 取消有 3 种状态机情形，都要处理：
+  //   ① connecting：ws 在建但还没 onopen；首帧都没发，直接关
+  //   ② recording：还在录音；停录音 + 走尾帧关闭点 B
+  //   ③ scoring（已停录音、尾帧已发）：等 bufferedAmount 归零后关
+  if (_state === 'connecting') {
+    if (_ws) try { _ws.close(); } catch {}
+    setState('idle');
+    return;
+  }
+  _closeAfterTail = true;
+  if (_state === 'recording') {
+    setState('scoring');
+    stopRecording();
+  } else if (_tailFrameSent && _ws?.readyState === WebSocket.OPEN) {
+    closeWhenBufferedAmountDrains(_ws);
+  }
+}
+
+/* ============================================================================
+ * §J · 调试 UI 门控（仅 ?debug=1 启用）
+ *      阶段 D 由生成器在生成产物时整段删除（参考 §6.4 Checklist）
+ *      阶段 C 新增：fixture 离线回放 + runAssertions() 断言
+ * ============================================================================ */
+
+if (typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).get('debug') === '1') {
+  document.addEventListener('DOMContentLoaded', mountDebugUI);
+}
+
+function mountDebugUI() {
+  const root = document.createElement('section');
+  root.dataset.debugOnly = 'true';
+  root.style.cssText = 'font-family:ui-monospace,Menlo,Consolas,monospace;'
+    + 'padding:16px;max-width:780px;margin:24px auto;'
+    + 'border:1px solid #999;border-radius:8px;background:#f7f7f7;';
+
+  const title = document.createElement('h3');
+  title.textContent = `🛠 ${SCHEMA.id} · 调试入口（?debug=1）`;
+  title.style.marginTop = '0';
+  root.appendChild(title);
+
+  const state = document.createElement('div');
+  state.style.cssText = 'padding:8px 12px;background:#eee;border-radius:4px;margin:8px 0';
+  state.textContent = 'state: idle';
+  on('state', s => state.textContent = `state: ${s}`);
+  root.appendChild(state);
+
+  //! 必须用 <textarea>：单行 <input type="text"> 会剥离换行符（05 多词列表、03/04 多句篇章默认值含 \n 会被破坏成 'applebananaorange...'）
+  const promptInput = document.createElement('textarea');
+  promptInput.value = SCHEMA.defaults.promptText;
+  promptInput.rows  = Math.min(8, Math.max(2, (SCHEMA.defaults.promptText || '').split('\n').length + 1));
+  promptInput.style.cssText = 'width:100%;padding:6px;margin:8px 0;font-family:inherit;font-size:13px;resize:vertical;white-space:pre';
+  root.appendChild(promptInput);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin:8px 0';
+  for (const [label, handler] of [
+    ['开始',  () => start({ promptText: promptInput.value })],
+    ['停止',  () => stop()],
+    ['取消',  () => cancel()],
+  ]) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.style.cssText = 'padding:6px 16px;cursor:pointer';
+    btn.addEventListener('click', handler);
+    btnRow.appendChild(btn);
+  }
+  root.appendChild(btnRow);
+
+  const log = document.createElement('pre');
+  log.style.cssText = 'background:#1e1e1e;color:#dcdcdc;padding:12px;border-radius:4px;'
+    + 'max-height:360px;overflow:auto;font-size:12px;line-height:1.5';
+  log.textContent = '(待事件)';
+  root.appendChild(log);
+
+  function appendLog(tag, payload) {
+    const ts = new Date().toISOString().slice(11, 23);
+    log.textContent = `[${ts}] ${tag}\n${JSON.stringify(payload, null, 2)}\n\n` + log.textContent;
+  }
+  on('result',    p => appendLog('result',    p));
+  on('rejected',  p => appendLog('rejected',  p));
+  on('except',    p => appendLog('except',    p));
+  on('error',     p => appendLog('error',     p));
+  on('recording', p => { /* 高频事件，不入 log */ });
+
+  /* --------------------------------------------------------------------------
+   * §J.2 · fixture 离线回放区
+   *        按 SCHEMA.fixtures 中存在的 key 动态生成按钮
+   *        ⚠️ 禁止写死 ['sample','rejected','except']——09 有 wrong 键、03/04 有 sample 子键
+   * -------------------------------------------------------------------------- */
+
+  if (SCHEMA.fixtures && Object.keys(SCHEMA.fixtures).length > 0) {
+    const hr = document.createElement('hr');
+    hr.style.cssText = 'margin:16px 0;border:none;border-top:1px dashed #aaa';
+    root.appendChild(hr);
+
+    const fixtureTitle = document.createElement('h4');
+    fixtureTitle.textContent = '📦 Fixture 离线回放';
+    fixtureTitle.style.cssText = 'margin:8px 0 4px';
+    root.appendChild(fixtureTitle);
+
+    const fixtureRow = document.createElement('div');
+    fixtureRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin:8px 0';
+
+    //! 动态遍历 SCHEMA.fixtures 的 key（不写死列表）
+    for (const fixtureKey of Object.keys(SCHEMA.fixtures)) {
+      const path = SCHEMA.fixtures[fixtureKey];
+      // 如果 path 是对象（03/04 sample.{adult,pupil}），展开子按钮
+      if (typeof path === 'object' && path !== null) {
+        for (const subKey of Object.keys(path)) {
+          const subPath = path[subKey];
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = `${fixtureKey}.${subKey}`;
+          btn.style.cssText = 'padding:4px 12px;cursor:pointer;font-size:12px';
+          btn.addEventListener('click', () => replayFixture(`${fixtureKey}.${subKey}`, subPath, appendLog));
+          fixtureRow.appendChild(btn);
+        }
+      } else {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = fixtureKey;
+        btn.style.cssText = 'padding:4px 12px;cursor:pointer;font-size:12px';
+        btn.addEventListener('click', () => replayFixture(fixtureKey, path, appendLog));
+        fixtureRow.appendChild(btn);
+      }
+    }
+    root.appendChild(fixtureRow);
+
+    // runAssertions 按钮
+    const assertBtn = document.createElement('button');
+    assertBtn.type = 'button';
+    assertBtn.textContent = '▶ runAssertions()';
+    assertBtn.style.cssText = 'padding:6px 16px;cursor:pointer;background:#2d6a4f;color:#fff;border:none;border-radius:4px;margin:8px 0';
+    assertBtn.addEventListener('click', () => runAssertions(appendLog));
+    root.appendChild(assertBtn);
+  }
+
+  document.body.appendChild(root);
+}
+
+/* --------------------------------------------------------------------------
+ * §J.3 · fixture 回放引擎
+ *        fetch XML → drillPath 下钻 → xmlExtractor → 按 key 分流断言
+ * -------------------------------------------------------------------------- */
+
+async function replayFixture(key, path, appendLog) {
+  appendLog('fixture:load', { key, path });
+  try {
+    const resp = await fetch(path);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${path}`);
+    const xml = await resp.text();
+    //! 03/04 sample.{adult,pupil} 子键直接作为 formData.group 传入 xmlExtractor
+    //  使 groupAwareScoreMasking 能在离线回放时正确触发 accuracy/emotion 屏蔽
+    const subKey = key.split('.')[1];
+    const fixtureFormData = subKey ? { group: subKey } : {};
+    const result = parseFixtureXml(xml, fixtureFormData);
+    const assertion = assertFixture(key, result);
+    appendLog(`fixture:${key}`, { result, assertion });
+    return { key, result, assertion };
+  } catch (err) {
+    const msg = `fixture:${key} 加载失败 — ${err.message}`;
+    appendLog('fixture:error', { key, error: msg });
+    return { key, result: null, assertion: { pass: false, reason: msg } };
+  }
+}
+
+function parseFixtureXml(xml, formData) {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  if (doc.querySelector('parsererror')) throw new Error('XML 解析失败');
+
+  // 按 SCHEMA.xmlConfig.drillPath 逐层下钻（与主流程 §I 一致）
+  let node = doc.documentElement;
+  for (const step of SCHEMA.xmlConfig.drillPath) {
+    if (typeof step === 'string') {
+      node = childByName(node, step);
+      if (!node) throw new Error(`drillPath 未找到节点：${step}`);
+    } else if (step && typeof step === 'object') {
+      const child = node?.children?.[step.childByIndex];
+      if (!child) throw new Error(`drillPath 索引越界：children[${step.childByIndex}]`);
+      if (step.expectedTag && child.localName !== step.expectedTag) {
+        throw new Error(`drillPath tag 不匹配：期望 ${step.expectedTag}，实际 ${child.localName}`);
+      }
+      node = child;
+    }
+  }
+
+  // 复用底座的 xmlExtractor；formData 由 replayFixture 按 fixture 子键推断（含 group）
+  return xmlExtractor(node, formData || _formData || {});
+}
+
+/* --------------------------------------------------------------------------
+ * §J.4 · 断言层（按 fixture key 分流）
+ *        sample   → 验证 result 字段齐全
+ *        rejected → 验证 paper.isRejected === true
+ *        except   → 验证 paper.exceptInfo !== '0'
+ *        wrong    → 验证有分数但业务侧判错（09 专用）
+ * -------------------------------------------------------------------------- */
+
+//! G3 双向 keys 集合断言工具（契约见字段定义.md §8 G3）
+//  parser 输出对象 keys 必须等于 schema 期望集合（无多余 + 无缺失），守门 schema/parser 漂移
+//  expectedKeysFor 推导：fields + pupilExtraFields（仅 paper 层 + groupAwareScoreMasking 启用）+ 子层 children.name
+function setEqual(a, b) {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every(x => setB.has(x));
+}
+
+function expectedKeysFor(schemaNode, opts = {}) {
+  const keys = [...(schemaNode.fields || [])];
+  //! pupilExtraFields 仅 paper 层 + groupAwareScoreMasking=true 启用（03/04 cn 句/篇）
+  if (opts.isPaper && SCHEMA.xmlConfig.flags?.groupAwareScoreMasking) {
+    for (const f of SCHEMA.xmlConfig.pupilExtraFields || []) keys.push(snakeToCamel(f));
+  }
+  //! 子层数组 key（如 sentence 上的 'words'、word 上的 'syllables'）
+  for (const child of schemaNode.children || []) keys.push(child.name);
+  return keys;
+}
+
+//! 递归校验 children 各层首项 keys 集合（paper-only fixture 容忍：空数组跳过）
+function checkChildrenKeys(parentObj, parentSchema, path, checks) {
+  for (const childSchema of parentSchema.children || []) {
+    const arr = parentObj[childSchema.name];
+    if (!arr?.length) continue;   //! paper-only 容忍（03/04 sample.pupil 仅含题级数据）
+    const item = arr[0];
+    const actualKeys = Object.keys(item);
+    const expectedKeys = expectedKeysFor(childSchema);
+    if (!setEqual(actualKeys, expectedKeys)) {
+      const extra = actualKeys.filter(k => !expectedKeys.includes(k));
+      const missing = expectedKeys.filter(k => !actualKeys.includes(k));
+      checks.push(`${path}.${childSchema.name}[0] keys 不匹配 · 多余[${extra.join(',')}] 缺失[${missing.join(',')}]`);
+    }
+    checkChildrenKeys(item, childSchema, `${path}.${childSchema.name}[0]`, checks);
+  }
+}
+
+function assertFixture(key, result) {
+  // 按 key 基名分流（去掉 .adult / .pupil 等子键后缀）
+  const baseKey = key.split('.')[0];
+  const subKey  = key.split('.')[1];   // 'adult' / 'pupil' / undefined
+
+  if (baseKey === 'sample') {
+    // 正常出分：paper 字段齐全 + 分数有值
+    const checks = [];
+    if (!result.paper) checks.push('paper 缺失');
+    for (const f of SCHEMA.xmlConfig.paperFields) {
+      const camel = snakeToCamel(f);
+      if (result.paper[camel] === null || result.paper[camel] === undefined) {
+        checks.push(`paper.${camel} 缺失`);
+      }
+    }
+
+    //! G3 · pupilExtraFields 双向断言（仅 03/04 groupAwareScoreMasking=true 时启用）
+    //  · sample.pupil → 期望真实数值（accuracy/emotion 非 null）
+    //  · sample.adult / sample.youth → 期望显式 null（成人 XML 也返回 0，必须屏蔽）
+    if (SCHEMA.xmlConfig.flags?.groupAwareScoreMasking && SCHEMA.xmlConfig.pupilExtraFields) {
+      const expectsPupilValues = subKey === 'pupil';
+      for (const f of SCHEMA.xmlConfig.pupilExtraFields) {
+        const camel = snakeToCamel(f);
+        const v = result.paper[camel];
+        if (expectsPupilValues) {
+          if (v === null || v === undefined) {
+            checks.push(`paper.${camel} (${subKey}) 应有真实值，实际 ${v}`);
+          }
+        } else {
+          if (v !== null) {
+            checks.push(`paper.${camel} (${subKey || 'no-subkey'}) 应被屏蔽为 null，实际 ${v}`);
+          }
+        }
+      }
+    }
+
+    if (result.paper.isRejected) checks.push('paper.isRejected 不应为 true');
+    if (result.paper.exceptInfo && result.paper.exceptInfo !== '0') {
+      checks.push(`paper.exceptInfo 应为 '0'，实际 '${result.paper.exceptInfo}'`);
+    }
+    // 验证子层结构（如果 schema 声明有 sentences）
+    if (SCHEMA.xmlConfig.sentenceLevel?.has) {
+      if (!result.sentences || !result.sentences.length) {
+        checks.push('sentences 数组为空');
+      } else {
+        //! 找首个含 words 的 sentence；若全部 words=[] 视为合法 paper-only fixture（03/04 sample.pupil 仅留题级字段）跳过子层检查
+        const s0 = result.sentences.find(s => s.words?.length > 0);
+        if (s0) {
+          if (SCHEMA.xmlConfig.wordLevel?.hasSyllables) {
+            if (!s0.words[0].syllables || !s0.words[0].syllables.length) {
+              checks.push('words[0].syllables 为空');
+            }
+          }
+          if (SCHEMA.xmlConfig.wordLevel?.hasPhones && s0.words[0].syllables?.[0]) {
+            // 过滤非 paper 的 syll（如 silv）再检查 phones
+            const paperSyll = s0.words[0].syllables.find(sy =>
+              !SCHEMA.xmlConfig.flags?.filterSyllByRecNodeType || sy.recNodeType === 'paper'
+            );
+            if (paperSyll && (!paperSyll.phones || !paperSyll.phones.length)) {
+              checks.push('paper syll 下 phones 为空');
+            }
+          }
+        }
+      }
+    }
+
+    //! G3 双向 keys 集合断言（契约见字段定义.md §8 G3）
+    //  paper 层：Object.keys(result.paper) 必须等于 resultSchema.paper.fields + pupilExtraFields(若启用)
+    //  子层递归：sentences/words/syllables/phones 各层首项 keys 必须等于 schema 声明
+    //  违例情形：parser 多吐字段（如误加 foobar）/ 漏掉 schema 声明字段 / schema 漂移
+    const actualPaperKeys = Object.keys(result.paper);
+    const expectedPaperKeys = expectedKeysFor(SCHEMA.resultSchema.paper, { isPaper: true });
+    if (!setEqual(actualPaperKeys, expectedPaperKeys)) {
+      const extra = actualPaperKeys.filter(k => !expectedPaperKeys.includes(k));
+      const missing = expectedPaperKeys.filter(k => !actualPaperKeys.includes(k));
+      checks.push(`paper keys 不匹配 · 多余[${extra.join(',')}] 缺失[${missing.join(',')}]`);
+    }
+    checkChildrenKeys(result, { children: SCHEMA.resultSchema.children || [] }, 'result', checks);
+
+    return { pass: checks.length === 0, checks };
+  }
+
+  if (baseKey === 'rejected') {
+    // 引擎拒识：isRejected 必须为 true
+    if (!result.paper) return { pass: false, checks: ['paper 缺失'] };
+    const ok = result.paper.isRejected === true;
+    return { pass: ok, checks: ok ? [] : [`paper.isRejected 应为 true，实际 ${result.paper.isRejected}`] };
+  }
+
+  if (baseKey === 'except') {
+    // 异常：exceptInfo 不为 '0'
+    if (!result.paper) return { pass: false, checks: ['paper 缺失'] };
+    const ok = result.paper.exceptInfo && result.paper.exceptInfo !== '0';
+    return { pass: ok, checks: ok ? [] : [`paper.exceptInfo 应非 '0'，实际 '${result.paper.exceptInfo}'`] };
+  }
+
+  if (baseKey === 'wrong') {
+    // 业务侧判错（09 专用）：有分数但 businessLogic 判定答错
+    if (!result.paper) return { pass: false, checks: ['paper 缺失'] };
+    const checks = [];
+    // wrong fixture 应该有分数（不是 rejected/except）
+    if (result.paper.isRejected) checks.push('wrong fixture 不应为 rejected');
+    if (result.paper.exceptInfo && result.paper.exceptInfo !== '0') {
+      checks.push(`wrong fixture exceptInfo 应为 '0'，实际 '${result.paper.exceptInfo}'`);
+    }
+    return { pass: checks.length === 0, checks };
+  }
+
+  // 未知 key 类型
+  return { pass: true, checks: [`未知 fixture key '${key}'，跳过断言`] };
+}
+
+/* --------------------------------------------------------------------------
+ * §J.5 · runAssertions()  聚合所有 fixture 的断言结果
+ * -------------------------------------------------------------------------- */
+
+async function runAssertions(appendLog) {
+  if (!SCHEMA.fixtures) {
+    appendLog('assertions', { pass: false, message: 'SCHEMA.fixtures 未定义' });
+    return;
+  }
+
+  const results = [];
+
+  //! 按 SCHEMA.fixtures 存在的 key 动态加载（禁止写死列表）
+  for (const fixtureKey of Object.keys(SCHEMA.fixtures)) {
+    const path = SCHEMA.fixtures[fixtureKey];
+    if (typeof path === 'object' && path !== null) {
+      // 03/04 sample.{adult,pupil} 子键
+      for (const subKey of Object.keys(path)) {
+        const r = await replayFixture(`${fixtureKey}.${subKey}`, path[subKey], appendLog);
+        results.push(r);
+      }
+    } else {
+      const r = await replayFixture(fixtureKey, path, appendLog);
+      results.push(r);
+    }
+  }
+
+  const allPass = results.every(r => r.assertion.pass);
+  const summary = {
+    pass: allPass,
+    total: results.length,
+    passed: results.filter(r => r.assertion.pass).length,
+    failed: results.filter(r => !r.assertion.pass).map(r => ({
+      key: r.key,
+      checks: r.assertion.checks || [r.assertion.reason],
+    })),
+  };
+
+  appendLog('assertions:summary', summary);
+  return summary;
+}
+
+/* ============================================================================
+ * §K · 公共 API
+ * ============================================================================ */
+
+window.QuizEngine = {
+  start, stop, cancel, getState, on,
+  schema: {
+    id:           SCHEMA.id,
+    displayName:  SCHEMA.displayName,
+    category:     SCHEMA.protocol.category,
+    ent:          SCHEMA.protocol.ent,
+    paperFields:  SCHEMA.xmlConfig.paperFields.map(snakeToCamel),   //! 对外 API 用驼峰，与 result.paper 字段命名一致；XML 解析层用下划线名留在 SCHEMA.xmlConfig.paperFields，不暴露
+    resultSchema: SCHEMA.resultSchema,            //! 下游 AI 看这里就知道 result 事件 payload 长什么样（递归 children 结构）
+    vocab:        SCHEMA.vocab,                   //! UI 显示文案必须从这里取（术语锁定）
+  },
+};
+
+})();
+</script>
+<!-- ============================================================================
+     UI 区 · 在下方自由编写
+     调用 window.QuizEngine 即可，不要修改上方 <script>
+     ============================================================================ -->
+
+
+<!-- ============ UI 区 START（下游 AI 在此区域添加界面与 CSS） ============ -->
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=Quicksand:wght@400;500;600;700&display=swap');
+
+  :root {
+    --warm-cream: #FFF8F0;
+    --soft-peach: #FFE5D9;
+    --gentle-coral: #FFCAB0;
+    --warm-beige: #F5E6D3;
+    --soft-sage: #D4E7D4;
+    --gentle-blue: #D6E5F0;
+    --warm-gray: #8B8680;
+    --dark-brown: #5C524A;
+    --accent-coral: #FF8B6A;
+    --accent-sage: #7FB685;
+    --text-primary: #4A4238;
+    --text-secondary: #7A7268;
+    --shadow-soft: 0 4px 20px rgba(92, 82, 74, 0.08);
+    --shadow-hover: 0 8px 30px rgba(92, 82, 74, 0.12);
+    --radius-sm: 12px;
+    --radius-md: 20px;
+    --radius-lg: 28px;
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: linear-gradient(135deg, var(--warm-cream) 0%, var(--soft-peach) 100%);
+    color: var(--text-primary);
+    line-height: 1.8;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  .page-header {
+    text-align: center;
+    padding: 24px 40px;
+    background: white;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 20px;
+  }
+
+  .page-header h1 {
+    font-family: 'Quicksand', sans-serif;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .page-header p {
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  .main-layout {
+    display: grid;
+    grid-template-columns: 1fr 1.6fr;
+    gap: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+    height: calc(100vh - 150px);
+  }
+
+  .left-panel {
+    background: white;
+    border-radius: var(--radius-lg);
+    padding: 28px;
+    box-shadow: var(--shadow-soft);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .left-panel h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sentence-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .sentence-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    background: var(--warm-cream);
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+  }
+
+  .sentence-item:hover {
+    border-color: var(--gentle-coral);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .sentence-item.active {
+    border-color: var(--accent-coral);
+    background: #FFF5F2;
+    box-shadow: 0 4px 16px rgba(255, 139, 106, 0.2);
+  }
+
+  .sentence-item.tested {
+    border-left: 4px solid var(--accent-sage);
+  }
+
+  .sentence-item.tested.active {
+    border-left: 4px solid var(--accent-coral);
+  }
+
+  .sentence-num {
+    background: var(--accent-coral);
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .sentence-item.tested .sentence-num {
+    background: var(--accent-sage);
+  }
+
+  .sentence-text {
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    flex: 1;
+  }
+
+  .sentence-mini-score {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent-sage);
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+
+  .sentence-mini-score.low {
+    color: var(--accent-coral);
+  }
+
+  .right-panel {
+    background: white;
+    border-radius: var(--radius-lg);
+    padding: 28px;
+    box-shadow: var(--shadow-soft);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .right-panel h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+  }
+
+  #evalArea {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .current-sentence-box {
+    background: var(--warm-cream);
+    border-radius: var(--radius-md);
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    border: 2px solid var(--soft-peach);
+  }
+
+  .current-sentence-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  .current-sentence-text {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  .controls {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .btn {
+    padding: 12px 28px;
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: center;
+  }
+
+  .btn-start {
+    background: linear-gradient(135deg, var(--accent-coral) 0%, var(--gentle-coral) 100%);
+    color: white;
+    box-shadow: 0 4px 16px rgba(255, 139, 106, 0.3);
+  }
+
+  .btn-start:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(255, 139, 106, 0.4);
+  }
+
+  .btn-stop {
+    background: linear-gradient(135deg, var(--accent-sage) 0%, var(--soft-sage) 100%);
+    color: white;
+    box-shadow: 0 4px 16px rgba(127, 182, 133, 0.3);
+  }
+
+  .btn-stop:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(127, 182, 133, 0.4);
+  }
+
+  .btn-cancel {
+    background: var(--warm-beige);
+    color: var(--text-primary);
+  }
+
+  .btn-cancel:hover:not(:disabled) {
+    background: var(--soft-peach);
+    transform: translateY(-2px);
+  }
+
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+  }
+
+  .status-indicator {
+    text-align: center;
+    margin-bottom: 16px;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    background: var(--warm-cream);
+    color: var(--text-secondary);
+  }
+
+  .status-badge.recording {
+    background: linear-gradient(135deg, var(--accent-coral) 0%, var(--gentle-coral) 100%);
+    color: white;
+    animation: pulse 2s infinite;
+  }
+
+  .status-badge.scoring {
+    background: linear-gradient(135deg, var(--gentle-blue) 0%, var(--soft-sage) 100%);
+    color: var(--text-primary);
+  }
+
+  .status-badge.done {
+    background: linear-gradient(135deg, var(--accent-sage) 0%, var(--soft-sage) 100%);
+    color: white;
+  }
+
+  .status-badge.error {
+    background: #FFE5E5;
+    color: #D32F2F;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+  }
+
+  .audio-visualizer {
+    display: none;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    height: 36px;
+    margin-bottom: 12px;
+  }
+
+  .audio-visualizer.active {
+    display: flex;
+  }
+
+  .audio-bar {
+    width: 4px;
+    background: linear-gradient(to top, var(--accent-coral), var(--gentle-coral));
+    border-radius: 2px;
+    animation: audioBar 0.5s ease-in-out infinite alternate;
+  }
+
+  .audio-bar:nth-child(1) { height: 20%; animation-delay: 0s; }
+  .audio-bar:nth-child(2) { height: 40%; animation-delay: 0.1s; }
+  .audio-bar:nth-child(3) { height: 60%; animation-delay: 0.2s; }
+  .audio-bar:nth-child(4) { height: 80%; animation-delay: 0.3s; }
+  .audio-bar:nth-child(5) { height: 100%; animation-delay: 0.4s; }
+  .audio-bar:nth-child(6) { height: 80%; animation-delay: 0.5s; }
+  .audio-bar:nth-child(7) { height: 60%; animation-delay: 0.6s; }
+
+  @keyframes audioBar {
+    0% { transform: scaleY(0.3); opacity: 0.5; }
+    100% { transform: scaleY(1); opacity: 1; }
+  }
+
+  .results-area {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .score-overview {
+    margin-bottom: 20px;
+  }
+
+  .score-overview h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    color: var(--text-primary);
+  }
+
+  .score-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .score-card {
+    background: var(--warm-cream);
+    border-radius: var(--radius-sm);
+    padding: 16px 12px;
+    text-align: center;
+    transition: var(--transition-smooth);
+  }
+
+  .score-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-hover);
+  }
+
+  .score-card-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: 'Quicksand', sans-serif;
+  }
+
+  .score-card-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    margin-top: 4px;
+  }
+
+  .words-section h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+  }
+
+  .words-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+  }
+
+  .word-card {
+    background: var(--warm-cream);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    border-left: 4px solid var(--soft-sage);
+    transition: var(--transition-smooth);
+  }
+
+  .word-card:hover {
+    box-shadow: var(--shadow-soft);
+  }
+
+  .word-card.has-error {
+    border-left-color: var(--accent-coral);
+    background: #FFF5F3;
+  }
+
+  .word-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .word-content {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .word-ipa {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-style: italic;
+    font-weight: 400;
+    margin-top: 2px;
+  }
+
+  .word-score {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent-sage);
+    font-family: 'Quicksand', sans-serif;
+  }
+
+  .word-score.low {
+    color: var(--accent-coral);
+  }
+
+  .word-diagnostics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .diagnostic-tag {
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 500;
+    background: #FFE5E5;
+    color: #D32F2F;
+  }
+
+  .phones-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .phone-chip {
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'Quicksand', sans-serif;
+  }
+
+  .phone-chip.good {
+    background: var(--soft-sage);
+    color: #2E7D32;
+  }
+
+  .phone-chip.medium {
+    background: #FFF3CD;
+    color: #F57C00;
+  }
+
+  .phone-chip.bad {
+    background: #FFE5E5;
+    color: #D32F2F;
+  }
+
+  .error-message {
+    background: #FFE5E5;
+    border-radius: var(--radius-md);
+    padding: 20px;
+    text-align: center;
+    color: #D32F2F;
+  }
+
+  .error-message h3 {
+    font-size: 16px;
+    margin-bottom: 6px;
+  }
+
+  .error-message p {
+    font-size: 13px;
+    color: #B71C1C;
+  }
+
+  .no-selection {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-secondary);
+  }
+
+  .no-selection .icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+  }
+
+  .no-selection p {
+    font-size: 15px;
+  }
+
+  .login-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, var(--warm-cream) 0%, var(--soft-peach) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+  }
+
+  .login-overlay.hidden {
+    display: none;
+  }
+
+  .login-card {
+    background: white;
+    border-radius: var(--radius-lg);
+    padding: 40px 36px;
+    box-shadow: var(--shadow-hover);
+    width: 420px;
+    max-width: 90vw;
+    text-align: center;
+  }
+
+  .login-card h2 {
+    font-family: 'Quicksand', sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .login-card .subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+  }
+
+  .login-field {
+    margin-bottom: 20px;
+    text-align: left;
+  }
+
+  .login-field label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+  }
+
+  .login-field input,
+  .login-field select {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid var(--warm-beige);
+    border-radius: var(--radius-sm);
+    font-size: 15px;
+    font-family: inherit;
+    color: var(--text-primary);
+    background: var(--warm-cream);
+    transition: var(--transition-smooth);
+    outline: none;
+  }
+
+  .login-field input:focus,
+  .login-field select:focus {
+    border-color: var(--accent-coral);
+    box-shadow: 0 0 0 3px rgba(255, 139, 106, 0.15);
+  }
+
+  .login-field input::placeholder {
+    color: var(--warm-gray);
+  }
+
+  .login-btn {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    background: linear-gradient(135deg, var(--accent-coral) 0%, var(--gentle-coral) 100%);
+    color: white;
+    box-shadow: 0 4px 16px rgba(255, 139, 106, 0.3);
+    transition: var(--transition-smooth);
+    margin-top: 8px;
+    font-family: inherit;
+  }
+
+  .login-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(255, 139, 106, 0.4);
+  }
+
+  .login-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+  }
+
+  .login-error {
+    color: #D32F2F;
+    font-size: 13px;
+    margin-top: 4px;
+    display: none;
+  }
+
+  .login-error.show {
+    display: block;
+  }
+
+  .back-btn {
+    position: fixed;
+    top: 16px;
+    right: 20px;
+    z-index: 9998;
+    padding: 8px 20px;
+    border: 2px solid var(--warm-gray);
+    border-radius: var(--radius-sm);
+    background: white;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: var(--transition-smooth);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .back-btn:hover {
+    border-color: var(--accent-coral);
+    color: var(--accent-coral);
+    box-shadow: var(--shadow-soft);
+    transform: translateY(-1px);
+  }
+
+  .submit-banner {
+    display: none;
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 12px 28px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 9999;
+    box-shadow: var(--shadow-hover);
+  }
+
+  .submit-banner.success {
+    display: block;
+    background: linear-gradient(135deg, var(--accent-sage) 0%, var(--soft-sage) 100%);
+    color: white;
+  }
+
+  .submit-banner.fail {
+    display: block;
+    background: #FFE5E5;
+    color: #D32F2F;
+  }
+
+  @media (max-width: 900px) {
+    .main-layout {
+      grid-template-columns: 1fr;
+    }
+
+    body {
+      padding: 12px;
+    }
+
+    .score-row {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    .words-grid {
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+  }
+</style>
+
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-card">
+    <h2>📝 Unit 1 英文句子朗读评测</h2>
+    <p class="subtitle">请填写信息后开始测评</p>
+    <div class="login-field">
+      <label for="studentName">姓名</label>
+      <input type="text" id="studentName" placeholder="请输入姓名" autocomplete="off">
+      <div class="login-error" id="nameError">请输入姓名</div>
+    </div>
+    <div class="login-field">
+      <label for="studentClass">班级</label>
+      <select id="studentClass">
+        <option value="">请选择班级</option>
+        <option value="三年级1班">三年级1班</option>
+        <option value="三年级2班">三年级2班</option>
+        <option value="三年级3班">三年级3班</option>
+        <option value="三年级4班">三年级4班</option>
+        <option value="三年级5班">三年级5班</option>
+        <option value="三年级6班">三年级6班</option>
+      </select>
+      <div class="login-error" id="classError">请选择班级</div>
+    </div>
+    <button class="login-btn" id="loginBtn" onclick="handleLogin()">开始测评</button>
+  </div>
+</div>
+
+<div class="submit-banner" id="submitBanner"></div>
+
+<button class="back-btn" onclick="window.close(); if(!window.closed) window.open('','_self').close();">← 返回</button>
+
+<div class="page-header">
+  <h1>Unit 1 英文句子朗读评测</h1>
+  <p>点击左侧句子，逐句朗读测评</p>
+</div>
+
+<div class="main-layout">
+  <div class="left-panel">
+    <h2>📝 句子列表</h2>
+    <div class="sentence-list" id="sentenceList"></div>
+  </div>
+
+  <div class="right-panel">
+    <h2>🎤 测评区域</h2>
+    <div id="evalArea">
+      <div class="no-selection">
+        <div class="icon">👈</div>
+        <p>请点击左侧句子开始测评</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const SENTENCES = [
+    "Hello! I'm Mike Black.",
+    "Hi! My name is Wu Binbin.",
+    "Nice to meet you.",
+    "Nice to meet you too.",
+    "Oh no!",
+    "It's OK, Chen Jie.",
+    "Hey, Sarah! We can share.",
+    "Thanks, Sarah. / Thank you, Chen Jie.",
+    "I listen with care.",
+    "I am nice to my friends."
+  ];
+
+  let currentIdx = -1;
+  const scoreStore = {};
+  let studentName = '';
+  let studentClass = '';
+
+  window.handleLogin = function() {
+    const nameInput = document.getElementById('studentName');
+    const classSelect = document.getElementById('studentClass');
+    const nameError = document.getElementById('nameError');
+    const classError = document.getElementById('classError');
+    let valid = true;
+
+    nameError.classList.remove('show');
+    classError.classList.remove('show');
+
+    if (!nameInput.value.trim()) {
+      nameError.classList.add('show');
+      valid = false;
+    }
+    if (!classSelect.value) {
+      classError.classList.add('show');
+      valid = false;
+    }
+    if (!valid) return;
+
+    studentName = nameInput.value.trim();
+    studentClass = classSelect.value;
+    document.getElementById('loginOverlay').classList.add('hidden');
+  };
+
+  function showBanner(message, type) {
+    const banner = document.getElementById('submitBanner');
+    banner.textContent = message;
+    banner.className = 'submit-banner ' + type;
+    setTimeout(() => { banner.className = 'submit-banner'; }, 3000);
+  }
+
+  function formatWordDetail(word) {
+    if (!word || !word.syllables) return null;
+    const phones = [];
+    let ipa = '';
+    word.syllables.forEach(syl => {
+      if (!syl.phones) return;
+      syl.phones.forEach(phone => {
+        if (!phone.content || phone.content === 'sil' || phone.content === 'fil') return;
+        const raw = (phone.content || '').toLowerCase();
+        const ipaChar = PHONEME_MAP[raw] || phone.content || '';
+        const gwpp = parseFloat(phone.gwpp) || 0;
+        let levelText = '优';
+        if (gwpp < -2.5) levelText = '差，需注意发音';
+        else if (gwpp < -1.0) levelText = '弱，需加强练习';
+        phones.push({ ipa: ipaChar, level: levelText, gwpp });
+        ipa += ipaChar;
+      });
+    });
+    const score = word.totalScore !== null && word.totalScore !== undefined ? word.totalScore : '--';
+    const hasIssue = score !== '--' && (score < 60 || phones.some(p => p.gwpp < -1.0));
+    const prefix = hasIssue ? '⚠️' : '✅';
+    const phoneStr = phones.map(p => `/${p.ipa}/ (${p.level})`).join(' ');
+    return `${prefix} [${word.content}] ${score}分  - 发音拆解：${phoneStr}`;
+  }
+
+  async function submitResults() {
+    const testedCount = Object.keys(scoreStore).length;
+    if (testedCount === 0) return;
+
+    const allWords = [];
+    for (let i = 0; i < SENTENCES.length; i++) {
+      const sc = scoreStore[i];
+      if (sc && sc.words) {
+        sc.words.forEach(w => allWords.push(formatWordDetail(w)));
+      }
+    }
+    const wordDetails = allWords.filter(Boolean).join('\n');
+
+    const lastIdx = Math.max(...Object.keys(scoreStore).map(Number));
+    const paper = scoreStore[lastIdx] || {};
+
+    const payload = {
+      name: studentName,
+      className: studentClass,
+      unit: 'Unit 1',
+      totalScore: paper.totalScore,
+      accuracyScore: paper.accuracyScore,
+      standardScore: paper.standardScore,
+      fluencyScore: paper.fluencyScore,
+      integrityScore: paper.integrityScore,
+      wordDetails: wordDetails,
+      testedCount: testedCount,
+      totalCount: SENTENCES.length,
+      submitTime: new Date().toLocaleString('zh-CN'),
+    };
+
+    try {
+      const resp = await fetch('https://quickform.cn/api/46ibabfsug', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        showBanner('✅ 测评结果提交成功！', 'success');
+      } else {
+        showBanner('❌ 提交失败，请重试', 'fail');
+      }
+    } catch (e) {
+      showBanner('❌ 网络错误，提交失败', 'fail');
+    }
+  }
+
+  function toPercentScore(value) {
+    if (value === null || value === undefined) return null;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    const maxVal = 5.0;
+    if (num <= maxVal && num > 0) return Math.round(num * 20);
+    if (num <= 10 && num > maxVal) return Math.round(num * 10);
+    return Math.round(num);
+  }
+
+  function renderSentenceList() {
+    const list = document.getElementById('sentenceList');
+    list.innerHTML = SENTENCES.map((s, i) => {
+      const isActive = i === currentIdx;
+      const hasScore = scoreStore[i] !== undefined;
+      const cls = ['sentence-item'];
+      if (isActive) cls.push('active');
+      if (hasScore) cls.push('tested');
+      let miniScore = '';
+      if (hasScore) {
+        const sc = scoreStore[i].totalScore;
+        const low = sc !== null && sc < 60;
+        miniScore = `<span class="sentence-mini-score ${low ? 'low' : ''}">${sc !== null ? sc : '--'}分</span>`;
+      }
+      return `<div class="${cls.join(' ')}" data-idx="${i}" onclick="selectSentence(${i})">
+        <span class="sentence-num">${i + 1}</span>
+        <span class="sentence-text">${s}</span>
+        ${miniScore}
+      </div>`;
+    }).join('');
+  }
+
+  function renderEvalArea() {
+    const area = document.getElementById('evalArea');
+    if (currentIdx < 0) {
+      area.innerHTML = `<div class="no-selection"><div class="icon">👈</div><p>请点击左侧句子开始测评</p></div>`;
+      return;
+    }
+
+    const sentence = SENTENCES[currentIdx];
+    const stored = scoreStore[currentIdx];
+
+    area.innerHTML = `
+      <div class="current-sentence-box">
+        <div class="current-sentence-label">当前句子 #${currentIdx + 1}</div>
+        <div class="current-sentence-text">${sentence}</div>
+      </div>
+      <div class="controls">
+        <button class="btn btn-start" id="startBtn" onclick="handleStart()">
+          <span>🎤</span><span>开始录音</span>
+        </button>
+        <button class="btn btn-stop" id="stopBtn" onclick="handleStop()" disabled>
+          <span>⏹️</span><span>停止录音</span>
+        </button>
+        <button class="btn btn-cancel" id="cancelBtn" onclick="handleCancel()" disabled>
+          <span>❌</span><span>取消</span>
+        </button>
+      </div>
+      <div class="audio-visualizer" id="audioVisualizer">
+        <div class="audio-bar"></div><div class="audio-bar"></div><div class="audio-bar"></div>
+        <div class="audio-bar"></div><div class="audio-bar"></div><div class="audio-bar"></div>
+        <div class="audio-bar"></div>
+      </div>
+      <div class="status-indicator">
+        <div class="status-badge" id="statusBadge"><span>💡</span><span id="statusText">准备就绪</span></div>
+      </div>
+      <div class="results-area" id="resultsArea">
+        ${stored ? renderResults(stored) : ''}
+      </div>
+    `;
+  }
+
+  function renderResults(data) {
+    const p = data;
+    let html = `<div class="score-overview"><h3>评分结果</h3><div class="score-row">`;
+    html += renderScoreCard('总分', p.totalScore);
+    html += renderScoreCard('准确度', p.accuracyScore);
+    html += renderScoreCard('标准度', p.standardScore);
+    html += renderScoreCard('流利度', p.fluencyScore);
+    html += renderScoreCard('完整度', p.integrityScore);
+    html += `</div></div>`;
+
+    if (p.words && p.words.length > 0) {
+      html += `<div class="words-section"><h3>单词详情</h3><div class="words-grid">`;
+      html += p.words.map(w => renderWordCard(w)).join('');
+      html += `</div></div>`;
+    }
+    return html;
+  }
+
+  function renderScoreCard(label, value) {
+    const v = value !== null && value !== undefined ? value : '--';
+    return `<div class="score-card"><div class="score-card-value">${v}</div><div class="score-card-label">${label}</div></div>`;
+  }
+
+  const PHONEME_MAP = {
+    'aa': 'ɑː', 'ae': 'æ', 'ah': 'ʌ', 'ao': 'ɔː', 'ar': 'eə',
+    'aw': 'aʊ', 'ax': 'ə', 'ay': 'aɪ', 'eh': 'e', 'er': 'ɜː',
+    'ey': 'eɪ', 'ih': 'ɪ', 'ir': 'ɪə', 'iy': 'iː', 'oo': 'ɒ',
+    'ow': 'əʊ', 'oy': 'ɒɪ', 'uh': 'ʊ', 'uw': 'uː', 'ur': 'ʊə',
+    'b': 'b', 'ch': 'tʃ', 'd': 'd', 'dh': 'ð', 'f': 'f',
+    'g': 'g', 'hh': 'h', 'jh': 'dʒ', 'k': 'k', 'l': 'l',
+    'm': 'm', 'n': 'n', 'ng': 'ŋ', 'p': 'p', 'r': 'r',
+    's': 's', 'sh': 'ʃ', 't': 't', 'th': 'θ', 'v': 'v',
+    'w': 'w', 'y': 'j', 'z': 'z', 'zh': 'ʒ',
+    'dr': 'dr', 'dz': 'dz', 'tr': 'tr', 'ts': 'ts'
+  };
+
+  function getWordIPA(word) {
+    if (!word.syllables || word.syllables.length === 0) return '';
+    let ipa = '';
+    word.syllables.forEach(syl => {
+      if (!syl.phones || syl.phones.length === 0) return;
+      let sylIpa = syl.phones.map(phone => {
+        if (!phone.content || phone.content === 'sil' || phone.content === 'fil') return '';
+        const raw = phone.content.toLowerCase();
+        return PHONEME_MAP[raw] || phone.content;
+      }).join('');
+      if (sylIpa) {
+        if (syl.syllAccent === '1') ipa += 'ˈ' + sylIpa;
+        else if (syl.syllAccent === '2') ipa += 'ˌ' + sylIpa;
+        else ipa += sylIpa;
+      }
+    });
+    return ipa ? `/${ipa}/` : '';
+  }
+
+  function renderWordCard(word) {
+    const hasError = word.totalScore === 0 || (word.dpMessage && word.dpMessage !== '0');
+    const diagnostics = getWordDiagnostics(word);
+    const ipa = getWordIPA(word);
+    let html = `<div class="word-card ${hasError ? 'has-error' : ''}">`;
+    html += `<div class="word-header"><div class="word-content">${word.content || ''}${ipa ? `<div class="word-ipa">${ipa}</div>` : ''}</div>`;
+    const ws = word.totalScore !== null && word.totalScore !== undefined ? word.totalScore : '--';
+    html += `<div class="word-score ${ws !== '--' && ws < 60 ? 'low' : ''}">${ws}分</div></div>`;
+    if (diagnostics.length > 0) {
+      html += `<div class="word-diagnostics">${diagnostics.map(d => `<span class="diagnostic-tag">${d}</span>`).join('')}</div>`;
+    }
+    if (word.syllables && word.syllables.length > 0) {
+      html += `<div class="phones-list">`;
+      word.syllables.forEach(syl => {
+        if (syl.phones && syl.phones.length > 0) {
+          syl.phones.forEach(phone => {
+            const gwpp = parseFloat(phone.gwpp) || 0;
+            let level = 'good';
+            if (gwpp < -2.5) level = 'bad';
+            else if (gwpp < -1.0) level = 'medium';
+            const raw = (phone.content || '').toLowerCase();
+            const display = PHONEME_MAP[raw] || phone.content || '';
+            html += `<span class="phone-chip ${level}" title="gwpp: ${gwpp.toFixed(2)}">${display}</span>`;
+          });
+        }
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function getWordDiagnostics(word) {
+    const diagnostics = [];
+    if (word.dpMessage && word.dpMessage !== '0') {
+      const dpLabels = { '16': '漏读', '32': '增读', '64': '回读', '128': '替换' };
+      diagnostics.push(dpLabels[word.dpMessage] || `异常(${word.dpMessage})`);
+    }
+    if (word.werrMsg && word.werrMsg !== '0') {
+      const werrBits = { '256': '意群停顿未停', '512': '连读未连', '2048': '该重读未重', '4096': '句末升降调错' };
+      const n = parseInt(word.werrMsg) || 0;
+      for (const [bit, label] of Object.entries(werrBits)) {
+        if ((n & parseInt(bit)) !== 0) diagnostics.push(label);
+      }
+    }
+    return diagnostics;
+  }
+
+  function updateStatus(state) {
+    const badge = document.getElementById('statusBadge');
+    const text = document.getElementById('statusText');
+    const viz = document.getElementById('audioVisualizer');
+    if (!badge || !text) return;
+
+    badge.className = 'status-badge';
+    let icon = '💡', label = '准备就绪';
+    switch (state) {
+      case 'connecting': icon = '🔗'; label = '连接中...'; break;
+      case 'recording':
+        icon = '🎤'; label = '正在录音...';
+        badge.classList.add('recording');
+        if (viz) viz.classList.add('active');
+        break;
+      case 'scoring':
+        icon = '⏳'; label = '评分中...';
+        badge.classList.add('scoring');
+        if (viz) viz.classList.remove('active');
+        break;
+      case 'done':
+        icon = '✅'; label = '评测完成';
+        badge.classList.add('done');
+        if (viz) viz.classList.remove('active');
+        break;
+      case 'error':
+        icon = '❌'; label = '评测出错';
+        badge.classList.add('error');
+        if (viz) viz.classList.remove('active');
+        break;
+    }
+    badge.innerHTML = `<span>${icon}</span><span>${label}</span>`;
+  }
+
+  function updateButtons(state) {
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    if (startBtn) startBtn.disabled = state !== 'idle';
+    if (stopBtn) stopBtn.disabled = state !== 'recording';
+    if (cancelBtn) cancelBtn.disabled = state === 'idle' || state === 'done' || state === 'error';
+  }
+
+  window.selectSentence = function(idx) {
+    if (window.QuizEngine && window.QuizEngine.getState() === 'recording') return;
+    if (window.QuizEngine && window.QuizEngine.getState() === 'scoring') return;
+    currentIdx = idx;
+    renderSentenceList();
+    renderEvalArea();
+  };
+
+  window.handleStart = async function() {
+    if (currentIdx < 0) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+    } catch (err) {
+      alert('无法访问麦克风，请检查麦克风权限设置');
+      return;
+    }
+    const sentence = SENTENCES[currentIdx];
+    window.QuizEngine.start({ promptText: sentence });
+  };
+
+  window.handleStop = function() {
+    window.QuizEngine.stop();
+  };
+
+  window.handleCancel = function() {
+    window.QuizEngine.cancel();
+  };
+
+  window.QuizEngine.on('state', function(state) {
+    updateButtons(state);
+    updateStatus(state);
+  });
+
+  window.QuizEngine.on('result', function(result) {
+    if (currentIdx < 0) return;
+    const paper = result.paper;
+    const percentPaper = {
+      totalScore: toPercentScore(paper.totalScore),
+      accuracyScore: toPercentScore(paper.accuracyScore),
+      standardScore: toPercentScore(paper.standardScore),
+      fluencyScore: toPercentScore(paper.fluencyScore),
+      integrityScore: toPercentScore(paper.integrityScore),
+      words: (result.sentences && result.sentences.length > 0) ? result.sentences.flatMap(s => s.words || []).map(w => ({
+        ...w,
+        totalScore: toPercentScore(w.totalScore),
+        syllables: (w.syllables || []).map(syl => ({
+          ...syl,
+          syllScore: toPercentScore(syl.syllScore)
+        }))
+      })) : []
+    };
+    scoreStore[currentIdx] = percentPaper;
+    renderSentenceList();
+    const resultsArea = document.getElementById('resultsArea');
+    if (resultsArea) resultsArea.innerHTML = renderResults(percentPaper);
+    submitResults();
+  });
+
+  window.QuizEngine.on('error', function(error) {
+    const resultsArea = document.getElementById('resultsArea');
+    if (resultsArea) {
+      resultsArea.innerHTML = `<div class="error-message"><h3>评测失败</h3><p>${error.message || '未知错误'}</p></div>`;
+    }
+  });
+
+  window.QuizEngine.on('rejected', function() {
+    const resultsArea = document.getElementById('resultsArea');
+    if (resultsArea) {
+      resultsArea.innerHTML = `<div class="error-message"><h3>评测被拒绝</h3><p>引擎无法识别，请重试</p></div>`;
+    }
+  });
+
+  window.QuizEngine.on('except', function(data) {
+    const exceptLabels = {
+      '28673': '无语音或音量过小',
+      '28676': '乱说',
+      '28680': '信噪比低',
+      '28689': '无音频输入',
+      '28690': '音量过大'
+    };
+    const resultsArea = document.getElementById('resultsArea');
+    if (resultsArea) {
+      resultsArea.innerHTML = `<div class="error-message"><h3>评测异常</h3><p>${exceptLabels[data.code] || data.label || '未知异常'}</p></div>`;
+    }
+  });
+
+  renderSentenceList();
+  renderEvalArea();
+})();
+</script>
+</body>
+</html>

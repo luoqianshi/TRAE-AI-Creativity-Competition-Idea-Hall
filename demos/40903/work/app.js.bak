@@ -1,0 +1,566 @@
+const canvas = document.getElementById("mapCanvas");
+const ctx = canvas.getContext("2d");
+const timelineList = document.getElementById("timelineList");
+const nodeCount = document.getElementById("nodeCount");
+const yearRange = document.getElementById("yearRange");
+
+const detailTitle = document.getElementById("detailTitle");
+const detailType = document.getElementById("detailType");
+const detailYear = document.getElementById("detailYear");
+const detailLocation = document.getElementById("detailLocation");
+const detailBackground = document.getElementById("detailBackground");
+const detailQuote = document.getElementById("detailQuote");
+const detailFullText = document.getElementById("detailFullText");
+const detailTags = document.getElementById("detailTags");
+
+const nodes = [...window.POETRY_NODES].sort((a, b) => Number(a.year) - Number(b.year));
+const years = nodes.map((node) => Number(node.year));
+
+nodeCount.textContent = String(nodes.length);
+yearRange.textContent = `${Math.min(...years)} - ${Math.max(...years)}`;
+
+let activeNodeId = nodes[0]?.id;
+let hoveredNodeId = null;
+let animationSeed = 0;
+let textureLoaded = false;
+let chinaGeoJson = null;
+let chinaMesh = null;
+let projection = null;
+let path = null;
+
+// 加载古风蒙版纹理
+const textureImage = new Image();
+textureImage.src = "./assets/ancient-map-clean.jpg";
+textureImage.onload = () => {
+  textureLoaded = true;
+};
+
+// 加载中国省级 GeoJSON（含各省边界；已修正环方向）与预计算边界线
+Promise.all([
+  fetch("./assets/china-provinces-v2-rewound.json").then((r) => r.json()),
+  fetch("./assets/china-mesh.json").then((r) => r.json())
+])
+  .then(([geo, mesh]) => {
+    chinaGeoJson = geo;
+    chinaMesh = mesh;
+    initProjection();
+    positionNodesFromGeo();
+  })
+  .catch((err) => {
+    console.error("GeoJSON 加载失败：", err);
+  });
+
+function initProjection() {
+  projection = d3.geoMercator().fitExtent(
+    [[50, 70], [canvas.width - 50, canvas.height - 70]],
+    chinaGeoJson
+  );
+  path = d3.geoPath(projection, ctx);
+}
+
+function positionNodesFromGeo() {
+  nodes.forEach((node) => {
+    if (node.lat != null && node.lng != null) {
+      const projected = projection([node.lng, node.lat]);
+      if (projected) {
+        node.x = projected[0];
+        node.y = projected[1];
+      }
+    }
+  });
+}
+
+function getActiveNode() {
+  return nodes.find((item) => item.id === activeNodeId) || nodes[0];
+}
+
+function getNodeAt(x, y) {
+  return nodes.find((node) => Math.hypot(node.x - x, node.y - y) <= 15);
+}
+
+function renderTimeline() {
+  timelineList.innerHTML = "";
+
+  nodes.forEach((node) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `timeline-item${node.id === activeNodeId ? " active" : ""}`;
+    item.innerHTML = `
+      <span class="year">${node.year}</span>
+      <h3>${node.title}</h3>
+      <p>${node.location} · ${node.scene}</p>
+    `;
+    item.addEventListener("click", () => {
+      activeNodeId = node.id;
+      renderDetail();
+      renderTimeline();
+    });
+    timelineList.appendChild(item);
+  });
+}
+
+function createTag(text) {
+  const span = document.createElement("span");
+  span.className = "tag";
+  span.textContent = text;
+  return span;
+}
+
+function renderDetail() {
+  const node = getActiveNode();
+  detailTitle.textContent = node.title;
+  detailType.textContent = node.type;
+  detailYear.textContent = node.year;
+  detailLocation.textContent = `${node.location} · ${node.scene}`;
+  detailBackground.textContent = node.background;
+  detailQuote.textContent = node.quote;
+  detailFullText.textContent = node.fullText;
+  detailTags.innerHTML = "";
+  [node.region, node.location, node.scene, `${node.type}作`, `${node.year}年`].forEach((tagText) => {
+    detailTags.appendChild(createTag(tagText));
+  });
+}
+
+// 标准中国地图配色（淡彩省份 + 浅蓝海洋 + 经纬网格 + 粉红国界）
+const PROVINCE_PALETTE = [
+  "#fbe5c3", "#f6c9c0", "#fde2a7", "#cfe6c5", "#cfd9ee",
+  "#f3d4d4", "#e7d4ee", "#fde7c2", "#d4eee4", "#f0d4b8",
+  "#e7e3c8", "#cfd9ee", "#f6c9c0", "#cfe6c5", "#fde2a7",
+  "#fbe5c3", "#e7d4ee", "#fde7c2", "#d4eee4", "#f3d4d4",
+  "#f0d4b8", "#e7e3c8", "#cfd9ee", "#f6c9c0", "#cfe6c5",
+  "#fde2a7", "#fbe5c3", "#e7d4ee", "#fde7c2", "#d4eee4",
+  "#f3d4d4", "#f0d4b8", "#e7e3c8", "#cfd9ee"
+];
+
+// 中国大陆整体国界（粉色重描）：用陆地部分的外环
+const NATIONAL_BORDER_COLOR = "rgba(216, 102, 138, 0.9)";
+const PROVINCE_BORDER_COLOR = "rgba(110, 110, 110, 0.85)";
+const COASTLINE_COLOR = "rgba(70, 90, 110, 0.9)";
+
+function getProvinceColor(name) {
+  if (!name) return PROVINCE_PALETTE[0];
+  // 稳定哈希：把 name 映射到 0..palette.length-1
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return PROVINCE_PALETTE[h % PROVINCE_PALETTE.length];
+}
+
+function getMeshFeature(type) {
+  if (!chinaMesh) return null;
+  return chinaMesh.features.find((f) => f.properties.type === type);
+}
+
+function drawOceanBackground() {
+  // 整画布浅蓝海洋
+  ctx.fillStyle = "#cfe5f2";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawGraticule() {
+  // 简单经纬网格：每 5°
+  if (!projection) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(140, 160, 180, 0.35)";
+  ctx.lineWidth = 0.6;
+  ctx.setLineDash([2, 4]);
+  ctx.beginPath();
+  for (let lng = 70; lng <= 140; lng += 5) {
+    const a = projection([lng, 0]);
+    const b = projection([lng, 60]);
+    if (a && b) {
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+  }
+  for (let lat = 0; lat <= 60; lat += 5) {
+    const a = projection([60, lat]);
+    const b = projection([140, lat]);
+    if (a && b) {
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawProvinces() {
+  if (!chinaGeoJson || !path) {
+    return;
+  }
+
+  // 1) 各省分别填色（不包含九段线）
+  chinaGeoJson.features.forEach((feature) => {
+    const name = feature.properties.name;
+    if (!name || String(feature.properties.adcode) === "100000_JD") {
+      return;
+    }
+    ctx.beginPath();
+    path(feature);
+    ctx.fillStyle = getProvinceColor(name);
+    ctx.fill();
+  });
+
+  // 2) 省份内部边界细描边
+  const mesh = getMeshFeature("mesh");
+  if (mesh) {
+    ctx.beginPath();
+    path(mesh);
+    ctx.strokeStyle = PROVINCE_BORDER_COLOR;
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+  }
+
+  // 3) 海岸线/国界外轮廓
+  const outline = getMeshFeature("outline");
+  if (outline) {
+    ctx.beginPath();
+    path(outline);
+    ctx.strokeStyle = COASTLINE_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+function drawNationalBorder() {
+  const outline = getMeshFeature("outline");
+  if (!outline || !path) return;
+  ctx.save();
+  ctx.beginPath();
+  path(outline);
+  ctx.strokeStyle = NATIONAL_BORDER_COLOR;
+  ctx.lineWidth = 2.8;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawNineDashLine() {
+  const jd = chinaGeoJson && chinaGeoJson.features.find(
+    (f) => String(f.properties.adcode) === "100000_JD"
+  );
+  if (!jd || !path) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(216, 102, 138, 0.9)";
+  ctx.lineWidth = 1.7;
+  ctx.setLineDash([5, 6]);
+  ctx.beginPath();
+  path(jd);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawProvinceLabels() {
+  if (!chinaGeoJson || !projection) {
+    return;
+  }
+
+  // 收集有节点的省份名称
+  const provincesWithNodes = new Set(
+    nodes
+      .map((n) => matchProvince(n.lng, n.lat))
+      .filter(Boolean)
+  );
+
+  ctx.save();
+  ctx.font = "12px Microsoft YaHei";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  chinaGeoJson.features.forEach((feature) => {
+    const name = feature.properties.name;
+    if (!name || String(feature.properties.adcode) === "100000_JD") {
+      return;
+    }
+    // 仅在有诗词节点的省份显示标签，淡化处理
+    if (!provincesWithNodes.has(name)) {
+      return;
+    }
+    const centroid = path.centroid(feature);
+    if (!isFinite(centroid[0]) || !isFinite(centroid[1])) {
+      return;
+    }
+    ctx.fillStyle = "rgba(40, 40, 40, 0.6)";
+    ctx.fillText(name, centroid[0], centroid[1]);
+  });
+  ctx.restore();
+}
+
+// 用 GeoJSON 的省级 polygon 判断经纬度落在哪个省
+let _provinceIndex = null;
+function matchProvince(lng, lat) {
+  if (!chinaGeoJson) {
+    return null;
+  }
+  if (!_provinceIndex) {
+    _provinceIndex = chinaGeoJson.features
+      .filter((f) => f.properties.name && String(f.properties.adcode) !== "100000_JD")
+      .map((f) => ({
+        name: f.properties.name,
+        feature: f
+      }));
+  }
+  for (const item of _provinceIndex) {
+    if (d3.geoContains(item.feature, [lng, lat])) {
+      return item.name;
+    }
+  }
+  return null;
+}
+
+function drawAncientTexture() {
+  if (!textureLoaded) {
+    return;
+  }
+  ctx.save();
+  // 在标准地图册底图上轻度叠加古风纹理，保留地理可读性
+  ctx.globalCompositeOperation = "multiply";
+  ctx.globalAlpha = 0.25;
+
+  // 保持宽高比绘制
+  const imgRatio = textureImage.width / textureImage.height;
+  const cvsRatio = canvas.width / canvas.height;
+  let sx, sy, sw, sh;
+  if (imgRatio > cvsRatio) {
+    sh = textureImage.height;
+    sw = textureImage.height * cvsRatio;
+    sx = (textureImage.width - sw) / 2;
+    sy = 0;
+  } else {
+    sw = textureImage.width;
+    sh = textureImage.width / cvsRatio;
+    sx = 0;
+    sy = (textureImage.height - sh) / 2;
+  }
+  ctx.drawImage(textureImage, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  // 再加一层极淡的暖褐色叠加，统一古风色调
+  ctx.save();
+  ctx.globalAlpha = 0.10;
+  ctx.fillStyle = "rgba(72, 46, 22, 1)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
+
+function drawBaseMap() {
+  drawOceanBackground();
+  drawGraticule();
+  if (chinaGeoJson && chinaMesh && path) {
+    drawProvinces();
+    drawNationalBorder();
+    drawNineDashLine();
+  } else {
+    // GeoJSON 未加载完成时显示提示文字
+    ctx.save();
+    ctx.fillStyle = "rgba(72, 48, 24, 0.55)";
+    ctx.font = "16px Microsoft YaHei";
+    ctx.textAlign = "center";
+    ctx.fillText("地图数据加载中…", canvas.width / 2, canvas.height / 2);
+    ctx.restore();
+  }
+  if (chinaGeoJson && chinaMesh && path) {
+    drawProvinceLabels();
+  }
+  drawAncientTexture();
+}
+
+function drawFrame() {
+  ctx.save();
+  ctx.strokeStyle = "rgba(118, 82, 48, 0.55)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
+  ctx.strokeStyle = "rgba(255, 239, 207, 0.35)";
+  ctx.strokeRect(28, 28, canvas.width - 56, canvas.height - 56);
+  ctx.restore();
+}
+
+function drawRoute() {
+  ctx.save();
+  ctx.beginPath();
+  nodes.forEach((node, index) => {
+    if (index === 0) {
+      ctx.moveTo(node.x, node.y);
+      return;
+    }
+    const previous = nodes[index - 1];
+    const controlX = (previous.x + node.x) / 2;
+    const controlY = (previous.y + node.y) / 2;
+    ctx.quadraticCurveTo(previous.x, previous.y, controlX, controlY);
+  });
+  ctx.strokeStyle = "rgba(54, 112, 126, 0.75)";
+  ctx.lineWidth = 2.3;
+  ctx.setLineDash([7, 10]);
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = "rgba(54, 112, 126, 0.35)";
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawRegionLabels() {
+  // 已废弃：省份标签由 drawProvinceLabels 渲染
+}
+
+function drawNodes() {
+  const active = getActiveNode();
+  const pulse = (Math.sin(animationSeed / 18) + 1) / 2;
+
+  nodes.forEach((node) => {
+    const isActive = node.id === active.id;
+    const isHovered = node.id === hoveredNodeId;
+    const isApprox = node.approximate === true;
+    const radius = isActive ? 10 + pulse * 2.5 : isHovered ? 9 : 7;
+
+    ctx.save();
+
+    // 选中节点——朱砂红特殊色高亮
+    if (isActive) {
+      // 外发光大圆环
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(192, 57, 43, ${0.12 + pulse * 0.10})`;
+      ctx.arc(node.x, node.y, radius + 16 + pulse * 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 中等光晕层
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(192, 57, 43, ${0.22 + pulse * 0.12})`;
+      ctx.arc(node.x, node.y, radius + 9, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // 普通光晕
+      ctx.beginPath();
+      ctx.fillStyle = isHovered ? "rgba(205, 150, 78, 0.20)" : "rgba(205, 150, 78, 0.15)";
+      ctx.arc(node.x, node.y, radius + 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 近似范围节点：用虚线圈表示
+    if (isApprox) {
+      ctx.beginPath();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = isActive ? "rgba(192, 57, 43, 0.85)" : "rgba(214, 171, 98, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.arc(node.x, node.y, radius + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.beginPath();
+    ctx.fillStyle = isActive ? "#c0392b" : isHovered ? "#d6ab62" : "#d6ab62";
+    ctx.shadowBlur = isActive ? 28 : isHovered ? 16 : 12;
+    ctx.shadowColor = isActive ? "rgba(192, 57, 43, 0.85)" : isHovered ? "rgba(214, 171, 98, 0.6)" : "rgba(214, 171, 98, 0.4)";
+    ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.fillStyle = "#fff4db";
+    ctx.arc(node.x, node.y, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+function drawLabel(node, align = "right") {
+  if (!node) {
+    return;
+  }
+
+  const text = `${node.year} · ${node.title}`;
+  ctx.save();
+  ctx.font = "bold 14px Microsoft YaHei";
+  const paddingX = 12;
+  const width = ctx.measureText(text).width + paddingX * 2;
+  const height = 34;
+  const x = align === "left" ? node.x - width - 18 : node.x + 18;
+  const y = node.y - 38;
+
+  ctx.fillStyle = "rgba(44, 30, 18, 0.82)";
+  ctx.strokeStyle = "rgba(230, 199, 147, 0.42)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, 14);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#f5e8ce";
+  ctx.fillText(text, x + paddingX, y + 22);
+  ctx.restore();
+}
+
+function drawCornerTitle() {
+  ctx.save();
+  ctx.fillStyle = "rgba(52, 35, 19, 0.76)";
+  ctx.beginPath();
+  ctx.roundRect(38, 34, 282, 72, 18);
+  ctx.fill();
+
+  ctx.fillStyle = "#f2dfba";
+  ctx.font = "bold 28px Microsoft YaHei";
+  ctx.fillText("诗词创作足迹长卷", 58, 68);
+  ctx.font = "14px Microsoft YaHei";
+  ctx.fillStyle = "rgba(243, 227, 196, 0.78)";
+  ctx.fillText("Poetry · Place · Time · Memory", 58, 92);
+  ctx.restore();
+}
+
+function draw() {
+  animationSeed += 1;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBaseMap();
+  drawFrame();
+  drawRoute();
+  drawNodes();
+
+  const active = getActiveNode();
+  if (active && active.x != null) {
+    drawLabel(active, active.x > canvas.width - 240 ? "left" : "right");
+    if (hoveredNodeId && hoveredNodeId !== activeNodeId) {
+      const hovered = nodes.find((item) => item.id === hoveredNodeId);
+      if (hovered) {
+        drawLabel(hovered, hovered.x > canvas.width - 240 ? "left" : "right");
+      }
+    }
+  }
+
+  drawCornerTitle();
+  requestAnimationFrame(draw);
+}
+
+function getCanvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY
+  };
+}
+
+canvas.addEventListener("mousemove", (event) => {
+  const point = getCanvasPoint(event);
+  const node = getNodeAt(point.x, point.y);
+  hoveredNodeId = node?.id || null;
+  canvas.style.cursor = node ? "pointer" : "default";
+});
+
+canvas.addEventListener("mouseleave", () => {
+  hoveredNodeId = null;
+  canvas.style.cursor = "default";
+});
+
+canvas.addEventListener("click", (event) => {
+  const point = getCanvasPoint(event);
+  const node = getNodeAt(point.x, point.y);
+  if (!node) {
+    return;
+  }
+  activeNodeId = node.id;
+  renderDetail();
+  renderTimeline();
+});
+
+renderDetail();
+renderTimeline();
+draw();
