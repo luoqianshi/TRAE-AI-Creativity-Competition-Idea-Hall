@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Diff - JSON / 文本对比</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fab387'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='system-ui,-apple-system,sans-serif' font-size='22' font-weight='800' fill='%231e1e2e'%3ED%3C/text%3E%3C/svg%3E">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: #1e1e2e;
+    color: #cdd6f4;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: #181825;
+    border-bottom: 1px solid #313244;
+  }
+  .header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #cba6f7;
+  }
+  .actions { display: flex; gap: 10px; align-items: center; }
+  .btn {
+    padding: 7px 18px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all .15s;
+  }
+  .btn-primary {
+    background: #89b4fa;
+    color: #1e1e2e;
+  }
+  .btn-primary:hover { background: #b4d0fe; }
+  .btn-secondary {
+    background: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+  }
+  .btn-secondary:hover { background: #45475a; }
+  .mode-toggle {
+    font-size: 12px;
+    color: #a6adc8;
+    margin-right: 8px;
+  }
+
+  /* Main layout */
+  .container {
+    display: flex;
+    height: calc(100vh - 53px);
+  }
+
+  /* Editor panels */
+  .panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .panel-label {
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    background: #181825;
+    border-bottom: 1px solid #313244;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .panel-left .panel-label { color: #89dceb; }
+  .panel-right .panel-label { color: #f5c2e7; }
+  .panel-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #313244;
+    color: #a6adc8;
+  }
+
+  .editor-wrap {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Line numbers */
+  .line-numbers {
+    width: 52px;
+    min-width: 52px;
+    background: #181825;
+    border-right: 1px solid #313244;
+    padding: 14px 0;
+    text-align: right;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    color: #585b70;
+    user-select: none;
+    overflow-y: hidden;
+  }
+  .line-numbers div { padding-right: 12px; }
+
+  /* Textarea */
+  .editor {
+    flex: 1;
+    resize: none;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #cdd6f4;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    padding: 14px 16px;
+    tab-size: 2;
+    white-space: pre;
+    overflow: auto;
+  }
+  .editor::placeholder { color: #45475a; }
+
+  /* Divider */
+  .divider {
+    width: 4px;
+    background: #313244;
+    cursor: col-resize;
+    transition: background .15s;
+  }
+  .divider:hover { background: #89b4fa; }
+
+  /* Result area (diff view) - overlays editor when in diff mode */
+  .result-panel {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 10;
+    background: #1e1e2e;
+    overflow: auto;
+  }
+  .result-panel.active { display: block; }
+  .editor-wrap.show-diff .editor,
+  .editor-wrap.show-diff .line-numbers {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  /* Diff view */
+  .diff-container {
+    display: flex;
+    width: 100%;
+    min-height: 100%;
+  }
+  .diff-side {
+    flex: 1;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border-right: 1px solid #313244;
+  }
+  .diff-side:last-child { border-right: none; }
+  .diff-line { display: block; padding: 1px 8px; margin: 0 -8px; border-radius: 3px; }
+  .diff-line-empty::before { content: '\00a0'; }
+
+  /* Diff colors */
+  .diff-added { background: rgba(166, 227, 161, .18); color: #a6e3a1; }
+  .diff-removed { background: rgba(243, 139, 168, .18); color: #f38ba8; }
+  .diff-unchanged { color: #6c7086; }
+
+  /* JSON syntax highlighting for diff */
+  .j-key { color: #89b4fa; }
+  .j-string { color: #a6e3a1; }
+  .j-number { color: #fab387; }
+  .j-bool { color: #cba6f7; }
+  .j-null { color: #f38ba8; }
+  .j-brace { color: #9399b2; }
+  .j-bracket { color: #9399b2; }
+  .j-comma { color: #9399b2; }
+  .j-colon { color: #9399b2; }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    gap: 20px;
+    padding: 6px 24px;
+    background: #11111b;
+    border-top: 1px solid #313244;
+    font-size: 12px;
+    color: #6c7086;
+  }
+  .status-item span { color: #a6adc8; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #313244; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #45475a; }
+
+  /* Sample data hint */
+  .sample-btn {
+    font-size: 11px;
+    cursor: pointer;
+    color: #89b4fa;
+    text-decoration: underline;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📋 JSON / 文本对比工具</h1>
+  <div class="actions">
+    <span class="mode-toggle" id="modeLabel">模式：编辑中</span>
+    <button class="btn btn-secondary" onclick="swapContent()">⇄ 交换</button>
+    <button class="btn btn-secondary" onclick="clearAll()">🗑 清空</button>
+    <button class="btn btn-primary" id="compareBtn" onclick="doCompare()">🔍 对比</button>
+    <button class="btn btn-primary" id="editBtn" onclick="backToEdit()" style="display:none">✏️ 返回编辑</button>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Left Panel -->
+  <div class="panel panel-left">
+    <div class="panel-label">
+      左侧（原始 / A）
+      <span class="panel-badge" id="leftBadge">-- 行</span>
+      <button class="sample-btn" onclick="loadSampleA()">载入示例</button>
+    </div>
+    <div class="editor-wrap" id="leftWrap">
+      <div class="line-numbers" id="leftLines"></div>
+      <textarea class="editor" id="editorLeft" placeholder="这里输入第一个 JSON 或文本..." spellcheck="false"></textarea>
+      <div class="result-panel" id="leftDiff"></div>
+    </div>
+  </div>
+
+  <div class="divider" id="divider"></div>
+
+  <!-- Right Panel -->
+  <div class="panel panel-right">
+    <div class="panel-label">
+      右侧（修改后 / B）
+      <span class="panel-badge" id="rightBadge">-- 行</span>
+      <button class="sample-btn" onclick="loadSampleB()">载入示例</button>
+    </div>
+    <div class="editor-wrap" id="rightWrap">
+      <div class="line-numbers" id="rightLines"></div>
+      <textarea class="editor" id="editorRight" placeholder="这里输入第二个 JSON 或文本，会自动格式化并对比。" spellcheck="false"></textarea>
+      <div class="result-panel" id="rightDiff"></div>
+    </div>
+  </div>
+</div>
+
+<div class="status-bar">
+  <div class="status-item">差异统计：<span id="statAdded">0</span> 处新增 &nbsp; <span id="statRemoved">0</span> 处删除</div>
+  <div class="status-item" id="statMode">等待输入...</div>
+</div>
+
+<script>
+// ===== Elements =====
+const elLeft = document.getElementById('editorLeft');
+const elRight = document.getElementById('editorRight');
+const leftLines = document.getElementById('leftLines');
+const rightLines = document.getElementById('rightLines');
+const leftWrap = document.getElementById('leftWrap');
+const rightWrap = document.getElementById('rightWrap');
+const leftDiff = document.getElementById('leftDiff');
+const rightDiff = document.getElementById('rightDiff');
+const leftBadge = document.getElementById('leftBadge');
+const rightBadge = document.getElementById('rightBadge');
+const statAdded = document.getElementById('statAdded');
+const statRemoved = document.getElementById('statRemoved');
+const statMode = document.getElementById('statMode');
+
+let isJsonMode = false;
+
+// ===== Line Numbers =====
+function updateLineNumbers(textarea, lineEl) {
+  const lines = textarea.value.split('\n').length;
+  let html = '';
+  for (let i = 1; i <= lines; i++) html += '<div>' + i + '</div>';
+  lineEl.innerHTML = html;
+}
+
+// Sync scroll between line numbers and textarea
+function syncScroll(ta, ln) {
+  ta.addEventListener('scroll', () => {
+    ln.scrollTop = ta.scrollTop;
+  });
+}
+syncScroll(elLeft, leftLines);
+syncScroll(elRight, rightLines);
+
+elLeft.addEventListener('input', () => { updateLineNumbers(elLeft, leftLines); leftBadge.textContent = elLeft.value.split('\n').length + ' 行'; });
+elRight.addEventListener('input', () => { updateLineNumbers(elRight, rightLines); rightBadge.textContent = elRight.value.split('\n').length + ' 行'; });
+
+// Tab support
+[elLeft, elRight].forEach(ta => {
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+      ta.dispatchEvent(new Event('input'));
+    }
+  });
+});
+
+// ===== Detect JSON =====
+function tryParseJSON(str) {
+  str = str.trim();
+  if (!str) return null;
+  try {
+    const obj = JSON.parse(str);
+    return obj;
+  } catch(e) {
+    return null;
+  }
+}
+
+function formatJSON(obj) {
+  return JSON.stringify(obj, null, 2);
+}
+
+// ===== JSON Syntax Highlighter =====
+function highlightJSONLine(line, isDiffAdd, isDiffRemove) {
+  let cls = isDiffAdd ? 'diff-added' : (isDiffRemove ? 'diff-removed' : 'diff-unchanged');
+  // Tokenize
+  let result = '';
+  const re = /("(?:[^"\\]|\\.)*")\s*(:)|("(?:[^"\\]|\\.)*")|(-?\d+\.?\d*(?:e[+-]?\d+)?i?)|(\btrue\b|\bfalse\b)|(\bnull\b)|([\[\]{}])|,|(:)/g;
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > lastIndex) result += escapeHtml(line.slice(lastIndex, m.index));
+    if (m[1] !== undefined) { result += `<span class="j-key">${escapeHtml(m[1])}</span><span class="j-colon">${escapeHtml(m[2])}</span>`; }
+    else if (m[3] !== undefined) { result += `<span class="j-string">${escapeHtml(m[3])}</span>`; }
+    else if (m[4] !== undefined) { result += `<span class="j-number">${escapeHtml(m[4])}</span>`; }
+    else if (m[5] !== undefined) { result += `<span class="j-bool">${escapeHtml(m[5])}</span>`; }
+    else if (m[6] !== undefined) { result += `<span class="j-null">${escapeHtml(m[6])}</span>`; }
+    else if (m[7] !== undefined) { result += `<span class="j-brace">${escapeHtml(m[7])}</span>`; }
+    else if (m[0] === ',') { result += `<span class="j-comma">${escapeHtml(m[0])}</span>`; }
+    else if (m[0] === ':') { result += `<span class="j-colon">${escapeHtml(m[0])}</span>`; }
+    else { result += escapeHtml(m[0]); }
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < line.length) result += escapeHtml(line.slice(lastIndex));
+  return `<div class="diff-line ${cls}">${result || '&nbsp;'}</div>`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ===== Diff Algorithm (LCS-based line-level diff) =====
+function computeDiff(linesA, linesB) {
+  const m = linesA.length, n = linesB.length;
+  // Build LCS table
+  const dp = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = linesA[i] === linesB[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  // Backtrack to get operations
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < m || j < n) {
+    if (i < m && j < n && linesA[i] === linesB[j]) {
+      ops.push({ type: '=', aIdx: i, bIdx: j });
+      i++; j++;
+    } else if (j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j])) {
+      ops.push({ type: '+', bIdx: j });
+      j++;
+    } else {
+      ops.push({ type: '-', aIdx: i });
+      i++;
+    }
+  }
+  return ops;
+}
+
+// ===== Compare =====
+function doCompare() {
+  let rawA = elLeft.value;
+  let rawB = elRight.value;
+  const jsonA = tryParseJSON(rawA);
+  const jsonB = tryParseJSON(rawB);
+
+  isJsonMode = (jsonA !== null || jsonB !== null);
+
+  if (isJsonMode && jsonA !== null && jsonB !== null) {
+    rawA = formatJSON(jsonA);
+    rawB = formatJSON(jsonB);
+  } else if (isJsonMode && jsonA !== null) {
+    rawA = formatJSON(jsonA);
+    // B is not JSON, keep as-is
+  } else if (isJsonMode && jsonB !== null) {
+    rawB = formatJSON(jsonB);
+  }
+
+  const linesA = rawA.split('\n');
+  const linesB = rawB.split('\n');
+  const ops = computeDiff(linesA, linesB);
+
+  let addedCount = 0, removedCount = 0;
+
+  // Build left side HTML
+  let leftHtml = '<div class="diff-side">';
+  for (const op of ops) {
+    if (op.type === '=') {
+      leftHtml += renderLine(linesA[op.aIdx], false, false, isJsonMode);
+    } else if (op.type === '-') {
+      removedCount++;
+      leftHtml += renderLine(linesA[op.aIdx], false, true, isJsonMode);
+    } else {
+      // '+' on left side shows empty placeholder to maintain alignment (no highlight)
+      leftHtml += `<div class="diff-line diff-line-empty">&nbsp;</div>`;
+    }
+  }
+  leftHtml += '</div>';
+
+  // Build right side HTML
+  let rightHtml = '<div class="diff-side">';
+  for (const op of ops) {
+    if (op.type === '=') {
+      rightHtml += renderLine(linesB[op.bIdx], false, false, isJsonMode);
+    } else if (op.type === '+') {
+      addedCount++;
+      rightHtml += renderLine(linesB[op.bIdx], true, false, isJsonMode);
+    } else {
+      // '-' on right side shows empty placeholder (no highlight)
+      rightHtml += `<div class="diff-line diff-line-empty">&nbsp;</div>`;
+    }
+  }
+  rightHtml += '</div>';
+
+  leftDiff.innerHTML = leftHtml;
+  rightDiff.innerHTML = rightHtml;
+
+  leftWrap.classList.add('show-diff');
+  rightWrap.classList.add('show-diff');
+  leftDiff.classList.add('active');
+  rightDiff.classList.add('active');
+
+  statAdded.textContent = addedCount;
+  statRemoved.textContent = removedCount;
+  statMode.textContent = isJsonMode ? 'JSON 对比模式' : '纯文本对比模式';
+  document.getElementById('modeLabel').textContent = '模式：对比结果';
+  document.getElementById('compareBtn').style.display = 'none';
+  document.getElementById('editBtn').style.display = '';
+}
+
+function backToEdit() {
+  leftDiff.classList.remove('active');
+  rightDiff.classList.remove('active');
+  leftWrap.classList.remove('show-diff');
+  rightWrap.classList.remove('show-diff');
+  document.getElementById('modeLabel').textContent = '模式：编辑中';
+  document.getElementById('compareBtn').style.display = '';
+  document.getElementById('editBtn').style.display = 'none';
+  statMode.textContent = '等待输入...';
+  // 重新聚焦到左侧编辑器
+  elLeft.focus();
+}
+
+function renderLine(line, isAdd, isRemove, doHighlight) {
+  if (!doHighlight) {
+    const cls = isAdd ? 'diff-added' : (isRemove ? 'diff-removed' : 'diff-unchanged');
+    return `<div class="diff-line ${cls}">${escapeHtml(line) || '&nbsp;'}</div>`;
+  }
+  return highlightJSONLine(line, isAdd, isRemove);
+}
+
+// ===== Utility =====
+function swapContent() {
+  const tmp = elLeft.value;
+  elLeft.value = elRight.value;
+  elRight.value = tmp;
+  [elLeft, elRight].forEach((ta, idx) => {
+    ta.dispatchEvent(new Event('input'));
+    const le = idx === 0 ? leftLines : rightLines;
+    updateLineNumbers(ta, le);
+  });
+  if (leftDiff.classList.contains('active')) doCompare();
+}
+
+function clearAll() {
+  elLeft.value = '';
+  elRight.value = '';
+  leftDiff.classList.remove('active');
+  rightDiff.classList.remove('active');
+  leftWrap.classList.remove('show-diff');
+  rightWrap.classList.remove('show-diff');
+  updateLineNumbers(elLeft, leftLines);
+  updateLineNumbers(elRight, rightLines);
+  leftBadge.textContent = '-- 行';
+  rightBadge.textContent = '-- 行';
+  statAdded.textContent = '0';
+  statRemoved.textContent = '0';
+  statMode.textContent = '等待输入...';
+  document.getElementById('modeLabel').textContent = '模式：编辑中';
+  document.getElementById('compareBtn').style.display = '';
+  document.getElementById('editBtn').style.display = 'none';
+}
+
+// ===== Sample Data =====
+function loadSampleA() {
+  elLeft.value = `{
+  "name": "张三",
+  "age": 28,
+  "skills": ["PHP", "JavaScript", "Go"],
+  "address": {
+    "city": "深圳",
+    "district": "南山区"
+  },
+  "active": true,
+  "score": 95.5,
+  "metadata": null
+}`;
+  elLeft.dispatchEvent(new Event('input'));
+  updateLineNumbers(elLeft, leftLines);
+}
+
+function loadSampleB() {
+  elRight.value = `{
+  "name": "张三",
+  "age": 29,
+  "skills": ["PHP", "TypeScript", "Go", "Rust"],
+  "address": {
+    "city": "广州",
+    "district": "天河区"
+  },
+  "active": true,
+  "score": 98.0,
+  "department": "研发部"
+}`;
+  elRight.dispatchEvent(new Event('input'));
+  updateLineNumbers(elRight, rightLines);
+}
+
+// ===== Resizable Divider =====
+const divider = document.getElementById('divider');
+const container = document.querySelector('.container');
+let isResizing = false;
+
+divider.addEventListener('mousedown', e => {
+  isResizing = true;
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+});
+document.addEventListener('mousemove', e => {
+  if (!isResizing) return;
+  const containerRect = container.getBoundingClientRect();
+  const percent = ((e.clientX - containerRect.left) / containerRect.width) * 100;
+  const clamped = Math.min(Math.max(percent, 15), 85);
+  document.querySelectorAll('.panel')[0].style.flex = `0 0 ${clamped}%`;
+  document.querySelectorAll('.panel')[1].style.flex = `0 0 ${100 - clamped}%`;
+});
+document.addEventListener('mouseup', () => {
+  isResizing = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+});
+
+// Init
+updateLineNumbers(elLeft, leftLines);
+updateLineNumbers(elRight, rightLines);
+</script>
+</body>
+</html>

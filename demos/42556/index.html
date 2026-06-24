@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>古风白衣少年 · 第三人称移动</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; background: #000; font-family: Georgia, 'Songti SC', serif; }
+        
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        .ui-layer {
+            position: absolute; pointer-events: none; z-index: 100;
+            color: #f0e6d3; text-shadow: 1px 1px 4px rgba(0,0,0,0.8);
+        }
+        #info {
+            top: 12px; left: 12px; line-height: 1.8; font-size: 13px; opacity: 0.9;
+        }
+        #viewMode {
+            top: 170px; left: 12px;
+            background: rgba(30,25,20,0.55); padding: 4px 12px;
+            border-radius: 3px; font-size: 12px;
+        }
+        #debug {
+            bottom: 10px; left: 10px; color: #ff9999; font-size: 11px;
+            font-family: monospace; max-width: 60%; word-wrap: break-word;
+        }
+        #fps {
+            top: 12px; right: 12px; font-family: monospace; font-size: 12px;
+            color: #8aff8a; opacity: 0.7;
+        }
+
+        .menu-overlay {
+            position: absolute; inset: 0; z-index: 200;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(5,4,2,0.4); backdrop-filter: blur(4px);
+            transition: opacity 0.4s ease;
+        }
+        .menu-overlay.hidden { opacity: 0; pointer-events: none; }
+        
+        .menu-card {
+            background: linear-gradient(160deg, rgba(15,12,8,0.96), rgba(35,28,18,0.94));
+            color: #f0e6d3; padding: 40px 55px; border-radius: 10px;
+            text-align: center; border: 1px solid rgba(200,170,80,0.25);
+            box-shadow: 0 0 80px rgba(0,0,0,0.7);
+            transform: translateY(0); transition: transform 0.4s ease;
+        }
+        .menu-overlay.hidden .menu-card { transform: translateY(-20px); }
+        
+        .menu-card h1 { margin: 0 0 8px; font-size: 32px; color: #D4A843; letter-spacing: 12px; font-weight: normal; }
+        .menu-card p { color: #8a7a6a; font-style: italic; margin: 0 0 28px; font-size: 14px; }
+        .menu-card h2 { margin: 0 0 18px; font-size: 22px; color: #D4A843; font-weight: normal; }
+        
+        .menu-btn {
+            padding: 12px 38px; margin: 8px; font-size: 15px; cursor: pointer;
+            background: transparent; border: 1px solid rgba(212,168,67,0.5);
+            color: #D4A843; border-radius: 4px; font-family: inherit;
+            letter-spacing: 4px; transition: all 0.3s ease; pointer-events: auto;
+        }
+        .menu-btn:hover {
+            background: rgba(212,168,67,0.15); border-color: #D4A843;
+            box-shadow: 0 0 20px rgba(212,168,67,0.15);
+        }
+
+        #loader {
+            position: absolute; inset: 0; z-index: 300;
+            background: #0a0806; display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            transition: opacity 0.6s ease;
+        }
+        #loader.hidden { opacity: 0; pointer-events: none; }
+        .loader-text { color: #D4A843; font-size: 18px; letter-spacing: 6px; margin-top: 20px; }
+        .loader-bar {
+            width: 200px; height: 2px; background: rgba(212,168,67,0.2);
+            border-radius: 2px; margin-top: 16px; overflow: hidden;
+        }
+        .loader-progress {
+            height: 100%; width: 0%; background: #D4A843;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="loader">
+        <div class="loader-text">江湖载入中...</div>
+        <div class="loader-bar"><div class="loader-progress" id="loaderProgress"></div></div>
+    </div>
+
+    <div id="info" class="ui-layer">
+        <div>WASD · 移动</div>
+        <div>鼠标 · 视角</div>
+        <div>空格 · 跳跃</div>
+        <div>V · 切换视角</div>
+        <div>ESC · 暂停</div>
+    </div>
+    <div id="viewMode" class="ui-layer">视角: 第三人称</div>
+    <div id="fps" class="ui-layer">FPS: --</div>
+    <div id="debug" class="ui-layer">初始化中...</div>
+
+    <div id="startMenu" class="menu-overlay">
+        <div class="menu-card">
+            <h1>白衣少年</h1>
+            <p>剑指天涯 · 古风江湖</p>
+            <button class="menu-btn" id="startBtn">踏入江湖</button>
+        </div>
+    </div>
+
+    <div id="pauseMenu" class="menu-overlay hidden">
+        <div class="menu-card">
+            <h2>暂歇片刻</h2>
+            <button class="menu-btn" id="resumeBtn">继续前行</button>
+        </div>
+    </div>
+
+    <script>
+    // ================================================================
+    //  工具与常量
+    // ================================================================
+    const CONSTANTS = {
+        GRAVITY: 20,
+        JUMP_FORCE: 10,
+        MOVE_SPEED: 8,
+        CAM_DISTANCE: 7,
+        CAM_HEIGHT: 2.5,
+        CAM_SMOOTH: 0.12,
+        ROTATION_SMOOTH: 8,
+        BOUNDARY: 55,
+        SHADOW_MAP_SIZE: 2048,
+        PARTICLE_COUNT: 400,
+        // 动画相关
+        ANIM_SWING_SMOOTH: 5,    // 手臂摆动过渡速度
+        ANIM_SPEED: 8,           // 基础动画频率
+        PARTICLE_SPEED_MIN: 0.3,
+        PARTICLE_SPEED_MAX: 0.45
+    };
+
+    const UTILS = {
+        clamp: (v, min, max) => Math.max(min, Math.min(max, v)),
+        lerp: (a, b, t) => a + (b - a) * t,
+        angleDiff: (a, b) => {
+            let d = b - a;
+            while (d > Math.PI) d -= Math.PI * 2;
+            while (d < -Math.PI) d += Math.PI * 2;
+            return d;
+        }
+    };
+
+    // ================================================================
+    //  性能监控
+    // ================================================================
+    class FPSCounter {
+        constructor() {
+            this.frames = 0;
+            this.lastTime = performance.now();
+            this.value = 0;
+            this.el = document.getElementById('fps');
+        }
+        update() {
+            this.frames++;
+            const now = performance.now();
+            if (now - this.lastTime >= 1000) {
+                this.value = this.frames;
+                this.frames = 0;
+                this.lastTime = now;
+                this.el.textContent = `FPS: ${this.value}`;
+            }
+        }
+    }
+
+    // ================================================================
+    //  输入管理器（集中处理键盘/鼠标）
+    // ================================================================
+    class InputManager {
+        constructor(stateProvider) {
+            this.keys = { w: false, a: false, s: false, d: false, v: false, space: false };
+            this.mouse = { dx: 0, dy: 0, locked: false, rawInit: false, lastX: 0, lastY: 0 };
+            this.onToggleView = null;
+            this.onPause = null;
+            this.lastVTime = 0;
+            this._stateProvider = stateProvider; // 获取游戏状态的函数
+            this._setupKeyboard();
+            this._setupPointerLock();
+        }
+
+        _setupKeyboard() {
+            document.addEventListener('keydown', (e) => {
+                const code = e.code;
+                if (code === 'KeyW') this.keys.w = true;
+                if (code === 'KeyA') this.keys.a = true;
+                if (code === 'KeyS') this.keys.s = true;
+                if (code === 'KeyD') this.keys.d = true;
+                if (code === 'KeyV') {
+                    if (!this.keys.v && Date.now() - this.lastVTime > 300) {
+                        this.lastVTime = Date.now();
+                        this.onToggleView?.();
+                    }
+                    this.keys.v = true;
+                }
+                if (code === 'Space') {
+                    e.preventDefault();
+                    this.keys.space = true;
+                }
+                if (code === 'Escape') this.onPause?.();
+            });
+
+            document.addEventListener('keyup', (e) => {
+                const code = e.code;
+                if (code === 'KeyW') this.keys.w = false;
+                if (code === 'KeyA') this.keys.a = false;
+                if (code === 'KeyS') this.keys.s = false;
+                if (code === 'KeyD') this.keys.d = false;
+                if (code === 'KeyV') this.keys.v = false;
+                if (code === 'Space') this.keys.space = false;
+            });
+        }
+
+        _setupPointerLock() {
+            const canvas = document.getElementById('canvas-container');
+            
+            document.addEventListener('pointerlockchange', () => {
+                this.mouse.locked = document.pointerLockElement === canvas;
+            });
+
+            canvas.addEventListener('click', () => {
+                if (this._stateProvider() === 'playing') this.requestLock();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (this._stateProvider() !== 'playing') return;
+                if (this.mouse.locked) {
+                    this.mouse.dx = e.movementX || 0;
+                    this.mouse.dy = e.movementY || 0;
+                } else {
+                    const cx = e.clientX, cy = e.clientY;
+                    if (!this.mouse.rawInit) {
+                        this.mouse.lastX = cx;
+                        this.mouse.lastY = cy;
+                        this.mouse.rawInit = true;
+                        return;
+                    }
+                    this.mouse.dx = cx - this.mouse.lastX;
+                    this.mouse.dy = cy - this.mouse.lastY;
+                    this.mouse.lastX = cx;
+                    this.mouse.lastY = cy;
+                }
+            });
+        }
+
+        requestLock() {
+            const el = document.getElementById('canvas-container');
+            el.requestPointerLock?.();
+        }
+
+        exitLock() {
+            document.exitPointerLock?.();
+        }
+
+        resetMouse() {
+            this.mouse.rawInit = false;
+            this.mouse.dx = 0;
+            this.mouse.dy = 0;
+        }
+
+        getMovement() {
+            const { dx, dy } = this.mouse;
+            this.mouse.dx = 0;
+            this.mouse.dy = 0;
+            return { dx, dy };
+        }
+    }
+
+    // ================================================================
+    //  角色动画系统
+    // ================================================================
+    class CharacterAnimator {
+        constructor(character) {
+            this.char = character;
+            this.time = 0;
+            this.swing = 0;
+            this.targetSwing = 0;
+            this.parts = this._cacheParts(character);
+        }
+
+        _cacheParts(g) {
+            const parts = {};
+            g.traverse((child) => {
+                if (child.userData?.role) parts[child.userData.role] = child;
+            });
+            return parts;
+        }
+
+        update(dt, speed) {
+            this.time += dt;
+            this.targetSwing = speed > 0.3 ? 0.38 : 0;
+            this.swing += (this.targetSwing - this.swing) * CONSTANTS.ANIM_SWING_SMOOTH * dt;
+
+            const t = this.time;
+            const s = this.swing;
+            const a = CONSTANTS.ANIM_SPEED;
+
+            const { leftArm, rightArm, skirt, leftRibbon, rightRibbon, 
+                    ponytail, sideHairL, sideHairR, sash1, sash2 } = this.parts;
+
+            if (leftArm && rightArm) {
+                const armSwing = Math.sin(t * a) * s;
+                leftArm.rotation.x = armSwing;
+                rightArm.rotation.x = -armSwing;
+                leftArm.rotation.z = 0.06 + Math.sin(t * 1.2) * 0.012;
+                rightArm.rotation.z = -0.06 - Math.sin(t * 1.2) * 0.012;
+            }
+
+            if (skirt) {
+                skirt.rotation.x = Math.sin(t * a) * s * 0.2;
+                skirt.rotation.z = Math.sin(t * a * 0.7 + 0.5) * s * 0.08;
+            }
+
+            if (leftRibbon && rightRibbon) {
+                const rs = Math.sin(t * a + 1.0) * s * 0.75;
+                leftRibbon.rotation.x = rs;
+                rightRibbon.rotation.x = -rs;
+                const rz = Math.cos(t * a * 0.8) * s * 0.45;
+                leftRibbon.rotation.z = rz;
+                rightRibbon.rotation.z = -rz;
+            }
+
+            if (ponytail) {
+                ponytail.rotation.x = -Math.sin(t * a * 0.65 + 0.5) * s * 0.12;
+                ponytail.rotation.z = Math.cos(t * a * 0.45) * s * 0.22;
+            }
+
+            if (sideHairL && sideHairR) {
+                const sh = Math.sin(t * a * 0.55 + 0.8) * s * 0.18;
+                sideHairL.rotation.z = 0.1 + sh;
+                sideHairR.rotation.z = -0.1 - sh;
+            }
+
+            if (sash1 && sash2) {
+                const ts = Math.sin(t * a * 0.75 + 1.2) * s * 0.3;
+                sash1.rotation.x = ts;
+                sash2.rotation.x = -ts * 0.7;
+            }
+        }
+    }
+
+    // ================================================================
+    //  樱花粒子系统（优化版）
+    // ================================================================
+    class CherryBlossomSystem {
+        constructor(scene, count) {
+            this.count = count;
+            this.geometry = new THREE.BufferGeometry();
+            this.positions = new Float32Array(count * 3);
+            this.colors = new Float32Array(count * 3);
+            this.speeds = new Float32Array(count);
+            this.phases = new Float32Array(count);
+
+            for (let i = 0; i < count; i++) {
+                this._resetParticle(i, true);
+                this.speeds[i] = CONSTANTS.PARTICLE_SPEED_MIN + Math.random() * (CONSTANTS.PARTICLE_SPEED_MAX - CONSTANTS.PARTICLE_SPEED_MIN);
+                this.phases[i] = Math.random() * Math.PI * 2;
+            }
+
+            this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+            this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+
+            this.mesh = new THREE.Points(this.geometry, new THREE.PointsMaterial({
+                size: 0.12, transparent: true, opacity: 0.6,
+                vertexColors: true, sizeAttenuation: true, depthWrite: false
+            }));
+            scene.add(this.mesh);
+        }
+
+        _resetParticle(i, initial = false) {
+            const positions = this.positions;
+            const colors = this.colors;
+            positions[i * 3] = (Math.random() - 0.5) * 60;
+            positions[i * 3 + 1] = initial ? Math.random() * 18 + 1 : 15 + Math.random() * 5;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 60;
+            
+            const b = 0.7 + Math.random() * 0.3;
+            colors[i * 3] = 1;
+            colors[i * 3 + 1] = b * 0.75;
+            colors[i * 3 + 2] = b * 0.8;
+        }
+
+        update(dt, time) {
+            const pos = this.positions;
+            const speeds = this.speeds;
+            const phases = this.phases;
+            
+            for (let i = 0; i < this.count; i++) {
+                const idx = i * 3;
+                pos[idx] += Math.sin(time * 0.6 + phases[i]) * dt * 0.4;
+                pos[idx + 1] -= dt * speeds[i];
+                pos[idx + 2] += Math.cos(time * 0.4 + phases[i] * 0.7) * dt * 0.25;
+
+                if (pos[idx + 1] < -0.5) {
+                    this._resetParticle(i);
+                }
+            }
+            this.geometry.attributes.position.needsUpdate = true;
+        }
+    }
+
+    // ================================================================
+    //  场景构建器
+    // ================================================================
+    class SceneBuilder {
+        static createGround(scene) {
+            const ground = new THREE.Mesh(
+                new THREE.PlaneGeometry(120, 120),
+                new THREE.MeshStandardMaterial({ color: 0x5A8A4A, roughness: 0.85 })
+            );
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            const grid = new THREE.GridHelper(120, 60, 0x8a9a7a, 0x7a8a6a);
+            grid.position.y = 0.01;
+            grid.material.transparent = true;
+            grid.material.opacity = 0.12;
+            scene.add(grid);
+        }
+
+        static createLighting(scene) {
+            scene.add(new THREE.AmbientLight(0xFFE8D0, 0.5));
+
+            const sun = new THREE.DirectionalLight(0xFFF5E8, 1.0);
+            sun.position.set(8, 15, 10);
+            sun.castShadow = true;
+            sun.shadow.mapSize.set(CONSTANTS.SHADOW_MAP_SIZE, CONSTANTS.SHADOW_MAP_SIZE);
+            sun.shadow.camera.near = 0.5;
+            sun.shadow.camera.far = 60;
+            const ss = 25;
+            sun.shadow.camera.left = -ss;
+            sun.shadow.camera.right = ss;
+            sun.shadow.camera.top = ss;
+            sun.shadow.camera.bottom = -ss;
+            sun.shadow.bias = -0.001;
+            scene.add(sun);
+
+            const fill1 = new THREE.DirectionalLight(0xB8D4FF, 0.3);
+            fill1.position.set(-5, 8, -5);
+            scene.add(fill1);
+
+            const fill2 = new THREE.DirectionalLight(0xFFE0C0, 0.2);
+            fill2.position.set(0, 5, -10);
+            scene.add(fill2);
+        }
+
+        static createBamboo(scene) {
+            const bm = new THREE.MeshStandardMaterial({ color: 0x4A7A3A, roughness: 0.55 });
+            const jm = new THREE.MeshStandardMaterial({ color: 0x3A6A2A, roughness: 0.5 });
+            const lm = new THREE.MeshStandardMaterial({ color: 0x5A9A4A, roughness: 0.4, side: THREE.DoubleSide });
+
+            const positions = [
+                [-15,-8],[-18,-5],[-16,-12],[-20,-3],[-14,-15],[-12,15],[-15,18],[-10,12],
+                [18,-10],[20,-8],[16,-14],[22,-12],[15,15],[18,12],[20,18],[13,20],
+                [-25,5],[-22,-20],[25,5],[22,-20],[-8,-22],[8,-22],[-8,22],[8,22]
+            ];
+
+            positions.forEach(([x, z]) => {
+                const g = new THREE.Group();
+                const h = 4 + Math.random() * 5;
+                const n = Math.floor(h / 1.2);
+                
+                for (let i = 0; i < n; i++) {
+                    const r = 0.04 + Math.random() * 0.03;
+                    const seg = new THREE.Mesh(
+                        new THREE.CylinderGeometry(r, r + 0.01, 1.1, 8),
+                        i % 2 ? jm : bm
+                    );
+                    seg.position.y = i * 1.2 + 0.55;
+                    seg.castShadow = true;
+                    g.add(seg);
+
+                    if (i > 0) {
+                        const j = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.02, r + 0.02, 0.06, 8), jm);
+                        j.position.y = i * 1.2 + 0.05;
+                        g.add(j);
+                    }
+                }
+
+                for (let k = 0; k < 4; k++) {
+                    const a = (k / 4) * Math.PI * 2 + Math.random();
+                    const lf = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.5), lm);
+                    lf.position.set(Math.cos(a) * 0.15, h - 1 - k * 0.5, Math.sin(a) * 0.15);
+                    lf.rotation.set(0, a, Math.cos(a) * 0.8);
+                    g.add(lf);
+                }
+
+                g.rotation.set((Math.random() - 0.5) * 0.05, 0, (Math.random() - 0.5) * 0.08);
+                g.position.set(x, 0, z);
+                scene.add(g);
+            });
+        }
+
+        static createCherryTrees(scene) {
+            const colors = [0xFFB7C5, 0xFFC0CB, 0xFFD1DC, 0xFFA4B8];
+            const trees = [[-10, -5, 1], [12, 8, 1.1], [0, -15, 0.9]];
+
+            trees.forEach(([x, z, sc], idx) => {
+                const t = new THREE.Group();
+                
+                const trunk = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.12, 0.22, 3.5, 8),
+                    new THREE.MeshStandardMaterial({ color: 0x5C3A1E, roughness: 0.85 })
+                );
+                trunk.position.y = 1.75;
+                trunk.castShadow = true;
+                t.add(trunk);
+
+                const branchMat = new THREE.MeshStandardMaterial({ color: 0x6B4226, roughness: 0.8 });
+                for (let i = 0; i < 4; i++) {
+                    const a = (i / 4) * Math.PI * 2 + idx * 0.5;
+                    const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.07, 1.8, 6), branchMat);
+                    branch.position.set(Math.cos(a) * 0.7, 2.8 + i * 0.3, Math.sin(a) * 0.7);
+                    branch.rotation.set(Math.sin(a) * 0.6, 0, Math.cos(a) * 0.6);
+                    branch.castShadow = true;
+                    t.add(branch);
+                }
+
+                for (let i = 0; i < 15; i++) {
+                    const cluster = new THREE.Mesh(
+                        new THREE.SphereGeometry(0.5 + Math.random() * 0.5, 8, 8),
+                        new THREE.MeshStandardMaterial({
+                            color: colors[i % 4], roughness: 0.6,
+                            transparent: true, opacity: 0.8
+                        })
+                    );
+                    cluster.position.set((Math.random() - 0.5) * 3, 3 + Math.random() * 2, (Math.random() - 0.5) * 3);
+                    cluster.castShadow = true;
+                    t.add(cluster);
+                }
+
+                t.position.set(x, 0, z);
+                t.scale.setScalar(sc);
+                scene.add(t);
+            });
+        }
+
+        static createStones(scene) {
+            const mat = new THREE.MeshStandardMaterial({ color: 0x8A8A7A, roughness: 0.9 });
+            const stones = [[5,3,0.4],[-3,-4,0.3],[7,-6,0.35],[-8,2,0.25],[2,8,0.3],[-5,-8,0.45]];
+            stones.forEach(([x, z, r]) => {
+                const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 1), mat);
+                mesh.position.set(x, r * 0.4, z);
+                mesh.rotation.set(Math.random(), Math.random(), Math.random());
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+            });
+        }
+    }
+
+    // ================================================================
+    //  角色构建器
+    // ================================================================
+    class CharacterBuilder {
+        static create() {
+            const G = new THREE.Group();
+            const skin = new THREE.MeshStandardMaterial({ color: 0xFFE0BD, roughness: 0.45 });
+            const skinDk = new THREE.MeshStandardMaterial({ color: 0xF0CCA8, roughness: 0.5 });
+            const hair = new THREE.MeshStandardMaterial({ color: 0x0B0B1A, roughness: 0.5, metalness: 0.15 });
+            const hairSh = new THREE.MeshStandardMaterial({ color: 0x161630, roughness: 0.35, metalness: 0.2 });
+            const outer = new THREE.MeshStandardMaterial({ color: 0xFAFAFF, roughness: 0.28, metalness: 0.02, emissive: 0x101018, emissiveIntensity: 0.08 });
+            const inner = new THREE.MeshStandardMaterial({ color: 0xF0F0F8, roughness: 0.45 });
+            const collar = new THREE.MeshStandardMaterial({ color: 0x9EC8E8, roughness: 0.28, metalness: 0.05, emissive: 0x0A1520, emissiveIntensity: 0.06 });
+            const sashM = new THREE.MeshStandardMaterial({ color: 0x6BB0D0, roughness: 0.2, metalness: 0.15 });
+            const gold = new THREE.MeshStandardMaterial({ color: 0xD4A843, roughness: 0.2, metalness: 0.7 });
+            const jade = new THREE.MeshStandardMaterial({ color: 0x80DD80, roughness: 0.15, emissive: 0x004400, emissiveIntensity: 0.35 });
+            const red = new THREE.MeshStandardMaterial({ color: 0xCC3333, roughness: 0.3 });
+            const eyeWht = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: 0.15 });
+            const eyeIris = new THREE.MeshStandardMaterial({ color: 0x1A3366, roughness: 0.12, emissive: 0x0A1A33, emissiveIntensity: 0.45 });
+            const eyePup = new THREE.MeshBasicMaterial({ color: 0x000008 });
+            const eyeHigh = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+            const browMat = new THREE.MeshStandardMaterial({ color: 0x111120, roughness: 0.6 });
+            const mouthM = new THREE.MeshStandardMaterial({ color: 0xE8A0A0, roughness: 0.4 });
+            const shoeM = new THREE.MeshStandardMaterial({ color: 0x1A1A2A, roughness: 0.5 });
+            const blushM = new THREE.MeshBasicMaterial({ color: 0xFFAAAA, transparent: true, opacity: 0.12 });
+            const bladeM = new THREE.MeshStandardMaterial({ color: 0x1A1A30, roughness: 0.32, metalness: 0.3 });
+
+            const add = (geo, mat, x, y, z, shadow, role) => {
+                const m = new THREE.Mesh(geo, mat);
+                m.position.set(x || 0, y || 0, z || 0);
+                if (shadow) m.castShadow = true;
+                if (role) m.userData.role = role;
+                G.add(m);
+                return m;
+            };
+
+            // 头部
+            const head = add(new THREE.SphereGeometry(0.3, 32, 32), skin, 0, 1.88, 0, true);
+            head.scale.set(1, 1.06, 0.95);
+            add(new THREE.SphereGeometry(0.14, 16, 16), skin, 0, 1.68, 0.1).scale.set(0.72, 0.6, 0.6);
+
+            [-1, 1].forEach(s => {
+                const ear = add(new THREE.SphereGeometry(0.05, 12, 12), skinDk, s * 0.28, 1.86, -0.02);
+                ear.scale.set(0.5, 1, 0.7);
+            });
+
+            // 眼睛
+            const mkEye = (x) => {
+                const g = new THREE.Group();
+                const lid = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.08, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.32),
+                    new THREE.MeshBasicMaterial({ color: 0x111118 })
+                );
+                lid.scale.set(1.2, 1.15, 0.5);
+                lid.position.y = 0.012;
+                g.add(lid);
+
+                const white = new THREE.Mesh(new THREE.SphereGeometry(0.075, 24, 24), eyeWht);
+                white.scale.set(1.12, 1.3, 0.5);
+                g.add(white);
+
+                const iris = new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 20), eyeIris);
+                iris.scale.set(1, 1.1, 0.25);
+                iris.position.z = 0.032;
+                g.add(iris);
+
+                const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.024, 16, 16), eyePup);
+                pupil.scale.z = 0.2;
+                pupil.position.z = 0.038;
+                g.add(pupil);
+
+                const h1 = new THREE.Mesh(new THREE.SphereGeometry(0.014, 12, 12), eyeHigh);
+                h1.position.set(0.022, 0.022, 0.042);
+                g.add(h1);
+
+                const h2 = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 8), eyeHigh);
+                h2.position.set(-0.012, -0.012, 0.042);
+                g.add(h2);
+
+                g.position.set(x, 1.91, 0.27);
+                return g;
+            };
+            G.add(mkEye(-0.12));
+            G.add(mkEye(0.12));
+
+            [-1, 1].forEach(s => {
+                const brow = add(new THREE.BoxGeometry(0.12, 0.018, 0.025), browMat, s * 0.12, 2.03, 0.28);
+                brow.rotation.z = s * -0.12;
+            });
+
+            add(new THREE.SphereGeometry(0.02, 8, 8), skinDk, 0, 1.85, 0.3);
+            add(new THREE.BoxGeometry(0.05, 0.012, 0.015), mouthM, 0, 1.78, 0.28);
+
+            [-1, 1].forEach(s => {
+                const bl = new THREE.Mesh(new THREE.CircleGeometry(0.045, 16), blushM);
+                bl.position.set(s * 0.17, 1.85, 0.265);
+                bl.lookAt(new THREE.Vector3(s * 0.17, 1.85, 1));
+                G.add(bl);
+            });
+
+            // 头发
+            add(new THREE.SphereGeometry(0.34, 32, 32, 0, Math.PI * 2, 0, Math.PI * 0.5), hair, 0, 1.9, -0.02).scale.set(1.06, 0.92, 1);
+            
+            [-1, 1].forEach(s => {
+                const t = add(new THREE.SphereGeometry(0.11, 12, 12, 0, Math.PI, 0, Math.PI), hair, s * 0.26, 1.88, 0.04);
+                t.rotation.y = s * -0.5;
+            });
+
+            for (let i = -3; i <= 3; i++) {
+                const bang = add(
+                    new THREE.BoxGeometry(0.075, 0.19 + Math.abs(i) * 0.015, 0.045),
+                    Math.abs(i) % 2 ? hairSh : hair,
+                    i * 0.068, 2.02 - Math.abs(i) * 0.015, 0.3 - Math.abs(i) * 0.008
+                );
+                bang.rotation.set(0.1, 0, i * 0.055);
+            }
+
+            // 鬓发
+            const sideHairL = new THREE.Group();
+            sideHairL.position.set(-0.27, 1.82, 0.12);
+            sideHairL.userData.role = 'sideHairL';
+            const sl1 = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.38, 0.045), hair);
+            sl1.position.y = -0.19; sideHairL.add(sl1);
+            const sl2 = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.15, 0.035), hairSh);
+            sl2.position.set(0.005, -0.43, 0); sideHairL.add(sl2);
+            G.add(sideHairL);
+
+            const sideHairR = new THREE.Group();
+            sideHairR.position.set(0.27, 1.82, 0.12);
+            sideHairR.userData.role = 'sideHairR';
+            const sr1 = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.38, 0.045), hair);
+            sr1.position.y = -0.19; sideHairR.add(sr1);
+            const sr2 = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.15, 0.035), hairSh);
+            sr2.position.set(-0.005, -0.43, 0); sideHairR.add(sr2);
+            G.add(sideHairR);
+
+            // 后发
+            [[0.52, 0.45, 0.18, 1.6, -0.2, hair],
+             [0.46, 0.55, 0.16, 1.18, -0.24, hair],
+             [0.36, 0.45, 0.13, 0.8, -0.28, hairSh]
+            ].forEach(([w, h, d, y, z, m]) => {
+                const bh = add(new THREE.BoxGeometry(w, h, d), m, 0, y, z, true);
+                bh.rotation.x = 0.08;
+            });
+
+            add(new THREE.SphereGeometry(0.13, 16, 16), hair, 0, 2.24, -0.04);
+            const hairRing = add(new THREE.TorusGeometry(0.13, 0.018, 8, 16), gold, 0, 2.24, -0.04);
+            hairRing.rotation.x = Math.PI / 2;
+
+            // 马尾
+            const ponytail = new THREE.Group();
+            ponytail.position.set(0, 2.2, -0.08);
+            ponytail.userData.role = 'ponytail';
+            [[0.085, 0.075, 0.38, -0.19, 0.28],
+             [0.075, 0.055, 0.38, -0.52, 0.38],
+             [0.055, 0.03, 0.32, -0.82, 0.32],
+             [0.03, 0.012, 0.22, -1.05, 0.2]
+            ].forEach(([rt, rb, h, y, rx]) => {
+                const seg = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 12), hair);
+                seg.position.set(0, y, -0.04);
+                seg.rotation.x = rx;
+                ponytail.add(seg);
+            });
+            const redBand = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.018, 8, 16), red);
+            redBand.position.set(0, 0.04, -0.02);
+            redBand.rotation.x = Math.PI / 2;
+            ponytail.add(redBand);
+            
+            const rt1 = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.28, 0.018), red);
+            rt1.position.set(0.055, -0.18, 0.04); rt1.rotation.z = 0.2; ponytail.add(rt1);
+            const rt2 = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.22, 0.018), red);
+            rt2.position.set(-0.04, -0.15, 0.06); rt2.rotation.z = -0.15; ponytail.add(rt2);
+            G.add(ponytail);
+
+            // 玉簪
+            const hairpin = add(new THREE.CylinderGeometry(0.01, 0.006, 0.32, 8), gold, 0.08, 2.27, -0.01);
+            hairpin.rotation.z = Math.PI / 5;
+            add(new THREE.OctahedronGeometry(0.035, 0), jade, 0.18, 2.34, -0.01);
+
+            // 躯干
+            add(new THREE.BoxGeometry(0.6, 0.76, 0.33), inner, 0, 1.18, 0, true);
+            add(new THREE.BoxGeometry(0.7, 0.78, 0.37), outer, 0, 1.18, 0, true);
+
+            const lapelR = add(new THREE.BoxGeometry(0.17, 0.5, 0.39), collar, 0.12, 1.27, 0);
+            lapelR.rotation.z = -0.22;
+            const lapelL = add(new THREE.BoxGeometry(0.14, 0.5, 0.37), inner, -0.12, 1.27, 0);
+            lapelL.rotation.z = 0.22;
+            add(new THREE.BoxGeometry(0.035, 0.48, 0.4), outer, 0.005, 1.28, 0);
+
+            [-1, 1].forEach(s => add(new THREE.BoxGeometry(0.08, 0.04, 0.4), collar, s * 0.32, 1.52, 0));
+
+            // 腰带
+            const sash = add(new THREE.TorusGeometry(0.36, 0.05, 8, 24), sashM, 0, 0.97, 0);
+            sash.rotation.x = Math.PI / 2;
+            add(new THREE.SphereGeometry(0.055, 12, 12), sashM, 0, 0.97, 0.34);
+
+            const sash1 = new THREE.Group();
+            sash1.position.set(0.055, 0.92, 0.31);
+            sash1.userData.role = 'sash1';
+            const t1a = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.48, 0.025), sashM);
+            t1a.position.y = -0.24; sash1.add(t1a);
+            const t1b = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.08, 0.022), gold);
+            t1b.position.y = -0.5; sash1.add(t1b);
+            G.add(sash1);
+
+            const sash2 = new THREE.Group();
+            sash2.position.set(-0.04, 0.92, 0.31);
+            sash2.userData.role = 'sash2';
+            const t2 = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.38, 0.025), collar);
+            t2.position.y = -0.19; sash2.add(t2);
+            G.add(sash2);
+
+            add(new THREE.OctahedronGeometry(0.032, 0), jade, 0.055, 0.42, 0.33);
+            add(new THREE.CylinderGeometry(0.004, 0.004, 0.07, 4), gold, 0.055, 0.46, 0.33);
+
+            // 裙摆
+            const skirt = new THREE.Group();
+            skirt.position.set(0, 0.92, 0);
+            skirt.userData.role = 'skirt';
+            
+            const skirtGeo = new THREE.CylinderGeometry(0.34, 0.62, 0.92, 16, 4);
+            const skirtPos = skirtGeo.attributes.position;
+            for (let i = 0; i < skirtPos.count; i++) {
+                const sx = skirtPos.getX(i), sy = skirtPos.getY(i), sz = skirtPos.getZ(i);
+                const dist = Math.sqrt(sx * sx + sz * sz);
+                if (dist > 0.1) {
+                    const angle = Math.atan2(sz, sx);
+                    const wave = Math.sin(angle * 4 + sy * 3) * 0.025;
+                    skirtPos.setX(i, sx + wave * Math.cos(angle));
+                    skirtPos.setZ(i, sz + wave * Math.sin(angle));
+                }
+            }
+            skirtGeo.computeVertexNormals();
+            const skirtMesh = new THREE.Mesh(skirtGeo, outer);
+            skirtMesh.position.y = -0.46;
+            skirtMesh.castShadow = true;
+            skirt.add(skirtMesh);
+
+            const innerSkirt = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.48, 0.82, 12), inner);
+            innerSkirt.position.y = -0.41;
+            skirt.add(innerSkirt);
+
+            const hemRing = new THREE.Mesh(new THREE.TorusGeometry(0.58, 0.018, 8, 24), collar);
+            hemRing.position.y = -0.9;
+            hemRing.rotation.x = Math.PI / 2;
+            skirt.add(hemRing);
+
+            for (let j = 0; j < 8; j++) {
+                const a = (j / 8) * Math.PI * 2;
+                const bead = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), gold);
+                bead.position.set(Math.cos(a) * 0.56, -0.9, Math.sin(a) * 0.56);
+                skirt.add(bead);
+            }
+            G.add(skirt);
+
+            const robeTrail = add(new THREE.BoxGeometry(0.55, 0.035, 0.65), outer, 0, 0.15, -0.42);
+            robeTrail.rotation.x = -0.22;
+
+            // 飘带
+            const mkRibbon = (sideX) => {
+                const g = new THREE.Group();
+                g.position.set(sideX * 0.2, 0.8, -0.22);
+                const ribbon = new THREE.Mesh(new THREE.BoxGeometry(0.065, 1.25, 0.03), collar);
+                ribbon.position.y = -0.62; g.add(ribbon);
+                const end = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.12, 0.025), gold);
+                end.position.y = -1.28; g.add(end);
+                return g;
+            };
+            const leftRibbon = mkRibbon(-1);
+            leftRibbon.userData.role = 'leftRibbon';
+            const rightRibbon = mkRibbon(1);
+            rightRibbon.userData.role = 'rightRibbon';
+            G.add(leftRibbon);
+            G.add(rightRibbon);
+
+            // 手臂
+            const mkArm = (side) => {
+                const p = new THREE.Group();
+                p.position.set(side * 0.47, 1.48, 0);
+                p.userData.role = side < 0 ? 'leftArm' : 'rightArm';
+
+                const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.06, 0.28, 8), skin);
+                upperArm.position.y = -0.14; p.add(upperArm);
+
+                const sleeveUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.17, 0.4, 12), outer);
+                sleeveUpper.position.y = -0.32; sleeveUpper.castShadow = true; p.add(sleeveUpper);
+
+                const sleeveLower = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.33, 0.28, 12), outer);
+                sleeveLower.position.y = -0.58; sleeveLower.castShadow = true; p.add(sleeveLower);
+
+                const sleeveInner = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.3, 0.26, 12), inner);
+                sleeveInner.position.y = -0.58; p.add(sleeveInner);
+
+                const cuffEdge = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.014, 8, 20), collar);
+                cuffEdge.position.y = -0.71; cuffEdge.rotation.x = Math.PI / 2; p.add(cuffEdge);
+
+                const hand = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 16), skin);
+                hand.position.y = -0.78; hand.scale.set(0.75, 1, 0.55); p.add(hand);
+
+                return p;
+            };
+            G.add(mkArm(-1));
+            G.add(mkArm(1));
+
+            // 腿部
+            [-1, 1].forEach(s => {
+                const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.05, 0.38, 8), inner);
+                leg.position.set(s * 0.13, 0.22, 0); G.add(leg);
+                
+                const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.15), shoeM);
+                shoe.position.set(s * 0.13, 0.04, 0.02); G.add(shoe);
+                
+                const toe = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.025, 0.05), shoeM);
+                toe.position.set(s * 0.13, 0.055, 0.09); toe.rotation.x = -0.2; G.add(toe);
+            });
+
+            // 背剑
+            const sword = new THREE.Group();
+            sword.position.set(-0.27, 1.32, -0.27);
+            sword.rotation.x = -0.16;
+
+            const scabbard = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.022, 1.0, 8), bladeM);
+            scabbard.position.y = -0.46; scabbard.castShadow = true; sword.add(scabbard);
+            
+            const scabbardMouth = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.032, 0.055, 8), gold);
+            scabbardMouth.position.y = 0.06; sword.add(scabbardMouth);
+            
+            const swordTip = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.07, 8), gold);
+            swordTip.position.y = -1.0; sword.add(swordTip);
+            
+            const swordGuard = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.03, 0.055), gold);
+            swordGuard.position.y = 0.08; sword.add(swordGuard);
+            
+            const swordHandle = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.02, 0.02, 0.19, 8),
+                new THREE.MeshStandardMaterial({ color: 0x3A2518, roughness: 0.6 })
+            );
+            swordHandle.position.y = 0.19; sword.add(swordHandle);
+            
+            const swordPommel = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 12), gold);
+            swordPommel.position.y = 0.29; sword.add(swordPommel);
+            
+            const tassel1 = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 4), gold);
+            tassel1.position.set(0.035, -0.05, 0); tassel1.rotation.z = 0.4; sword.add(tassel1);
+            
+            const tasselBead = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), red);
+            tasselBead.position.set(0.07, -0.1, 0); sword.add(tasselBead);
+            
+            const tassel2 = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.001, 0.14, 4), red);
+            tassel2.position.set(0.075, -0.2, 0); tassel2.rotation.z = 0.08; sword.add(tassel2);
+            
+            const swordCord = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.025, 0.45), sashM);
+            swordCord.position.set(0.14, 0, 0.12); swordCord.rotation.y = 0.4; sword.add(swordCord);
+            
+            G.add(sword);
+
+            return G;
+        }
+    }
+
+    // ================================================================
+    //  相机控制器
+    // ================================================================
+    class CameraController {
+        constructor(camera) {
+            this.camera = camera;
+            this.angleX = 0;
+            this.angleY = Math.PI;
+            this.targetPos = new THREE.Vector3();
+            this.currentPos = new THREE.Vector3();
+        }
+
+        update(playerPos, isFirstPerson, dt) {
+            const { angleX, angleY } = this;
+            
+            if (isFirstPerson) {
+                this.camera.position.set(
+                    playerPos.x + Math.sin(angleY) * 0.15,
+                    playerPos.y + 1.88,
+                    playerPos.z + Math.cos(angleY) * 0.15
+                );
+                this.camera.lookAt(
+                    playerPos.x + Math.sin(angleY) * 10,
+                    playerPos.y + 1.85 + Math.sin(angleX) * 10,
+                    playerPos.z + Math.cos(angleY) * 10
+                );
+            } else {
+                const idealDist = CONSTANTS.CAM_DISTANCE;
+                const idealHeight = CONSTANTS.CAM_HEIGHT;
+                
+                const targetX = playerPos.x + Math.sin(angleY) * idealDist;
+                const targetY = playerPos.y + idealHeight + Math.sin(angleX) * idealDist * 0.5;
+                const targetZ = playerPos.z + Math.cos(angleY) * idealDist;
+
+                this.targetPos.set(targetX, targetY, targetZ);
+                
+                if (this.targetPos.y < 1.5) this.targetPos.y = 1.5;
+                
+                this.currentPos.lerp(this.targetPos, CONSTANTS.CAM_SMOOTH);
+                this.camera.position.copy(this.currentPos);
+                this.camera.lookAt(playerPos.x, playerPos.y + 1.0, playerPos.z);
+            }
+        }
+
+        rotate(dx, dy) {
+            this.angleY -= dx * 0.006;
+            this.angleX -= dy * 0.006;
+            this.angleX = UTILS.clamp(this.angleX, -1.2, 1.2);
+        }
+    }
+
+    // ================================================================
+    //  游戏主类
+    // ================================================================
+    class Game {
+        constructor() {
+            this.state = 'loading';
+            this.isFirstPerson = false;
+            this.canJump = false;
+            this.velocity = new THREE.Vector3();
+            this.input = new InputManager(() => this.state);
+            this.fps = new FPSCounter();
+            this.clock = new THREE.Clock();
+            this.tempVec = new THREE.Vector3();
+            this._camRight = new THREE.Vector3();
+            this._moveDir = new THREE.Vector3();
+            
+            this._initRenderer();
+            this._buildScene();
+            this._setupUI();
+            this._simulateLoading();
+        }
+
+        _initRenderer() {
+            const container = document.getElementById('canvas-container');
+            
+            this.scene = new THREE.Scene();
+            this.scene.background = new THREE.Color(0xC8D8EC);
+            this.scene.fog = new THREE.FogExp2(0xC8D8EC, 0.013);
+
+            this.camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 200);
+            this.camera.position.set(0, 4, 10);
+
+            this.renderer = new THREE.WebGLRenderer({ antialias: true });
+            this.renderer.setSize(innerWidth, innerHeight);
+            this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+            this.renderer.shadowMap.enabled = true;
+            this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            this.renderer.toneMappingExposure = 1.1;
+            container.appendChild(this.renderer.domElement);
+
+            this.camCtrl = new CameraController(this.camera);
+
+            window.addEventListener('resize', () => {
+                this.camera.aspect = innerWidth / innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(innerWidth, innerHeight);
+            });
+        }
+
+        _buildScene() {
+            SceneBuilder.createGround(this.scene);
+            SceneBuilder.createLighting(this.scene);
+            SceneBuilder.createBamboo(this.scene);
+            SceneBuilder.createCherryTrees(this.scene);
+            SceneBuilder.createStones(this.scene);
+            
+            this.player = CharacterBuilder.create();
+            this.player.castShadow = true;
+            this.scene.add(this.player);
+            
+            this.animator = new CharacterAnimator(this.player);
+            this.cherrySystem = new CherryBlossomSystem(this.scene, CONSTANTS.PARTICLE_COUNT);
+        }
+
+        _setupUI() {
+            this.input.onToggleView = () => this.toggleView();
+            this.input.onPause = () => this.togglePause();
+
+            document.getElementById('startBtn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.start();
+            });
+            document.getElementById('resumeBtn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.togglePause();
+            });
+        }
+
+        _simulateLoading() {
+            const bar = document.getElementById('loaderProgress');
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.random() * 30 + 10;
+                if (progress >= 100) {
+                    progress = 100;
+                    clearInterval(interval);
+                    setTimeout(() => {
+                        document.getElementById('loader').classList.add('hidden');
+                        this.state = 'menu';
+                        document.getElementById('debug').textContent = '准备就绪，请点击「踏入江湖」';
+                    }, 400);
+                }
+                bar.style.width = progress + '%';
+            }, 200);
+        }
+
+        start() {
+            document.getElementById('startMenu').classList.add('hidden');
+            this.state = 'playing';
+            this.clock.start();
+            this.input.resetMouse();
+            setTimeout(() => this.input.requestLock(), 100);
+            document.getElementById('debug').textContent = '游戏进行中...';
+        }
+
+        togglePause() {
+            if (this.state !== 'playing' && this.state !== 'paused') return;
+            
+            this.state = this.state === 'paused' ? 'playing' : 'paused';
+            document.getElementById('pauseMenu').classList.toggle('hidden', this.state !== 'paused');
+            
+            if (this.state === 'paused') {
+                this.clock.stop();
+                this.input.exitLock();
+            } else {
+                this.clock.start();
+                this.input.resetMouse();
+                setTimeout(() => this.input.requestLock(), 100);
+            }
+        }
+
+        toggleView() {
+            this.isFirstPerson = !this.isFirstPerson;
+            document.getElementById('viewMode').textContent = 
+                `视角: ${this.isFirstPerson ? '第一人称' : '第三人称'}`;
+            this.player.visible = !this.isFirstPerson;
+        }
+
+        _updateMovement(dt) {
+            const k = this.input.keys;
+            
+            this.velocity.y -= CONSTANTS.GRAVITY * dt;
+
+            if (k.space && this.canJump) {
+                this.velocity.y = CONSTANTS.JUMP_FORCE;
+                this.canJump = false;
+                k.space = false;
+            }
+
+            const camDir = this.tempVec;
+            this.camera.getWorldDirection(camDir);
+            camDir.y = 0;
+            camDir.normalize();
+
+            const camRight = this._camRight.crossVectors(camDir, new THREE.Vector3(0, 1, 0)).normalize();
+            const moveDir = this._moveDir.set(0, 0, 0);
+
+            if (k.w) moveDir.add(camDir);
+            if (k.s) moveDir.sub(camDir);
+            if (k.a) moveDir.sub(camRight);
+            if (k.d) moveDir.add(camRight);
+
+            const speed = CONSTANTS.MOVE_SPEED;
+            if (moveDir.lengthSq() > 0.001) {
+                moveDir.normalize();
+                this.velocity.x = moveDir.x * speed;
+                this.velocity.z = moveDir.z * speed;
+
+                if (k.w) {
+                    const targetAngle = Math.atan2(moveDir.x, moveDir.z);
+                    const diff = UTILS.angleDiff(this.player.rotation.y, targetAngle);
+                    this.player.rotation.y += diff * CONSTANTS.ROTATION_SMOOTH * dt;
+                }
+            } else {
+                const damp = Math.max(0, 1 - 10 * dt);
+                this.velocity.x *= damp;
+                this.velocity.z *= damp;
+            }
+
+            this.player.position.x += this.velocity.x * dt;
+            this.player.position.y += this.velocity.y * dt;
+            this.player.position.z += this.velocity.z * dt;
+
+            if (this.player.position.y < 0) {
+                this.player.position.y = 0;
+                this.velocity.y = 0;
+                this.canJump = true;
+            }
+
+            const b = CONSTANTS.BOUNDARY;
+            this.player.position.x = UTILS.clamp(this.player.position.x, -b, b);
+            this.player.position.z = UTILS.clamp(this.player.position.z, -b, b);
+        }
+
+        update() {
+            if (this.state !== 'playing') return;
+
+            const dt = Math.min(this.clock.getDelta(), 0.05);
+            const { dx, dy } = this.input.getMovement();
+            
+            this.camCtrl.rotate(dx, dy);
+            this._updateMovement(dt);
+            
+            const hSpeed = Math.sqrt(this.velocity.x ** 2 + this.velocity.z ** 2);
+            this.animator.update(dt, hSpeed);
+            this.cherrySystem.update(dt, this.animator.time);
+            this.camCtrl.update(this.player.position, this.isFirstPerson, dt);
+            
+            this.fps.update();
+        }
+
+        render() {
+            requestAnimationFrame(() => this.render());
+            this.update();
+            this.renderer.render(this.scene, this.camera);
+        }
+    }
+
+    window.onerror = (msg, url, line) => {
+        const d = document.getElementById('debug');
+        if (d) d.textContent = `错误: ${msg} (第${line}行)`;
+    };
+
+    const game = new Game();
+    game.render();
+    </script>
+</body>
+</html>
