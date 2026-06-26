@@ -14,16 +14,16 @@
 
 | 维度 | 数量 |
 |---|---|
-| 总报名帖 | **16,913** |
-| 含 HTML Demo | **13,879** |
+| 总报名帖 | **17,022** |
+| 含 HTML Demo | **14,041** |
 | 官方审核通过 | **12,524** |
 | 暂无 Demo / 未审核 | **4,498** |
-| 学习工作 | 7,615 |
-| 生活娱乐 | 5,557 |
+| 学习工作 | 7,637 |
+| 生活娱乐 | 5,603 |
 | 社会服务 | 3,000 |
-| 社会公益 | 2,567 |
-| 硬件交互 | 850 |
-| 野蛮生长（未分类） | 324 |
+| 社会公益 | 2,555 |
+| 硬件交互 | 878 |
+| 野蛮生长（未分类） | 11 |
 | 已生成 Insight 洞见 | 17,022 |
 
 > 数据更新时间：2026-06-25 · 来源：[forum.trae.cn 大赛报名专区](https://forum.trae.cn/c/38-category/40-category/40) + 飞书官方审核名单（6月16日 + 6月18日 + 6月22日 + 6月23日 + 6月24日 + 6月25日）
@@ -71,7 +71,7 @@
 
 ### 前端性能优化
 
-- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 5.5MB），index.html 仅 6.0KB 骨架
+- **数据外置**：卡片数据从 HTML 内联移至 `data/demos.min.js`（约 6.9MB），index.html 仅 6.3KB 骨架
 - **数据字段精简**：前端数据文件仅包含渲染必需字段（移除 excerpt），体积减少 39%
 - **手动加载更多**：首屏渲染 50 张卡片，底部「加载更多」按钮手动触发下一批（每批 50 张）
 - **DOM 回收**：卡片超过 200 张时自动移除顶部批次（保留 150 张缓冲），保持 DOM 轻量
@@ -110,8 +110,8 @@ Python 爬虫（双数据源）
     │
     ▼
 Jinja2 模板渲染
-    ├── 生成 index.html（骨架 HTML，约 6.0KB）
-    ├── 生成 data/demos.min.js（前端数据文件，约 5.5MB）
+    ├── 生成 index.html（骨架 HTML，约 6.3KB）
+    ├── 生成 data/demos.min.js（前端数据文件，约 6.9MB）
     │   └── 含 insight 洞见字段（规则引擎自动生成）
     └── Insight 生成（规则引擎，无外部 API 依赖）
     │
@@ -121,7 +121,7 @@ Git push → GitHub Actions → GitHub Pages
     ▼
 浏览器加载
     ├── index.html（骨架）+ styles.css
-    ├── data/demos.min.js（16,886 条卡片数据）
+    ├── data/demos.min.js（17,022 条卡片数据）
     └── script.js（手动加载 + 筛选 + 搜索 + 排序）
 ```
 
@@ -192,10 +192,10 @@ URL 校验规则：
 
 ```json
 {
-  "last_updated": "2026-06-22T14:25:00.000000+00:00",
-  "total_count": 15473,
-  "approved_count": 12350,
-  "unapproved_count": 3123,
+  "last_updated": "2026-06-25T17:46:17.811572+00:00",
+  "total_count": 17022,
+  "approved_count": 12524,
+  "unapproved_count": 4498,
   "demos": [
     {
       "topic_id": 34392,
@@ -247,8 +247,8 @@ URL 校验规则：
 - **Footer**：数据来源 + 作者链接 + 更新时间
 
 渲染输出两个文件：
-- `index.html`：骨架 HTML（约 6.0KB），不含卡片数据
-- `data/demos.min.js`：前端数据文件（约 5.5MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, insight, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
+- `index.html`：骨架 HTML（约 6.3KB），不含卡片数据
+- `data/demos.min.js`：前端数据文件（约 6.9MB），格式为 `window.DEMOS_DATA = [...]`，仅包含前端所需字段（topic_id, title, insight, tags, views, like_count, author, created_at, demo_url, external_url, has_demo, approved）
 
 ### 4. 前端交互（script.js）
 
@@ -354,9 +354,10 @@ CSS 变量驱动的设计系统：
 
 ```
 TRAE-AI-Creativity-Competition-Idea-Hall/
-├── index.html                          # 生成的骨架首页（约 6.0KB）
-├── styles.css                          # TRAE 深色科技风样式（CSS 变量体系）
-├── script.js                           # 前端交互（手动加载/筛选/搜索/排序/加载更多）
+├── index.html                          # 生成的骨架首页（约 6.3KB）
+├── styles.css                          # TRAE 深色科技风样式（CSS 变量体系，约 14.7KB）
+├── script.js                           # 前端交互（手动加载/筛选/搜索/排序/加载更多，约 22.3KB）
+├── plan.md                             # 加载与访问效率优化方案
 ├── templates/
 │   └── index.html.j2                   # Jinja2 模板
 ├── crawler/
@@ -365,13 +366,15 @@ TRAE-AI-Creativity-Competition-Idea-Hall/
 │   ├── config.json                     # 爬虫配置（API 地址/限速/赛道标签/排除域名）
 │   └── requirements.txt                # Python 依赖（requests + beautifulsoup4 + jinja2）
 ├── data/
-│   ├── demos.json                       # 所有帖子的结构化数据（16,913 条，含 insight 字段）
-│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 7.0MB）
-│   └── approved_projects.json          # 飞书多维表格审批数据源（6月16日 + 6月18日 + 6月22日 + 6月23日 + 6月24日）
-├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录）
+│   ├── demos.json                       # 所有帖子的结构化数据（17,022 条，含 insight 字段）
+│   ├── demos.min.js                    # 前端数据文件（仅含渲染所需字段，约 6.9MB）
+│   └── approved_projects.json          # 飞书多维表格审批数据源（13,144 条，6月16日-25日共6批）
+├── demos/                              # 下载的 HTML Demo 文件（按 topic_id 分目录，约 3.8GB / 32,008 文件）
+├── prompts/
+│   └── update.md                       # 自动更新提示词（供 TRAE Work 定时执行）
 ├── assets/
 │   ├── trae-logo.png                    # Logo & Favicon
-│   ├── banner.webp                     # 大赛横幅图（WebP，49KB）
+│   ├── banner.webp                     # 大赛横幅图（WebP，48KB）
 │   ├── icons/                          # SVG 图标（eye/heart/user/play/external 等 16 个）
 │   └── tracks/                         # 赛道图标 SVG（5 赛道 + 野蛮生长，内联渲染）
 ├── .github/
@@ -421,6 +424,10 @@ python -m http.server 8889
 ```
 cron: 0 4 * * *
 ```
+
+### 自动更新提示词
+
+`prompts/update.md` 中包含完整的自动化更新流程提示词，可直接交给 TRAE Work 执行。涵盖从飞书 Wiki 获取审核名单、数据爬取、静态站点渲染到 Git 推送部署的完整六步流程，支持增量更新（跳过已爬取数据）和审核状态遗漏检查。
 
 ### GitHub Actions
 
