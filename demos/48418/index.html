@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>河口洪水预报系统 v4.0 生产环境</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="nav.css">
+    <script src="nav.js"></script>
+    <script src="global_time.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: #0f1923;
+            color: #e0e6ed;
+            min-height: 100vh;
+        }
+        /* 状态栏（保留在导航栏下方） */
+        .status-bar {
+            background: #1a2a3a;
+            padding: 8px 24px;
+            border-bottom: 1px solid #2a3a4a;
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #90a4ae;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #66bb6a;
+        }
+        .status-dot.offline { background: #ef5350; }
+        .status-dot.unknown { background: #78909c; }
+        .container {
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 16px;
+            padding: 16px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+        .sidebar {
+            background: #1a2a3a;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #2a3a4a;
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
+        }
+        .sidebar h2 {
+            font-size: 14px;
+            color: #4fc3f7;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #2a3a4a;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .form-group {
+            margin-bottom: 14px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: #90a4ae;
+            margin-bottom: 4px;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px 10px;
+            background: #0f1923;
+            border: 1px solid #2a3a4a;
+            border-radius: 4px;
+            color: #e0e6ed;
+            font-size: 13px;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #4fc3f7;
+        }
+        .checkbox-group label {
+            margin: 0;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #1976d2, #42a5f5);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #1565c0, #38a0f0);
+            box-shadow: 0 2px 8px rgba(66, 165, 245, 0.3);
+        }
+        .btn-secondary {
+            background: #2a3a4a;
+            color: #90a4ae;
+            margin-top: 8px;
+        }
+        .btn-secondary:hover {
+            background: #3a4a5a;
+            color: #e0e6ed;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .chart-container {
+            background: #1a2a3a;
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid #2a3a4a;
+        }
+        .chart-title {
+            font-size: 14px;
+            color: #4fc3f7;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .chart-wrapper {
+            position: relative;
+            height: 320px;
+        }
+        .chart-wrapper.small {
+            height: 200px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+        .stat-card {
+            background: #1a2a3a;
+            border-radius: 8px;
+            padding: 14px;
+            border: 1px solid #2a3a4a;
+            text-align: center;
+        }
+        .stat-card .label {
+            font-size: 11px;
+            color: #78909c;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-card .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #4fc3f7;
+            margin-top: 4px;
+        }
+        .stat-card .unit {
+            font-size: 12px;
+            color: #78909c;
+        }
+        .stat-card.warning .value { color: #ffa726; }
+        .stat-card.danger .value { color: #ef5350; }
+        .stat-card.success .value { color: #66bb6a; }
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15, 25, 35, 0.85);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .loading-overlay.active { display: flex; }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #2a3a4a;
+            border-top: 4px solid #4fc3f7;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        .loading-text {
+            color: #4fc3f7;
+            font-size: 14px;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .status-bar {
+            display: flex;
+            gap: 16px;
+            font-size: 12px;
+            color: #78909c;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #66bb6a;
+        }
+        .status-dot.inactive { background: #455a64; }
+        .tab-group {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+        .tab {
+            padding: 6px 16px;
+            background: #0f1923;
+            border: 1px solid #2a3a4a;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #78909c;
+        }
+        .tab.active {
+            background: #1976d2;
+            color: white;
+            border-color: #1976d2;
+        }
+        .db-config { display: none; }
+        .db-config.active { display: block; }
+        .csv-config { display: block; }
+        .csv-config.hidden { display: none; }
+
+        /* 模态窗口 */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #1a2a3a;
+            border: 1px solid #3a5a7a;
+            border-radius: 8px;
+            padding: 20px;
+            width: 90%;
+            max-width: 1200px;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #2a3a4a;
+        }
+        .modal-header h2 {
+            font-size: 18px;
+            color: #4fc3f7;
+        }
+        .modal-close {
+            background: #2a3a4a;
+            border: none;
+            color: #e0e6ed;
+            width: 30px;
+            height: 30px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .modal-close:hover {
+            background: #ef5350;
+        }
+        .sub-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .sub-tab {
+            padding: 4px 12px;
+            background: #0f1923;
+            border: 1px solid #2a3a4a;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            color: #78909c;
+        }
+        .sub-tab.active {
+            background: #1976d2;
+            color: white;
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .data-table th, .data-table td {
+            padding: 6px 8px;
+            text-align: left;
+            border-bottom: 1px solid #2a3a4a;
+        }
+        .data-table th {
+            color: #4fc3f7;
+            font-weight: 600;
+        }
+        .data-table td {
+            color: #b0bec5;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .metric-card {
+            background: #0f1923;
+            padding: 12px;
+            border-radius: 4px;
+            border: 1px solid #2a3a4a;
+        }
+        .metric-card .label {
+            font-size: 11px;
+            color: #78909c;
+        }
+        .metric-card .value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #4fc3f7;
+            margin-top: 4px;
+        }
+        .metric-card.good .value { color: #66bb6a; }
+        .metric-card.warn .value { color: #ffa726; }
+        .metric-card.bad .value { color: #ef5350; }
+    </style>
+</head>
+<body>
+    <div id="nav"></div>
+    <script>document.getElementById('nav').innerHTML = createNavBar('index');</script>
+    <script>injectGlobalTimeBar();</script>
+    <div class="status-bar">
+        <div class="status-item">
+            <div class="status-dot" id="statusDb"></div>
+            <span id="statusDbText">CSV模式</span>
+        </div>
+        <div class="status-item">
+            <div class="status-dot" id="statusPhys"></div>
+            <span>物理模型</span>
+        </div>
+        <div class="status-item">
+            <div class="status-dot" id="statusEnkf"></div>
+            <span>EnKF同化</span>
+        </div>
+        <div class="status-item">
+            <div class="status-dot" id="statusLstm"></div>
+            <span>LSTM修正</span>
+        </div>
+        <div class="status-item">
+            <div class="status-dot" id="statusCalib"></div>
+            <span>参数率定</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 左侧控制面板 -->
+        <div class="sidebar">
+            <h2>数据源</h2>
+            <div class="form-group">
+                <div style="font-size:12px;color:#78909c;padding:8px;background:#0f1923;border-radius:4px;margin-bottom:8px;" id="dbStatusInfo">
+                    默认: 局域网SQL Server ([内网地址])
+                </div>
+                <button class="btn btn-secondary" onclick="showDbSettings()">数据库设置</button>
+            </div>
+
+            <h2 style="margin-top: 20px;">日期区间</h2>
+            <div class="form-group">
+                <label>起始时间</label>
+                <input type="datetime-local" id="startTime" value="2024-06-20T00:00">
+            </div>
+            <div class="form-group">
+                <label>结束时间</label>
+                <input type="datetime-local" id="endTime" value="2024-07-10T00:00">
+            </div>
+            <div class="form-group">
+                <label>数据频率</label>
+                <select id="dataFreq">
+                    <option value="5min">5分钟（原始）</option>
+                    <option value="1H" selected>1小时</option>
+                    <option value="1D">1天</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>快速选择历史洪水</label>
+                <select id="quickEvent" onchange="selectQuickEvent()">
+                    <option value="">-- 选择洪水事件 --</option>
+                </select>
+            </div>
+
+            <h2 style="margin-top: 20px;">预报模块</h2>
+            <div class="checkbox-group">
+                <input type="checkbox" id="enableEnkf" checked>
+                <label for="enableEnkf">EnKF数据同化</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="enableLstm" checked>
+                <label for="enableLstm">LSTM残差修正</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="enableProb" checked>
+                <label for="enableProb">概率预报</label>
+            </div>
+
+            <button class="btn btn-primary" onclick="runProductionForecast()" id="forecastBtn">
+                运行生产环境预报
+            </button>
+            <button class="btn btn-secondary" onclick="showCalibParams()">
+                查看率定参数
+            </button>
+            <button class="btn btn-secondary" onclick="showRainfallDetails()">
+                查看流域雨量详情
+            </button>
+            <button class="btn btn-secondary" onclick="showFlowDetails()">
+                查看汇流详情
+            </button>
+            <button class="btn btn-secondary" onclick="window.open('/params', '_blank')"
+                    style="background:#2e7d32;color:#fff;">
+                参数设置
+            </button>
+        </div>
+
+        <!-- 右侧主内容 -->
+        <div class="main-content">
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label">实测峰值流量</div>
+                    <div class="value" id="statObsPeak">--</div>
+                    <div class="unit">m³/s</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="label">预报峰值流量</div>
+                    <div class="value" id="statSimPeak">--</div>
+                    <div class="unit">m³/s</div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="label">峰值偏差</div>
+                    <div class="value" id="statPeakBias">--</div>
+                    <div class="unit">%</div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="label">洪峰时间差</div>
+                    <div class="value" id="statTimeDiff">--</div>
+                    <div class="unit">天</div>
+                </div>
+            </div>
+
+            <!-- NSE指标卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label">NSE(物理模型)</div>
+                    <div class="value" id="statNsePhys">--</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="label">NSE(同化后)</div>
+                    <div class="value" id="statNseAnaly">--</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="label">NSE(LSTM修正)</div>
+                    <div class="value" id="statNseLstm">--</div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="label">RMSE(修正)</div>
+                    <div class="value" id="statRmse">--</div>
+                    <div class="unit">m³/s</div>
+                </div>
+            </div>
+
+            <!-- 流量对比图 -->
+            <div class="chart-container">
+                <div class="chart-title">
+                    <span>河口站流量对比（实测 vs 预报）</span>
+                    <button class="btn btn-secondary" style="width:auto;padding:4px 12px;" onclick="showFlowDetails()">详细数据</button>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="flowChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 水位对比图 -->
+            <div class="chart-container">
+                <div class="chart-title">
+                    <span>河口站水位对比（实测 vs 预报）</span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="levelChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 雨量图 -->
+            <div class="chart-container">
+                <div class="chart-title">
+                    <span>全流域综合面雨量（面积加权）</span>
+                    <button class="btn btn-secondary" style="width:auto;padding:4px 12px;" onclick="showRainfallDetails()">各流域详情</button>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="rainChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 概率预报图 -->
+            <div class="chart-container" id="probContainer" style="display:none;">
+                <div class="chart-title">
+                    <span>概率预报（集合不确定性）</span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="probChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loadingText">正在运行预报...</div>
+    </div>
+
+    <!-- 雨量详情模态窗口 -->
+    <div class="modal-overlay" id="rainfallModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>各流域雨量详情</h2>
+                <button class="modal-close" onclick="closeModal('rainfallModal')">×</button>
+            </div>
+            <div class="sub-tabs" id="rainfallSubTabs"></div>
+            <div id="rainfallModalContent"></div>
+        </div>
+    </div>
+
+    <!-- 汇流详情模态窗口 -->
+    <div class="modal-overlay" id="flowModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>各流域汇流详情</h2>
+                <button class="modal-close" onclick="closeModal('flowModal')">×</button>
+            </div>
+            <div class="sub-tabs" id="flowSubTabs"></div>
+            <div id="flowModalContent"></div>
+        </div>
+    </div>
+
+    <!-- 率定参数模态窗口 -->
+    <div class="modal-overlay" id="calibModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>模型参数率定结果</h2>
+                <button class="modal-close" onclick="closeModal('calibModal')">×</button>
+            </div>
+            <div id="calibModalContent"></div>
+        </div>
+    </div>
+
+    <!-- 数据库设置模态窗口 -->
+    <div class="modal-overlay" id="dbSettingsModal">
+        <div class="modal" style="max-width:600px;">
+            <div class="modal-header">
+                <h2>数据库设置</h2>
+                <button class="modal-close" onclick="closeModal('dbSettingsModal')">×</button>
+            </div>
+            <div style="padding:8px 0;">
+                <div class="form-group">
+                    <label>快速连接</label>
+                    <select id="quickConnect" onchange="quickConnectDB()">
+                        <option value="sqlserver_local" selected>SQL Server局域网 (推荐，快3800倍)</option>
+                        <option value="mysql_remote">MySQL远程 (Tailscale隧道)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>数据库类型</label>
+                    <select id="dbType">
+                        <option value="sqlserver">SQL Server (备用系统)</option>
+                        <option value="mysql">MySQL (主系统)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>主机地址</label>
+                    <input type="text" id="dbHost" value="[内网地址]">
+                </div>
+                <div class="form-group">
+                    <label>端口</label>
+                    <input type="number" id="dbPort" value="1433">
+                </div>
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="dbUser" value="sa">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="dbPassword" value="[数据库密码]">
+                </div>
+                <div class="form-group">
+                    <label>数据库名</label>
+                    <input type="text" id="dbName" value="flood_db">
+                </div>
+                <button class="btn btn-primary" onclick="connectDatabase()">连接数据库</button>
+                <button class="btn btn-secondary" onclick="loadDataRange()">查询数据范围</button>
+                <div id="dbConnectResult" style="font-size:11px;margin-top:8px;"></div>
+                <div id="dataRangeInfo" style="font-size:11px;color:#78909c;margin-top:8px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 全局状态
+        let lastForecastResult = null;
+        let flowChart = null, levelChart = null, rainChart = null, probChart = null;
+
+        // ============================================================
+        // 数据源 / 数据库设置
+        // ============================================================
+        function showDbSettings() {
+            document.getElementById('dbSettingsModal').classList.add('active');
+            // 打开时同步当前数据库状态
+            checkDbStatus();
+        }
+
+        async function checkDbStatus() {
+            try {
+                const resp = await fetch('/api/forecast/db_status');
+                const data = await resp.json();
+                const statusDiv = document.getElementById('dbStatusInfo');
+                const statusDot = document.getElementById('statusDb');
+                const statusText = document.getElementById('statusDbText');
+                if (data.pipeline_db) {
+                    const info = data.pipeline_db_info || {};
+                    const host = info.host || '[内网地址]';
+                    const db = info.database || 'flood_db';
+                    statusDiv.innerHTML = `✓ 已连接: ${host} / ${db} (局域网SQL Server)`;
+                    statusDot.classList.remove('inactive');
+                    statusText.textContent = `${db}@${host}`;
+                } else {
+                    statusDiv.innerHTML = '✗ 未连接, 点击"数据库设置"连接';
+                    statusDot.classList.add('inactive');
+                    statusText.textContent = '未连接';
+                }
+            } catch (e) {
+                console.error('db_status failed', e);
+            }
+        }
+
+        function quickConnectDB() {
+            const choice = document.getElementById('quickConnect').value;
+            if (choice === 'sqlserver_local') {
+                document.getElementById('dbType').value = 'sqlserver';
+                document.getElementById('dbHost').value = '[内网地址]';
+                document.getElementById('dbPort').value = 1433;
+                document.getElementById('dbUser').value = 'sa';
+                document.getElementById('dbPassword').value = '[数据库密码]';
+                document.getElementById('dbName').value = 'flood_db';
+            } else if (choice === 'mysql_remote') {
+                document.getElementById('dbType').value = 'mysql';
+                document.getElementById('dbHost').value = '[远程地址]';
+                document.getElementById('dbPort').value = 13306;
+                document.getElementById('dbUser').value = 'root';
+                document.getElementById('dbPassword').value = '';
+                document.getElementById('dbName').value = 'sensor_db';
+            }
+        }
+
+        async function connectDatabase() {
+            const config = {
+                db_type: document.getElementById('dbType').value,
+                host: document.getElementById('dbHost').value,
+                port: parseInt(document.getElementById('dbPort').value),
+                user: document.getElementById('dbUser').value,
+                password: document.getElementById('dbPassword').value,
+                database: document.getElementById('dbName').value,
+            };
+            try {
+                const resp = await fetch('/api/forecast/connect_db', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(config),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    document.getElementById('dbConnectResult').innerHTML =
+                        `<span style="color:#66bb6a;">✓ 连接成功: ${data.database}</span>`;
+                    document.getElementById('statusDbText').textContent = '数据库已连接';
+                    loadDataRange();
+                } else {
+                    document.getElementById('dbConnectResult').innerHTML =
+                        `<span style="color:#ef5350;">✗ ${data.detail || '连接失败'}</span>`;
+                }
+            } catch (e) {
+                document.getElementById('dbConnectResult').innerHTML =
+                    `<span style="color:#ef5350;">✗ ${e.message}</span>`;
+            }
+        }
+
+        async function loadDataRange() {
+            try {
+                const resp = await fetch('/api/forecast/data_range');
+                const data = await resp.json();
+                document.getElementById('dataRangeInfo').innerHTML =
+                    `数据范围: ${data.start} ~ ${data.end}`;
+            } catch (e) {}
+        }
+
+        async function loadQuickEvents() {
+            try {
+                const resp = await fetch('/api/forecast/calib_params');
+                const data = await resp.json();
+                if (data.event_results) {
+                    const select = document.getElementById('quickEvent');
+                    data.event_results.forEach(ev => {
+                        const opt = document.createElement('option');
+                        opt.value = `${ev.peak_date}`;
+                        opt.textContent = `${ev.peak_date} (峰值${ev.obs_peak.toFixed(0)}m³/s, NSE=${ev.nse.toFixed(2)})`;
+                        select.appendChild(opt);
+                    });
+                }
+            } catch (e) {}
+        }
+
+        function selectQuickEvent() {
+            const peakDate = document.getElementById('quickEvent').value;
+            if (!peakDate) return;
+            const d = new Date(peakDate);
+            const start = new Date(d.getTime() - 10*24*3600*1000);
+            const end = new Date(d.getTime() + 15*24*3600*1000);
+            document.getElementById('startTime').value = start.toISOString().split('T')[0] + 'T00:00';
+            document.getElementById('endTime').value = end.toISOString().split('T')[0] + 'T00:00';
+        }
+
+        // ============================================================
+        // 运行预报
+        // ============================================================
+        async function runProductionForecast() {
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+            if (!startTime || !endTime) {
+                alert('请选择起止时间');
+                return;
+            }
+
+            // 禁用按钮防止重复提交
+            const btn = document.getElementById('forecastBtn');
+            btn.disabled = true;
+            btn.textContent = '预报中...';
+
+            // 根据频率和时间范围估算步数，提示用户
+            const freq = document.getElementById('dataFreq').value;
+            const start = new Date(startTime);
+            const end = new Date(endTime);
+            const diffMs = end - start;
+            let estSteps = 0;
+            let stepMs = 0;
+            if (freq === '5min') { stepMs = 5 * 60 * 1000; estSteps = Math.ceil(diffMs / stepMs); }
+            else if (freq === '1H') { stepMs = 60 * 60 * 1000; estSteps = Math.ceil(diffMs / stepMs); }
+            else { stepMs = 24 * 60 * 60 * 1000; estSteps = Math.ceil(diffMs / stepMs); }
+
+            if (estSteps > 3000) {
+                alert(`预计时间步数 ${estSteps} 过多（上限3000），请缩短时间范围或降低频率（改用1天）。`);
+                btn.disabled = false;
+                btn.textContent = '生成预报';
+                return;
+            }
+
+            const estTime = estSteps > 200 ? `预计需要1-3分钟（${estSteps}步）` : `正在运行（${estSteps}步）...`;
+            showLoading(estTime);
+
+            const req = {
+                start_time: startTime,
+                end_time: endTime,
+                enable_enkf: document.getElementById('enableEnkf').checked,
+                enable_lstm: document.getElementById('enableLstm').checked,
+                enable_prob: document.getElementById('enableProb').checked,
+                data_freq: freq,
+            };
+
+            // fetch超时控制（5分钟）
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
+
+            try {
+                const resp = await fetch('/api/forecast/forecast', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(req),
+                    signal: controller.signal,
+                });
+                clearTimeout(timeoutId);
+                const data = await resp.json();
+                if (resp.ok) {
+                    lastForecastResult = data;
+                    renderForecast(data);
+                    hideLoading();
+                } else {
+                    hideLoading();
+                    alert('预报失败: ' + (data.detail || '未知错误'));
+                }
+            } catch (e) {
+                clearTimeout(timeoutId);
+                hideLoading();
+                if (e.name === 'AbortError') {
+                    alert('请求超时（5分钟），请缩短时间范围或降低频率');
+                } else {
+                    alert('请求失败: ' + e.message);
+                }
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '生成预报';
+            }
+        }
+
+        // ============================================================
+        // 渲染预报结果
+        // ============================================================
+        function renderForecast(data) {
+            // 更新状态
+            document.getElementById('statusPhys').classList.toggle('inactive', false);
+            document.getElementById('statusEnkf').classList.toggle('inactive', !data.enkf_enabled);
+            document.getElementById('statusLstm').classList.toggle('inactive', !data.lstm_enabled);
+            document.getElementById('statusCalib').classList.toggle('inactive', !data.network_info.calibration_nse);
+
+            // 统计卡片
+            const m = data.metrics || {};
+            document.getElementById('statObsPeak').textContent = m.obs_peak ? m.obs_peak.toFixed(0) : '--';
+            document.getElementById('statSimPeak').textContent = m.peak_corrected ? m.peak_corrected.toFixed(0) :
+                (m.peak_analyzed ? m.peak_analyzed.toFixed(0) : (m.peak_phys ? m.peak_phys.toFixed(0) : '--'));
+
+            const peakBias = m.peak_bias_corrected !== undefined ? m.peak_bias_corrected :
+                            (m.peak_bias_analyzed !== undefined ? m.peak_bias_analyzed :
+                            (m.peak_bias_phys !== undefined ? m.peak_bias_phys : null));
+            document.getElementById('statPeakBias').textContent = peakBias !== null ? peakBias.toFixed(1) : '--';
+
+            const timeDiff = m.peak_time_diff_corrected !== undefined ? m.peak_time_diff_corrected :
+                            (m.peak_time_diff_analyzed !== undefined ? m.peak_time_diff_analyzed :
+                            (m.peak_time_diff_phys !== undefined ? m.peak_time_diff_phys : null));
+            document.getElementById('statTimeDiff').textContent = timeDiff !== null ? timeDiff : '--';
+
+            document.getElementById('statNsePhys').textContent = m.nse_phys !== undefined ? m.nse_phys.toFixed(3) : '--';
+            document.getElementById('statNseAnaly').textContent = m.nse_analyzed !== undefined ? m.nse_analyzed.toFixed(3) : '--';
+            document.getElementById('statNseLstm').textContent = m.nse_corrected !== undefined ? m.nse_corrected.toFixed(3) : '--';
+            document.getElementById('statRmse').textContent = m.rmse_corrected !== undefined ? m.rmse_corrected.toFixed(1) : '--';
+
+            // 流量对比图
+            renderFlowChart(data);
+            // 水位对比图
+            renderLevelChart(data);
+            // 雨量图
+            renderRainChart(data);
+            // 概率预报图
+            renderProbChart(data);
+        }
+
+        function renderFlowChart(data) {
+            const ctx = document.getElementById('flowChart').getContext('2d');
+            if (flowChart) flowChart.destroy();
+
+            const datasets = [];
+            // 实测流量
+            if (data.observed_flow && data.observed_flow.some(v => v !== null)) {
+                datasets.push({
+                    label: '实测流量',
+                    data: data.observed_flow,
+                    borderColor: '#ef5350',
+                    backgroundColor: 'rgba(239,83,80,0.1)',
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    tension: 0.3,
+                });
+            }
+            // 物理模型
+            datasets.push({
+                label: '物理模型',
+                data: data.xikou_flow_phys,
+                borderColor: '#42a5f5',
+                backgroundColor: 'rgba(66,165,245,0.1)',
+                borderWidth: 2,
+                pointRadius: 2,
+                tension: 0.3,
+            });
+            // 同化后
+            if (data.enkf_enabled && data.xikou_flow_analyzed) {
+                datasets.push({
+                    label: 'EnKF同化',
+                    data: data.xikou_flow_analyzed,
+                    borderColor: '#ffa726',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    tension: 0.3,
+                });
+            }
+            // LSTM修正
+            if (data.lstm_enabled && data.xikou_flow_corrected) {
+                datasets.push({
+                    label: 'LSTM修正',
+                    data: data.xikou_flow_corrected,
+                    borderColor: '#66bb6a',
+                    borderWidth: 3,
+                    pointRadius: 2,
+                    tension: 0.3,
+                });
+            }
+
+            flowChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: data.time, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: { ticks: { color: '#90a4ae', maxTicksLimit: 15 } },
+                        y: { ticks: { color: '#90a4ae' }, title: { display: true, text: '流量 (m³/s)', color: '#90a4ae' } },
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#e0e6ed' } },
+                        tooltip: { mode: 'index', intersect: false },
+                    },
+                },
+            });
+        }
+
+        function renderLevelChart(data) {
+            const ctx = document.getElementById('levelChart').getContext('2d');
+            if (levelChart) levelChart.destroy();
+
+            const datasets = [];
+            if (data.observed_level && data.observed_level.some(v => v !== null)) {
+                datasets.push({
+                    label: '实测水位',
+                    data: data.observed_level,
+                    borderColor: '#ef5350',
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    tension: 0.3,
+                });
+            }
+            datasets.push({
+                label: '物理模型',
+                data: data.xikou_level_phys,
+                borderColor: '#42a5f5',
+                borderWidth: 2,
+                pointRadius: 2,
+                tension: 0.3,
+            });
+            if (data.enkf_enabled && data.xikou_level_analyzed) {
+                datasets.push({
+                    label: 'EnKF同化',
+                    data: data.xikou_level_analyzed,
+                    borderColor: '#ffa726',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    tension: 0.3,
+                });
+            }
+            if (data.lstm_enabled && data.xikou_level_corrected) {
+                datasets.push({
+                    label: 'LSTM修正',
+                    data: data.xikou_level_corrected,
+                    borderColor: '#66bb6a',
+                    borderWidth: 3,
+                    pointRadius: 2,
+                    tension: 0.3,
+                });
+            }
+
+            levelChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: data.time, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: { ticks: { color: '#90a4ae', maxTicksLimit: 15 } },
+                        y: { ticks: { color: '#90a4ae' }, title: { display: true, text: '水位 (m)', color: '#90a4ae' } },
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#e0e6ed' } },
+                        tooltip: { mode: 'index', intersect: false },
+                    },
+                },
+            });
+        }
+
+        function renderRainChart(data) {
+            const ctx = document.getElementById('rainChart').getContext('2d');
+            if (rainChart) rainChart.destroy();
+
+            const datasets = [{
+                label: '全流域综合面雨量',
+                data: data.mean_rainfall,
+                borderColor: '#4fc3f7',
+                backgroundColor: 'rgba(79,195,247,0.3)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+            }];
+
+            rainChart = new Chart(ctx, {
+                type: 'bar',
+                data: { labels: data.time, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: '#90a4ae', maxTicksLimit: 15 } },
+                        y: { ticks: { color: '#90a4ae' }, title: { display: true, text: '雨量 (mm)', color: '#90a4ae' } },
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#e0e6ed' } },
+                    },
+                },
+            });
+        }
+
+        function renderProbChart(data) {
+            const container = document.getElementById('probContainer');
+            if (!data.prob_enabled || !data.prob_median || data.prob_median.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            container.style.display = 'block';
+
+            const ctx = document.getElementById('probChart').getContext('2d');
+            if (probChart) probChart.destroy();
+
+            probChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.time,
+                    datasets: [
+                        { label: '90%上界', data: data.prob_upper_90, borderColor: 'rgba(239,83,80,0.3)', backgroundColor: 'rgba(239,83,80,0.15)', fill: '+1', tension: 0.3 },
+                        { label: '90%下界', data: data.prob_lower_90, borderColor: 'rgba(239,83,80,0.3)', fill: false, tension: 0.3 },
+                        { label: '50%上界', data: data.prob_upper_50, borderColor: 'rgba(255,167,38,0.4)', backgroundColor: 'rgba(255,167,38,0.2)', fill: '+1', tension: 0.3 },
+                        { label: '50%下界', data: data.prob_lower_50, borderColor: 'rgba(255,167,38,0.4)', fill: false, tension: 0.3 },
+                        { label: '中位数', data: data.prob_median, borderColor: '#66bb6a', borderWidth: 2, fill: false, tension: 0.3 },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: { ticks: { color: '#90a4ae', maxTicksLimit: 15 } },
+                        y: { ticks: { color: '#90a4ae' }, title: { display: true, text: '水位 (m)', color: '#90a4ae' } },
+                    },
+                    plugins: { legend: { labels: { color: '#e0e6ed' } } },
+                },
+            });
+        }
+
+        // ============================================================
+        // 模态窗口
+        // ============================================================
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        async function showRainfallDetails() {
+            if (!lastForecastResult) {
+                alert('请先运行预报');
+                return;
+            }
+            const modal = document.getElementById('rainfallModal');
+            const tabsDiv = document.getElementById('rainfallSubTabs');
+            const contentDiv = document.getElementById('rainfallModalContent');
+
+            tabsDiv.innerHTML = '';
+            const stations = Object.keys(lastForecastResult.station_rainfall || {});
+            const subcatchments = Object.keys(lastForecastResult.areal_rainfall || {});
+
+            // 获取子流域元数据 (名称、面积)
+            let scMeta = {};
+            try {
+                const resp = await fetch('/api/forecast/subcatchments');
+                const data = await resp.json();
+                (data.subcatchments || []).forEach(s => { scMeta[s.subcatchment_id] = s; });
+            } catch (e) {}
+
+            let html = '';
+
+            // 全流域综合面雨量图
+            html += '<div style="margin-bottom:16px;"><h3 style="color:#4fc3f7;margin-bottom:8px;">全流域综合面雨量过程（面积加权）</h3><div style="height:280px;"><canvas id="rainDetailChart"></canvas></div></div>';
+
+            // 69子流域面雨量表格 + 站点雨量表格
+            html += '<div style="display:flex;gap:16px;">';
+
+            // 左侧：69子流域面雨量
+            html += '<div style="flex:1.5;"><h3 style="color:#4fc3f7;margin-bottom:8px;">子流域面雨量（共' + subcatchments.length + '个）</h3>';
+            if (subcatchments.length > 0) {
+                html += '<table class="data-table" style="font-size:11px;"><thead><tr><th>ID</th><th>名称</th><th>面积(km²)</th><th>总雨量(mm)</th><th>峰值(mm)</th></tr></thead><tbody>';
+                subcatchments.sort((a,b) => parseInt(a)-parseInt(b)).forEach(scId => {
+                    const rain = (lastForecastResult.areal_rainfall[scId] || []).filter(v => v !== null);
+                    const total = rain.reduce((a,b) => a+b, 0);
+                    const peak = rain.length > 0 ? Math.max(...rain, 0) : 0;
+                    const meta = scMeta[scId] || scMeta[parseInt(scId)] || {};
+                    const name = (meta.node_name || '').substring(0, 18);
+                    const area = meta.area_km2 ? meta.area_km2.toFixed(1) : '--';
+                    html += `<tr><td>${scId}</td><td>${name}</td><td>${area}</td><td>${total.toFixed(1)}</td><td>${peak.toFixed(1)}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p style="color:#78909c;">无面雨量数据</p>';
+            }
+            html += '</div>';
+
+            // 右侧：站点雨量
+            html += '<div style="flex:1;"><h3 style="color:#4fc3f7;margin-bottom:8px;">雨量站数据（共' + stations.length + '站）</h3>';
+            if (stations.length > 0) {
+                html += '<table class="data-table" style="font-size:11px;"><thead><tr><th>站码</th><th>总雨量(mm)</th><th>峰值(mm)</th></tr></thead><tbody>';
+                stations.forEach(sid => {
+                    const rain = (lastForecastResult.station_rainfall[sid] || []).filter(v => v !== null);
+                    const total = rain.reduce((a,b) => a+b, 0);
+                    const peak = rain.length > 0 ? Math.max(...rain, 0) : 0;
+                    html += `<tr><td>${sid}</td><td>${total.toFixed(1)}</td><td>${peak.toFixed(1)}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p style="color:#78909c;">无站点数据</p>';
+            }
+            html += '</div></div>';
+
+            contentDiv.innerHTML = html;
+            modal.classList.add('active');
+
+            // 绘制全流域综合面雨量过程图
+            setTimeout(() => {
+                const ctx = document.getElementById('rainDetailChart').getContext('2d');
+                const datasets = [{
+                    label: '全流域综合面雨量',
+                    data: lastForecastResult.mean_rainfall,
+                    borderColor: '#4fc3f7',
+                    backgroundColor: 'rgba(79,195,247,0.4)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                }];
+                // 叠加前5个子流域面雨量做对比
+                const colors = ['#ffa726','#66bb6a','#ef5350','#ab47bc','#26c6da'];
+                subcatchments.sort((a,b) => parseInt(a)-parseInt(b)).slice(0, 5).forEach((scId, i) => {
+                    datasets.push({
+                        label: 'SC' + scId,
+                        data: lastForecastResult.areal_rainfall[scId],
+                        type: 'line',
+                        borderColor: colors[i],
+                        borderWidth: 1.2,
+                        pointRadius: 0,
+                        fill: false,
+                        tension: 0.3,
+                    });
+                });
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: { labels: lastForecastResult.time, datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { ticks: { color: '#90a4ae', maxTicksLimit: 15 } },
+                            y: { ticks: { color: '#90a4ae' }, title: { display: true, text: '雨量(mm)', color: '#90a4ae' } },
+                        },
+                        plugins: { legend: { labels: { color: '#e0e6ed', font: { size: 10 } } } },
+                    },
+                });
+            }, 100);
+        }
+
+        async function showFlowDetails() {
+            if (!lastForecastResult) {
+                alert('请先运行预报');
+                return;
+            }
+            const modal = document.getElementById('flowModal');
+            const contentDiv = document.getElementById('flowModalContent');
+
+            let html = '<div style="display:flex;gap:16px;">';
+
+            // 左侧：子流域出流 (含可同化修正系数beta)
+            html += '<div style="flex:1;"><h3 style="color:#4fc3f7;margin-bottom:8px;">子流域出流 (69个子流域, 含β同化系数)</h3>';
+            const subOutflows = Object.keys(lastForecastResult.subcatchment_outflows || {});
+            if (subOutflows.length > 0) {
+                html += '<table class="data-table" style="font-size:12px;"><thead><tr>' +
+                    '<th>ID</th><th>名称</th><th>类型</th><th>面积(km²)</th>' +
+                    '<th>分区</th><th>β系数</th><th>峰值(m³/s)</th><th>总量(万m³)</th>' +
+                    '<th>雨量站</th><th>水位站</th><th>水库</th><th>上游</th>' +
+                    '</tr></thead><tbody>';
+                // 尝试获取子流域元数据
+                let scMeta = {};
+                try {
+                    const resp = await fetch('/api/forecast/subcatchments');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        (data.subcatchments || []).forEach(s => { scMeta[s.subcatchment_id] = s; });
+                    }
+                } catch(e) {}
+
+                subOutflows.sort((a,b) => parseInt(a)-parseInt(b)).forEach(scId => {
+                    const flow = lastForecastResult.subcatchment_outflows[scId].filter(v => v !== null);
+                    const peak = Math.max(...flow, 0);
+                    const total = flow.reduce((a,b) => a+b, 0) * 24 * 3600 / 10000;
+                    const meta = scMeta[parseInt(scId)] || {};
+                    const name = meta.node_name || '-';
+                    const type = meta.node_type || '-';
+                    const area = meta.area_km2 || '-';
+                    const zone = meta.zone || '-';
+                    const beta = meta.beta !== undefined ? meta.beta.toFixed(3) : '1.000';
+                    const nRain = meta.n_rainfall_stations || 0;
+                    const nLevel = meta.n_level_stations || 0;
+                    const nRes = meta.n_reservoirs || 0;
+                    const nUp = meta.n_upstream || 0;
+                    html += `<tr><td>${scId}</td><td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;">${name}</td>` +
+                        `<td>${type}</td><td>${area}</td><td>${zone}</td><td style="color:#4fc3f7;">${beta}</td>` +
+                        `<td>${peak.toFixed(1)}</td><td>${total.toFixed(1)}</td>` +
+                        `<td>${nRain}</td><td>${nLevel}</td><td>${nRes}</td><td>${nUp}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                html += '<p style="color:#78909c;margin-top:6px;font-size:11px;">' +
+                    'β=可同化修正系数(默认1.0, EnKF可修正, 范围0.5-2.0); 分区: mountain山区/hill丘陵/plain平原</p>';
+            } else {
+                html += '<p style="color:#78909c;">无数据</p>';
+            }
+            html += '</div>';
+
+            // 右侧：河段流量
+            html += '<div style="flex:1;"><h3 style="color:#4fc3f7;margin-bottom:8px;">河段流量 (马斯京根演进)</h3>';
+            const reachFlows = Object.keys(lastForecastResult.reach_flows || {});
+            if (reachFlows.length > 0) {
+                html += '<table class="data-table"><thead><tr><th>河段ID</th><th>峰值(m³/s)</th><th>总量(万m³)</th></tr></thead><tbody>';
+                reachFlows.forEach(rid => {
+                    const flow = lastForecastResult.reach_flows[rid].filter(v => v !== null);
+                    const peak = Math.max(...flow, 0);
+                    const total = flow.reduce((a,b) => a+b, 0) * 24 * 3600 / 10000;
+                    html += `<tr><td>${rid}</td><td>${peak.toFixed(1)}</td><td>${total.toFixed(1)}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p style="color:#78909c;">无数据</p>';
+            }
+            html += '</div></div>';
+
+            // 河段流量过程图
+            html += '<div style="margin-top:16px;"><h3 style="color:#4fc3f7;margin-bottom:8px;">主要河段流量过程</h3><div style="height:300px;"><canvas id="flowDetailChart"></canvas></div></div>';
+
+            contentDiv.innerHTML = html;
+            modal.classList.add('active');
+
+            setTimeout(() => {
+                const ctx = document.getElementById('flowDetailChart').getContext('2d');
+                const datasets = reachFlows.slice(0, 8).map((rid, i) => ({
+                    label: '河段' + rid,
+                    data: lastForecastResult.reach_flows[rid],
+                    borderColor: ['#42a5f5','#ffa726','#66bb6a','#ef5350','#ab47bc','#26c6da','#78909c','#8d6e63'][i],
+                    borderWidth: 1.5,
+                    pointRadius: 1,
+                    tension: 0.3,
+                }));
+                new Chart(ctx, {
+                    type: 'line',
+                    data: { labels: lastForecastResult.time, datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { ticks: { color: '#90a4ae', maxTicksLimit: 15 } },
+                            y: { ticks: { color: '#90a4ae' }, title: { display: true, text: '流量(m³/s)', color: '#90a4ae' } },
+                        },
+                        plugins: { legend: { labels: { color: '#e0e6ed' } } },
+                    },
+                });
+            }, 100);
+        }
+
+        async function showCalibParams() {
+            const modal = document.getElementById('calibModal');
+            const contentDiv = document.getElementById('calibModalContent');
+
+            try {
+                const resp = await fetch('/api/forecast/calib_params');
+                const data = await resp.json();
+
+                let html = '';
+                // 率定信息
+                html += `<div style="margin-bottom:16px;">
+                    <p style="color:#90a4ae;font-size:13px;">
+                        率定方法: ${data.method || 'SCE-UA'} |
+                        率定事件数: ${data.n_events || 'N/A'} |
+                        率定时间: ${data.calibration_time || 'N/A'}
+                    </p>
+                </div>`;
+
+                // 最优参数
+                html += '<h3 style="color:#4fc3f7;margin-bottom:8px;">最优参数</h3>';
+                if (data.best_params) {
+                    html += '<div class="metrics-grid">';
+                    const paramNames = {
+                        'f0': '初始下渗率(mm/h)', 'fc': '稳定下渗率(mm/h)',
+                        'k_horton': 'Horton衰减系数', 'n_nash': 'Nash水库数',
+                        'k_nash': 'Nash蓄泄系数(h)', 'muskingum_x': '马斯京根x',
+                        'runoff_coeff': '产流系数',
+                    };
+                    Object.entries(data.best_params).forEach(([k, v]) => {
+                        html += `<div class="metric-card">
+                            <div class="label">${paramNames[k] || k}</div>
+                            <div class="value">${v.toFixed(4)}</div>
+                        </div>`;
+                    });
+                    html += '</div>';
+                }
+
+                // 率定指标
+                html += '<h3 style="color:#4fc3f7;margin:16px 0 8px;">率定指标</h3>';
+                if (data.metrics) {
+                    html += '<div class="metrics-grid">';
+                    html += `<div class="metric-card ${data.metrics.avg_nse > 0.5 ? 'good' : (data.metrics.avg_nse > 0 ? 'warn' : 'bad')}">
+                        <div class="label">平均NSE</div>
+                        <div class="value">${data.metrics.avg_nse.toFixed(3)}</div>
+                    </div>`;
+                    html += `<div class="metric-card ${data.metrics.avg_peak_error_pct < 20 ? 'good' : 'warn'}">
+                        <div class="label">平均峰值偏差(%)</div>
+                        <div class="value">${data.metrics.avg_peak_error_pct.toFixed(1)}</div>
+                    </div>`;
+                    html += `<div class="metric-card ${data.metrics.avg_volume_bias_pct < 20 ? 'good' : 'warn'}">
+                        <div class="label">平均水量偏差(%)</div>
+                        <div class="value">${data.metrics.avg_volume_bias_pct.toFixed(1)}</div>
+                    </div>`;
+                    html += '</div>';
+                }
+
+                // 逐事件结果
+                html += '<h3 style="color:#4fc3f7;margin:16px 0 8px;">逐事件率定结果</h3>';
+                if (data.event_results && data.event_results.length > 0) {
+                    html += '<table class="data-table"><thead><tr><th>事件ID</th><th>峰现日期</th><th>NSE</th><th>RMSE</th><th>实测峰</th><th>模拟峰</th><th>峰偏差%</th><th>水量偏差%</th></tr></thead><tbody>';
+                    data.event_results.forEach(ev => {
+                        html += `<tr>
+                            <td>${ev.event_id}</td>
+                            <td>${ev.peak_date}</td>
+                            <td style="color:${ev.nse > 0.5 ? '#66bb6a' : (ev.nse > 0 ? '#ffa726' : '#ef5350')}">${ev.nse.toFixed(3)}</td>
+                            <td>${ev.rmse.toFixed(1)}</td>
+                            <td>${ev.obs_peak.toFixed(0)}</td>
+                            <td>${ev.sim_peak.toFixed(0)}</td>
+                            <td>${ev.peak_error_pct.toFixed(1)}</td>
+                            <td>${ev.volume_bias_pct.toFixed(1)}</td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table>';
+                }
+
+                contentDiv.innerHTML = html;
+                modal.classList.add('active');
+            } catch (e) {
+                alert('加载率定参数失败: ' + e.message);
+            }
+        }
+
+        // ============================================================
+        // 工具函数
+        // ============================================================
+        function showLoading(text) {
+            document.getElementById('loadingText').textContent = text;
+            document.getElementById('loadingOverlay').classList.add('active');
+            document.getElementById('forecastBtn').disabled = true;
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.remove('active');
+            document.getElementById('forecastBtn').disabled = false;
+        }
+
+        // 初始化
+        window.addEventListener('load', () => {
+            // 仅检查健康状态，不自动加载耗时数据（避免页面卡顿）
+            fetch('/api/forecast/health').then(r => r.json()).then(data => {
+                if (data.calib_params_loaded) {
+                    document.getElementById('statusCalib').classList.remove('inactive');
+                }
+                if (data.db_connected) {
+                    document.getElementById('statusDbText').textContent = '数据库已连接';
+                    // 数据库已连接时才加载数据范围
+                    loadDataRange();
+                }
+            }).catch(e => {});
+            // 检查数据库连接状态（启动时已预连接局域网SQL Server）
+            checkDbStatus();
+            // 加载历史洪水事件（从本地率定结果，不触发数据库查询）
+            loadQuickEvents();
+
+            // 检查全局时间是否已应用，自动填充预报表单时间输入框
+            const range = getGlobalTimeRange();
+            if (range.applied) {
+                console.log(`[洪水预报] 检测到全局时间已应用: ${range.start} ~ ${range.end}`);
+                applyGlobalTimeToForm(range.start, range.end);
+            }
+        });
+
+        // 将全局时间应用到预报表单的起止时间输入框
+        // global_time.js 返回 'YYYY-MM-DD' 格式，输入框为 datetime-local（YYYY-MM-DDTHH:MM）
+        function applyGlobalTimeToForm(start, end) {
+            const startInput = document.getElementById('startTime');
+            const endInput = document.getElementById('endTime');
+            if (startInput && start) startInput.value = start + 'T00:00';
+            if (endInput && end) endInput.value = end + 'T00:00';
+        }
+
+        // 监听全局时间变更，自动填充预报表单时间输入框
+        window.addEventListener('GlobalTimeChanged', (e) => {
+            const { start, end, applied } = e.detail;
+            if (applied) {
+                console.log(`[洪水预报] 全局时间变更: ${start} ~ ${end}`);
+                applyGlobalTimeToForm(start, end);
+            }
+        });
+    </script>
+</body>
+</html>

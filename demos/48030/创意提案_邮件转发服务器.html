@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>邮件转发服务器 · 创意提案 | TRAE AI 创造力大赛</title>
+  <meta name="description" content="基于 Flask 的 POP3 邮件转飞书智能转发系统 —— 多用户邮箱管理、实时推送、安全加密、自动清理的一站式方案。" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'Noto Sans SC', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            ink: '#0a0e1a',
+            'ink-soft': '#111726',
+            'ink-card': '#161d31',
+            brand: {
+              50: '#eff6ff',
+              400: '#60a5fa',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+            },
+            accent: {
+              cyan: '#22d3ee',
+              violet: '#a78bfa',
+              pink: '#f472b6',
+              emerald: '#34d399',
+              amber: '#fbbf24',
+            },
+          },
+          boxShadow: {
+            glow: '0 0 40px rgba(59,130,246,0.35)',
+            'glow-violet': '0 0 40px rgba(167,139,250,0.35)',
+          },
+          keyframes: {
+            float: {
+              '0%,100%': { transform: 'translateY(0)' },
+              '50%': { transform: 'translateY(-12px)' },
+            },
+            shimmer: {
+              '0%': { backgroundPosition: '-200% 0' },
+              '100%': { backgroundPosition: '200% 0' },
+            },
+            pulseRing: {
+              '0%': { transform: 'scale(0.8)', opacity: '0.8' },
+              '100%': { transform: 'scale(2.2)', opacity: '0' },
+            },
+          },
+          animation: {
+            float: 'float 6s ease-in-out infinite',
+            shimmer: 'shimmer 3s linear infinite',
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    /* ============ 设计 Token 系统 ============ */
+    :root {
+      /* 背景色阶 */
+      --bg-base: #070b16;
+      --bg-ink: #0a0e1a;
+      --bg-elevated: #111726;
+      --bg-card: #161d31;
+
+      /* 品牌色阶（50–950） */
+      --brand-50:  #eff6ff;
+      --brand-400: #60a5fa;
+      --brand-500: #3b82f6;
+      --brand-600: #2563eb;
+      --brand-700: #1d4ed8;
+
+      /* 辅助色 */
+      --cyan:    #22d3ee;
+      --violet:  #a78bfa;
+      --pink:    #f472b6;
+      --emerald: #34d399;
+      --amber:   #fbbf24;
+      --red:     #f87171;
+
+      /* 文本色阶（对比度 ≥ 4.5:1） */
+      --text-primary:   #f3f4f6;   /* 主文本：高对比 */
+      --text-secondary: #d1d5db;   /* 次文本 */
+      --text-tertiary:  #9ca3af;   /* 辅助文本 */
+      --text-disabled:  #6b7280;
+
+      /* 边框 / 分割线 */
+      --border-subtle: rgba(255,255,255,0.06);
+      --border-default: rgba(255,255,255,0.10);
+      --border-hover: rgba(96,165,250,0.45);
+
+      /* 间距系统（4 / 8 倍数） */
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 20px;
+      --sp-6: 24px;
+      --sp-8: 32px;
+      --sp-10: 40px;
+      --sp-12: 48px;
+      --sp-16: 64px;
+
+      /* 圆角梯度 */
+      --r-sm: 4px;
+      --r-md: 8px;
+      --r-lg: 12px;
+      --r-xl: 16px;
+      --r-2xl: 20px;
+      --r-full: 999px;
+
+      /* 阴影层级 */
+      --sh-0: none;
+      --sh-1: 0 1px 2px rgba(0,0,0,0.25);
+      --sh-2: 0 8px 24px rgba(0,0,0,0.35);
+      --sh-3: 0 18px 48px rgba(0,0,0,0.45);
+      --sh-glow-brand: 0 0 40px rgba(59,130,246,0.35);
+      --sh-glow-violet: 0 0 40px rgba(167,139,250,0.35);
+
+      /* 缓动曲线 */
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+      /* 动效时长（克制：200–400ms） */
+      --dur-fast: 180ms;
+      --dur-base: 260ms;
+      --dur-slow: 400ms;
+
+      --grid: rgba(99, 102, 241, 0.07);
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', 'Noto Sans SC', sans-serif;
+      background: var(--bg-base);
+      color: var(--text-secondary);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.6;
+    }
+
+    /* 字体层级强化 */
+    h1, h2, h3 { color: var(--text-primary); letter-spacing: -0.02em; }
+
+    /* 文本选中高亮 */
+    ::selection { background: rgba(96,165,250,0.30); color: #fff; }
+
+    /* ============ 装饰背景 ============ */
+    .bg-grid {
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 100%);
+      -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 100%);
+    }
+    .blob { filter: blur(80px); opacity: 0.55; }
+
+    /* 渐变文字 */
+    .text-gradient {
+      background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .text-gradient-cyan {
+      background: linear-gradient(135deg, #22d3ee 0%, #60a5fa 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ============ 玻璃卡片 ============ */
+    .glass {
+      background: linear-gradient(180deg, rgba(22,29,49,0.72) 0%, rgba(17,23,38,0.52) 100%);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border-subtle);
+      transition: transform var(--dur-base) var(--ease-out),
+                  border-color var(--dur-base) var(--ease-out),
+                  box-shadow var(--dur-base) var(--ease-out);
+    }
+    .glass:hover {
+      border-color: var(--border-hover);
+      box-shadow: var(--sh-2), 0 0 0 1px rgba(96,165,250,0.08);
+      transform: translateY(-4px);
+    }
+
+    /* ============ 滚动渐入 ============ */
+    .reveal {
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity var(--dur-slow) var(--ease-out),
+                  transform var(--dur-slow) var(--ease-out);
+      will-change: opacity, transform;
+    }
+    .reveal.in { opacity: 1; transform: translateY(0); }
+
+    /* 状态徽章 */
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-4);
+      border-radius: var(--r-full);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      line-height: 1;
+    }
+
+    /* ============ 按钮：完整状态机 ============ */
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-2);
+      padding: 14px 28px;
+      min-height: 48px;            /* 触摸目标 ≥44px */
+      border-radius: var(--r-lg);
+      font-weight: 600;
+      font-size: 15px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+      box-shadow: var(--sh-glow-brand), var(--sh-1);
+      transition: transform var(--dur-fast) var(--ease-out),
+                  box-shadow var(--dur-base) var(--ease-out),
+                  filter var(--dur-base) var(--ease-out);
+      will-change: transform;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 56px rgba(59,130,246,0.5), var(--sh-2);
+      filter: brightness(1.08);
+    }
+    .btn-primary:active { transform: translateY(0) scale(0.985); filter: brightness(0.96); }
+
+    .btn-ghost {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-2);
+      padding: 14px 28px;
+      min-height: 48px;
+      border-radius: var(--r-lg);
+      font-weight: 500;
+      font-size: 15px;
+      color: var(--text-primary);
+      background: linear-gradient(180deg, rgba(22,29,49,0.7), rgba(17,23,38,0.5));
+      border: 1px solid var(--border-default);
+      backdrop-filter: blur(12px);
+      transition: transform var(--dur-fast) var(--ease-out),
+                  border-color var(--dur-base) var(--ease-out),
+                  background var(--dur-base) var(--ease-out);
+    }
+    .btn-ghost:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-hover);
+      background: linear-gradient(180deg, rgba(30,40,68,0.8), rgba(22,29,49,0.6));
+    }
+    .btn-ghost:active { transform: translateY(0) scale(0.985); }
+
+    /* ============ 焦点可见性（可访问性） ============ */
+    a:focus-visible,
+    button:focus-visible,
+    .btn-primary:focus-visible,
+    .btn-ghost:focus-visible,
+    .chip:focus-visible {
+      outline: 2px solid var(--brand-400);
+      outline-offset: 3px;
+      border-radius: var(--r-md);
+    }
+
+    /* ============ 导航 ============ */
+    #navbar { transition: background var(--dur-base) var(--ease-out),
+                          border-color var(--dur-base) var(--ease-out),
+                          box-shadow var(--dur-base) var(--ease-out); }
+    #navbar.scrolled {
+      background: rgba(10,14,26,0.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border-subtle);
+      box-shadow: var(--sh-1);
+    }
+    .nav-link {
+      position: relative;
+      padding: var(--sp-2) 0;
+      transition: color var(--dur-base) var(--ease-out);
+    }
+    .nav-link::after {
+      content: '';
+      position: absolute;
+      left: 0; bottom: -4px;
+      width: 0; height: 2px;
+      background: linear-gradient(90deg, var(--brand-400), var(--violet));
+      border-radius: var(--r-full);
+      transition: width var(--dur-base) var(--ease-out);
+    }
+    .nav-link:hover { color: #fff; }
+    .nav-link:hover::after { width: 100%; }
+
+    /* 移动端汉堡按钮 */
+    .nav-toggle {
+      display: none;
+      width: 44px; height: 44px;
+      align-items: center; justify-content: center;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: rgba(22,29,49,0.6);
+      color: var(--text-primary);
+    }
+    .nav-toggle:hover { border-color: var(--border-hover); }
+    .mobile-menu {
+      display: none;
+      position: fixed;
+      top: 68px; left: var(--sp-4); right: var(--sp-4);
+      padding: var(--sp-3);
+      background: rgba(10,14,26,0.96);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-xl);
+      box-shadow: var(--sh-3);
+      z-index: 60;
+      transform: translateY(-12px);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform var(--dur-base) var(--ease-out),
+                  opacity var(--dur-base) var(--ease-out);
+    }
+    .mobile-menu.open {
+      transform: translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .mobile-menu a {
+      display: block;
+      padding: 14px var(--sp-4);
+      border-radius: var(--r-md);
+      color: var(--text-secondary);
+      min-height: 48px;
+      line-height: 20px;
+    }
+    .mobile-menu a:hover { background: rgba(96,165,250,0.10); color: #fff; }
+
+    /* ============ 功能卡片图标动效 ============ */
+    .feature-card .icon-wrap {
+      transition: transform var(--dur-base) var(--ease-spring),
+                  background var(--dur-base) var(--ease-out);
+    }
+    .feature-card:hover .icon-wrap {
+      transform: scale(1.12) rotate(-4deg);
+    }
+
+    /* ============ 时间线 ============ */
+    .timeline-dot::before {
+      content: '';
+      position: absolute;
+      left: -33px; top: 6px;
+      width: 14px; height: 14px;
+      border-radius: var(--r-full);
+      background: var(--brand-400);
+      box-shadow: 0 0 0 4px rgba(96,165,250,0.2),
+                  0 0 16px rgba(96,165,250,0.5);
+    }
+    .timeline-line::before {
+      content: '';
+      position: absolute;
+      left: -28px; top: 20px; bottom: -40px;
+      width: 2px;
+      background: linear-gradient(180deg, rgba(96,165,250,0.6), rgba(96,165,250,0.05));
+    }
+    .timeline-item {
+      transition: transform var(--dur-base) var(--ease-out);
+    }
+    .timeline-item:hover { transform: translateX(6px); }
+
+    /* ============ 滚动条 ============ */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--bg-ink); }
+    ::-webkit-scrollbar-thumb {
+      background: #1f2a44;
+      border-radius: var(--r-full);
+      border: 2px solid var(--bg-ink);
+    }
+    ::-webkit-scrollbar-thumb:hover { background: #2d3b5f; }
+
+    .tnum { font-variant-numeric: tabular-nums; }
+
+    /* ============ 响应式断点 ============ */
+    /* 平板（≤1024） */
+    @media (max-width: 1024px) {
+      .hero-title { font-size: clamp(2.5rem, 6vw, 4rem) !important; }
+    }
+    /* 移动端（≤768） */
+    @media (max-width: 768px) {
+      .nav-toggle { display: inline-flex; }
+      .nav-desktop { display: none !important; }
+      .mobile-menu { display: block; }
+      .section-title { font-size: clamp(2rem, 8vw, 2.75rem) !important; }
+      .hero-title { font-size: clamp(2.25rem, 9vw, 3rem) !important; line-height: 1.1 !important; }
+      .glass:hover { transform: none; }        /* 移动端关闭悬浮位移，避免触屏抖动 */
+      .timeline-item:hover { transform: none; }
+    }
+    /* 小屏（≤480） */
+    @media (max-width: 480px) {
+      .hero-stat { font-size: 1.75rem !important; }
+    }
+
+    /* ============ 无障碍：尊重减少动效偏好 ============ */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+      .animate-float { animation: none !important; }
+    }
+  </style>
+</head>
+<body class="overflow-x-hidden">
+
+  <!-- ============ 顶部导航 ============ -->
+  <nav class="fixed top-0 inset-x-0 z-50" id="navbar">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+      <a href="#top" class="flex items-center gap-2.5 group" aria-label="MailBridge 首页">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-accent-violet flex items-center justify-center shadow-glow group-hover:scale-105 transition-transform">
+          <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+        </div>
+        <span class="font-semibold text-white/90 tracking-tight">MailBridge</span>
+      </a>
+      <div class="nav-desktop hidden md:flex items-center gap-7 text-sm text-white/60">
+        <a href="#pain" class="nav-link">痛点</a>
+        <a href="#solution" class="nav-link">方案</a>
+        <a href="#features" class="nav-link">功能</a>
+        <a href="#arch" class="nav-link">架构</a>
+        <a href="#scenarios" class="nav-link">场景</a>
+        <a href="#roadmap" class="nav-link">规划</a>
+      </div>
+      <a href="#cta" class="chip bg-brand-500/15 text-brand-400 border border-brand-500/30 hover:bg-brand-500/25 transition hidden sm:inline-flex">
+        报名参赛
+      </a>
+      <button class="nav-toggle md:hidden" id="navToggle" aria-label="打开菜单" aria-expanded="false" aria-controls="mobileMenu">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+    </div>
+    <!-- 移动端菜单 -->
+    <div class="mobile-menu" id="mobileMenu" role="menu" aria-label="移动端导航">
+      <a href="#pain" class="block">痛点</a>
+      <a href="#solution" class="block">方案</a>
+      <a href="#features" class="block">功能</a>
+      <a href="#arch" class="block">架构</a>
+      <a href="#scenarios" class="block">场景</a>
+      <a href="#roadmap" class="block">规划</a>
+      <a href="#cta" class="block mt-2 text-center chip bg-brand-500/15 text-brand-400 border border-brand-500/30">报名参赛</a>
+    </div>
+  </nav>
+
+  <!-- ============ Hero ============ -->
+  <header id="top" class="relative min-h-screen flex items-center pt-24 pb-16 overflow-hidden">
+    <div class="absolute inset-0 bg-grid"></div>
+    <div class="blob absolute -top-20 -left-20 w-[480px] h-[480px] rounded-full bg-brand-600"></div>
+    <div class="blob absolute top-40 -right-20 w-[520px] h-[520px] rounded-full bg-accent-violet"></div>
+    <div class="blob absolute bottom-0 left-1/3 w-[400px] h-[400px] rounded-full bg-accent-cyan opacity-30"></div>
+
+    <div class="relative max-w-7xl mx-auto px-6 w-full">
+      <div class="grid lg:grid-cols-12 gap-10 items-center">
+        <div class="lg:col-span-7">
+          <div class="chip bg-white/5 border border-white/10 text-white/70 mb-6">
+            <span class="w-2 h-2 rounded-full bg-accent-emerald animate-pulse"></span>
+            TRAE AI 创造力大赛 · 参赛创意提案
+          </div>
+          <h1 class="hero-title text-5xl md:text-6xl lg:text-7xl font-black leading-[1.05] tracking-tight text-white">
+            让每一封邮件
+            <br />
+            <span class="text-gradient">秒达飞书</span>
+          </h1>
+          <p class="mt-7 text-lg md:text-xl text-white/65 leading-relaxed max-w-2xl">
+            基于 Flask 打造的 POP3 邮件智能转发服务器，多邮箱集中托管 · 实时推送飞书 · 加密存储 · 自动清理，告别反复登录邮箱的繁琐，把信息流交给 AI 时代的协同入口。
+          </p>
+
+          <div class="mt-9 flex flex-wrap items-center gap-4">
+            <a href="#solution" class="btn-primary">
+              查看创意方案
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </a>
+            <a href="#features" class="btn-ghost">
+              核心功能一览
+            </a>
+          </div>
+
+          <div class="mt-12 grid grid-cols-3 gap-6 max-w-xl">
+            <div>
+              <div class="hero-stat text-3xl font-black text-white tnum">10<span class="text-brand-400">+</span></div>
+              <div class="text-sm text-white/50 mt-1">核心功能模块</div>
+            </div>
+            <div>
+              <div class="hero-stat text-3xl font-black text-white tnum">AES<span class="text-brand-400">-128</span></div>
+              <div class="text-sm text-white/50 mt-1">加密存储保障</div>
+            </div>
+            <div>
+              <div class="hero-stat text-3xl font-black text-white tnum">0<span class="text-brand-400">门槛</span></div>
+              <div class="text-sm text-white/50 mt-1">用户零运维</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右侧示意卡片 -->
+        <div class="lg:col-span-5 relative">
+          <div class="relative animate-float">
+            <div class="glass rounded-2xl p-6 shadow-2xl">
+              <div class="flex items-center justify-between mb-5">
+                <div class="flex items-center gap-2">
+                  <span class="w-3 h-3 rounded-full bg-red-400/80"></span>
+                  <span class="w-3 h-3 rounded-full bg-amber-400/80"></span>
+                  <span class="w-3 h-3 rounded-full bg-emerald-400/80"></span>
+                </div>
+                <span class="text-xs text-white/40">实时邮件流</span>
+              </div>
+
+              <!-- 模拟邮件 -->
+              <div class="space-y-3">
+                <div class="rounded-xl bg-white/[0.03] border border-white/5 p-3.5 flex items-start gap-3">
+                  <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500 to-accent-violet flex items-center justify-center text-xs font-bold text-white shrink-0">CW</div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-sm font-medium text-white truncate">CI 构建失败告警</span>
+                      <span class="text-[10px] text-white/40 shrink-0">刚刚</span>
+                    </div>
+                    <p class="text-xs text-white/50 mt-1 truncate">main 分支测试未通过，请尽快处理...</p>
+                  </div>
+                </div>
+                <div class="rounded-xl bg-white/[0.03] border border-white/5 p-3.5 flex items-start gap-3">
+                  <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-accent-cyan to-brand-500 flex items-center justify-center text-xs font-bold text-white shrink-0">LK</div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-sm font-medium text-white truncate">客户合同待签署</span>
+                      <span class="text-[10px] text-white/40 shrink-0">2 分钟前</span>
+                    </div>
+                    <p class="text-xs text-white/50 mt-1 truncate">附件已上传，请查收并尽快回复...</p>
+                  </div>
+                </div>
+                <div class="rounded-xl bg-white/[0.03] border border-white/5 p-3.5 flex items-start gap-3">
+                  <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-accent-pink to-accent-violet flex items-center justify-center text-xs font-bold text-white shrink-0">HR</div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-sm font-medium text-white truncate">入职欢迎邮件</span>
+                      <span class="text-[10px] text-white/40 shrink-0">5 分钟前</span>
+                    </div>
+                    <p class="text-xs text-white/50 mt-1 truncate">欢迎加入团队，请完成入职流程...</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 箭头 -->
+              <div class="my-4 flex items-center justify-center gap-2 text-white/40 text-xs">
+                <span class="h-px w-12 bg-gradient-to-r from-transparent to-brand-400/60"></span>
+                <span>POP3 拉取 · 智能过滤 · 加密存储</span>
+                <span class="h-px w-12 bg-gradient-to-l from-transparent to-accent-violet/60"></span>
+              </div>
+
+              <!-- 飞书卡片 -->
+              <div class="rounded-xl bg-gradient-to-br from-[#1d4ed8]/30 to-[#7c3aed]/20 border border-brand-500/30 p-4">
+                <div class="flex items-center gap-2 mb-2">
+                  <svg class="w-4 h-4 text-brand-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/></svg>
+                  <span class="text-sm font-semibold text-white">飞书消息卡片推送</span>
+                </div>
+                <div class="space-y-1.5 text-xs text-white/70">
+                  <div class="flex justify-between"><span>主题</span><span class="text-white">CI 构建失败告警</span></div>
+                  <div class="flex justify-between"><span>发件人</span><span class="text-white">noreply@ci.io</span></div>
+                  <div class="flex justify-between"><span>附件</span><span class="text-accent-emerald">2 个 · 已转存</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 装饰光环 -->
+            <div class="absolute -inset-4 -z-10 rounded-3xl bg-gradient-to-br from-brand-500/20 to-accent-violet/20 blur-2xl"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 滚动提示 -->
+      <div class="hidden md:flex absolute bottom-6 left-1/2 -translate-x-1/2 flex-col items-center gap-2 text-white/40 text-xs">
+        <span>向下滚动探索</span>
+        <svg class="w-4 h-4 animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ 痛点 ============ -->
+  <section id="pain" class="relative py-28 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+        <span class="chip bg-red-500/10 text-red-300 border border-red-500/20">背景痛点</span>
+        <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight">邮箱，正在拖慢你的协同节奏</h2>
+        <p class="mt-5 text-white/60 text-lg">传统邮箱作为信息孤岛，与现代即时协作工具之间的鸿沟越来越大。</p>
+      </div>
+
+      <div class="grid md:grid-cols-3 gap-6">
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="w-12 h-12 rounded-xl bg-red-500/15 flex items-center justify-center mb-5">
+            <svg class="w-6 h-6 text-red-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          </div>
+          <h3 class="text-xl font-semibold text-white mb-3">反复切换 · 注意力割裂</h3>
+          <p class="text-white/55 leading-relaxed">开发、运营、HR 每天要在邮箱、IM、协同文档之间反复切换。一封关键邮件淹没在收件箱里，错过就是几小时的延误。</p>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="w-12 h-12 rounded-xl bg-amber-500/15 flex items-center justify-center mb-5">
+            <svg class="w-6 h-6 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 13l2 2M17 13l-4 4"/></svg>
+          </div>
+          <h3 class="text-xl font-semibold text-white mb-3">多邮箱 · 难以集中管理</h3>
+          <p class="text-white/55 leading-relaxed">公司邮箱、客户邮箱、CI 告警邮箱分散在不同账号，需要分别登录、分别检查，无法统一过滤、统一归档、统一推送。</p>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="w-12 h-12 rounded-xl bg-violet-500/15 flex items-center justify-center mb-5">
+            <svg class="w-6 h-6 text-violet-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <h3 class="text-xl font-semibold text-white mb-3">附件存储 · 安全合规风险</h3>
+          <p class="text-white/55 leading-relaxed">附件散落各处难以审计，过期数据无法自动清理；明文存储密码、跨用户数据隔离缺失，是企业数据安全的隐形炸弹。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 解决方案 ============ -->
+  <section id="solution" class="relative py-28 px-6 overflow-hidden">
+    <div class="blob absolute top-1/2 -translate-y-1/2 -left-32 w-[420px] h-[420px] rounded-full bg-brand-600 opacity-30"></div>
+    <div class="relative max-w-7xl mx-auto">
+      <div class="grid lg:grid-cols-2 gap-14 items-center">
+        <div class="reveal">
+          <span class="chip bg-brand-500/10 text-brand-400 border border-brand-500/20">解决方案</span>
+          <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight leading-tight">
+            一座桥，<br />
+            把<span class="text-gradient-cyan">邮箱</span>接入<span class="text-gradient-cyan">飞书</span>
+          </h2>
+          <p class="mt-6 text-white/65 text-lg leading-relaxed">
+            MailBridge 在 POP3 邮箱与飞书之间架设一座智能桥梁：后台自动拉取多账号邮件，按规则过滤，加密落库后生成富文本消息卡片，实时推送到用户绑定的飞书账号。
+          </p>
+          <p class="mt-4 text-white/65 text-lg leading-relaxed">
+            用户无需再打开邮箱客户端，所有关键邮件以统一格式汇聚在飞书会话中，附件自动转存云空间，过期数据按策略清理——把邮件变成协同流的一部分。
+          </p>
+
+          <div class="mt-8 space-y-4">
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <svg class="w-3.5 h-3.5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+              <p class="text-white/75">多账号集中托管，一处配置 · 全程托管</p>
+            </div>
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <svg class="w-3.5 h-3.5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+              <p class="text-white/75">关键字 + 签名双过滤，降噪不丢信</p>
+            </div>
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <svg class="w-3.5 h-3.5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+              <p class="text-white/75">Fernet 加密 + 多用户数据隔离，企业级安全</p>
+            </div>
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <svg class="w-3.5 h-3.5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+              <p class="text-white/75">内容寻址附件存储，去重省空间、引用计数自动清理</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 流程图 -->
+        <div class="reveal">
+          <div class="glass rounded-2xl p-6 md:p-8">
+            <div class="text-xs text-white/40 mb-6 tracking-wider uppercase">数据流转链路</div>
+            <div class="space-y-4">
+              <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500/30 to-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold text-white">POP3 邮箱</div>
+                  <div class="text-xs text-white/50">多账号 · 连接池复用 · 后台轮询</div>
+                </div>
+                <span class="chip bg-amber-500/10 text-amber-300 border border-amber-500/20">输入</span>
+              </div>
+
+              <div class="ml-6 h-6 w-px bg-gradient-to-b from-amber-500/40 to-brand-500/40"></div>
+
+              <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-500/30 to-brand-500/10 border border-brand-500/30 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-brand-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/><path d="M12 22V12M3 7l9 5 9-5"/></svg>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold text-white">MailBridge 引擎</div>
+                  <div class="text-xs text-white/50">解析 · 过滤 · 加密 · 全文索引</div>
+                </div>
+                <span class="chip bg-brand-500/10 text-brand-300 border border-brand-500/20">核心</span>
+              </div>
+
+              <div class="ml-6 h-6 w-px bg-gradient-to-b from-brand-500/40 to-violet-500/40"></div>
+
+              <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500/30 to-violet-500/10 border border-violet-500/30 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-violet-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold text-white">SQLite + 附件共享池</div>
+                  <div class="text-xs text-white/50">SHA256 去重 · 分层目录 · FTS5 检索</div>
+                </div>
+                <span class="chip bg-violet-500/10 text-violet-300 border border-violet-500/20">存储</span>
+              </div>
+
+              <div class="ml-6 h-6 w-px bg-gradient-to-b from-violet-500/40 to-emerald-500/40"></div>
+
+              <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500/30 to-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-emerald-300" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/></svg>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold text-white">飞书消息卡片</div>
+                  <div class="text-xs text-white/50">实时推送 · 卡片富文本 · 附件转存云空间</div>
+                </div>
+                <span class="chip bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">输出</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 核心功能 ============ -->
+  <section id="features" class="relative py-28 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+        <span class="chip bg-brand-500/10 text-brand-400 border border-brand-500/20">核心功能</span>
+        <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight">从拉取到推送，全链路一站式</h2>
+        <p class="mt-5 text-white/60 text-lg">十大模块协同工作，覆盖邮件生命周期每一个关键节点。</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <!-- 卡片 1 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-brand-500/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">多用户邮箱托管</h3>
+          <p class="text-sm text-white/55 leading-relaxed">配置持久化到 SQLite，支持多个邮箱账号登录管理；管理员与普通用户权限分离，数据严格隔离。</p>
+        </div>
+
+        <!-- 卡片 2 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-accent-cyan/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-accent-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">智能定时检查</h3>
+          <p class="text-sm text-white/55 leading-relaxed">后台线程池并行拉取，白天 60 秒、夜间自动降频，平衡时效与资源占用。</p>
+        </div>
+
+        <!-- 卡片 3 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-accent-violet/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-accent-violet" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">飞书卡片推送</h3>
+          <p class="text-sm text-white/55 leading-relaxed">新邮件自动生成富文本消息卡片，图片上传飞图，附件转存云空间，一键直达原文。</p>
+        </div>
+
+        <!-- 卡片 4 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-accent-pink/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-accent-pink" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">关键字 + 签名过滤</h3>
+          <p class="text-sm text-white/55 leading-relaxed">多关键字逗号分隔匹配，签名识别自动剔除自动回复，让推送只保留真正重要的信息。</p>
+        </div>
+
+        <!-- 卡片 5 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-accent-emerald/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-accent-emerald" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">FTS5 全文检索</h3>
+          <p class="text-sm text-white/55 leading-relaxed">主题 / 发件人 / 正文写入 SQLite FTS5 虚拟表，trigram 分词支持中文子串匹配，秒级回溯历史邮件。</p>
+        </div>
+
+        <!-- 卡片 6 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-accent-amber/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-accent-amber" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">附件内容寻址</h3>
+          <p class="text-sm text-white/55 leading-relaxed">按 SHA256 分桶存储，多用户同附件仅存一份；按用户 / 年月分层目录，性能与可维护性兼得。</p>
+        </div>
+
+        <!-- 卡片 7 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-red-500/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-red-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">Fernet 加密存储</h3>
+          <p class="text-sm text-white/55 leading-relaxed">用户邮箱密码采用 AES-128-CBC + HMAC 加密，未配置 ENCRYPTION_KEY 拒绝启动，安全配置强约束。</p>
+        </div>
+
+        <!-- 卡片 8 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-teal-500/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-teal-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/><path d="M9 6v12"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">云空间自动清理</h3>
+          <p class="text-sm text-white/55 leading-relaxed">飞书云空间文件夹超 80 文件自动归档，本地附件按时间 + 容量 + 引用计数三重策略 LRU 清理。</p>
+        </div>
+
+        <!-- 卡片 9 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-indigo-500/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-indigo-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">跨平台 + 系统托盘</h3>
+          <p class="text-sm text-white/55 leading-relaxed">Windows 提供托盘图标一键启停，Linux / Docker 无托盘模式运行，PyInstaller 一键打包部署。</p>
+        </div>
+
+        <!-- 卡片 10 -->
+        <div class="reveal glass feature-card rounded-2xl p-6 group">
+          <div class="w-11 h-11 rounded-xl bg-fuchsia-500/15 flex items-center justify-center mb-4 icon-wrap">
+            <svg class="w-5 h-5 text-fuchsia-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <h3 class="text-lg font-semibold text-white mb-2">高性能并发引擎</h3>
+          <p class="text-sm text-white/55 leading-relaxed">ThreadPoolExecutor 并行处理，推送队列解耦，DB 连接复用 + POP3 连接池，支撑多用户高吞吐。</p>
+        </div>
+
+        <!-- CTA 卡片 -->
+        <div class="reveal rounded-2xl p-6 bg-gradient-to-br from-brand-600/30 to-accent-violet/20 border border-brand-500/30 flex flex-col justify-center items-center text-center">
+          <div class="text-3xl font-black text-white mb-2">还有更多</div>
+          <p class="text-sm text-white/70 mb-4">智能夜间降频 · 日志轮转 · 磁盘告警 · 管理员日志审计</p>
+          <a href="#cta" class="chip bg-white/10 text-white border border-white/20 hover:bg-white/20 transition">查看参赛信息</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 技术架构 ============ -->
+  <section id="arch" class="relative py-28 px-6 overflow-hidden">
+    <div class="blob absolute top-20 right-0 w-[420px] h-[420px] rounded-full bg-accent-violet opacity-25"></div>
+    <div class="relative max-w-7xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+        <span class="chip bg-accent-violet/10 text-accent-violet border border-accent-violet/20">技术架构</span>
+        <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight">分层清晰，职责单一</h2>
+        <p class="mt-5 text-white/60 text-lg">经典 MVC 分层 + 服务化解耦，每一层都可独立演进。</p>
+      </div>
+
+      <div class="reveal space-y-4 max-w-5xl mx-auto">
+        <!-- 表现层 -->
+        <div class="glass rounded-2xl p-6 flex flex-col md:flex-row md:items-center gap-5">
+          <div class="md:w-40 shrink-0">
+            <div class="chip bg-brand-500/15 text-brand-400 border border-brand-500/30">表现层 · Web</div>
+            <div class="mt-2 text-xs text-white/40">用户交互入口</div>
+          </div>
+          <div class="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">登录页</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">邮件列表</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">邮件详情</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">用户管理</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">管理员控制台</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">日志查看</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">云空间管理</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">飞书配置指南</div>
+          </div>
+        </div>
+
+        <div class="flex justify-center"><svg class="w-5 h-5 text-white/20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></div>
+
+        <!-- 路由层 -->
+        <div class="glass rounded-2xl p-6 flex flex-col md:flex-row md:items-center gap-5">
+          <div class="md:w-40 shrink-0">
+            <div class="chip bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30">路由层 · Routes</div>
+            <div class="mt-2 text-xs text-white/40">Controller 调度</div>
+          </div>
+          <div class="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-4 py-3">
+              <div class="text-sm font-medium text-white">user_routes</div>
+              <div class="text-xs text-white/45 mt-1">登录 / 邮件查看 / 飞书绑定</div>
+            </div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-4 py-3">
+              <div class="text-sm font-medium text-white">admin_routes</div>
+              <div class="text-xs text-white/45 mt-1">用户管理 / 日志 / 云空间</div>
+            </div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-4 py-3">
+              <div class="text-sm font-medium text-white">api_routes</div>
+              <div class="text-xs text-white/45 mt-1">性能监控 API</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex justify-center"><svg class="w-5 h-5 text-white/20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></div>
+
+        <!-- 服务层 -->
+        <div class="glass rounded-2xl p-6 flex flex-col md:flex-row md:items-center gap-5">
+          <div class="md:w-40 shrink-0">
+            <div class="chip bg-accent-violet/15 text-accent-violet border border-accent-violet/30">服务层 · Services</div>
+            <div class="mt-2 text-xs text-white/40">业务逻辑核心</div>
+          </div>
+          <div class="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">user_service</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">email_service</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">email_status_db</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">feishu_service</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">cloud_service</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">cleanup_service</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">connection_pool</div>
+          </div>
+        </div>
+
+        <div class="flex justify-center"><svg class="w-5 h-5 text-white/20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></div>
+
+        <!-- 工具层 -->
+        <div class="glass rounded-2xl p-6 flex flex-col md:flex-row md:items-center gap-5">
+          <div class="md:w-40 shrink-0">
+            <div class="chip bg-accent-emerald/15 text-accent-emerald border border-accent-emerald/30">工具层 · Utils</div>
+            <div class="mt-2 text-xs text-white/40">基础设施</div>
+          </div>
+          <div class="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">crypto 加密</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">cache 缓存</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">logger 日志</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">storage_backend</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">email_utils</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">string_utils</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">decorators</div>
+            <div class="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-sm text-white/80 text-center">tray_icon</div>
+          </div>
+        </div>
+
+        <div class="flex justify-center"><svg class="w-5 h-5 text-white/20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></div>
+
+        <!-- 存储层 -->
+        <div class="rounded-2xl p-6 bg-gradient-to-r from-brand-600/20 via-accent-violet/15 to-accent-cyan/15 border border-white/10 flex flex-col md:flex-row md:items-center gap-5">
+          <div class="md:w-40 shrink-0">
+            <div class="chip bg-white/10 text-white border border-white/20">存储层 · Data</div>
+            <div class="mt-2 text-xs text-white/50">持久化与外部协议</div>
+          </div>
+          <div class="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="rounded-lg bg-black/20 border border-white/10 px-3 py-2.5 text-sm text-white/85 text-center">SQLite + FTS5</div>
+            <div class="rounded-lg bg-black/20 border border-white/10 px-3 py-2.5 text-sm text-white/85 text-center">POP3 协议</div>
+            <div class="rounded-lg bg-black/20 border border-white/10 px-3 py-2.5 text-sm text-white/85 text-center">飞书开放平台 API</div>
+            <div class="rounded-lg bg-black/20 border border-white/10 px-3 py-2.5 text-sm text-white/85 text-center">附件共享池</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 技术栈 -->
+      <div class="reveal mt-14 text-center">
+        <div class="text-xs text-white/40 tracking-wider uppercase mb-5">技术栈</div>
+        <div class="flex flex-wrap justify-center gap-2.5">
+          <span class="chip bg-white/5 border border-white/10 text-white/70">Flask</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">Flask-Session</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">SQLite · FTS5</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">POP3</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">飞书开放平台</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">cryptography · Fernet</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">Tailwind CSS</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">Bootstrap · jQuery</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">ThreadPoolExecutor</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">pystray</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">PyInstaller</span>
+          <span class="chip bg-white/5 border border-white/10 text-white/70">psutil</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 应用场景 ============ -->
+  <section id="scenarios" class="relative py-28 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+        <span class="chip bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20">应用场景</span>
+        <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight">谁需要这座桥</h2>
+        <p class="mt-5 text-white/60 text-lg">从个人效率到企业协同，MailBridge 都能找到自己的位置。</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div class="reveal glass rounded-2xl p-6">
+          <div class="text-3xl mb-4">🧑‍💻</div>
+          <h3 class="text-lg font-semibold text-white mb-2">开发者 / DevOps</h3>
+          <p class="text-sm text-white/55 leading-relaxed">CI 构建结果、代码评审、仓库告警邮件，统一推送到飞书开发群，关键信号不漏接。</p>
+        </div>
+        <div class="reveal glass rounded-2xl p-6">
+          <div class="text-3xl mb-4">💼</div>
+          <h3 class="text-lg font-semibold text-white mb-2">销售 / 商务</h3>
+          <p class="text-sm text-white/55 leading-relaxed">客户合同、询盘邮件实时进入飞书，附件自动转存云空间，团队协同跟进零延迟。</p>
+        </div>
+        <div class="reveal glass rounded-2xl p-6">
+          <div class="text-3xl mb-4">👥</div>
+          <h3 class="text-lg font-semibold text-white mb-2">HR / 行政</h3>
+          <p class="text-sm text-white/55 leading-relaxed">招聘邮箱、入职邮件集中托管，按关键字过滤噪音，重要通知卡片化推送相关负责人。</p>
+        </div>
+        <div class="reveal glass rounded-2xl p-6">
+          <div class="text-3xl mb-4">🏢</div>
+          <h3 class="text-lg font-semibold text-white mb-2">中小企业团队</h3>
+          <p class="text-sm text-white/55 leading-relaxed">无需采购企业邮箱套件，用现有 POP3 邮箱 + 飞书即可搭建轻量统一通信入口。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 创新亮点 ============ -->
+  <section class="relative py-28 px-6 overflow-hidden">
+    <div class="blob absolute bottom-0 left-1/4 w-[480px] h-[480px] rounded-full bg-brand-600 opacity-25"></div>
+    <div class="relative max-w-7xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+        <span class="chip bg-accent-amber/10 text-accent-amber border border-accent-amber/20">创新亮点</span>
+        <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight">不止于转发，更是工程化沉淀</h2>
+        <p class="mt-5 text-white/60 text-lg">在「邮件转 IM」的朴素命题下，做出工程上的极致取舍。</p>
+      </div>
+
+      <div class="grid lg:grid-cols-2 gap-5">
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-lg bg-brand-500/15 flex items-center justify-center shrink-0">
+              <span class="text-brand-400 font-bold">01</span>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-white mb-2">附件内容寻址 · 去重省 70% 空间</h3>
+              <p class="text-sm text-white/60 leading-relaxed">同附件多用户共享存储，按 SHA256 分桶；附件 blob 按引用计数归零后自动回收，避免冗余存储。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-lg bg-accent-cyan/15 flex items-center justify-center shrink-0">
+              <span class="text-accent-cyan font-bold">02</span>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-white mb-2">FTS5 中文检索 · trigram 子串匹配</h3>
+              <p class="text-sm text-white/60 leading-relaxed">主题 / 发件人 / 正文入索引，原生支持中文 ≥3 字符子串查询，历史邮件秒级回溯。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-lg bg-accent-violet/15 flex items-center justify-center shrink-0">
+              <span class="text-accent-violet font-bold">03</span>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-white mb-2">智能夜间降频 · 资源自适应</h3>
+              <p class="text-sm text-white/60 leading-relaxed">20:00–7:00 自动延长检查间隔，降低无关唤醒；白天恢复高频，按需分配算力。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-lg bg-accent-emerald/15 flex items-center justify-center shrink-0">
+              <span class="text-accent-emerald font-bold">04</span>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-white mb-2">三重清理策略 · 数据自管理</h3>
+              <p class="text-sm text-white/60 leading-relaxed">时间过期 + 容量阈值 + 引用计数，本地附件 / 云空间 / 数据库分层自治，零人工干预。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-lg bg-accent-pink/15 flex items-center justify-center shrink-0">
+              <span class="text-accent-pink font-bold">05</span>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-white mb-2">连接池 + 线程池 · 高吞吐引擎</h3>
+              <p class="text-sm text-white/60 leading-relaxed">POP3 连接池避免握手开销，线程池并行处理多用户，推送队列解耦存储与通知。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="reveal glass rounded-2xl p-7">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-lg bg-red-500/15 flex items-center justify-center shrink-0">
+              <span class="text-red-300 font-bold">06</span>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-white mb-2">企业级安全 · 强约束加密</h3>
+              <p class="text-sm text-white/60 leading-relaxed">Fernet (AES-128-CBC + HMAC) 加密密码，未配置密钥拒绝启动；附件下载强制校验归属。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 未来规划 ============ -->
+  <section id="roadmap" class="relative py-28 px-6">
+    <div class="max-w-4xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+        <span class="chip bg-brand-500/10 text-brand-400 border border-brand-500/20">未来规划</span>
+        <h2 class="mt-5 section-title text-4xl md:text-5xl font-black text-white tracking-tight">从一座桥到一张网</h2>
+        <p class="mt-5 text-white/60 text-lg">MailBridge 的下一步，是把邮件协同推向更广阔的边界。</p>
+      </div>
+
+      <div class="relative pl-10 space-y-10">
+        <div class="reveal relative timeline-line timeline-item">
+          <div class="timeline-dot absolute"></div>
+          <div class="chip bg-brand-500/15 text-brand-400 border border-brand-500/30 mb-2">阶段一 · 已完成</div>
+          <h3 class="text-xl font-semibold text-white mb-2">邮件转飞书 MVP</h3>
+          <p class="text-white/60 leading-relaxed">多账号托管、POP3 拉取、飞书卡片推送、附件存储、加密与清理，完整闭环跑通。</p>
+        </div>
+
+        <div class="reveal relative timeline-line timeline-item">
+          <div class="timeline-dot absolute"></div>
+          <div class="chip bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 mb-2">阶段二 · 进行中</div>
+          <h3 class="text-xl font-semibold text-white mb-2">性能与体验打磨</h3>
+          <p class="text-white/60 leading-relaxed">连接池、全文检索、内容寻址、自动清理已落地；持续优化前端交互与监控可观测性。</p>
+        </div>
+
+        <div class="reveal relative timeline-line timeline-item">
+          <div class="timeline-dot absolute"></div>
+          <div class="chip bg-accent-violet/15 text-accent-violet border border-accent-violet/30 mb-2">阶段三 · 规划中</div>
+          <h3 class="text-xl font-semibold text-white mb-2">AI 智能摘要与分类</h3>
+          <p class="text-white/60 leading-relaxed">接入大模型，对长邮件生成一句话摘要、自动打标分类、按重要度排序，让推送更聪明。</p>
+        </div>
+
+        <div class="reveal relative timeline-item">
+          <div class="timeline-dot absolute"></div>
+          <div class="chip bg-accent-emerald/15 text-accent-emerald border border-accent-emerald/30 mb-2">阶段四 · 远景</div>
+          <h3 class="text-xl font-semibold text-white mb-2">多 IM 协同网络</h3>
+          <p class="text-white/60 leading-relaxed">从飞书扩展到钉钉、企业微信、Slack，邮件、IM、日历、文档统一编排，构建企业信息中枢。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CTA ============ -->
+  <section id="cta" class="relative py-28 px-6 overflow-hidden">
+    <div class="blob absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full bg-brand-600 opacity-30"></div>
+    <div class="relative max-w-4xl mx-auto text-center reveal">
+      <h2 class="section-title text-4xl md:text-5xl font-black text-white tracking-tight">让邮件，回归协同</h2>
+      <p class="mt-5 text-white/65 text-lg max-w-2xl mx-auto">MailBridge 用一座桥，把传统邮箱的孤岛接入飞书的协同网络。这是我们对「邮件转 IM」的一次工程化回答。</p>
+
+      <div class="mt-10 grid sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
+        <div class="glass rounded-xl p-5">
+          <div class="text-2xl font-black text-white">MIT</div>
+          <div class="text-xs text-white/50 mt-1">开源协议</div>
+        </div>
+        <div class="glass rounded-xl p-5">
+          <div class="text-2xl font-black text-white">0 门槛</div>
+          <div class="text-xs text-white/50 mt-1">用户零运维</div>
+        </div>
+        <div class="glass rounded-xl p-5">
+          <div class="text-2xl font-black text-white">单文件部署</div>
+          <div class="text-xs text-white/50 mt-1">PyInstaller 打包</div>
+        </div>
+      </div>
+
+      <div class="mt-10 inline-flex flex-wrap items-center justify-center gap-4">
+        <a href="https://forum.trae.cn/t/topic/22569" target="_blank" rel="noopener" class="btn-primary">
+          查看参赛指南
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 17L17 7M9 7h8v8"/></svg>
+        </a>
+        <a href="#top" class="btn-ghost">
+          返回顶部
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 页脚 ============ -->
+  <footer class="relative border-t border-white/5 py-10 px-6">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-2.5">
+        <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-brand-500 to-accent-violet flex items-center justify-center">
+          <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+        </div>
+        <span class="text-sm text-white/60">MailBridge · 邮件转发服务器</span>
+      </div>
+      <div class="text-xs text-white/40">
+        TRAE AI 创造力大赛 · 参赛创意提案 · 2026
+      </div>
+    </div>
+  </footer>
+
+  <!-- ============ 脚本 ============ -->
+  <script>
+    // 滚动出现动画
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+    // 导航栏滚动状态
+    const nav = document.getElementById('navbar');
+    const onScroll = () => {
+      if (window.scrollY > 30) nav.classList.add('scrolled');
+      else nav.classList.remove('scrolled');
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    // 移动端菜单交互
+    const toggle = document.getElementById('navToggle');
+    const menu = document.getElementById('mobileMenu');
+    const closeMenu = () => {
+      menu.classList.remove('open');
+      toggle.setAttribute('aria-expanded', 'false');
+    };
+    toggle.addEventListener('click', () => {
+      const isOpen = menu.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', String(isOpen));
+    });
+    // 点击菜单项后自动关闭
+    menu.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+    // 点击外部关闭
+    document.addEventListener('click', (e) => {
+      if (!menu.contains(e.target) && !toggle.contains(e.target)) closeMenu();
+    });
+    // ESC 关闭
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeMenu();
+    });
+  </script>
+</body>
+</html>

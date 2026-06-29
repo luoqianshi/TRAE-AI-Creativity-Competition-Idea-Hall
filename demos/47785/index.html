@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>学习伴侣 - 一起成长互相陪伴</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#6366F1',
+            secondary: '#10B981',
+            warm: '#F59E0B',
+            calm: '#EC4899',
+            sky: '#0EA5E9',
+            danger: '#EF4444',
+            bg: '#F1F5F9',
+            text: '#1E293B',
+            muted: '#64748B',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Noto Sans SC', system-ui, sans-serif; background: #F1F5F9; }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .card { background: white; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .btn { transition: all 0.2s; }
+    .btn:active { transform: scale(0.97); }
+    .mood-btn { transition: all 0.15s; }
+    .mood-btn:hover { transform: scale(1.1); }
+    .scroll-area { scrollbar-width: thin; scrollbar-color: #CBD5E1 #F1F5F9; }
+    .scroll-area::-webkit-scrollbar { width: 5px; }
+    .scroll-area::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .tag-basic { background: #DBEAFE; color: #1E40AF; }
+    .tag-core { background: #FEF3C7; color: #92400E; }
+    .tag-hard { background: #FEE2E2; color: #991B1B; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="app"></div>
+
+  <script>
+    // ===== 数据层 =====
+    const genId = () => Math.random().toString(36).substr(2, 9);
+    const fmtDate = d => new Date(d).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+    const fmtTime = d => new Date(d).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const todayKey = () => new Date().toISOString().split('T')[0];
+
+    const STORAGE_KEY = 'study_companion_v4';
+
+    const defaultData = {
+      notes: [],
+      checkins: {},
+      moods: {},
+      studyMinutes: {},
+      treeholeChat: [],
+      psychResults: [],
+      buddies: [],
+      currentPage: 'home',
+      currentNote: null,
+      prevPages: [],
+      helpStories: [],
+      myHelpCount: 0,
+      publicWelfare: {
+        myActions: [],
+        totalHelpPeople: 0,
+        totalVolunteerHours: 0,
+        totalDonations: 0,
+        badges: [],
+        communityGoal: { target: 100, current: 42, label: '本月帮助他人' }
+      }
+    };
+
+    let state = { ...defaultData };
+    let psychCurAnswers = [];
+
+    const load = () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          state = { ...defaultData, ...parsed, currentPage: 'home', prevPages: [] };
+        }
+      } catch(e) {}
+    };
+
+    const save = () => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+    };
+
+    load();
+
+    // ===== 天气与美食推荐 =====
+    const WEATHER_CONDITIONS = [
+      { type: 'sunny', icon: '☀️', temp: '28°', desc: '晴朗', tip: '天气真好' },
+      { type: 'cloudy', icon: '☁️', temp: '25°', desc: '多云', tip: '适宜学习' },
+      { type: 'rainy', icon: '🌧️', temp: '22°', desc: '下雨', tip: '雨天适合室内学习' },
+      { type: 'stormy', icon: '⛈️', temp: '20°', desc: '雷雨', tip: '注意安全' },
+      { type: 'snowy', icon: '❄️', temp: '-2°', desc: '下雪', tip: '注意保暖' },
+      { type: 'foggy', icon: '🌫️', temp: '18°', desc: '雾霾', tip: '空气不好' },
+    ];
+
+    const FOOD_RECOMMENDATIONS = {
+      sunny: { title: '清爽美食', items: ['冰粉', '凉拌黄瓜', '绿豆汤', '西瓜', '沙拉'], reason: '天气炎热，清爽食物让你更有精神！' },
+      cloudy: { title: '均衡美食', items: ['红烧肉', '米饭', '蔬菜汤', '水果拼盘', '酸奶'], reason: '天气舒适，均衡饮食保持好状态！' },
+      rainy: { title: '暖心美食', items: ['麻辣烫', '火锅', '热汤面', '姜茶', '炖菜'], reason: '雨天阴冷，热乎食物温暖身心！' },
+      stormy: { title: '安心美食', items: ['粥', '包子', '面条', '热茶', '甜点'], reason: '雷雨天气，简单食物让你安心学习！' },
+      snowy: { title: '暖胃美食', items: ['火锅', '麻辣烫', '羊肉汤', '热可可', '烤红薯'], reason: '天气寒冷，暖胃食物补充能量！' },
+      foggy: { title: '清淡美食', items: ['粥', '清蒸鱼', '蔬菜', '银耳羹', '柠檬水'], reason: '空气不好，清淡饮食更健康！' },
+    };
+
+    const getWeather = () => {
+      const hour = new Date().getHours();
+      if (hour >= 6 && hour < 18) {
+        return WEATHER_CONDITIONS[Math.floor(Math.random() * 2)];
+      } else {
+        return { type: 'cloudy', icon: '🌙', temp: '20°', desc: '夜晚', tip: '夜深了，注意休息' };
+      }
+    };
+
+    // ===== 温暖AI回复 =====
+    const WARM_RESPONSES = [
+      "我听到了。你已经很努力了，偶尔感到疲惫是完全正常的。给自己一个拥抱吧。",
+      "谢谢你的分享。我能感受到你内心的声音。你不是一个人，我在这里陪着你。",
+      "学习确实会有压力，但你要知道，每一次坚持都在让你变得更强。",
+      "我理解你的感受。有时候，把烦恼说出来就是一种治愈。",
+      "你今天已经做得很好了。不要对自己太苛刻，休息也是一种进步。",
+      "每个人的成长节奏不同，不必和别人比较。今天的你比昨天更好，这就够了。",
+      "感到困难说明你在成长。坚持下去，你会发现自己比想象中更坚强。",
+      "我欣赏你的坦诚。把心里话说出来需要勇气，你很棒。",
+      "学习是一场马拉松，不是短跑。适当休息，才能走得更远。",
+      "无论发生什么，请记得你值得被爱、被理解。我在这里支持你。",
+    ];
+
+    const ENCOURAGEMENTS = [
+      "今天又是元气满满的一天！",
+      "你正在成为更好的自己！",
+      "每一步都是成长，继续加油！",
+      "相信自己，你可以的！",
+    ];
+
+    const getWarmReply = () => WARM_RESPONSES[Math.floor(Math.random() * WARM_RESPONSES.length)];
+    const getEncourage = () => ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)];
+
+    // ===== 心理测评 =====
+    const PSYCH_QUESTIONS = [
+      { q: "最近一周，你是否经常感到心情低落或抑郁？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否经常感到焦虑、担心或紧张？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否难以入睡或睡眠质量差？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否感到学习或生活失去兴趣？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否经常感到疲惫、没有精力？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否难以集中注意力？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否经常对自己感到失望？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+      { q: "你是否感到孤独，缺少支持？", opts: ['完全没有', '偶尔有', '经常有', '一直有'], scores: [0, 1, 2, 3] },
+    ];
+
+    const analyzePsych = (scores) => {
+      const total = scores.reduce((a, b) => a + b, 0);
+      const max = scores.length * 3;
+      const percent = Math.round((total / max) * 100);
+      
+      if (percent <= 25) return { level: 'best', emoji: '😊', title: '心理状态很棒', color: 'secondary', tip: '你目前的心理状态非常好！继续保持这种积极乐观的心态。记住，难过的时候可以找朋友聊聊，或者做些让自己开心的事。' };
+      if (percent <= 50) return { level: 'good', emoji: '🙂', title: '心理状态良好', color: 'sky', tip: '你的心理状态总体不错。如果偶尔感到压力，试试深呼吸、散步或找信任的人倾诉。照顾好自己才能更好地学习。' };
+      if (percent <= 75) return { level: 'stressed', emoji: '😔', title: '轻度压力', color: 'warm', tip: '你可能正在经历一些压力。这很正常，记得给自己一些放松时间。可以尝试运动、听音乐或者和朋友聊天。如果持续感到不适，不要犹豫寻求帮助。' };
+      return { level: 'needCare', emoji: '😢', title: '需要关注', color: 'danger', tip: '我注意到你最近可能比较辛苦。请记住，寻求帮助是勇敢的表现。建议你和学校的心理老师聊聊，或者告诉信任的朋友、家人你的感受。你不是一个人。' };
+    };
+
+    // ===== 笔记处理 =====
+    const processNote = (text, title, subject) => {
+      const lines = text.split('\n').filter(l => l.trim());
+      const keyWords = ['重点', '考点', '难点', '核心', '关键', '必须', '易错', '重要'];
+      
+      const keyPoints = lines.slice(0, 10).map(line => {
+        let level = 'basic';
+        if (line.includes('难点') || line.includes('易错')) level = 'hard';
+        else if (keyWords.some(w => line.includes(w))) level = 'core';
+        return { id: genId(), content: line.slice(0, 80), level };
+      });
+
+      const mindMap = {
+        id: 'root', label: title,
+        children: lines.slice(0, 5).map((l, i) => ({
+          id: `n${i}`, label: l.slice(0, 30),
+          children: [{ id: `${i}a`, label: '理解要点' }, { id: `${i}b`, label: '相关例题' }],
+          collapsed: false
+        })),
+        collapsed: false
+      };
+
+      const questions = keyPoints.slice(0, 5).map((kp, i) => ({
+        id: genId(),
+        type: i % 2 === 0 ? 'choice' : 'fill',
+        content: `关于"${kp.content.slice(0, 15)}"的正确理解是？`,
+        options: i % 2 === 0 ? ['A. 正确理解', 'B. 片面理解', 'C. 错误理解', 'D. 不确定'].sort(() => Math.random() - 0.5) : null,
+        answer: 'A',
+        explanation: kp.content
+      }));
+
+      return { keyPoints, mindMap, questions, processedText: text };
+    };
+
+    // ===== 导航系统 =====
+    const navigate = (page, addToHistory = true) => {
+      if (addToHistory && state.currentPage !== page) {
+        state.prevPages.push(state.currentPage);
+      }
+      state.currentPage = page;
+      save();
+      render();
+      window.scrollTo(0, 0);
+    };
+
+    const goBack = () => {
+      if (state.prevPages.length > 0) {
+        state.currentPage = state.prevPages.pop();
+        save();
+        render();
+        window.scrollTo(0, 0);
+      }
+    };
+
+    // ===== 渲染函数 =====
+    const renderNav = () => `
+      <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-2 py-2 z-50">
+        <div class="max-w-lg mx-auto flex justify-around">
+          <button onclick="navigate('home')" class="btn flex flex-col items-center px-4 py-1 rounded-xl ${state.currentPage==='home'?'bg-primary/10':''}">
+            <svg class="w-6 h-6 ${state.currentPage==='home'?'text-primary':'text-muted'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+            </svg>
+            <span class="text-xs ${state.currentPage==='home'?'text-primary font-medium':'text-muted'}">首页</span>
+          </button>
+          <button onclick="navigate('notes')" class="btn flex flex-col items-center px-4 py-1 rounded-xl ${state.currentPage==='notes'||state.currentPage==='noteDetail'||state.currentPage==='quiz'||state.currentPage==='quizResult'?'bg-primary/10':''}">
+            <svg class="w-6 h-6 ${['notes','noteDetail','quiz','quizResult'].includes(state.currentPage)?'text-primary':'text-muted'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <span class="text-xs ${['notes','noteDetail','quiz','quizResult'].includes(state.currentPage)?'text-primary font-medium':'text-muted'}">笔记</span>
+          </button>
+          <button onclick="navigate('mind')" class="btn flex flex-col items-center px-4 py-1 rounded-xl ${state.currentPage==='mind'||state.currentPage==='treehole'||state.currentPage==='psychTest'||state.currentPage==='psychResult'?'bg-calm/10':''}">
+            <svg class="w-6 h-6 ${['mind','treehole','psychTest','psychResult'].includes(state.currentPage)?'text-calm':'text-muted'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+            </svg>
+            <span class="text-xs ${['mind','treehole','psychTest','psychResult'].includes(state.currentPage)?'text-calm font-medium':'text-muted'}">心理</span>
+          </button>
+          <button onclick="navigate('buddies')" class="btn flex flex-col items-center px-4 py-1 rounded-xl ${state.currentPage==='buddies'||state.currentPage==='chat'?'bg-sky/10':''}">
+            <svg class="w-6 h-6 ${['buddies','chat'].includes(state.currentPage)?'text-sky':'text-muted'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+            </svg>
+            <span class="text-xs ${['buddies','chat'].includes(state.currentPage)?'text-sky font-medium':'text-muted'}">搭子</span>
+          </button>
+        </div>
+      </nav>
+    `;
+
+    const renderHeader = (title, showBack) => `
+      <header class="sticky top-0 bg-white/90 backdrop-blur border-b border-gray-100 px-4 py-3 z-40 flex items-center gap-3">
+        ${showBack ? `<button onclick="goBack()" class="text-muted hover:text-text"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg></button>` : ''}
+        <h1 class="text-lg font-bold text-text flex-1">${title}</h1>
+      </header>
+    `;
+
+    // ===== 首页 =====
+    const renderHome = () => {
+      const today = todayKey();
+      const checked = state.checkins[today];
+      const todayMood = state.moods[today];
+      const todayMins = state.studyMinutes[today] || 0;
+      const streak = Object.keys(state.checkins).length;
+      const totalMins = Object.values(state.studyMinutes).reduce((a, b) => a + b, 0);
+      const weather = getWeather();
+      const food = FOOD_RECOMMENDATIONS[weather.type] || FOOD_RECOMMENDATIONS.cloudy;
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader('学习伴侣', false)}
+          
+          <!-- 天气卡片 -->
+          <div class="card p-4 mb-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="text-3xl">${weather.icon}</div>
+              <div>
+                <p class="text-sm text-muted">${weather.desc}</p>
+                <p class="text-lg font-bold text-text">${weather.temp}</p>
+              </div>
+            </div>
+            <div class="text-right">
+              <p class="text-xs text-muted">${weather.tip}</p>
+            </div>
+          </div>
+
+          <!-- 今日美食推荐 -->
+          <div class="card p-4 mb-4 bg-gradient-to-r from-warm/5 to-primary/5">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-lg">🍽️</span>
+              <p class="font-medium text-text">今日美食推荐</p>
+            </div>
+            <p class="text-xs text-muted mb-3">${food.reason}</p>
+            <div class="flex flex-wrap gap-2">
+              ${food.items.map(item => `<span class="px-3 py-1 bg-white rounded-full text-sm font-medium text-text">${item}</span>`).join('')}
+            </div>
+          </div>
+
+          <div class="card p-5 mb-4">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <p class="text-sm text-muted">今日学习</p>
+                <div class="text-3xl font-bold text-primary">${todayMins}<span class="text-base text-muted ml-1">分钟</span></div>
+              </div>
+              <button onclick="doCheckin()" class="btn ${checked ? 'bg-secondary text-white' : 'bg-primary text-white'} px-5 py-3 rounded-xl font-medium flex items-center gap-2">
+                ${checked ? '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> 已打卡' : '✓ 打卡'}
+              </button>
+            </div>
+            
+            <div class="mb-3">
+              <p class="text-sm text-muted mb-2">今日心情</p>
+              <div class="flex gap-3 justify-center">
+                ${['😊','🙂','😐','😔','😢'].map((m) => `
+                  <button onclick="setMood('${m}')" class="mood-btn text-2xl p-2 rounded-xl ${todayMood === m ? 'bg-calm/20 ring-2 ring-calm' : 'bg-gray-50'}">${m}</button>
+                `).join('')}
+              </div>
+            </div>
+
+            ${checked ? `<div class="bg-secondary/10 rounded-xl p-3 text-center"><p class="text-secondary text-sm">🎉 ${getEncourage()}</p></div>` : ''}
+          </div>
+
+          <div class="grid grid-cols-3 gap-3 mb-4">
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-warm">${streak}</div>
+              <div class="text-xs text-muted">连续打卡</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-primary">${state.notes.length}</div>
+              <div class="text-xs text-muted">笔记</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-sky">${totalMins}</div>
+              <div class="text-xs text-muted">总学习</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3 mb-4">
+            <button onclick="navigate('upload')" class="card p-3 text-center btn">
+              <div class="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-1">
+                <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              </div>
+              <span class="text-xs text-text">新建笔记</span>
+            </button>
+            <button onclick="navigate('treehole')" class="card p-3 text-center btn">
+              <div class="w-10 h-10 bg-calm/10 rounded-xl flex items-center justify-center mx-auto mb-1">
+                <svg class="w-5 h-5 text-calm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+              </div>
+              <span class="text-xs text-text">树洞</span>
+            </button>
+            <button onclick="navigate('psychTest')" class="card p-3 text-center btn">
+              <div class="w-10 h-10 bg-sky/10 rounded-xl flex items-center justify-center mx-auto mb-1">
+                <svg class="w-5 h-5 text-sky" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+              </div>
+              <span class="text-xs text-text">测评</span>
+            </button>
+          </div>
+
+          <!-- 正能量分享入口 -->
+          <button onclick="navigate('helpStories')" class="btn w-full card p-4 mb-3 flex items-center justify-center gap-3 bg-gradient-to-r from-warm/10 to-secondary/10">
+            <svg class="w-6 h-6 text-warm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+            <div class="text-left">
+              <p class="font-medium text-text">正能量分享</p>
+              <p class="text-xs text-muted">分享温暖，传递爱心 · 已帮助 ${state.myHelpCount || 0} 人</p>
+            </div>
+          </button>
+
+          <!-- 社会公益入口 -->
+          <button onclick="navigate('publicWelfare')" class="btn w-full card p-4 mb-4 flex items-center justify-center gap-3 bg-gradient-to-r from-calm/10 to-sky/10">
+            <svg class="w-6 h-6 text-calm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+            <div class="text-left">
+              <p class="font-medium text-text">社会公益</p>
+              <p class="text-xs text-muted">参与公益，记录善行 · ${state.publicWelfare.totalHelpPeople || 0}人受益</p>
+            </div>
+          </button>
+
+          <div class="card p-4 mb-4">
+            <p class="text-sm font-medium text-text mb-2">添加学习时长</p>
+            <div class="flex gap-2">
+              <input type="number" id="minsInput" placeholder="分钟" class="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-center" value="30">
+              <button onclick="addMins()" class="btn bg-primary text-white px-4 py-2 rounded-xl">添加</button>
+            </div>
+            <div class="flex gap-2 mt-2">
+              ${[15,30,60,120].map(t => `<button onclick="quickAdd(${t})" class="btn bg-gray-100 text-text px-3 py-1 rounded-lg text-sm">+${t}</button>`).join('')}
+            </div>
+          </div>
+
+          ${state.buddies.length > 0 ? `
+            <div class="card p-4 cursor-pointer btn mb-4" onclick="navigate('buddies')">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-sky/10 rounded-full flex items-center justify-center text-sky font-bold">${state.buddies[0].name[0]}</div>
+                <div class="flex-1">
+                  <p class="font-medium text-text">${state.buddies[0].name}</p>
+                  <p class="text-sm text-muted">${state.buddies[0].lastMsg || '开始聊天吧'}</p>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+
+          ${state.notes.length > 0 ? `
+            <div class="mt-4">
+              <p class="text-sm font-medium text-text mb-2">最近笔记</p>
+              ${state.notes.slice(0, 2).map(n => `
+                <div class="card p-3 mb-2 cursor-pointer btn" onclick="openNote('${n.id}')">
+                  <h4 class="font-medium text-text">${n.title}</h4>
+                  <p class="text-xs text-muted">${n.keyPoints?.length || 0}考点 · ${fmtDate(n.createdAt)}</p>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    // ===== 笔记列表 =====
+    const renderNotes = () => `
+      <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+        ${renderHeader('我的笔记', false)}
+        <button onclick="navigate('upload')" class="btn w-full card p-3 mb-4 flex items-center justify-center gap-2 bg-primary/5">
+          <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          <span class="text-primary font-medium">新建笔记</span>
+        </button>
+        ${state.notes.length === 0 ? `
+          <div class="card p-8 text-center">
+            <div class="text-5xl mb-3">📝</div>
+            <p class="text-muted mb-4">还没有笔记</p>
+            <button onclick="loadDemo()" class="btn bg-secondary text-white px-5 py-2 rounded-xl">查看示例</button>
+          </div>
+        ` : state.notes.map(n => `
+          <div class="card p-3 mb-2 cursor-pointer btn" onclick="openNote('${n.id}')">
+            <div class="flex justify-between">
+              <h4 class="font-medium text-text">${n.title}</h4>
+              <span class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">${n.subject || '通用'}</span>
+            </div>
+            <p class="text-sm text-muted mt-1">${n.keyPoints?.length || 0}考点 · ${n.questions?.length || 0}题</p>
+          </div>
+        `).join('')}
+      </div>
+      ${renderNav()}
+    `;
+
+    // ===== 上传笔记 =====
+    let inputMode = 'text';
+    let isRecording = false;
+    let recognition = null;
+
+    const renderUpload = () => `
+      <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+        ${renderHeader('新建笔记', true)}
+        
+        <!-- 输入模式选择 -->
+        <div class="flex gap-2 mb-4">
+          <button onclick="setInputMode('text')" class="btn flex-1 py-2 rounded-xl ${inputMode === 'text' ? 'bg-primary text-white' : 'bg-gray-100'}">
+            <svg class="w-5 h-5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+            文本输入
+          </button>
+          <button onclick="setInputMode('voice')" class="btn flex-1 py-2 rounded-xl ${inputMode === 'voice' ? 'bg-primary text-white' : 'bg-gray-100'}">
+            <svg class="w-5 h-5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+            语音输入
+          </button>
+          <button onclick="setInputMode('photo')" class="btn flex-1 py-2 rounded-xl ${inputMode === 'photo' ? 'bg-primary text-white' : 'bg-gray-100'}">
+            <svg class="w-5 h-5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            拍照识别
+          </button>
+        </div>
+
+        <!-- 文本输入模式 -->
+        ${inputMode === 'text' ? `
+          <div class="card p-4 mb-4">
+            <textarea id="noteText" rows="8" placeholder="粘贴或输入笔记内容，如：
+
+重点：函数的基本性质
+考点：极限的计算方法
+难点：证明题思路
+核心：重要定理" class="w-full p-3 border border-gray-200 rounded-xl resize-none scroll-area"></textarea>
+          </div>
+        ` : ''}
+
+        <!-- 语音输入模式 -->
+        ${inputMode === 'voice' ? `
+          <div class="card p-6 mb-4 text-center">
+            <div class="mb-4">
+              <button onclick="toggleRecording()" class="w-20 h-20 rounded-full ${isRecording ? 'bg-danger animate-pulse' : 'bg-primary'} text-white flex items-center justify-center mx-auto">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${isRecording ? 'M12 19l9 2-9-18-9 18 9-2zm0 0v-8' : 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z'}"/></svg>
+              </button>
+            </div>
+            <p class="text-sm text-muted mb-2">${isRecording ? '正在录音，请说话...' : '点击按钮开始录音'}</p>
+            <p class="text-xs text-muted">录音完成后自动转文字</p>
+            <textarea id="noteText" rows="6" placeholder="语音转文字结果将显示在这里..." class="w-full mt-4 p-3 border border-gray-200 rounded-xl resize-none scroll-area"></textarea>
+          </div>
+        ` : ''}
+
+        <!-- 拍照识别模式 -->
+        ${inputMode === 'photo' ? `
+          <div class="card p-6 mb-4">
+            <div class="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center mb-4 cursor-pointer btn" onclick="document.getElementById('photoInput').click()">
+              <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden" onchange="handlePhotoUpload(this)">
+              <div class="text-4xl mb-2">📷</div>
+              <p class="text-sm text-muted">点击拍照或上传图片</p>
+              <p class="text-xs text-muted mt-1">支持识别图片中的文字</p>
+            </div>
+            <div id="photoPreview" class="hidden mb-4">
+              <img id="previewImg" class="w-full rounded-xl mb-2" />
+              <button onclick="removePreview()" class="btn w-full bg-gray-100 text-muted py-2 rounded-xl">移除图片</button>
+            </div>
+            <textarea id="noteText" rows="6" placeholder="识别结果将显示在这里..." class="w-full p-3 border border-gray-200 rounded-xl resize-none scroll-area"></textarea>
+            <div id="ocrStatus" class="text-xs text-muted text-center mt-2"></div>
+          </div>
+        ` : ''}
+
+        <div class="card p-4 mb-4">
+          <div class="grid grid-cols-2 gap-3">
+            <input id="noteTitle" placeholder="笔记标题" class="px-3 py-2 border border-gray-200 rounded-xl">
+            <select id="noteSubject" class="px-3 py-2 border border-gray-200 rounded-xl bg-white">
+              <option value="数学">数学</option>
+              <option value="物理">物理</option>
+              <option value="化学">化学</option>
+              <option value="英语">英语</option>
+              <option value="语文">语文</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+        </div>
+        <button onclick="createNote()" class="btn w-full bg-primary text-white py-3 rounded-xl font-medium">AI智能整理</button>
+      </div>
+      ${renderNav()}
+    `;
+
+    // ===== 笔记详情 =====
+    const renderNoteDetail = () => {
+      const n = state.currentNote;
+      if (!n) return renderNotes();
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader(n.title, true)}
+          
+          <div class="card p-4 mb-3">
+            <div class="flex justify-between items-center mb-2">
+              <h2 class="text-xl font-bold text-text">${n.title}</h2>
+              <span class="text-xs bg-primary/10 text-primary px-2 py-1 rounded">${n.subject}</span>
+            </div>
+            <p class="text-xs text-muted">${fmtDate(n.createdAt)} · ${n.keyPoints?.length || 0}考点</p>
+          </div>
+
+          <div class="card p-4 mb-3">
+            <h3 class="font-medium text-text mb-2">考点提炼</h3>
+            <div class="flex flex-wrap gap-2">
+              ${n.keyPoints?.map(k => `<span class="text-xs px-2 py-1 rounded tag-${k.level}">${k.content}</span>`).join('') || '暂无'}
+            </div>
+          </div>
+
+          <div class="card p-4 mb-3">
+            <h3 class="font-medium text-text mb-2">思维导图</h3>
+            <div class="bg-bg rounded-xl p-3 max-h-48 overflow-y-auto scroll-area">
+              ${n.mindMap ? renderMap(n.mindMap) : '暂无'}
+            </div>
+          </div>
+
+          <div class="card p-4 mb-3">
+            <h3 class="font-medium text-text mb-2">自测题</h3>
+            ${n.questions?.length ? n.questions.slice(0, 3).map((q, i) => `
+              <div class="bg-bg rounded-lg p-2 mb-2">
+                <p class="text-sm">${i + 1}. ${q.content}</p>
+                <p class="text-xs text-muted">${q.type === 'choice' ? '选择题' : '填空题'}</p>
+              </div>
+            `).join('') : '暂无'}
+          </div>
+
+          <div class="flex gap-2">
+            <button onclick="startQuiz('${n.id}')" class="btn flex-1 bg-secondary text-white py-3 rounded-xl font-medium">开始自测</button>
+            <button onclick="deleteNote('${n.id}')" class="btn bg-gray-100 text-muted px-4 py-3 rounded-xl">删除</button>
+          </div>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    const renderMap = (node, lv = 0) => `
+      <div style="padding-left:${lv * 16}px" onclick="toggleMap('${node.id}')">
+        <div class="flex items-center gap-1 py-1 px-2 rounded cursor-pointer hover:bg-white">
+          ${node.children?.length ? `<svg class="w-3 h-3 text-muted transition ${node.collapsed ? '-rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>` : ''}
+          <span class="text-sm ${lv === 0 ? 'font-medium text-primary' : 'text-text'}">${node.label}</span>
+        </div>
+        ${node.children?.length && !node.collapsed ? node.children.map(c => renderMap(c, lv + 1)).join('') : ''}
+      </div>
+    `;
+
+    // ===== 自测 =====
+    let quizState = { answers: {}, idx: 0 };
+
+    const renderQuiz = () => {
+      const n = state.currentNote;
+      if (!n?.questions?.length) return renderNotes();
+      const q = n.questions[quizState.idx];
+      const total = n.questions.length;
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader('自测练习', true)}
+          <div class="flex justify-between mb-3 text-sm">
+            <span class="text-primary font-medium">${quizState.idx + 1}/${total}</span>
+            <span class="text-muted">${q.type === 'choice' ? '选择题' : '填空题'}</span>
+          </div>
+          <div class="h-2 bg-gray-200 rounded-full mb-4">
+            <div class="h-2 bg-primary rounded-full transition-all" style="width:${(quizState.idx + 1) / total * 100}%"></div>
+          </div>
+          <div class="card p-4 mb-4">
+            <p class="font-medium text-text mb-3">${q.content}</p>
+            ${q.type === 'choice' && q.options ? q.options.map(o => `
+              <label class="flex items-center gap-2 p-3 border rounded-xl mb-2 cursor-pointer ${quizState.answers[q.id] === o ? 'border-primary bg-primary/5' : ''}">
+                <input type="radio" name="q" value="${o}" ${quizState.answers[q.id] === o ? 'checked' : ''} onchange="quizState.answers['${q.id}']='${o}'; render();" class="accent-primary">
+                <span class="text-sm">${o}</span>
+              </label>
+            `).join('') : `<textarea id="quizFill" rows="3" placeholder="请输入答案" class="w-full p-3 border rounded-xl" oninput="quizState.answers['${q.id}']=this.value">${quizState.answers[q.id] || ''}</textarea>`}
+          </div>
+          <div class="flex gap-2">
+            <button onclick="quizPrev()" class="btn flex-1 bg-gray-100 py-3 rounded-xl ${quizState.idx === 0 ? 'opacity-50' : ''}" ${quizState.idx === 0 ? 'disabled' : ''}>上一题</button>
+            ${quizState.idx < total - 1 ? `<button onclick="quizNext()" class="btn flex-1 bg-primary text-white py-3 rounded-xl">下一题</button>` : `<button onclick="submitQuiz()" class="btn flex-1 bg-secondary text-white py-3 rounded-xl font-medium">提交</button>`}
+          </div>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    const renderQuizResult = () => {
+      const n = state.currentNote;
+      const results = n.questions.map(q => ({
+        q,
+        userAns: quizState.answers[q.id] || '',
+        correct: q.type === 'choice' ? quizState.answers[q.id] === q.answer : true
+      }));
+      const correct = results.filter(r => r.correct).length;
+      const rate = Math.round(correct / results.length * 100);
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader('测试结果', true)}
+          <div class="card p-6 text-center mb-4">
+            <div class="text-5xl mb-3">${rate >= 60 ? '🎉' : '💪'}</div>
+            <div class="text-4xl font-bold ${rate >= 60 ? 'text-secondary' : 'text-warm'}">${rate}%</div>
+            <p class="text-muted mt-2">答对 ${correct}/${results.length} 题</p>
+          </div>
+          ${results.map((r, i) => `
+            <div class="card p-3 mb-2">
+              <div class="flex items-start gap-2">
+                <div class="w-6 h-6 rounded-full flex items-center justify-center ${r.correct ? 'bg-secondary/10' : 'bg-danger/10'}">
+                  ${r.correct ? '✓' : '✗'}
+                </div>
+                <div>
+                  <p class="text-sm font-medium">${i + 1}. ${r.q.content}</p>
+                  ${!r.correct && r.q.type === 'choice' ? `<p class="text-xs text-danger">你的答案: ${r.userAns || '未答'}</p><p class="text-xs text-secondary">正确答案: ${r.q.answer}</p>` : ''}
+                </div>
+              </div>
+            </div>
+          `).join('')}
+          <button onclick="navigate('notes')" class="btn w-full bg-primary text-white py-3 rounded-xl mt-4">返回笔记</button>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    // ===== 心理模块 =====
+    const renderMind = () => `
+      <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+        ${renderHeader('心理健康', false)}
+        
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <button onclick="navigate('treehole')" class="card p-4 text-center btn">
+            <div class="w-12 h-12 bg-calm/10 rounded-xl flex items-center justify-center mx-auto mb-2">
+              <svg class="w-6 h-6 text-calm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            </div>
+            <span class="text-sm font-medium text-text">心理树洞</span>
+            <p class="text-xs text-muted">AI温暖陪伴</p>
+          </button>
+          <button onclick="navigate('psychTest')" class="card p-4 text-center btn">
+            <div class="w-12 h-12 bg-sky/10 rounded-xl flex items-center justify-center mx-auto mb-2">
+              <svg class="w-6 h-6 text-sky" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            </div>
+            <span class="text-sm font-medium text-text">心理测评</span>
+            <p class="text-xs text-muted">了解你的状态</p>
+          </button>
+        </div>
+
+        ${state.moods[todayKey()] ? `
+          <div class="card p-4 mb-4 text-center">
+            <p class="text-sm text-muted mb-2">今日心情</p>
+            <div class="text-4xl">${state.moods[todayKey()]}</div>
+          </div>
+        ` : ''}
+
+        ${state.psychResults.length > 0 ? `
+          <div class="card p-4">
+            <p class="font-medium text-text mb-3">最近测评</p>
+            ${state.psychResults.slice(-3).reverse().map(r => `
+              <div class="flex items-center gap-3 p-2 bg-bg rounded-xl mb-2">
+                <span class="text-2xl">${r.emoji}</span>
+                <div class="flex-1">
+                  <p class="font-medium text-text">${r.title}</p>
+                  <p class="text-xs text-muted">${fmtDate(r.time)}</p>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+
+        <div class="card p-4 mt-4">
+          <p class="font-medium text-text mb-2">💡 心理小贴士</p>
+          <p class="text-sm text-muted">每天给自己留一点独处的时间，哪怕只有5分钟。深呼吸，感受当下，你已经很棒了。</p>
+        </div>
+      </div>
+      ${renderNav()}
+    `;
+
+    // ===== 心理树洞 =====
+    let chatMessages = [];
+
+    const renderTreehole = () => `
+      <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+        ${renderHeader('心理树洞', true)}
+        <p class="text-sm text-muted mb-3 text-center">这里是安全的倾诉空间，AI会温暖地回应你</p>
+        
+        <div id="chatArea" class="card p-3 mb-4 h-72 overflow-y-auto scroll-area bg-gray-50">
+          ${chatMessages.length === 0 ? `
+            <div class="text-center text-muted py-8">
+              <p class="text-4xl mb-2">🌸</p>
+              <p>想说点什么吗？我在这里倾听</p>
+              <p class="text-xs mt-2">例如："最近学习压力好大..."</p>
+            </div>
+          ` : chatMessages.map(m => `
+            <div class="mb-3 ${m.from === 'me' ? 'text-right' : 'text-left'}">
+              <div class="inline-block max-w-[80%] p-3 rounded-2xl ${m.from === 'me' ? 'bg-primary text-white rounded-br-sm' : 'bg-white text-text rounded-bl-sm'}">
+                <p class="text-sm">${m.text}</p>
+                <p class="text-xs ${m.from === 'me' ? 'text-white/70' : 'text-muted'} mt-1">${fmtTime(m.time)}</p>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="flex gap-2">
+          <input id="chatInput" placeholder="说点什么..." class="flex-1 px-4 py-3 border border-gray-200 rounded-xl" onkeypress="if(event.key==='Enter')sendChat()">
+          <button onclick="sendChat()" class="btn bg-calm text-white px-5 py-3 rounded-xl">发送</button>
+        </div>
+
+        <button onclick="clearChat()" class="btn w-full text-muted text-sm mt-3">清空对话</button>
+      </div>
+      ${renderNav()}
+    `;
+
+    // ===== 心理测评 =====
+    let psychIdx = 0;
+
+    const renderPsychTest = () => `
+      <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+        ${renderHeader('心理压力测评', true)}
+        <p class="text-sm text-muted mb-3">请根据最近一周的真实感受作答</p>
+        
+        <div class="flex justify-between mb-3 text-sm">
+          <span class="text-calm font-medium">${psychIdx + 1}/${PSYCH_QUESTIONS.length}</span>
+        </div>
+        <div class="h-2 bg-gray-200 rounded-full mb-4">
+          <div class="h-2 bg-calm rounded-full transition-all" style="width:${(psychIdx + 1) / PSYCH_QUESTIONS.length * 100}%"></div>
+        </div>
+
+        <div class="card p-4 mb-4">
+          <p class="font-medium text-text mb-4">${PSYCH_QUESTIONS[psychIdx].q}</p>
+          ${PSYCH_QUESTIONS[psychIdx].opts.map((o, i) => `
+            <label class="flex items-center gap-3 p-3 border rounded-xl mb-2 cursor-pointer ${psychCurAnswers[psychIdx] === i ? 'border-calm bg-calm/5' : ''}">
+              <input type="radio" name="p" value="${i}" ${psychCurAnswers[psychIdx] === i ? 'checked' : ''} onchange="psychCurAnswers[${psychIdx}]=${i}; render();" class="accent-calm">
+              <span class="text-sm">${o}</span>
+            </label>
+          `).join('')}
+        </div>
+
+        <div class="flex gap-2">
+          <button onclick="psychPrev()" class="btn flex-1 bg-gray-100 py-3 rounded-xl ${psychIdx === 0 ? 'opacity-50' : ''}" ${psychIdx === 0 ? 'disabled' : ''}>上一题</button>
+          ${psychIdx < PSYCH_QUESTIONS.length - 1 ? 
+            `<button onclick="psychNext()" class="btn flex-1 bg-calm text-white py-3 rounded-xl">下一题</button>` :
+            `<button onclick="submitPsych()" class="btn flex-1 bg-secondary text-white py-3 rounded-xl font-medium" ${psychCurAnswers[psychIdx] === undefined ? 'disabled opacity-50' : ''}>查看结果</button>`
+          }
+        </div>
+      </div>
+      ${renderNav()}
+    `;
+
+    const renderPsychResult = () => {
+      const scores = psychCurAnswers.map((a, i) => a !== undefined ? PSYCH_QUESTIONS[i].scores[a] : 0);
+      const result = analyzePsych(scores);
+      
+      state.psychResults.push({ ...result, scores, time: new Date().toISOString() });
+      save();
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader('测评结果', true)}
+          <div class="card p-6 text-center mb-4">
+            <div class="text-6xl mb-3">${result.emoji}</div>
+            <h2 class="text-xl font-bold text-${result.color}">${result.title}</h2>
+            <p class="text-sm text-muted mt-2">总分 ${scores.reduce((a,b)=>a+b, 0)} / ${PSYCH_QUESTIONS.length * 3}</p>
+          </div>
+          <div class="card p-4 mb-4">
+            <p class="font-medium text-text mb-2">💬 AI温暖建议</p>
+            <p class="text-sm text-muted leading-relaxed">${result.tip}</p>
+          </div>
+          <div class="card p-4 bg-calm/5">
+            <p class="text-sm text-calm text-center">记得，你不是一个人。有需要可以寻求专业帮助。</p>
+          </div>
+          <button onclick="navigate('mind')" class="btn w-full bg-primary text-white py-3 rounded-xl mt-4">返回</button>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    // ===== 搭子页面 =====
+    const renderBuddies = () => `
+      <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+        ${renderHeader('学习搭子', false)}
+        
+        <button onclick="showFindBuddy()" class="btn w-full card p-4 mb-4 flex items-center justify-center gap-3 bg-gradient-to-r from-sky/10 to-calm/10">
+          <svg class="w-6 h-6 text-sky" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+          <div class="text-left">
+            <p class="font-medium text-text">寻找学习搭子</p>
+            <p class="text-xs text-muted">与志同道合的伙伴一起进步</p>
+          </div>
+        </button>
+
+        ${state.buddies.length > 0 ? `
+          <p class="text-sm font-medium text-text mb-2">我的搭子</p>
+          ${state.buddies.map(b => `
+            <div class="card p-4 mb-2 cursor-pointer btn" onclick="openChat('${b.id}')">
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-12 bg-sky/10 rounded-full flex items-center justify-center text-sky font-bold text-lg">${b.name[0]}</div>
+                <div class="flex-1">
+                  <p class="font-medium text-text">${b.name}</p>
+                  <p class="text-xs text-muted">${b.subject || '通用'}</p>
+                </div>
+                <div class="text-right">
+                  <p class="text-xs text-secondary">${b.commonDays || 0}天同行</p>
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        ` : `
+          <div class="card p-8 text-center">
+            <div class="text-5xl mb-3">🤝</div>
+            <p class="text-muted mb-2">还没有搭子</p>
+            <p class="text-xs text-muted">点击上方按钮寻找学习伙伴</p>
+          </div>
+        `}
+
+        <p class="text-sm font-medium text-text mb-2 mt-6">推荐搭子</p>
+        <div class="grid grid-cols-2 gap-3">
+          ${[
+            { name: '小晴', subject: '英语', desc: '英语专业，擅长语法', days: 12 },
+            { name: '阿轩', subject: '数学', desc: '理科生，喜欢刷题', days: 8 },
+            { name: '小雅', subject: '物理', desc: '物理竞赛选手', days: 15 },
+            { name: 'Leo', subject: '英语', desc: '留学生，可以练口语', days: 6 },
+          ].filter(b => !state.buddies.find(m => m.name === b.name)).map(b => `
+            <div class="card p-3 text-center">
+              <div class="w-12 h-12 bg-sky/10 rounded-full flex items-center justify-center mx-auto mb-2 text-sky font-bold">${b.name[0]}</div>
+              <p class="font-medium text-text text-sm">${b.name}</p>
+              <p class="text-xs text-muted">${b.subject}</p>
+              <button onclick="addBuddy('${b.name}', '${b.subject}')" class="btn mt-2 bg-sky/10 text-sky text-xs px-3 py-1 rounded-lg">添加</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ${renderNav()}
+    `;
+
+    // ===== 搭子聊天 =====
+    let currentBuddyChat = [];
+    let currentBuddyId = null;
+
+    const renderChat = () => {
+      const buddy = state.buddies.find(b => b.id === currentBuddyId);
+      if (!buddy) return renderBuddies();
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader(buddy.name, true)}
+          
+          <div id="chatMsgs" class="card p-3 mb-4 h-80 overflow-y-auto scroll-area bg-gray-50">
+            ${currentBuddyChat.length === 0 ? `
+              <div class="text-center text-muted py-8">
+                <p class="text-4xl mb-2">👋</p>
+                <p>和${buddy.name}打个招呼吧</p>
+              </div>
+            ` : currentBuddyChat.map(m => `
+              <div class="mb-3 ${m.from === 'me' ? 'text-right' : 'text-left'}">
+                <div class="inline-block max-w-[75%] p-3 rounded-2xl ${m.from === 'me' ? 'bg-primary text-white rounded-br-sm' : 'bg-white text-text rounded-bl-sm'}">
+                  <p class="text-sm">${m.text}</p>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+
+          <div class="flex gap-2">
+            <input id="buddyInput" placeholder="发消息..." class="flex-1 px-4 py-3 border border-gray-200 rounded-xl" onkeypress="if(event.key==='Enter')sendBuddyMsg()">
+            <button onclick="sendBuddyMsg()" class="btn bg-sky text-white px-5 py-3 rounded-xl">发送</button>
+          </div>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    // ===== 正能量分享页面 =====
+    const HELP_TAGS = [
+      { name: '鼓励达人', icon: '💪', desc: '经常鼓励他人', color: 'warm' },
+      { name: '学习伙伴', icon: '📚', desc: '帮助他人学习', color: 'primary' },
+      { name: '心理支持', icon: '🤗', desc: '温暖陪伴他人', color: 'calm' },
+      { name: '答疑助手', icon: '💡', desc: '解答他人疑问', color: 'sky' },
+      { name: '正能量传递', icon: '✨', desc: '分享正能量', color: 'secondary' },
+    ];
+
+    const DEMO_HELP_STORIES = [
+      { id: 'd1', author: '小晴', avatar: 'Q', tag: '鼓励达人', title: '帮助学弟克服英语焦虑', content: '今天帮助一位学弟克服了英语学习的焦虑，告诉他学习语言最重要的是坚持，每天进步一点点就好。看到他露出笑容，我感觉很开心！', likes: 28, time: '2026-06-26T10:30:00' },
+      { id: 'd2', author: '阿轩', avatar: 'X', tag: '答疑助手', title: '帮同学解决数学难题', content: '花了一个小时帮同学讲解了一道复杂的积分题，他从完全不懂到最后能独立解题，过程很辛苦但很有成就感！', likes: 45, time: '2026-06-25T15:20:00' },
+      { id: 'd3', author: '小雅', avatar: 'Y', tag: '心理支持', title: '陪伴考试焦虑的同学', content: '室友因为考试焦虑睡不着，我陪她聊了很久，分享了缓解压力的方法，最后她终于安心入睡了。希望大家都能顺利度过考试期！', likes: 67, time: '2026-06-24T20:45:00' },
+      { id: 'd4', author: 'Leo', avatar: 'L', tag: '学习伙伴', title: '组建学习小组', content: '组织了5个人的英语学习小组，大家一起背单词、练口语，互相监督打卡。两周后大家的进步都很明显，真棒！', likes: 52, time: '2026-06-23T09:15:00' },
+    ];
+
+    const renderHelpStories = () => {
+      const allStories = [...DEMO_HELP_STORIES, ...state.helpStories].sort((a, b) => new Date(b.time) - new Date(a.time));
+      const myStories = state.helpStories;
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader('正能量分享', true)}
+
+          <!-- 我的帮助统计 -->
+          <div class="card p-4 mb-4 text-center bg-gradient-to-r from-warm/5 to-secondary/5">
+            <div class="flex justify-around mb-3">
+              <div>
+                <p class="text-2xl font-bold text-warm">${state.myHelpCount || 0}</p>
+                <p class="text-xs text-muted">帮助他人次数</p>
+              </div>
+              <div>
+                <p class="text-2xl font-bold text-secondary">${myStories.length}</p>
+                <p class="text-xs text-muted">分享正能量</p>
+              </div>
+            </div>
+            <p class="text-sm text-muted">🌟 每一次帮助，都是一份温暖</p>
+          </div>
+
+          <!-- 分享按钮 -->
+          <button onclick="showShareHelp()" class="btn w-full bg-warm text-white py-3 rounded-xl font-medium mb-4 flex items-center justify-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            分享我的正能量故事
+          </button>
+
+          <!-- 最近帮助他人的人 -->
+          <div class="card p-4 mb-4">
+            <p class="font-medium text-text mb-3 flex items-center gap-2">
+              <span class="text-warm">❤️</span> 最近帮助他人的人
+            </p>
+            <div class="flex flex-wrap gap-2">
+              ${HELP_TAGS.map(t => `
+                <span class="px-3 py-1.5 bg-${t.color}/10 text-${t.color} rounded-full text-sm flex items-center gap-1">
+                  ${t.icon} ${t.name}
+                </span>
+              `).join('')}
+            </div>
+          </div>
+
+          <!-- 正能量故事列表 -->
+          <p class="font-medium text-text mb-3">温暖故事</p>
+          ${allStories.length === 0 ? `
+            <div class="card p-8 text-center">
+              <div class="text-5xl mb-3">🌈</div>
+              <p class="text-muted mb-2">还没有故事</p>
+              <p class="text-xs text-muted">分享你的正能量故事，传递温暖</p>
+            </div>
+          ` : allStories.slice(0, 10).map(s => `
+            <div class="card p-4 mb-3">
+              <div class="flex items-start gap-3 mb-2">
+                <div class="w-10 h-10 bg-warm/10 rounded-full flex items-center justify-center text-warm font-bold">${s.avatar || s.author[0]}</div>
+                <div class="flex-1">
+                  <div class="flex items-center gap-2">
+                    <p class="font-medium text-text">${s.author}</p>
+                    ${s.tag ? `<span class="text-xs px-2 py-0.5 bg-secondary/10 text-secondary rounded">${s.tag}</span>` : ''}
+                  </div>
+                  <p class="text-xs text-muted">${fmtDate(s.time)}</p>
+                </div>
+              </div>
+              <h4 class="font-medium text-text mb-1">${s.title}</h4>
+              <p class="text-sm text-muted leading-relaxed">${s.content}</p>
+              <div class="flex items-center justify-between mt-3 pt-2 border-t border-gray-100">
+                <button onclick="likeHelpStory('${s.id}')" class="btn flex items-center gap-1 text-xs text-muted">
+                  <svg class="w-4 h-4 ${s.liked ? 'text-warm fill-warm' : ''}" fill="${s.liked ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+                  <span>${s.likes || 0}</span>
+                </button>
+                <span class="text-xs text-secondary">传递温暖 ✨</span>
+              </div>
+            </div>
+          `).join('')}
+
+          <!-- 鼓励文案 -->
+          <div class="card p-4 bg-calm/5 mt-4">
+            <p class="text-sm text-calm text-center">帮助他人，也是帮助自己。每一次善举，都会让这个世界变得更美好。</p>
+          </div>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    // ===== 公益勋章数据 =====
+    const WELFARE_BADGES = [
+      { id: 'first_help', name: '初次善举', icon: '🌱', desc: '完成第一次公益行动', condition: (pw) => pw.myActions.length >= 1 },
+      { id: 'help_5', name: '爱心萌芽', icon: '🌿', desc: '帮助5个人', condition: (pw) => pw.totalHelpPeople >= 5 },
+      { id: 'help_10', name: '温暖传递', icon: '🌸', desc: '帮助10个人', condition: (pw) => pw.totalHelpPeople >= 10 },
+      { id: 'help_20', name: '爱心使者', icon: '🌹', desc: '帮助20个人', condition: (pw) => pw.totalHelpPeople >= 20 },
+      { id: 'volunteer_1', name: '志愿新手', icon: '🤝', desc: '完成1小时志愿服务', condition: (pw) => pw.totalVolunteerHours >= 1 },
+      { id: 'volunteer_5', name: '热心志愿者', icon: '🌟', desc: '累计5小时志愿服务', condition: (pw) => pw.totalVolunteerHours >= 5 },
+      { id: 'volunteer_10', name: '公益之星', icon: '⭐', desc: '累计10小时志愿服务', condition: (pw) => pw.totalVolunteerHours >= 10 },
+      { id: 'donate_1', name: '奉献爱心', icon: '🎁', desc: '捐赠1次物资', condition: (pw) => pw.totalDonations >= 1 },
+      { id: 'donate_5', name: '慷慨捐助', icon: '💎', desc: '捐赠5次物资', condition: (pw) => pw.totalDonations >= 5 },
+      { id: 'community', name: '社区先锋', icon: '🏆', desc: '参与社区公益活动', condition: (pw) => pw.myActions.some(a => a.type === 'community') },
+    ];
+
+    const WELFARE_ACTIONS = [
+      { type: 'help_people', name: '帮助他人', icon: '❤️', unit: '人', color: 'warm' },
+      { type: 'volunteer', name: '志愿服务', icon: '🤝', unit: '小时', color: 'sky' },
+      { type: 'donate', name: '物资捐赠', icon: '🎁', unit: '次', color: 'secondary' },
+      { type: 'community', name: '社区活动', icon: '🏘️', unit: '次', color: 'calm' },
+      { type: 'mentor', name: '公益辅导', icon: '📚', unit: '小时', color: 'primary' },
+      { type: 'share', name: '知识分享', icon: '💡', unit: '次', color: 'wink' },
+    ];
+
+    // ===== 公益页面 =====
+    const renderPublicWelfare = () => {
+      const pw = state.publicWelfare;
+      const earnedBadges = WELFARE_BADGES.filter(b => b.condition(pw));
+      const unearnedBadges = WELFARE_BADGES.filter(b => !b.condition(pw));
+      const progress = Math.min(100, Math.round((pw.communityGoal.current / pw.communityGoal.target) * 100));
+
+      return `
+        <div class="fade-in pb-24 px-4 pt-4 max-w-lg mx-auto">
+          ${renderHeader('社会公益', true)}
+
+          <!-- 社区目标进度 -->
+          <div class="card p-4 mb-4 bg-gradient-to-r from-warm/10 to-calm/10">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span class="text-xl">🌍</span>
+                <span class="font-medium text-text">${pw.communityGoal.label}</span>
+              </div>
+              <span class="text-sm font-bold text-warm">${pw.communityGoal.current}/${pw.communityGoal.target}</span>
+            </div>
+            <div class="h-3 bg-gray-200 rounded-full overflow-hidden">
+              <div class="h-full bg-gradient-to-r from-warm to-calm rounded-full transition-all duration-500" style="width:${progress}%"></div>
+            </div>
+            <p class="text-xs text-muted text-center mt-2">我们一起努力，还差 ${pw.communityGoal.target - pw.communityGoal.current} 人就能达成目标！</p>
+          </div>
+
+          <!-- 我的公益数据看板 -->
+          <div class="grid grid-cols-2 gap-3 mb-4">
+            <div class="card p-4 bg-warm/5">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-lg">❤️</span>
+                <span class="text-xs text-muted">帮助他人</span>
+              </div>
+              <p class="text-3xl font-bold text-warm">${pw.totalHelpPeople}</p>
+              <p class="text-xs text-muted">累计帮助人数</p>
+            </div>
+            <div class="card p-4 bg-sky/5">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-lg">🤝</span>
+                <span class="text-xs text-muted">志愿服务</span>
+              </div>
+              <p class="text-3xl font-bold text-sky">${pw.totalVolunteerHours}</p>
+              <p class="text-xs text-muted">累计志愿时长</p>
+            </div>
+            <div class="card p-4 bg-secondary/5">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-lg">🎁</span>
+                <span class="text-xs text-muted">物资捐赠</span>
+              </div>
+              <p class="text-3xl font-bold text-secondary">${pw.totalDonations}</p>
+              <p class="text-xs text-muted">累计捐赠次数</p>
+            </div>
+            <div class="card p-4 bg-calm/5">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-lg">🏅</span>
+                <span class="text-xs text-muted">获得勋章</span>
+              </div>
+              <p class="text-3xl font-bold text-calm">${earnedBadges.length}</p>
+              <p class="text-xs text-muted">${WELFARE_BADGES.length}个勋章</p>
+            </div>
+          </div>
+
+          <!-- 添加公益行动 -->
+          <button onclick="showAddWelfareAction()" class="btn w-full bg-primary text-white py-3 rounded-xl font-medium mb-4 flex items-center justify-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            记录我的公益行动
+          </button>
+
+          <!-- 我的勋章 -->
+          <div class="card p-4 mb-4">
+            <p class="font-medium text-text mb-3 flex items-center gap-2">
+              <span class="text-warm">🏅</span> 我的公益勋章
+            </p>
+            <div class="grid grid-cols-5 gap-2">
+              ${WELFARE_BADGES.map(b => {
+                const earned = b.condition(pw);
+                return `
+                  <div class="text-center p-2 rounded-xl ${earned ? 'bg-warm/10' : 'bg-gray-50 opacity-50'} cursor-pointer" onclick="showBadgeDetail('${b.id}')">
+                    <div class="text-2xl mb-1">${b.icon}</div>
+                    <div class="text-xs text-text">${b.name}</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
+          <!-- 我的公益记录 -->
+          <div class="card p-4 mb-4">
+            <p class="font-medium text-text mb-3 flex items-center gap-2">
+              <span class="text-calm">📝</span> 我的公益记录
+            </p>
+            ${pw.myActions.length === 0 ? `
+              <div class="text-center text-muted py-4">
+                <p class="text-3xl mb-2">🌱</p>
+                <p class="text-sm">还没有公益记录</p>
+                <p class="text-xs">点击上方按钮记录你的第一次公益行动</p>
+              </div>
+            ` : pw.myActions.slice(0, 5).map(a => {
+              const actionType = WELFARE_ACTIONS.find(t => t.type === a.actionType);
+              return `
+                <div class="flex items-center gap-3 p-2 bg-bg rounded-xl mb-2">
+                  <div class="w-10 h-10 bg-${actionType?.color || 'primary'}/10 rounded-xl flex items-center justify-center text-${actionType?.color || 'primary'}">
+                    ${actionType?.icon || '❤️'}
+                  </div>
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-text">${actionType?.name || a.actionType}</p>
+                    <p class="text-xs text-muted">${a.desc || `完成了 ${a.amount} ${actionType?.unit || ''}`}</p>
+                  </div>
+                  <p class="text-xs text-muted">${fmtDate(a.time)}</p>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <!-- 公益活动推荐 -->
+          <div class="card p-4">
+            <p class="font-medium text-text mb-3 flex items-center gap-2">
+              <span class="text-sky">✨</span> 推荐公益活动
+            </p>
+            <div class="space-y-3">
+              ${[
+                { title: '社区图书馆整理', icon: '📚', desc: '帮助整理图书，为孩子们创造更好的阅读环境', location: '附近社区', time: '每周六上午' },
+                { title: '校园义务辅导', icon: '👨‍🏫', desc: '为低年级同学辅导功课，分享学习经验', location: '学校', time: '每周日下午' },
+                { title: '敬老院陪伴', icon: '👴', desc: '陪伴老人聊天，送去温暖关怀', location: '养老院', time: '每月一次' },
+                { title: '环保志愿活动', icon: '🌿', desc: '参与公园垃圾清理，守护美丽环境', location: '城市公园', time: '每月第一个周六' },
+              ].map((act, i) => `
+                <div class="flex items-start gap-3 p-3 bg-bg rounded-xl">
+                  <div class="w-10 h-10 bg-sky/10 rounded-xl flex items-center justify-center text-xl">${act.icon}</div>
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-text">${act.title}</p>
+                    <p class="text-xs text-muted mb-1">${act.desc}</p>
+                    <div class="flex gap-3 text-xs">
+                      <span class="text-sky">📍 ${act.location}</span>
+                      <span class="text-warm">⏰ ${act.time}</span>
+                    </div>
+                  </div>
+                  <button onclick="joinActivity('${act.title}')" class="btn bg-sky/10 text-sky text-xs px-3 py-1.5 rounded-lg">报名</button>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <!-- 公益宣言 -->
+          <div class="card p-4 bg-warm/5 mt-4">
+            <p class="text-sm text-warm text-center">❤️ 每一次善举都在改变世界，让我们一起传递温暖与爱</p>
+          </div>
+        </div>
+        ${renderNav()}
+      `;
+    };
+
+    // ===== 全局函数 =====
+    window.navigate = navigate;
+    window.goBack = goBack;
+
+    window.doCheckin = () => {
+      const today = todayKey();
+      if (!state.checkins[today]) {
+        state.checkins[today] = { time: new Date().toISOString() };
+        save();
+        render();
+      }
+    };
+
+    window.setMood = (mood) => {
+      state.moods[todayKey()] = mood;
+      save();
+      render();
+    };
+
+    window.addMins = () => {
+      const mins = parseInt(document.getElementById('minsInput')?.value) || 0;
+      const today = todayKey();
+      state.studyMinutes[today] = (state.studyMinutes[today] || 0) + mins;
+      save();
+      render();
+    };
+
+    window.quickAdd = (mins) => {
+      const today = todayKey();
+      state.studyMinutes[today] = (state.studyMinutes[today] || 0) + mins;
+      save();
+      render();
+    };
+
+    window.loadDemo = () => {
+      const demo = `第一章 函数与极限
+重点：函数的基本概念与性质
+核心考点：极限的定义与计算
+难点：极限存在准则
+易错：无穷小量比较
+必须掌握：两个重要极限
+重要：连续函数的性质
+关键：洛必达法则使用条件`;
+      const result = processNote(demo, '数学-函数与极限', '数学');
+      const note = { id: genId(), title: '数学-函数与极限', subject: '数学', createdAt: new Date().toISOString(), ...result };
+      state.notes.unshift(note);
+      state.currentNote = note;
+      navigate('noteDetail');
+    };
+
+    window.createNote = () => {
+      const text = document.getElementById('noteText')?.value?.trim();
+      const title = document.getElementById('noteTitle')?.value || '未命名笔记';
+      const subject = document.getElementById('noteSubject')?.value;
+      if (!text) return;
+      const result = processNote(text, title, subject);
+      const note = { id: genId(), title, subject, createdAt: new Date().toISOString(), ...result };
+      state.notes.unshift(note);
+      state.currentNote = note;
+      navigate('noteDetail');
+    };
+
+    window.openNote = (id) => {
+      state.currentNote = state.notes.find(n => n.id === id);
+      navigate('noteDetail');
+    };
+
+    window.deleteNote = (id) => {
+      if (confirm('确定删除这篇笔记？')) {
+        state.notes = state.notes.filter(n => n.id !== id);
+        state.currentNote = null;
+        navigate('notes');
+      }
+    };
+
+    window.toggleMap = (id) => {
+      const toggle = (node) => {
+        if (node.id === id) node.collapsed = !node.collapsed;
+        node.children?.forEach(toggle);
+      };
+      if (state.currentNote?.mindMap) toggle(state.currentNote.mindMap);
+      save();
+      render();
+    };
+
+    window.startQuiz = (id) => {
+      state.currentNote = state.notes.find(n => n.id === id);
+      quizState = { answers: {}, idx: 0 };
+      navigate('quiz');
+    };
+
+    window.quizNext = () => { quizState.idx++; render(); };
+    window.quizPrev = () => { if (quizState.idx > 0) { quizState.idx--; render(); } };
+    window.submitQuiz = () => navigate('quizResult');
+
+    window.sendChat = () => {
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+      chatMessages.push({ from: 'me', text, time: new Date().toISOString() });
+      input.value = '';
+      render();
+      setTimeout(() => {
+        chatMessages.push({ from: 'ai', text: getWarmReply(), time: new Date().toISOString() });
+        save();
+        render();
+        setTimeout(() => { const el = document.getElementById('chatArea'); if(el) el.scrollTop = el.scrollHeight; }, 100);
+      }, 800);
+    };
+
+    window.clearChat = () => { chatMessages = []; save(); render(); };
+
+    window.psychNext = () => { if (psychCurAnswers[psychIdx] !== undefined) { psychIdx++; render(); } };
+    window.psychPrev = () => { if (psychIdx > 0) { psychIdx--; render(); } };
+    window.submitPsych = () => navigate('psychResult');
+
+    window.showFindBuddy = () => {
+      const name = prompt('输入你想添加的搭子昵称：');
+      if (name) addBuddy(name, '其他');
+    };
+
+    window.addBuddy = (name, subject) => {
+      if (state.buddies.find(b => b.name === name)) {
+        alert('已经是你的搭子了~');
+        return;
+      }
+      const buddy = { id: genId(), name, subject: subject || '通用', commonDays: Math.floor(Math.random() * 20) + 1, lastMsg: '' };
+      state.buddies.push(buddy);
+      save();
+      render();
+    };
+
+    window.openChat = (id) => {
+      currentBuddyId = id;
+      const buddy = state.buddies.find(b => b.id === id);
+      if (!currentBuddyChat.length && buddy) {
+        currentBuddyChat = [
+          { from: 'ai', text: `你好！我是${buddy.name}，很高兴认识你！我们一起加油吧 💪`, time: new Date().toISOString() }
+        ];
+      }
+      navigate('chat');
+    };
+
+    window.sendBuddyMsg = () => {
+      const input = document.getElementById('buddyInput');
+      const text = input.value.trim();
+      if (!text) return;
+      currentBuddyChat.push({ from: 'me', text, time: new Date().toISOString() });
+      const buddy = state.buddies.find(b => b.id === currentBuddyId);
+      if (buddy) {
+        buddy.lastMsg = text;
+      }
+      input.value = '';
+      save();
+      render();
+      setTimeout(() => {
+        const replies = ['加油！今天也要努力哦~', '一起学习，互相监督！', '相信你一定可以的！', '我们一起进步吧！'];
+        currentBuddyChat.push({ from: 'ai', text: replies[Math.floor(Math.random() * replies.length)], time: new Date().toISOString() });
+        save();
+        render();
+        setTimeout(() => { const el = document.getElementById('chatMsgs'); if(el) el.scrollTop = el.scrollHeight; }, 100);
+      }, 600);
+    };
+
+    // ===== 正能量分享函数 =====
+    window.showShareHelp = () => {
+      const title = prompt('分享标题（你帮助他人做了什么？）：');
+      if (!title) return;
+      const content = prompt('详细描述你的正能量故事：');
+      if (!content) return;
+      const tagOptions = HELP_TAGS.map((t, i) => `${i + 1}. ${t.icon} ${t.name}`).join('\n');
+      const tagIndex = prompt(`选择一个标签：\n${tagOptions}\n\n输入序号(1-5)：`);
+      const tag = HELP_TAGS[parseInt(tagIndex) - 1]?.name || '正能量传递';
+
+      const story = {
+        id: genId(),
+        author: '我',
+        avatar: 'Me',
+        tag,
+        title,
+        content,
+        likes: 0,
+        time: new Date().toISOString()
+      };
+
+      state.helpStories.unshift(story);
+      state.myHelpCount = (state.myHelpCount || 0) + 1;
+      save();
+      render();
+      alert('感谢你的分享！你的正能量将温暖更多人 ✨');
+    };
+
+    window.likeHelpStory = (id) => {
+      const story = state.helpStories.find(s => s.id === id);
+      if (story) {
+        if (!story.liked) {
+          story.likes = (story.likes || 0) + 1;
+          story.liked = true;
+          save();
+          render();
+        }
+      } else {
+        // Demo stories - just show appreciation
+        alert('感谢你的认可！让我们一起传递温暖 ❤️');
+      }
+    };
+
+    // ===== 社会公益函数 =====
+    window.showAddWelfareAction = () => {
+      const actionOptions = WELFARE_ACTIONS.map((a, i) => `${i + 1}. ${a.icon} ${a.name}`).join('\n');
+      const actionIndex = prompt(`选择公益行动类型：\n${actionOptions}\n\n输入序号(1-6)：`);
+      const actionType = WELFARE_ACTIONS[parseInt(actionIndex) - 1];
+      if (!actionType) return;
+
+      const amount = parseInt(prompt(`请输入${actionType.name}的数量（${actionType.unit}）：`));
+      if (!amount || amount <= 0) {
+        alert('请输入有效的数量');
+        return;
+      }
+
+      const desc = prompt('请简要描述这次公益行动（可选）：');
+
+      const action = {
+        id: genId(),
+        actionType: actionType.type,
+        amount,
+        desc: desc || `${actionType.name} ${amount} ${actionType.unit}`,
+        time: new Date().toISOString()
+      };
+
+      state.publicWelfare.myActions.unshift(action);
+
+      if (actionType.type === 'help_people') {
+        state.publicWelfare.totalHelpPeople += amount;
+      } else if (actionType.type === 'volunteer') {
+        state.publicWelfare.totalVolunteerHours += amount;
+      } else if (actionType.type === 'donate') {
+        state.publicWelfare.totalDonations += amount;
+      }
+
+      state.publicWelfare.communityGoal.current += amount;
+
+      save();
+      render();
+      alert(`🎉 恭喜！你完成了${actionType.name} ${amount}${actionType.unit}！`);
+    };
+
+    window.showBadgeDetail = (badgeId) => {
+      const badge = WELFARE_BADGES.find(b => b.id === badgeId);
+      if (!badge) return;
+
+      const earned = badge.condition(state.publicWelfare);
+      alert(`${badge.icon} ${badge.name}\n\n${badge.desc}\n\n${earned ? '✅ 已获得' : '🔒 未获得'}`);
+    };
+
+    window.joinActivity = (activityName) => {
+      alert(`🎉 成功报名「${activityName}」！\n\n记得按时参加活动哦~`);
+    };
+
+    // ===== 语音转文字 =====
+    window.setInputMode = (mode) => {
+      inputMode = mode;
+      render();
+    };
+
+    window.toggleRecording = () => {
+      if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        alert('您的浏览器不支持语音识别，请使用文本输入模式');
+        return;
+      }
+
+      if (isRecording) {
+        recognition.stop();
+        isRecording = false;
+        render();
+      } else {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onresult = (event) => {
+          let interimTranscript = '';
+          let finalTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+
+          const textarea = document.getElementById('noteText');
+          if (textarea) {
+            textarea.value = finalTranscript + interimTranscript;
+          }
+        };
+
+        recognition.onerror = (event) => {
+          console.error('语音识别错误:', event.error);
+          isRecording = false;
+          render();
+        };
+
+        recognition.onend = () => {
+          if (isRecording) {
+            recognition.start();
+          }
+        };
+
+        recognition.start();
+        isRecording = true;
+        render();
+      }
+    };
+
+    // ===== 照片转文字 =====
+    window.handlePhotoUpload = async (input) => {
+      const file = input.files[0];
+      if (!file) return;
+
+      const preview = document.getElementById('photoPreview');
+      const img = document.getElementById('previewImg');
+      const status = document.getElementById('ocrStatus');
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        img.src = e.target.result;
+        preview.classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+
+      if (status) {
+        status.textContent = '正在识别文字，请稍候...';
+      }
+
+      try {
+        if (!window.Tesseract) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        }
+
+        const result = await window.Tesseract.recognize(file, 'chi_sim', {
+          logger: m => {
+            if (status) {
+              status.textContent = `识别中: ${Math.round(m.progress * 100)}%`;
+            }
+          }
+        });
+
+        const textarea = document.getElementById('noteText');
+        if (textarea) {
+          textarea.value = result.data.text;
+        }
+        if (status) {
+          status.textContent = `识别完成，共 ${result.data.text.length} 字`;
+        }
+      } catch (err) {
+        console.error('OCR错误:', err);
+        if (status) {
+          status.textContent = '识别失败，请重试';
+        }
+      }
+    };
+
+    window.removePreview = () => {
+      document.getElementById('photoPreview').classList.add('hidden');
+      document.getElementById('photoInput').value = '';
+    };
+
+    // ===== 主渲染 =====
+    const render = () => {
+      const app = document.getElementById('app');
+      let content = '';
+
+      switch (state.currentPage) {
+        case 'home': content = renderHome(); break;
+        case 'notes': content = renderNotes(); break;
+        case 'upload': content = renderUpload(); break;
+        case 'noteDetail': content = renderNoteDetail(); break;
+        case 'quiz': content = renderQuiz(); break;
+        case 'quizResult': content = renderQuizResult(); break;
+        case 'mind': content = renderMind(); break;
+        case 'treehole': content = renderTreehole(); break;
+        case 'psychTest': content = renderPsychTest(); break;
+        case 'psychResult': content = renderPsychResult(); break;
+        case 'buddies': content = renderBuddies(); break;
+        case 'chat': content = renderChat(); break;
+        case 'helpStories': content = renderHelpStories(); break;
+        case 'publicWelfare': content = renderPublicWelfare(); break;
+        default: content = renderHome();
+      }
+
+      app.innerHTML = content;
+    };
+
+    render();
+  </script>
+</body>
+</html>

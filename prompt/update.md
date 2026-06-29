@@ -336,6 +336,114 @@ git push origin main
 
 ---
 
+## 已知问题与踩坑记录
+
+> 以下问题在 2026-06-26 日的更新中实际遇到，后续执行时需特别注意。
+
+### 问题 1：TRAE 沙箱环境中 `gh` CLI 未安装
+
+**现象**：上一次会话中通过 `apt install gh` 安装过 `gh`，但在新的沙箱会话中该包不存在（`dpkg -L gh` 报错）。
+
+**影响**：无法使用 `gh auth login` 进行 GitHub 认证。
+
+**解决方案**：沙箱环境不保证跨会话持久化，**每次新会话都必须重新安装 `gh`**。替代方案是直接用 `git remote set-url origin https://<TOKEN>@github.com/...` 配置 remote URL 来完成推送。
+
+### 问题 2：飞书审核名单中有大量已存在于 demos.json 但未标记 approved 的记录
+
+**现象**：2026-06-26 运行时，飞书 Wiki 获取到 13,641 条唯一审核记录，本地 `approved_projects.json` 仅有 13,144 条，但 `demos.json` 中的已通过数（`approved_count`）仍为 12,524。存在约 600+ 条记录在飞书审核名单中，但 demos.json 中 `approved` 仍为 `false`。
+
+**原因**：`approved_projects.json` 的数据写入与 `demos.json` 的 `approved` 字段更新是两个独立步骤。之前的更新流程在写入 `approved_projects.json` 时直接全量覆盖，但未能将 demos.json 中对应的记录标记为 `approved=True`。
+
+**解决方案**：在执行完飞书数据同步后，**必须**执行第三步（检查已有数据中的审核状态遗漏），将飞书审核名单中的所有 topic_id 与 demos.json 中的记录做交叉比对，把遗漏的 `approved` 字段补上。
+
+### 问题 3：lark-cli 认证不支持交互式管理
+
+**现象**：运行 `lark-cli auth status` 返回错误：`"auth" is not supported: credentials are provided externally and do not support interactive management`。
+
+**影响**：无实际影响，lark-cli 在沙箱环境中凭证由外部注入，直接调用 API 命令即可正常工作，不需要也不支持手动登录/切换。
+
+### 问题 4：飞书 Bitable 字段顺序不一致
+
+**现象**：不同批次的 Bitable 表格，字段顺序和名称不同：
+- **6月26日批次**：`["社区昵称", "报名帖标题", "链接"]`（字段顺序为 昵称→标题→链接）
+- **6月16日批次**：`["社区昵称", "创意帖链接", "创意帖标题"]`（字段顺序为 昵称→链接→标题）
+
+**影响**：如果按固定列索引（如始终取第 2 列为标题、第 3 列为链接）解析数据，会导致字段张冠李戴。
+
+**解决方案**：**必须**先读取每个批次的 `fields` 数组，通过字段名（而非列索引）定位昵称、标题、链接列，再按实际索引提取数据。参考 1.3 节。
+
+### 问题 5：飞书 Wiki 审核名单总数与 approved_projects.json 不一致
+
+**现象**：`approved_projects.json` 中 `total` 字段为 13,144，但飞书 Wiki 实际有 13,641 条唯一审核记录。差异约 497 条来自新增的 6月26日批次。
+
+**解决方案**：每次同步时以飞书 Wiki 为准，全量覆盖 `approved_projects.json`。但如果只是同步了 approved_projects.json 而没有执行第三步的 demos.json 交叉比对，demos.min.js 中的 approved 数量不会自动更新。
+
+### 问题 6：crawelr_v2.py 处理约 500 条新记录耗时极长（>10 分钟）
+
+**现象**：运行 `crawler_v2.py` 处理 6月26日批次新增的约 498 条审核记录时，每条记录需调用 Discourse API 获取帖子详情、下载附件、解压 ZIP 等，总计耗时超过 10 分钟。
+
+**影响**：如果当前会话有超时限制，可能会被中断。
+
+**解决方案**：
+1. 在 TRAE 定时任务中，确保超时配置足够长（建议 30 分钟以上）。
+2. 如果只更新审核状态（approved flag），可以跳过 Demo 下载步骤，仅运行 `daily_update.py` 脚本中的审核状态同步部分。
+
+### 问题 7：ZIP 解压后文件名乱码
+
+**现象**：部分 ZIP 附件解压后，HTML 文件名为乱码（如 `╓░│í┤φ╩┬▒╛.html`），这是因为原 ZIP 使用了 GBK/GB2312 编码。
+
+**影响**：文件仍然可用，但文件名不可读。不影响功能，仅影响可维护性。
+
+### 问题 8：部分 ZIP 附件解压后不含 HTML 文件
+
+**现象**：多次出现 `WARNING: ZIP contained no HTML files` 的警告。
+
+**原因**：部分参赛者上传的 ZIP 包中不含 HTML 文件（可能是源码压缩包、图片包等）。
+
+**影响**：这些记录的 `has_demo` 保持为 `false`，卡片按钮置灰显示「暂无 Demo」。
+
+---
+
+### 自动记录问题（2026-06-29）
+
+- Failed to fetch batch '6月24日（截至6.24 08:00）通过1286个': Expecting value: line 1 column 1 (char 0)
+
+### 问题 9：Bitable 链接字段可能为非字符串类型（2026-06-29 发现）
+
+**现象**：运行 `fetch_bitable_records` 时出现 `TypeError: expected string or bytes-like object`，原因是某些行的链接字段不是字符串（可能是 `null`、列表或字典）。
+
+**解决方案**：在 `scripts/daily_update.py` 中对 `link_field`、`nickname`、`title` 字段进行类型检查，非字符串时转换为字符串或空字符串。已修复。
+
+### 问题 10：部分批次获取失败会导致数据丢失（2026-06-29 发现）
+
+**现象**：`daily_update.py` 最初的逻辑是：从 Wiki 获取所有批次记录后，直接以 Wiki 数据全量覆盖 `approved_projects.json`。如果某个批次获取失败（如 6月24日批次返回空 JSON），则该批次的所有记录会丢失（1286 条）。
+
+**解决方案**：改为"已有记录为基础，合并 Wiki 新数据"的策略。即先加载本地 `approved_projects.json`，再将成功获取的 Wiki 记录合并覆盖进去，失败批次的旧数据得以保留。已修复。
+
+### 问题 11：daily_update.py 不包含新记录爬取步骤（2026-06-29 发现）
+
+**现象**：`scripts/daily_update.py` 只做了审核名单同步和 approved 状态标记，但没有调用 `crawler_v2.py` 来爬取新审核记录的 Demo 附件和元数据。新审核通过的记录如果不在 demos.json 中，就不会被添加。
+
+**解决方案**：`daily_update.py` 完成审核名单同步后，需要调用 `crawler_v2.py` 的 `crawl()` 方法来爬取新记录，或者至少为缺失的审核记录创建最小条目（title、author、approved=True 等基础字段）。后续版本应集成完整爬取流程。
+
+### 问题 12：爬虫处理大量新记录耗时极长（2026-06-29 验证）
+
+**现象**：处理约 1,400 条新审核记录时，由于 Discourse API 限速 1.5 秒/请求 + Demo 附件下载，总耗时超过 30 分钟（在 30 分钟 timeout 内未能完成全部处理）。
+
+**解决方案**：
+1. 定时任务超时设置应不低于 45 分钟
+2. `crawler_v2.py` 已有 checkpoint 机制（每 100 条保存一次），超时后重新运行会从断点继续
+3. 可以考虑增加并发下载或适当减小限速
+
+### 问题 13：部分 tags 字段存在异常值（2026-06-29 发现）
+
+**现象**：tags 统计中出现了非标准标签名：`'标题】【学习工作': 2, '生活服务': 8, '互动娱乐': 1, '看病挂号': 1, 'featured': 1, '社会服务（社会公益）': 1, '工作学习': 1`。这些来自论坛帖子的原始标签，未经过标准化映射。
+
+**影响**：赛道分类统计不准确。
+
+**解决方案**：后续需在爬虫中增加标签标准化映射逻辑，将非标准标签映射到五大标准赛道（学习工作、生活娱乐、社会服务、社会公益、硬件交互）或"野蛮生长"。
+
+
 ## 注意事项
 
 1. **增量更新原则**：只处理新增或变更的数据，已有数据不要重复爬取。判断依据是 `topic_id` 是否已在 `demos.json` 中存在。

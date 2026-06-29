@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>学习助手 - AI智能阅读辅助工具</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/lucide-static@0.344.0/font/lucide.css" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    [class^="lucide-"], [class*=" lucide-"] {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      stroke-width: 2;
+      stroke: currentColor;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    
+    .animate-fade-in {
+      animation: fadeIn 0.3s ease-out;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .animate-pulse-slow {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    
+    .tab-active {
+      background: linear-gradient(to right, #3b82f6, #06b6d4);
+      color: white;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    }
+    
+    .card-hover:hover {
+      box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+      border-color: #93c5fd;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 min-h-screen">
+  <div id="app">
+    <div class="h-screen flex flex-col">
+      <header class="bg-white/80 backdrop-blur-md border-b border-gray-100 px-6 py-4 shadow-sm">
+        <div class="flex items-center justify-between max-w-7xl mx-auto">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg">
+              <i class="lucide-brain text-white text-xl"></i>
+            </div>
+            <div>
+              <h1 class="text-xl font-bold text-gray-800">学习助手</h1>
+              <p class="text-xs text-gray-500">AI驱动的智能阅读辅助工具</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button v-for="tab in tabs" :key="tab.id"
+              @click="activeTab = tab.id"
+              :class="['flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200', activeTab === tab.id ? 'tab-active' : 'text-gray-600 hover:bg-gray-100']">
+              <i :class="['lucide-' + tab.icon]"></i>
+              <span class="hidden sm:inline">{{ tab.label }}</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="flex-1 p-6 overflow-hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full max-w-7xl mx-auto">
+          <div :class="[(activeTab === 'scan') ? 'lg:col-span-2' : 'lg:col-span-1', 'h-full']">
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 h-full overflow-hidden">
+              <div class="p-6 h-full">
+                <div v-if="activeTab === 'scan'" class="flex flex-col h-full">
+                  <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+                      <i class="lucide-camera text-blue-500 text-2xl"></i>
+                      摄像头扫描
+                    </h2>
+                    <button @click="runDemo"
+                      :disabled="isOCRProcessing"
+                      class="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2">
+                      <i class="lucide-sparkles"></i>
+                      演示模式
+                    </button>
+                  </div>
+
+                  <div class="flex-1 bg-gray-900 rounded-xl overflow-hidden relative shadow-lg">
+                    <video v-if="isCameraOn" ref="videoRef"
+                      class="w-full h-full object-cover" autoplay playsinline></video>
+                    <img v-else-if="capturedImage" :src="capturedImage" alt="Captured"
+                      class="w-full h-full object-contain" />
+                    <div v-else class="w-full h-full flex flex-col items-center justify-center text-gray-400">
+                      <i class="lucide-camera text-6xl mb-4"></i>
+                      <p class="text-lg">点击下方按钮启动摄像头</p>
+                      <p class="text-sm mt-2">或上传图片进行识别</p>
+                    </div>
+
+                    <div v-if="isOCRProcessing"
+                      class="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-10">
+                      <div class="w-64 bg-white rounded-xl p-6 text-center">
+                        <div class="w-12 h-12 mx-auto mb-4 bg-blue-100 rounded-full flex items-center justify-center">
+                          <i class="lucide-scan text-blue-500 text-2xl animate-pulse-slow"></i>
+                        </div>
+                        <p class="text-gray-700 font-medium mb-3">正在识别中...</p>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                          <div class="bg-gradient-to-r from-blue-500 to-cyan-500 h-2 rounded-full transition-all duration-300"
+                            :style="{ width: ocrProgress + '%' }"></div>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-2">{{ ocrProgress }}%</p>
+                      </div>
+                    </div>
+
+                    <div class="absolute bottom-4 left-4 right-4 flex justify-center gap-4">
+                      <template v-if="isCameraOn">
+                        <button @click="stopCamera"
+                          class="w-12 h-12 bg-red-500 rounded-full flex items-center justify-center shadow-lg hover:bg-red-600 transition-colors">
+                          <i class="lucide-camera-off text-white text-xl"></i>
+                        </button>
+                        <button @click="captureImage"
+                          class="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-lg hover:bg-gray-100 transition-colors ring-4 ring-blue-500 ring-opacity-50">
+                          <div class="w-12 h-12 bg-blue-500 rounded-full"></div>
+                        </button>
+                        <label for="image-upload"
+                          class="w-12 h-12 bg-gray-500 rounded-full flex items-center justify-center shadow-lg hover:bg-gray-600 transition-colors cursor-pointer">
+                          <i class="lucide-upload text-white text-xl"></i>
+                        </label>
+                      </template>
+                      <template v-else-if="capturedImage">
+                        <button @click="capturedImage = ''"
+                          class="px-6 py-3 bg-gray-500 text-white rounded-lg font-medium hover:bg-gray-600 transition-colors">
+                          重新拍摄
+                        </button>
+                        <button @click="handleOCR"
+                          :disabled="isOCRProcessing"
+                          class="px-6 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2">
+                          <i class="lucide-scan text-xl"></i>
+                          开始识别
+                        </button>
+                      </template>
+                      <template v-else>
+                        <button @click="startCamera"
+                          class="px-8 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg font-medium hover:opacity-90 transition-opacity shadow-lg">
+                          启动摄像头
+                        </button>
+                      </template>
+                    </div>
+
+                    <input type="file" accept="image/*" @change="handleUpload"
+                      class="hidden" id="image-upload" />
+                    <div v-if="!isCameraOn && !capturedImage"
+                      class="absolute bottom-20 left-1/2 transform -translate-x-1/2">
+                      <label for="image-upload"
+                        class="px-6 py-2 bg-white/90 text-gray-700 rounded-lg font-medium cursor-pointer hover:bg-white transition-colors shadow-md flex items-center gap-2">
+                        <i class="lucide-upload"></i>
+                        上传图片
+                      </label>
+                    </div>
+                  </div>
+                  <canvas ref="canvasRef" class="hidden"></canvas>
+                </div>
+
+                <div v-if="activeTab === 'knowledge'" class="flex flex-col h-full">
+                  <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+                      <i class="lucide-file-text text-green-500 text-2xl"></i>
+                      内容识别与提炼
+                    </h2>
+                    <button @click="loadDemoText"
+                      class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors flex items-center gap-2">
+                      <i class="lucide-book-open"></i>
+                      加载示例文本
+                    </button>
+                  </div>
+
+                  <div class="flex flex-col gap-4 h-full">
+                    <div class="flex items-center gap-4">
+                      <label class="text-sm font-medium text-gray-700">所属章节:</label>
+                      <input type="text" v-model="chapter"
+                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="输入章节名称" />
+                    </div>
+
+                    <div class="flex-1 bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-hidden">
+                      <textarea v-model="scannedText"
+                        class="w-full h-full resize-none bg-transparent focus:outline-none text-gray-800 text-base leading-relaxed"
+                        placeholder="在此输入文本内容，或使用摄像头扫描书本内容..."></textarea>
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                      <span class="text-sm text-gray-500">{{ scannedText.length }} 字符</span>
+                      <div class="flex gap-3">
+                        <button @click="scannedText = ''"
+                          class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 transition-colors flex items-center gap-2">
+                          <i class="lucide-refresh-cw"></i>
+                          清空
+                        </button>
+                        <button @click="handleExtract"
+                          :disabled="isAIProcessing || !scannedText.trim()"
+                          class="px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2 shadow-lg">
+                          <i class="lucide-sparkles text-xl"></i>
+                          {{ isAIProcessing ? '提炼中...' : '提炼知识点' }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div v-if="isAIProcessing" class="w-full bg-gray-200 rounded-full h-2">
+                      <div class="bg-gradient-to-r from-green-500 to-emerald-500 h-2 rounded-full transition-all duration-300"
+                        :style="{ width: aiProgress + '%' }"></div>
+                    </div>
+
+                    <div v-if="showSummary"
+                      class="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3 animate-fade-in">
+                      <i class="lucide-check-circle text-green-500 text-2xl flex-shrink-0 mt-0.5"></i>
+                      <div class="flex-1">
+                        <p class="text-green-800 font-medium">提炼成功！</p>
+                        <p class="text-green-600 text-sm mt-1">{{ summaryText }}</p>
+                        <button @click="activeTab = 'history'"
+                          class="mt-3 px-4 py-1.5 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600 transition-colors">
+                          查看知识点
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lg:col-span-1 h-full">
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 h-full overflow-hidden">
+              <div class="p-6 h-full">
+                <div v-if="activeTab === 'history'" class="flex flex-col h-full">
+                  <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+                      <i class="lucide-history text-orange-500 text-2xl"></i>
+                      历史知识点
+                    </h2>
+                    <button @click="activeTab = 'quiz'"
+                      class="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
+                      <i class="lucide-trending-up"></i>
+                      开始测验
+                    </button>
+                  </div>
+
+                  <div class="grid grid-cols-4 gap-3 mb-4">
+                    <div class="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-3 text-center">
+                      <p class="text-2xl font-bold text-blue-600">{{ knowledgePoints.length }}</p>
+                      <p class="text-xs text-blue-500 mt-1">总知识点</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-red-50 to-red-100 rounded-xl p-3 text-center">
+                      <p class="text-2xl font-bold text-red-600">{{ stats.high }}</p>
+                      <p class="text-xs text-red-500 mt-1">高优先级</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-xl p-3 text-center">
+                      <p class="text-2xl font-bold text-yellow-600">{{ stats.medium }}</p>
+                      <p class="text-xs text-yellow-500 mt-1">中优先级</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-3 text-center">
+                      <p class="text-2xl font-bold text-green-600">{{ stats.low }}</p>
+                      <p class="text-xs text-green-500 mt-1">低优先级</p>
+                    </div>
+                  </div>
+
+                  <div class="flex gap-3 mb-4">
+                    <div class="relative flex-1">
+                      <i class="lucide-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                      <input type="text" v-model="searchQuery"
+                        placeholder="搜索知识点..."
+                        class="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm" />
+                    </div>
+                    <select v-model="selectedCategory"
+                      class="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm bg-white">
+                      <option value="all">全部分类</option>
+                      <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                    </select>
+                    <select v-model="sortBy"
+                      class="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm bg-white">
+                      <option value="date">按时间排序</option>
+                      <option value="importance">按优先级排序</option>
+                    </select>
+                  </div>
+
+                  <div class="flex-1 overflow-y-auto space-y-3 pr-2">
+                    <div v-if="filteredPoints.length === 0"
+                      class="flex flex-col items-center justify-center h-full text-gray-400">
+                      <i class="lucide-book-open text-5xl mb-3"></i>
+                      <p class="text-sm">暂无知识点</p>
+                      <p class="text-xs mt-1">点击左侧扫描或输入文本开始提炼</p>
+                    </div>
+                    <div v-for="point in filteredPoints" :key="point.id"
+                      @click="selectKnowledgePoint(point)"
+                      :class="['bg-white rounded-xl border-2 transition-all duration-300 cursor-pointer card-hover', selectedKnowledgePoint?.id === point.id ? 'border-blue-500 shadow-lg' : 'border-gray-100 hover:border-blue-200']">
+                      <div class="p-4">
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="flex-1">
+                            <div class="flex items-center gap-2 mb-2">
+                              <span :class="['px-2 py-0.5 rounded-full text-xs font-medium', getCategoryColor(point.category)]">
+                                <i class="lucide-tag mr-1"></i>
+                                {{ point.category }}
+                              </span>
+                              <span :class="['px-2 py-0.5 rounded-full text-xs font-medium border', getImportanceColor(point.importance)]">
+                                <i class="lucide-star mr-1"></i>
+                                {{ getImportanceLabel(point.importance) }}
+                              </span>
+                            </div>
+                            <p class="text-gray-800 text-sm leading-relaxed line-clamp-2">{{ point.content }}</p>
+                          </div>
+                          <button @click.stop="deleteKnowledgePoint(point.id)"
+                            class="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                            <i class="lucide-trash-2"></i>
+                          </button>
+                        </div>
+                        <div v-if="point.expanded" class="mt-4 pt-4 border-t border-gray-100">
+                          <div class="flex items-center gap-4 text-xs text-gray-500">
+                            <span class="flex items-center gap-1">
+                              <i class="lucide-calendar"></i>
+                              {{ formatDate(point.createdAt) }}
+                            </span>
+                            <span>章节: {{ point.chapter }}</span>
+                          </div>
+                          <div class="mt-3">
+                            <p class="text-xs text-gray-500 mb-1">来源文本:</p>
+                            <p class="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">{{ point.sourceText }}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-else-if="activeTab === 'quiz'" class="flex flex-col h-full">
+                  <div v-if="knowledgePoints.length === 0"
+                    class="flex flex-col items-center justify-center h-full text-gray-400">
+                    <i class="lucide-brain text-6xl mb-4"></i>
+                    <p class="text-lg">暂无知识点可测验</p>
+                    <p class="text-sm mt-2">请先扫描书本内容或输入文本提炼知识点</p>
+                  </div>
+
+                  <div v-else-if="isGenerating"
+                    class="flex flex-col items-center justify-center h-full">
+                    <div class="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <p class="mt-4 text-gray-600">正在生成测验题目...</p>
+                  </div>
+
+                  <div v-else-if="isFinished" class="flex flex-col items-center justify-center h-full p-8">
+                    <div class="bg-gradient-to-br from-yellow-100 to-orange-100 rounded-full p-6 mb-6">
+                      <i class="lucide-trophy text-yellow-500 text-6xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-2">测验完成！</h2>
+                    <p :class="['text-4xl font-bold mb-4', getGradeColor()]">{{ getGrade() }}</p>
+                    
+                    <div class="grid grid-cols-3 gap-6 w-full max-w-md mb-8">
+                      <div class="bg-white rounded-xl p-4 text-center shadow-md">
+                        <i class="lucide-target text-blue-500 text-3xl mb-2"></i>
+                        <p class="text-2xl font-bold text-gray-800">{{ score }}/{{ quizQuestions.length }}</p>
+                        <p class="text-sm text-gray-500">正确率</p>
+                      </div>
+                      <div class="bg-white rounded-xl p-4 text-center shadow-md">
+                        <i class="lucide-clock text-green-500 text-3xl mb-2"></i>
+                        <p class="text-2xl font-bold text-gray-800">{{ formatTime(timeSpent) }}</p>
+                        <p class="text-sm text-gray-500">用时</p>
+                      </div>
+                      <div class="bg-white rounded-xl p-4 text-center shadow-md">
+                        <i class="lucide-brain text-purple-500 text-3xl mb-2"></i>
+                        <p class="text-2xl font-bold text-gray-800">{{ Math.round((score / quizQuestions.length) * 100) }}%</p>
+                        <p class="text-sm text-gray-500">得分率</p>
+                      </div>
+                    </div>
+
+                    <button @click="loadQuestions"
+                      class="px-8 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl font-medium hover:opacity-90 transition-opacity flex items-center gap-2 shadow-lg">
+                      <i class="lucide-refresh-cw text-xl"></i>
+                      再测一次
+                    </button>
+                  </div>
+
+                  <template v-else>
+                    <div class="flex items-center justify-between mb-4">
+                      <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+                        <i class="lucide-brain text-purple-500 text-2xl"></i>
+                        智能测验
+                      </h2>
+                      <div class="flex items-center gap-4">
+                        <span class="flex items-center gap-2 text-sm text-gray-500">
+                          <i class="lucide-clock"></i>
+                          {{ formatTime(timeSpent) }}
+                        </span>
+                        <span class="px-3 py-1 bg-purple-100 text-purple-600 rounded-full text-sm font-medium">
+                          {{ currentQuestionIndex + 1 }}/{{ quizQuestions.length }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="flex-1 flex flex-col">
+                      <div class="bg-white rounded-xl p-6 shadow-md mb-4">
+                        <p class="text-lg font-medium text-gray-800 mb-6">
+                          {{ currentQuestion.question }}
+                        </p>
+                        
+                        <div class="space-y-3">
+                          <button v-for="(option, index) in currentQuestion.options" :key="index"
+                            @click="!currentQuestion.showResult && handleAnswer(option)"
+                            :disabled="currentQuestion.showResult"
+                            :class="['w-full p-4 text-left rounded-lg border-2 transition-all duration-200 flex items-center gap-3', getOptionClass(option)]">
+                            <span class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-medium text-gray-600 flex-shrink-0">
+                              {{ String.fromCharCode(65 + index) }}
+                            </span>
+                            <span class="flex-1">{{ option }}</span>
+                            <i v-if="currentQuestion.showResult && option === currentQuestion.correctAnswer"
+                              class="lucide-check-circle text-green-500 text-xl"></i>
+                            <i v-if="currentQuestion.showResult && option === currentQuestion.userAnswer && option !== currentQuestion.correctAnswer"
+                              class="lucide-x-circle text-red-500 text-xl"></i>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div v-if="currentQuestion.showResult" class="bg-gray-50 rounded-xl p-4 mb-4">
+                        <p class="text-sm text-gray-600">
+                          <span v-if="currentQuestion.isCorrect" class="text-green-600 font-medium">✓ 回答正确！</span>
+                          <span v-else class="text-red-600 font-medium">✗ 回答错误。</span>
+                          <span v-if="!currentQuestion.isCorrect" class="ml-2">
+                            正确答案是：<span class="font-medium">{{ currentQuestion.correctAnswer }}</span>
+                          </span>
+                        </p>
+                      </div>
+
+                      <div class="mt-auto flex justify-end">
+                        <button v-if="currentQuestion.showResult" @click="handleNext"
+                          class="px-6 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg font-medium hover:opacity-90 transition-opacity flex items-center gap-2 shadow-lg">
+                          {{ currentQuestionIndex < quizQuestions.length - 1 ? '下一题' : '查看结果' }}
+                          <i class="lucide-arrow-right"></i>
+                        </button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <div v-else class="flex flex-col h-full">
+                  <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2 mb-4">
+                    <i class="lucide-history text-orange-500 text-2xl"></i>
+                    知识点概览
+                  </h2>
+                  <div class="flex-1 overflow-y-auto">
+                    <div v-if="filteredPoints.length === 0"
+                      class="flex flex-col items-center justify-center h-full text-gray-400">
+                      <i class="lucide-book-open text-5xl mb-3"></i>
+                      <p class="text-sm">暂无知识点</p>
+                      <p class="text-xs mt-1">点击左侧扫描或输入文本开始提炼</p>
+                    </div>
+                    <div v-for="point in filteredPoints.slice(0, 5)" :key="point.id"
+                      class="bg-gray-50 rounded-lg p-3 mb-2 border border-gray-100 hover:border-blue-200 transition-colors cursor-pointer"
+                      @click="activeTab = 'history'">
+                      <div class="flex items-center gap-2 mb-1">
+                        <span :class="['px-2 py-0.5 rounded-full text-xs', getCategoryColor(point.category)]">
+                          {{ point.category }}
+                        </span>
+                      </div>
+                      <p class="text-sm text-gray-700 line-clamp-2">{{ point.content }}</p>
+                    </div>
+                    <button v-if="filteredPoints.length > 5" @click="activeTab = 'history'"
+                      class="w-full py-2 text-blue-500 text-sm hover:bg-blue-50 rounded-lg transition-colors">
+                      查看全部 {{ filteredPoints.length }} 个知识点 →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <footer class="bg-white/60 backdrop-blur-sm border-t border-gray-100 px-6 py-3">
+        <div class="flex items-center justify-between text-sm text-gray-500 max-w-7xl mx-auto">
+          <p>学习助手 - 让阅读更高效</p>
+          <p>支持摄像头扫描、OCR识别、AI知识点提炼</p>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
+
+    createApp({
+      setup() {
+        const activeTab = ref('scan');
+        const isCameraOn = ref(false);
+        const capturedImage = ref('');
+        const scannedText = ref('');
+        const chapter = ref('未分类章节');
+        const isOCRProcessing = ref(false);
+        const ocrProgress = ref(0);
+        const isAIProcessing = ref(false);
+        const aiProgress = ref(0);
+        const showSummary = ref(false);
+        const summaryText = ref('');
+        const searchQuery = ref('');
+        const selectedCategory = ref('all');
+        const sortBy = ref('date');
+        const selectedKnowledgePoint = ref(null);
+        
+        let mediaStream = null;
+        const videoRef = ref(null);
+        const canvasRef = ref(null);
+
+        const tabs = [
+          { id: 'scan', label: '摄像头', icon: 'camera' },
+          { id: 'knowledge', label: '提炼', icon: 'file-text' },
+          { id: 'history', label: '历史', icon: 'history' },
+          { id: 'quiz', label: '测验', icon: 'brain' },
+        ];
+
+        const categories = ['概念', '原理', '公式', '定义', '案例', '其他'];
+
+        const demoText = `牛顿运动定律是经典力学的基础，包括三条基本定律：
+
+第一定律：物体在没有外力作用时，保持静止或匀速直线运动状态。这一定律也被称为惯性定律。
+
+第二定律：力等于质量乘以加速度，数学表达式为 F = ma。这是解决力学问题最常用的公式。
+
+第三定律：作用力与反作用力大小相等、方向相反，作用在不同物体上。
+
+惯性是物体抵抗运动状态改变的性质。质量是惯性大小的量度，质量越大，惯性越大。`;
+
+        const mockKnowledgePoints = ref([
+          {
+            id: 'kp1',
+            content: '牛顿第一定律：物体在没有外力作用时，保持静止或匀速直线运动状态。',
+            category: '原理',
+            importance: 'high',
+            sourceText: '牛顿运动定律是经典力学的基础，包括三条基本定律。第一定律描述了惯性的概念。',
+            chapter: '第二章 牛顿运动定律',
+            createdAt: Date.now() - 86400000 * 5,
+            expanded: false,
+          },
+          {
+            id: 'kp2',
+            content: '牛顿第二定律：F = ma，力等于质量乘以加速度。',
+            category: '公式',
+            importance: 'high',
+            sourceText: '第二定律定量描述了力和加速度的关系，是解决力学问题的核心公式。',
+            chapter: '第二章 牛顿运动定律',
+            createdAt: Date.now() - 86400000 * 5,
+            expanded: false,
+          },
+          {
+            id: 'kp3',
+            content: '惯性：物体抵抗运动状态改变的性质，质量是惯性大小的量度。',
+            category: '概念',
+            importance: 'medium',
+            sourceText: '惯性是物体的固有属性，与物体的质量成正比。质量越大，惯性越大。',
+            chapter: '第一章 力学基础',
+            createdAt: Date.now() - 86400000 * 7,
+            expanded: false,
+          },
+          {
+            id: 'kp4',
+            content: '动能定理：合外力做功等于动能的变化量。',
+            category: '原理',
+            importance: 'high',
+            sourceText: '动能定理提供了一种从能量角度解决力学问题的方法，W = ΔEk。',
+            chapter: '第三章 能量守恒',
+            createdAt: Date.now() - 86400000 * 3,
+            expanded: false,
+          },
+          {
+            id: 'kp5',
+            content: '势能：物体由于位置或状态而具有的能量，包括重力势能和弹性势能。',
+            category: '概念',
+            importance: 'medium',
+            sourceText: '势能是储存起来的能量，可以转化为动能。重力势能公式为Ep = mgh。',
+            chapter: '第三章 能量守恒',
+            createdAt: Date.now() - 86400000 * 2,
+            expanded: false,
+          },
+        ]);
+
+        const knowledgePoints = ref([...mockKnowledgePoints.value]);
+
+        const stats = computed(() => ({
+          total: knowledgePoints.value.length,
+          high: knowledgePoints.value.filter(p => p.importance === 'high').length,
+          medium: knowledgePoints.value.filter(p => p.importance === 'medium').length,
+          low: knowledgePoints.value.filter(p => p.importance === 'low').length,
+        }));
+
+        const filteredPoints = computed(() => {
+          return knowledgePoints.value
+            .filter(point => {
+              const matchesSearch = point.content.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+                point.chapter.toLowerCase().includes(searchQuery.value.toLowerCase());
+              const matchesCategory = selectedCategory.value === 'all' || point.category === selectedCategory.value;
+              return matchesSearch && matchesCategory;
+            })
+            .sort((a, b) => {
+              if (sortBy.value === 'date') {
+                return b.createdAt - a.createdAt;
+              }
+              const order = { high: 0, medium: 1, low: 2 };
+              return order[a.importance] - order[b.importance];
+            });
+        });
+
+        const startCamera = async () => {
+          try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+            });
+            if (videoRef.value) {
+              videoRef.value.srcObject = mediaStream;
+              videoRef.value.play();
+            }
+            isCameraOn.value = true;
+          } catch (error) {
+            console.error('Failed to access camera:', error);
+            alert('无法访问摄像头，请检查权限设置。您可以使用演示模式体验功能。');
+          }
+        };
+
+        const stopCamera = () => {
+          if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+          }
+          isCameraOn.value = false;
+          mediaStream = null;
+        };
+
+        const captureImage = () => {
+          if (!videoRef.value || !canvasRef.value) return;
+          
+          const context = canvasRef.value.getContext('2d');
+          if (!context) return;
+          
+          canvasRef.value.width = videoRef.value.videoWidth;
+          canvasRef.value.height = videoRef.value.videoHeight;
+          
+          context.drawImage(videoRef.value, 0, 0, canvasRef.value.width, canvasRef.value.height);
+          capturedImage.value = canvasRef.value.toDataURL('image/jpeg');
+          stopCamera();
+        };
+
+        const handleUpload = (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            capturedImage.value = event.target.result;
+          };
+          reader.readAsDataURL(file);
+        };
+
+        const handleOCR = async () => {
+          if (!capturedImage.value) return;
+          
+          isOCRProcessing.value = true;
+          ocrProgress.value = 0;
+          
+          try {
+            const { createWorker } = Tesseract;
+            const worker = await createWorker('chi_sim');
+            ocrProgress.value = 30;
+            
+            const result = await worker.recognize(capturedImage.value);
+            ocrProgress.value = 100;
+            
+            scannedText.value = result.data.text;
+            capturedImage.value = '';
+            activeTab.value = 'knowledge';
+            
+            await worker.terminate();
+          } catch (error) {
+            console.error('OCR failed:', error);
+            alert('OCR识别失败，请重试或使用演示模式体验');
+          } finally {
+            isOCRProcessing.value = false;
+            ocrProgress.value = 100;
+          }
+        };
+
+        const runDemo = () => {
+          isOCRProcessing.value = true;
+          ocrProgress.value = 0;
+          
+          const interval = setInterval(() => {
+            ocrProgress.value += 10;
+            if (ocrProgress.value >= 100) {
+              clearInterval(interval);
+              isOCRProcessing.value = false;
+              scannedText.value = demoText;
+              activeTab.value = 'knowledge';
+            }
+          }, 100);
+        };
+
+        const loadDemoText = () => {
+          scannedText.value = demoText;
+        };
+
+        const extractKnowledgePoints = (text, chap) => {
+          const sentences = text.split(/[。！？\n]+/).filter(s => s.trim().length > 10);
+          
+          const importanceKeywords = {
+            '定律': 'high', '定理': 'high', '公式': 'high', '原理': 'high',
+            '定义': 'medium', '概念': 'medium', '性质': 'medium',
+            '特点': 'low', '例子': 'low', '案例': 'low',
+          };
+          
+          const categoryKeywords = {
+            '定律': '原理', '定理': '原理', '公式': '公式',
+            '定义': '定义', '概念': '概念', '案例': '案例', '例子': '案例',
+          };
+          
+          const determineCategory = (t) => {
+            for (const [keyword, category] of Object.entries(categoryKeywords)) {
+              if (t.includes(keyword)) return category;
+            }
+            return '其他';
+          };
+          
+          const determineImportance = (t) => {
+            for (const [keyword, importance] of Object.entries(importanceKeywords)) {
+              if (t.includes(keyword)) return importance;
+            }
+            return 'medium';
+          };
+          
+          const points = [];
+          let currentPoint = '';
+          
+          for (const sentence of sentences) {
+            const trimmed = sentence.trim();
+            if (trimmed.length === 0) continue;
+            
+            if (trimmed.startsWith('第') || trimmed.includes('定律') || trimmed.includes('定理') || trimmed.includes('公式')) {
+              if (currentPoint) points.push(currentPoint.trim());
+              currentPoint = trimmed;
+            } else if (currentPoint.length < 200) {
+              currentPoint += '。' + trimmed;
+            } else {
+              points.push(currentPoint.trim());
+              currentPoint = trimmed;
+            }
+          }
+          
+          if (currentPoint) points.push(currentPoint.trim());
+          
+          return points.map((point) => ({
+            id: 'kp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+            content: point,
+            category: determineCategory(point),
+            importance: determineImportance(point),
+            sourceText: text.substring(0, 200) + (text.length > 200 ? '...' : ''),
+            chapter: chap,
+            createdAt: Date.now(),
+            expanded: false,
+          }));
+        };
+
+        const handleExtract = () => {
+          if (!scannedText.value.trim()) {
+            alert('请输入或扫描文本内容');
+            return;
+          }
+          
+          isAIProcessing.value = true;
+          aiProgress.value = 0;
+          showSummary.value = false;
+          
+          const interval = setInterval(() => {
+            aiProgress.value += 20;
+            if (aiProgress.value >= 100) clearInterval(interval);
+          }, 300);
+          
+          setTimeout(() => {
+            clearInterval(interval);
+            const newPoints = extractKnowledgePoints(scannedText.value, chapter.value);
+            knowledgePoints.value = [...newPoints, ...knowledgePoints.value];
+            summaryText.value = `从文本中提取了 ${newPoints.length} 个知识点，涵盖${[...new Set(newPoints.map(p => p.category))].join('、')}等类别。`;
+            showSummary.value = true;
+            isAIProcessing.value = false;
+            aiProgress.value = 100;
+          }, 1500);
+        };
+
+        const selectKnowledgePoint = (point) => {
+          selectedKnowledgePoint.value = point;
+          point.expanded = !point.expanded;
+        };
+
+        const deleteKnowledgePoint = (id) => {
+          knowledgePoints.value = knowledgePoints.value.filter(p => p.id !== id);
+        };
+
+        const getCategoryColor = (category) => {
+          const colors = {
+            '概念': 'bg-blue-100 text-blue-700',
+            '原理': 'bg-purple-100 text-purple-700',
+            '公式': 'bg-orange-100 text-orange-700',
+            '定义': 'bg-teal-100 text-teal-700',
+            '案例': 'bg-pink-100 text-pink-700',
+            '其他': 'bg-gray-100 text-gray-700',
+          };
+          return colors[category] || colors['其他'];
+        };
+
+        const getImportanceColor = (importance) => {
+          const colors = {
+            high: 'bg-red-100 text-red-700 border-red-200',
+            medium: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+            low: 'bg-green-100 text-green-700 border-green-200',
+          };
+          return colors[importance];
+        };
+
+        const getImportanceLabel = (importance) => {
+          const labels = { high: '高', medium: '中', low: '低' };
+          return labels[importance];
+        };
+
+        const formatDate = (timestamp) => {
+          const date = new Date(timestamp);
+          return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+        };
+
+        const quizQuestions = ref([]);
+        const currentQuestionIndex = ref(0);
+        const score = ref(0);
+        const isFinished = ref(false);
+        const isGenerating = ref(false);
+        const timeSpent = ref(0);
+        let timer = null;
+
+        const generateQuizFromPoint = (point) => {
+          const content = point.content;
+          let question = '';
+          let options = [];
+          let correctAnswer = '';
+          
+          if (content.includes('公式') || content.includes('=')) {
+            question = `根据${point.category}，下列哪个表达式是正确的？`;
+            correctAnswer = content.match(/[A-Za-z]+\s*=\s*.+/)?.[0] || content.substring(0, 30);
+            options = [correctAnswer, 'F = mv', 'E = mc', 'P = F/t'];
+          } else if (content.includes('定义') || content.includes('是')) {
+            const parts = content.split('是');
+            if (parts.length > 1) {
+              question = `${parts[0].trim()}是什么？`;
+              correctAnswer = parts[1].trim().substring(0, 40);
+            } else {
+              question = `关于${point.category}，下列说法正确的是？`;
+              correctAnswer = content.substring(0, 40);
+            }
+            options = [correctAnswer, '一种物理现象', '一个数学概念', '一种实验方法'];
+          } else {
+            question = `关于${point.category}，下列描述正确的是？`;
+            correctAnswer = content.substring(0, 40);
+            options = [correctAnswer, '与原描述相反的说法', '不相关的描述', '部分正确的描述'];
+          }
+          
+          options = options.map(o => o.replace(/。/g, '')).filter(o => o.length > 5);
+          
+          return {
+            id: 'q_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+            question,
+            options: [...options].sort(() => Math.random() - 0.5),
+            correctAnswer,
+            knowledgePointId: point.id,
+            userAnswer: null,
+            isCorrect: null,
+            showResult: false,
+          };
+        };
+
+        const loadQuestions = () => {
+          isGenerating.value = true;
+          isFinished.value = false;
+          score.value = 0;
+          currentQuestionIndex.value = 0;
+          timeSpent.value = 0;
+          
+          setTimeout(() => {
+            const shuffled = [...knowledgePoints.value].sort(() => Math.random() - 0.5);
+            const selected = shuffled.slice(0, Math.min(5, shuffled.length));
+            quizQuestions.value = selected.map(p => generateQuizFromPoint(p));
+            isGenerating.value = false;
+            startTimer();
+          }, 1000);
+        };
+
+        const startTimer = () => {
+          if (timer) clearInterval(timer);
+          timer = setInterval(() => {
+            timeSpent.value++;
+          }, 1000);
+        };
+
+        const stopTimer = () => {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        };
+
+        const currentQuestion = computed(() => quizQuestions.value[currentQuestionIndex.value]);
+
+        const handleAnswer = (option) => {
+          const q = quizQuestions.value[currentQuestionIndex.value];
+          q.userAnswer = option;
+          q.isCorrect = option === q.correctAnswer;
+          q.showResult = true;
+          
+          if (q.isCorrect) score.value++;
+        };
+
+        const handleNext = () => {
+          if (currentQuestionIndex.value < quizQuestions.value.length - 1) {
+            currentQuestionIndex.value++;
+          } else {
+            isFinished.value = true;
+            stopTimer();
+          }
+        };
+
+        const formatTime = (seconds) => {
+          const mins = Math.floor(seconds / 60);
+          const secs = seconds % 60;
+          return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        };
+
+        const getOptionClass = (option) => {
+          const q = currentQuestion.value;
+          if (!q.showResult) {
+            return 'border-gray-200 hover:border-blue-400 hover:bg-blue-50';
+          }
+          if (option === q.correctAnswer) {
+            return 'border-green-500 bg-green-50 text-green-700';
+          }
+          if (option === q.userAnswer && option !== q.correctAnswer) {
+            return 'border-red-500 bg-red-50 text-red-700';
+          }
+          return 'border-gray-200 opacity-50';
+        };
+
+        const getGrade = () => {
+          const percentage = Math.round((score.value / quizQuestions.value.length) * 100);
+          if (percentage >= 90) return '优秀';
+          if (percentage >= 70) return '良好';
+          if (percentage >= 60) return '及格';
+          return '需努力';
+        };
+
+        const getGradeColor = () => {
+          const percentage = Math.round((score.value / quizQuestions.value.length) * 100);
+          if (percentage >= 90) return 'text-green-500';
+          if (percentage >= 70) return 'text-blue-500';
+          if (percentage >= 60) return 'text-yellow-500';
+          return 'text-red-500';
+        };
+
+        watch(activeTab, (newTab) => {
+          if (newTab === 'quiz' && quizQuestions.value.length === 0 && knowledgePoints.value.length > 0) {
+            loadQuestions();
+          }
+        });
+
+        onMounted(() => {
+          nextTick(() => {
+            videoRef.value = document.querySelector('video');
+            canvasRef.value = document.querySelector('canvas');
+          });
+        });
+
+        onUnmounted(() => {
+          stopCamera();
+          stopTimer();
+        });
+
+        return {
+          activeTab,
+          tabs,
+          isCameraOn,
+          capturedImage,
+          scannedText,
+          chapter,
+          isOCRProcessing,
+          ocrProgress,
+          isAIProcessing,
+          aiProgress,
+          showSummary,
+          summaryText,
+          knowledgePoints,
+          stats,
+          filteredPoints,
+          searchQuery,
+          selectedCategory,
+          sortBy,
+          selectedKnowledgePoint,
+          categories,
+          videoRef,
+          canvasRef,
+          startCamera,
+          stopCamera,
+          captureImage,
+          handleUpload,
+          handleOCR,
+          runDemo,
+          loadDemoText,
+          handleExtract,
+          selectKnowledgePoint,
+          deleteKnowledgePoint,
+          getCategoryColor,
+          getImportanceColor,
+          getImportanceLabel,
+          formatDate,
+          quizQuestions,
+          currentQuestion,
+          currentQuestionIndex,
+          score,
+          isFinished,
+          isGenerating,
+          timeSpent,
+          loadQuestions,
+          handleAnswer,
+          handleNext,
+          formatTime,
+          getOptionClass,
+          getGrade,
+          getGradeColor,
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

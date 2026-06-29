@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Embodied-Vis v2.0 | ROS2 Industrial Console</title>
+    <style>
+        :root {
+            --bg-base: #080c14;
+            --panel-bg-solid: #111a2e;
+            --panel-bg-glass: rgba(17, 26, 46, 0.75);
+            --panel-border: #1f3156;
+            
+            /* 色彩层级规范 */
+            --cyan-glow: #00f2fe;
+            --blue-data: #38bdf8;
+            --green-ok: #10b981;
+            --yellow-warn: #f59e0b;
+            --red-err: #ef4444;
+            --text-main: #f1f5f9;
+            --text-dim: #64748b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "JetBrains Mono", "Segoe UI", Roboto, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 顶部导航与状态机 */
+        header {
+            height: 50px;
+            background: #0b111e;
+            border-bottom: 1px solid var(--panel-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            z-index: 10;
+        }
+
+        .brand {
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--cyan-glow);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .brand::before {
+            content: ""; display: block; width: 6px; height: 16px; background: var(--cyan-glow);
+        }
+
+        .conn-badge {
+            font-family: monospace;
+            font-size: 12px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--text-dim);
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.3s;
+        }
+        .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+        
+        .status-online { border-color: var(--green-ok); color: var(--green-ok); background: rgba(16,185,129,0.1); }
+        .status-connecting { border-color: var(--yellow-warn); color: var(--yellow-warn); background: rgba(245,158,11,0.1); }
+        .status-offline { border-color: var(--red-err); color: var(--red-err); background: rgba(239,68,68,0.1); }
+
+        /* 主体布局 */
+        main {
+            flex: 1; display: flex; padding: 16px; gap: 16px; height: calc(100vh - 50px);
+        }
+
+        /* 左侧：3D 渲染容器与 HUD */
+        .viewport-container {
+            flex: 1;
+            background-color: #05080f;
+            border: 1px solid var(--panel-border);
+            border-radius: 6px;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #scene-viewer { width: 100%; height: 100%; display: block; }
+
+        .viewport-grid {
+            position: absolute; inset: 0; pointer-events: none;
+            background-image: linear-gradient(rgba(0, 242, 254, 0.03) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(0, 242, 254, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+
+        .crosshair {
+            position: absolute; pointer-events: none;
+            width: 40px; height: 40px; border: 1px opacity rgba(0,242,254,0.2);
+        }
+        .crosshair::before, .crosshair::after {
+            content: ""; position: absolute; background: rgba(0, 242, 254, 0.15);
+        }
+        .crosshair::before { top: 19px; left: 0; width: 40px; height: 1px; }
+        .crosshair::after { top: 0; left: 19px; width: 1px; height: 40px; }
+
+        /* HUD 四角矩阵规范 */
+        .hud {
+            position: absolute; font-family: monospace; font-size: 11px;
+            line-height: 1.7; pointer-events: none; padding: 14px;
+            background: rgba(5, 8, 15, 0.6); border-radius: 4px;
+        }
+        .hud-tl { top: 16px; left: 16px; border-left: 2px solid var(--blue-data); color: var(--text-dim); }
+        .hud-tr { top: 16px; right: 16px; text-align: right; border-right: 2px solid var(--cyan-glow); }
+        .hud-bl { bottom: 16px; left: 16px; color: var(--text-dim); }
+        .hud-br { bottom: 16px; right: 16px; text-align: right; color: var(--text-dim); }
+
+        .hud-val { color: var(--text-main); font-weight: bold; }
+        .hud-live { color: var(--green-ok); font-weight: bold; animation: blink 2s infinite; }
+
+        /* 右侧：控制面板 */
+        .control-panel { width: 380px; display: flex; flex-direction: column; gap: 14px; }
+
+        /* 毛玻璃性能兼容降级写法 */
+        .card {
+            background: var(--panel-bg-solid);
+            border: 1px solid var(--panel-border);
+            border-radius: 6px; padding: 14px;
+        }
+        @supports (backdrop-filter: blur(12px)) {
+            .card { background: var(--panel-bg-glass); backdrop-filter: blur(12px); }
+        }
+
+        .card-header {
+            font-size: 11px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 1px; color: var(--text-dim); margin-bottom: 10px;
+            display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06);
+            padding-bottom: 6px;
+        }
+
+        /* ROS 同步控制按钮 */
+        .btn-action {
+            width: 100%; padding: 12px; background: transparent;
+            border: 1px solid var(--blue-data); color: var(--blue-data);
+            font-family: monospace; font-size: 13px; font-weight: bold;
+            border-radius: 4px; cursor: pointer; transition: all 0.2s;
+        }
+        .btn-action:hover { background: rgba(56, 189, 248, 0.1); box-shadow: 0 0 12px rgba(56,189,248,0.2); }
+        .btn-action.danger { border-color: var(--red-err); color: var(--red-err); }
+        .btn-action.danger:hover { background: rgba(239, 68, 68, 0.1); box-shadow: 0 0 12px rgba(239,68,68,0.2); }
+
+        /* 数据行展示 */
+        .data-row { display: flex; justify-content: space-between; font-family: monospace; font-size: 13px; margin-bottom: 8px; }
+        .data-row:last-child { margin-bottom: 0; }
+        
+        /* 延迟阈值颜色类 */
+        .lat-green { color: var(--green-ok); }
+        .lat-yellow { color: var(--yellow-warn); }
+        .lat-red { color: var(--red-err); }
+
+        /* 位姿双模块 Grid */
+        .sub-section-title { font-size: 10px; color: var(--cyan-glow); margin: 6px 0 4px 0; font-family: monospace;}
+        .pose-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+        .pose-cell { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.04); padding: 6px; border-radius: 4px; }
+        .pose-lbl { font-size: 9px; color: var(--text-dim); }
+        .pose-num { font-family: monospace; font-size: 12px; color: var(--blue-data); font-weight: 600; margin-top: 2px;}
+
+        /* 滑动条与反馈条 */
+        .gripper-visualizer { font-family: monospace; font-size: 12px; margin-top: 6px; }
+        .progress-bar-bg { width: 100%; height: 8px; background: rgba(0,0,0,0.5); border-radius: 4px; overflow: hidden; margin: 8px 0; border: 1px solid rgba(255,255,255,0.08); }
+        .progress-bar-fill { height: 100%; background: var(--cyan-glow); width: 47%; transition: width 0.05s; }
+        
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 2px; background: var(--text-main); cursor: pointer; margin-top: -5px; }
+
+        /* Toast 规范写法 */
+        #toast {
+            position: fixed; top: 65px; right: 24px;
+            background: #1e293b; border-left: 3px solid var(--cyan-glow);
+            color: #fff; padding: 10px 16px; font-size: 12px; font-family: monospace;
+            border-radius: 4px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            transform: translateX(120%); transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); z-index: 100;
+        }
+        #toast.show { transform: translateX(0); }
+
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand">EMBODIED-VIS // STUDIO</div>
+        <div id="connBadge" class="conn-badge status-offline">
+            <span class="badge-dot"></span><span id="connText">ROS: DISCONNECTED</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="viewport-container">
+            <canvas id="scene-viewer"></canvas>
+            <div class="viewport-grid"></div>
+            <div class="crosshair"></div>
+
+            <div class="hud hud-tl">
+                ROBOT: <span class="hud-val">UR5e (6-DOF)</span><br>
+                CAMERA: <span class="hud-val">RealSense D435i</span><br>
+                STREAM: <span class="hud-val">RGB-D 1280x720</span><br>
+                FRAME: <span class="hud-val">base_link -> tool0</span>
+            </div>
+
+            <div class="hud hud-tr">
+                STATUS: <span id="hudStatus" style="color:var(--text-dim)">STANDBY</span><br>
+                FPS: <span id="hudFps" class="hud-val">0.0</span><br>
+                POINTS: <span id="hudPts" class="hud-val">0</span>
+            </div>
+
+            <div class="hud hud-bl">
+                TOPICS: /tf, /joint_states, /camera/depth/color/points
+            </div>
+
+            <div class="hud hud-br">
+                GRID: 1.0m // VIEW: ORBIT_PERSPECTIVE
+            </div>
+        </div>
+
+        <aside class="control-panel">
+            <div class="card">
+                <button id="streamBtn" class="btn-action" onclick="app.toggleStream()">建立 ROS2 数据流链路</button>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><span>模型推理延迟 (VLA Telemetry)</span></div>
+                <div class="data-row">
+                    <span style="color:var(--text-dim)">BridgeVLA</span>
+                    <span id="latVla">-- ms</span>
+                </div>
+                <div class="data-row">
+                    <span style="color:var(--text-dim)">3D-LOTUS++</span>
+                    <span id="latLotus">-- ms</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><span>实时末端位姿 (TCP Pose)</span></div>
+                <div class="sub-section-title">POSITION (mm)</div>
+                <div class="pose-grid">
+                    <div class="pose-cell"><div class="pose-lbl">X</div><div class="pose-num" id="posX">-412.5</div></div>
+                    <div class="pose-cell"><div class="pose-lbl">Y</div><div class="pose-num" id="posY">128.3</div></div>
+                    <div class="pose-cell"><div class="pose-lbl">Z</div><div class="pose-num" id="posZ">540.0</div></div>
+                </div>
+                <div class="sub-section-title">ORIENTATION (rad)</div>
+                <div class="pose-grid">
+                    <div class="pose-cell"><div class="pose-lbl">ROLL</div><div class="pose-num" id="posRoll">3.141</div></div>
+                    <div class="pose-cell"><div class="pose-lbl">PITCH</div><div class="pose-num" id="posPitch">0.024</div></div>
+                    <div class="pose-cell"><div class="pose-lbl">YAW</div><div class="pose-num" id="posYaw">-1.570</div></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><span>执行器控制 (AG95 Gripper)</span></div>
+                <div class="gripper-visualizer">
+                    <div style="display:flex; justify-content:space-between; color:var(--text-dim);">
+                        <span>APERTURE</span><span id="gripText" style="color:var(--cyan-glow); font-weight:bold;">45 mm (47%)</span>
+                    </div>
+                    <div class="progress-bar-bg"><div id="gripBar" class="progress-bar-fill"></div></div>
+                    <input type="range" id="gripSlider" min="0" max="95" value="45" oninput="app.handleGripperInput(this.value)">
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <div id="toast"></div>
+
+    <script>
+        /**
+         * 全局静态配置与默认快照
+         */
+        const CONFIG = {
+            rosBridgeUrl: "ws://localhost:9090",
+            useMock: true, // 工程化开关：设为 false 自动调取 ROSLIB.Ros
+            basePose: { x: -412.5, y: 128.3, z: 540.0, roll: 3.141, pitch: 0.024, yaw: -1.570 },
+            maxGripper: 95
+        };
+
+        /**
+         * DOM 缓存池：避免核心循环内高频查询
+         */
+        const DOM = {};
+
+        /**
+         * ROS 通信抽象层 (Rosbridge Abstraction Layer)
+         */
+        class RosBridgeClient {
+            constructor(onMessageCallback) {
+                this.onMessage = onMessageCallback;
+                this.socket = null;
+                this.mockInterval = null;
+            }
+
+            connect() {
+                if (CONFIG.useMock) {
+                    if (this.mockInterval) return; // 防止并发锁漏发
+                    this.mockInterval = setInterval(() => {
+                        this.onMessage({
+                            fps: 59.5 + Math.random(),
+                            points: 43200 + Math.floor(Math.random() * 50),
+                            vlaLatency: 16 + Math.random() * 30, // 覆盖绿黄红三区间
+                            lotusLatency: 14 + Math.random() * 10,
+                            pose: {
+                                x: CONFIG.basePose.x + (Math.random() - 0.5) * 0.4,
+                                y: CONFIG.basePose.y + (Math.random() - 0.5) * 0.4,
+                                z: CONFIG.basePose.z + (Math.random() - 0.5) * 0.4,
+                                roll: CONFIG.basePose.roll + (Math.random() - 0.5) * 0.004,
+                                pitch: CONFIG.basePose.pitch + (Math.random() - 0.5) * 0.004,
+                                yaw: CONFIG.basePose.yaw + (Math.random() - 0.5) * 0.004
+                            }
+                        });
+                    }, 100);
+                } else {
+                    /* 标准 roslibjs 生产代码占位 */
+                    // const ros = new ROSLIB.Ros({ url: CONFIG.rosBridgeUrl });
+                    // ... topic.subscribe(msg => this.onMessage(parse(msg)))
+                }
+            }
+
+            disconnect() {
+                if (CONFIG.useMock) {
+                    clearInterval(this.mockInterval);
+                    this.mockInterval = null;
+                } else if (this.socket) {
+                    this.socket.close();
+                }
+            }
+        }
+
+        /**
+         * 应用主逻辑控制器
+         */
+        class AppController {
+            constructor() {
+                this.isStreaming = false;
+                this.toastTimer = null;
+                this.rosClient = new RosBridgeClient(data => this.renderFrame(data));
+            }
+
+            init() {
+                // 初始化缓存节点
+                const ids = ['connBadge', 'connText', 'streamBtn', 'hudStatus', 'hudFps', 'hudPts', 
+                             'latVla', 'latLotus', 'posX', 'posY', 'posZ', 'posRoll', 'posPitch', 'posYaw', 
+                             'gripText', 'gripBar', 'gripSlider', 'toast'];
+                ids.forEach(id => DOM[id] = document.getElementById(id));
+            }
+
+            toggleStream() {
+                if (this.isStreaming) {
+                    this.stopStream();
+                } else {
+                    this.startStream();
+                }
+            }
+
+            startStream() {
+                this.isStreaming = true;
+                DOM.connBadge.className = "conn-badge status-connecting";
+                DOM.connText.textContent = "ROS: CONNECTING...";
+                
+                setTimeout(() => { // 模拟握手延迟
+                    if(!this.isStreaming) return;
+                    DOM.connBadge.className = "conn-badge status-online";
+                    DOM.connText.textContent = "ROS: ONLINE (/joint_states)";
+                    DOM.streamBtn.textContent = "断开 ROS2 数据链路";
+                    DOM.streamBtn.classList.add("danger");
+                    
+                    DOM.hudStatus.textContent = "● LIVE STREAM";
+                    DOM.hudStatus.className = "hud-live";
+                    
+                    this.rosClient.connect();
+                    this.showToast("WS_CONNECT: 成功订阅 Topic 链路");
+                }, 400);
+            }
+
+            stopStream() {
+                this.isStreaming = false;
+                this.rosClient.disconnect();
+
+                // 完整状态归位
+                DOM.connBadge.className = "conn-badge status-offline";
+                DOM.connText.textContent = "ROS: DISCONNECTED";
+                DOM.streamBtn.textContent = "建立 ROS2 数据流链路";
+                DOM.streamBtn.classList.remove("danger");
+
+                DOM.hudStatus.textContent = "STANDBY";
+                DOM.hudStatus.removeAttribute("class");
+                DOM.hudStatus.style.color = "var(--text-dim)";
+                DOM.hudFps.textContent = "0.0";
+                DOM.hudPts.textContent = "0";
+
+                DOM.latVla.textContent = "-- ms";
+                DOM.latVla.removeAttribute("class");
+                DOM.latLotus.textContent = "-- ms";
+                DOM.latLotus.removeAttribute("class");
+
+                DOM.posX.textContent = CONFIG.basePose.x.toFixed(1);
+                DOM.posY.textContent = CONFIG.basePose.y.toFixed(1);
+                DOM.posZ.textContent = CONFIG.basePose.z.toFixed(1);
+                DOM.posRoll.textContent = CONFIG.basePose.roll.toFixed(3);
+                DOM.posPitch.textContent = CONFIG.basePose.pitch.toFixed(3);
+                DOM.posYaw.textContent = CONFIG.basePose.yaw.toFixed(3);
+
+                this.showToast("WS_CLOSED: 已安全切断数据链路");
+            }
+
+            renderFrame(data) {
+                DOM.hudFps.textContent = data.fps.toFixed(1);
+                DOM.hudPts.textContent = data.points.toLocaleString();
+
+                this.setLatencyUI(DOM.latVla, data.vlaLatency);
+                this.setLatencyUI(DOM.latLotus, data.lotusLatency);
+
+                DOM.posX.textContent = data.pose.x.toFixed(1);
+                DOM.posY.textContent = data.pose.y.toFixed(1);
+                DOM.posZ.textContent = data.pose.z.toFixed(1);
+                DOM.posRoll.textContent = data.pose.roll.toFixed(3);
+                DOM.posPitch.textContent = data.pose.pitch.toFixed(3);
+                DOM.posYaw.textContent = data.pose.yaw.toFixed(3);
+            }
+
+            setLatencyUI(domNode, val) {
+                domNode.textContent = val.toFixed(1) + " ms";
+                if (val < 20) domNode.className = "lat-green";
+                else if (val <= 40) domNode.className = "lat-yellow";
+                else domNode.className = "lat-red";
+            }
+
+            handleGripperInput(val) {
+                const pct = Math.round((val / CONFIG.maxGripper) * 100);
+                DOM.gripText.textContent = `${val} mm (${pct}%)`;
+                DOM.gripBar.style.width = `${pct}%`;
+            }
+
+            showToast(msg) {
+                clearTimeout(this.toastTimer);
+                DOM.toast.textContent = msg;
+                DOM.toast.classList.add("show");
+                this.toastTimer = setTimeout(() => {
+                    DOM.toast.classList.remove("show");
+                }, 2200);
+            }
+        }
+
+        const app = new AppController();
+        window.addEventListener('DOMContentLoaded', () => app.init());
+    </script>
+</body>
+</html>

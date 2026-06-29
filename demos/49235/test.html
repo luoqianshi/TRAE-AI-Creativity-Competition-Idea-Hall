@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能在线证件照生成器</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0/dist/body-pix.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .upload-area {
+            border: 2px dashed #3b82f6;
+            transition: all 0.3s ease;
+        }
+        .upload-area.drag-over {
+            border-color: #1d4ed8;
+            background-color: #eff6ff;
+        }
+        .preview-container {
+            aspect-ratio: 3/4;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .bg-btn.active {
+            border-color: #60a5fa !important;
+            border-width: 4px;
+        }
+        .size-btn.active {
+            background-color: #2563eb;
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 min-h-screen">
+    <header class="bg-gradient-to-r from-blue-600 to-blue-800 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <h1 class="text-3xl md:text-4xl font-bold text-white text-center">
+                🔍 智能在线证件照生成器
+            </h1>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="space-y-6">
+                <div class="bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <h2 class="text-xl font-semibold text-blue-400 mb-4">📸 上传图片</h2>
+                    <div id="uploadArea" class="upload-area rounded-lg p-12 text-center cursor-pointer">
+                        <div class="space-y-4">
+                            <svg class="w-16 h-16 mx-auto text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                            </svg>
+                            <p class="text-slate-300">点击或拖拽上传人像图片</p>
+                            <p class="text-sm text-slate-500">支持 JPG、PNG 格式</p>
+                        </div>
+                        <input type="file" id="fileInput" accept="image/*" class="hidden">
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <h2 class="text-xl font-semibold text-blue-400 mb-4">📏 证件尺寸</h2>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <button class="size-btn bg-blue-600 text-white py-3 px-4 rounded-lg font-medium transition-all hover:bg-blue-700 active" data-size="1inch">一寸</button>
+                        <button class="size-btn bg-slate-700 text-slate-300 py-3 px-4 rounded-lg font-medium transition-all hover:bg-slate-600" data-size="small2inch">小二寸</button>
+                        <button class="size-btn bg-slate-700 text-slate-300 py-3 px-4 rounded-lg font-medium transition-all hover:bg-slate-600" data-size="2inch">二寸</button>
+                        <button class="size-btn bg-slate-700 text-slate-300 py-3 px-4 rounded-lg font-medium transition-all hover:bg-slate-600" data-size="passport">护照</button>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <h2 class="text-xl font-semibold text-blue-400 mb-4">🎨 背景颜色</h2>
+                    <div class="flex gap-4 flex-wrap">
+                        <button class="bg-btn bg-red-600 w-16 h-16 rounded-full border-4 border-blue-400 hover:scale-110 transition-all active" data-color="red"></button>
+                        <button class="bg-btn bg-white w-16 h-16 rounded-full border-4 border-slate-300 hover:scale-110 transition-all" data-color="white"></button>
+                        <button class="bg-btn bg-blue-600 w-16 h-16 rounded-full border-4 border-transparent hover:scale-110 transition-all" data-color="blue"></button>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <button id="processBtn" class="w-full bg-gradient-to-r from-blue-600 to-blue-800 text-white py-4 rounded-lg font-semibold text-lg transition-all hover:from-blue-700 hover:to-blue-900 disabled:opacity-50 disabled:cursor-not-allowed" disabled>🤖 AI智能抠图</button>
+                    <button id="downloadBtn" class="w-full mt-4 bg-gradient-to-r from-green-600 to-green-800 text-white py-4 rounded-lg font-semibold text-lg transition-all hover:from-green-700 hover:to-green-900 disabled:opacity-50 disabled:cursor-not-allowed" disabled>💾 下载证件照</button>
+                </div>
+
+                <div id="loadingArea" class="hidden bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <div class="flex flex-col items-center space-y-4">
+                        <div class="loading-spinner"></div>
+                        <p class="text-blue-400 font-medium" id="loadingText">正在加载AI模型...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <div class="bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <h2 class="text-xl font-semibold text-blue-400 mb-4">👁️ 实时预览</h2>
+                    <div class="flex flex-col md:flex-row gap-6">
+                        <div class="flex-1">
+                            <p class="text-slate-400 text-sm mb-2 text-center">原图</p>
+                            <div class="preview-container bg-slate-900 rounded-lg flex items-center justify-center overflow-hidden">
+                                <img id="originalPreview" class="max-w-full max-h-full object-contain hidden" alt="原图">
+                                <div id="originalPlaceholder" class="text-slate-600 text-center p-4">
+                                    <svg class="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                    </svg>
+                                    <p>等待上传</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex-1">
+                            <p class="text-slate-400 text-sm mb-2 text-center">处理后</p>
+                            <div class="preview-container bg-slate-900 rounded-lg flex items-center justify-center overflow-hidden">
+                                <canvas id="processedPreview" class="max-w-full max-h-full hidden"></canvas>
+                                <div id="processedPlaceholder" class="text-slate-600 text-center p-4">
+                                    <svg class="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"></path>
+                                    </svg>
+                                    <p>等待处理</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 rounded-xl p-6 shadow-xl">
+                    <h2 class="text-xl font-semibold text-blue-400 mb-4">📋 尺寸信息</h2>
+                    <div class="grid grid-cols-2 gap-4 text-center">
+                        <div class="bg-slate-700 rounded-lg p-4">
+                            <p class="text-slate-400 text-sm">像素尺寸</p>
+                            <p class="text-white font-semibold text-lg" id="pixelSize">295×413</p>
+                        </div>
+                        <div class="bg-slate-700 rounded-lg p-4">
+                            <p class="text-slate-400 text-sm">物理尺寸</p>
+                            <p class="text-white font-semibold text-lg" id="physicalSize">25×35mm</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="bg-slate-900 border-t border-slate-700 mt-12">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <p class="text-center text-slate-500">本作品为 TRAE AI 创造力大赛参赛作品</p>
+        </div>
+    </footer>
+
+    <script>
+        let originalImage = null;
+        let bodyPixModel = null;
+        let currentSize = '1inch';
+        let currentColor = 'red';
+        let isProcessing = false;
+        let isProcessed = false;
+        let personSegmentation = null;
+
+        const sizeConfig = {
+            '1inch': { width: 295, height: 413, label: '一寸', physical: '25×35mm' },
+            'small2inch': { width: 413, height: 531, label: '小二寸', physical: '35×45mm' },
+            '2inch': { width: 413, height: 579, label: '二寸', physical: '35×49mm' },
+            'passport': { width: 354, height: 472, label: '护照', physical: '33×48mm' }
+        };
+
+        const colorConfig = {
+            'red': '#d92121',
+            'white': '#ffffff',
+            'blue': '#0052cc'
+        };
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const originalPreview = document.getElementById('originalPreview');
+        const originalPlaceholder = document.getElementById('originalPlaceholder');
+        const processedPreview = document.getElementById('processedPreview');
+        const processedPlaceholder = document.getElementById('processedPlaceholder');
+        const processBtn = document.getElementById('processBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const loadingArea = document.getElementById('loadingArea');
+        const loadingText = document.getElementById('loadingText');
+        const pixelSize = document.getElementById('pixelSize');
+        const physicalSize = document.getElementById('physicalSize');
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initEventListeners();
+            loadBodyPixModel();
+        });
+
+        function initEventListeners() {
+            uploadArea.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', handleFileSelect);
+
+            uploadArea.addEventListener('dragover', e => {
+                e.preventDefault();
+                uploadArea.classList.add('drag-over');
+            });
+            uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+            uploadArea.addEventListener('drop', e => {
+                e.preventDefault();
+                uploadArea.classList.remove('drag-over');
+                const file = e.dataTransfer.files[0];
+                if (file && file.type.startsWith('image/')) loadImage(file);
+            });
+
+            document.querySelectorAll('.size-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentSize = btn.dataset.size;
+                    const cfg = sizeConfig[currentSize];
+                    pixelSize.textContent = `${cfg.width}×${cfg.height}`;
+                    physicalSize.textContent = cfg.physical;
+                    if (isProcessed) renderProcessedImage();
+                });
+            });
+
+            document.querySelectorAll('.bg-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.bg-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentColor = btn.dataset.color;
+                    if (isProcessed) renderProcessedImage();
+                });
+            });
+
+            processBtn.addEventListener('click', processImage);
+            downloadBtn.addEventListener('click', downloadImage);
+        }
+
+        async function loadBodyPixModel() {
+            try {
+                showLoading('加载高精度人像分割模型...');
+                bodyPixModel = await bodyPix.load({
+                    architecture: 'MobileNetV1',
+                    outputStride: 8,
+                    multiplier: 0.75,
+                    quantBytes: 2
+                });
+                hideLoading();
+            } catch (err) {
+                hideLoading();
+                alert('模型加载失败，请刷新页面重试');
+                console.error(err);
+            }
+        }
+
+        function showLoading(text) {
+            loadingText.textContent = text;
+            loadingArea.classList.remove('hidden');
+            processBtn.disabled = true;
+        }
+        function hideLoading() {
+            loadingArea.classList.add('hidden');
+            if (originalImage) processBtn.disabled = false;
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) loadImage(file);
+        }
+
+        function loadImage(file) {
+            const reader = new FileReader();
+            reader.onload = e => {
+                originalImage = new Image();
+                originalImage.onload = () => {
+                    originalPreview.src = e.target.result;
+                    originalPreview.classList.remove('hidden');
+                    originalPlaceholder.classList.add('hidden');
+                    processBtn.disabled = false;
+
+                    isProcessed = false;
+                    personSegmentation = null;
+                    processedPreview.classList.add('hidden');
+                    processedPlaceholder.classList.remove('hidden');
+                    downloadBtn.disabled = true;
+                }
+                originalImage.src = e.target.result;
+            }
+            reader.readAsDataURL(file);
+        }
+
+        async function processImage() {
+            if (!originalImage || !bodyPixModel || isProcessing) return;
+            isProcessing = true;
+            showLoading('人像精细分割，躯干强化识别...');
+            try {
+                const sourceCanvas = document.createElement('canvas');
+                const sCtx = sourceCanvas.getContext('2d');
+                sourceCanvas.width = originalImage.width;
+                sourceCanvas.height = originalImage.height;
+                sCtx.drawImage(originalImage, 0, 0);
+
+                // 关键优化1：分割参数全开，降低阈值保留深色衣物
+                personSegmentation = await bodyPixModel.segmentPerson(sourceCanvas, {
+                    flipHorizontal: false,
+                    internalResolution: 'full',
+                    segmentationThreshold: 0.45, // 大幅降低阈值，深色衣服不会丢失
+                    maxDetections: 1,
+                    scoreThreshold: 0.2
+                });
+                isProcessed = true;
+                renderProcessedImage();
+                downloadBtn.disabled = false;
+            } catch (err) {
+                alert('抠图失败，请更换正面清晰人像照片重试');
+                console.error(err);
+            } finally {
+                isProcessing = false;
+                hideLoading();
+            }
+        }
+
+        // 1. 掩码膨胀：向外扩张人像区域，消除衣服镂空黑点（核心修复缺失）
+        function dilateMask(data, w, h, expand = 2) {
+            const copy = new Uint8ClampedArray(data);
+            for (let y = expand; y < h - expand; y++) {
+                for (let x = expand; x < w - expand; x++) {
+                    const pos = (y * w + x) * 4;
+                    // 当前像素已是人像，跳过
+                    if (copy[pos] === 255) continue;
+                    // 扫描周边邻域，有人像则填充当前像素
+                    for (let dy = -expand; dy <= expand; dy++) {
+                        for (let dx = -expand; dx <= expand; dx++) {
+                            const neighborIdx = ((y + dy) * w + (x + dx)) * 4;
+                            if (copy[neighborIdx] === 255) {
+                                data[pos] = 255;
+                                dy = expand + 1;
+                                dx = expand + 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 高斯平滑羽化，边缘柔和无锯齿
+        function smoothMask(imgData, width, height, radius = 2) {
+            const copy = new Uint8ClampedArray(imgData);
+            for (let y = radius; y < height - radius; y++) {
+                for (let x = radius; x < width - radius; x++) {
+                    let sum = 0, count = 0;
+                    for (let dy = -radius; dy <= radius; dy++) {
+                        for (let dx = -radius; dx <= radius; dx++) {
+                            const idx = ((y + dy) * width + (x + dx)) * 4;
+                            sum += copy[idx];
+                            count++;
+                        }
+                    }
+                    const curIdx = (y * width + x) * 4;
+                    imgData[curIdx] = sum / count;
+                }
+            }
+        }
+
+        function renderProcessedImage() {
+            if (!originalImage || !personSegmentation) return;
+            const cfg = sizeConfig[currentSize];
+            const canvas = processedPreview;
+            const ctx = canvas.getContext('2d');
+            canvas.width = cfg.width;
+            canvas.height = cfg.height;
+
+            // 底层纯色背景
+            ctx.fillStyle = colorConfig[currentColor];
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = originalImage.width;
+            tempCanvas.height = originalImage.height;
+            tempCtx.drawImage(originalImage, 0, 0);
+
+            const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            const pixels = imgData.data;
+            const segData = personSegmentation.data;
+
+            // 基础掩码：人像不透明，背景透明
+            for (let i = 0; i < segData.length; i++) {
+                const alphaIdx = i * 4 + 3;
+                pixels[alphaIdx] = segData[i] === 1 ? 255 : 0;
+            }
+
+            // 步骤1：掩码膨胀2像素，填补衣服镂空、碎黑点（最关键）
+            dilateMask(pixels, tempCanvas.width, tempCanvas.height, 2);
+            // 步骤2：平滑羽化边缘，消除锯齿
+            smoothMask(pixels, tempCanvas.width, tempCanvas.height, 2);
+
+            tempCtx.putImageData(imgData, 0, 0);
+
+            // 证件照标准构图：头顶留白10%，底部到画面85%
+            const headTopRatio = 0.10;
+            const bodyBottomRatio = 0.85;
+            const usableHeight = canvas.height * (bodyBottomRatio - headTopRatio);
+            const scale = Math.min(canvas.width * 0.85 / tempCanvas.width, usableHeight / tempCanvas.height);
+
+            const w = tempCanvas.width * scale;
+            const h = tempCanvas.height * scale;
+            const x = (canvas.width - w) / 2;
+            const y = canvas.height * headTopRatio;
+
+            // 高清抗锯齿
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(tempCanvas, x, y, w, h);
+
+            processedPreview.classList.remove('hidden');
+            processedPlaceholder.classList.add('hidden');
+        }
+
+        // 无损高清下载
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = `证件照_${sizeConfig[currentSize].label}_${Date.now()}.png`;
+            link.href = processedPreview.toDataURL('image/png', 1.0);
+            link.click();
+        }
+    </script>
+</body>
+</html>

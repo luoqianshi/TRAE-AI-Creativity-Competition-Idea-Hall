@@ -105,6 +105,14 @@ def fetch_bitable_records(token, table_id, date_str):
             title = row[title_idx] if title_idx < len(row) else ''
             link_field = row[link_idx] if link_idx < len(row) else ''
             
+            # link_field might be None, list, or dict in some edge cases
+            if not isinstance(link_field, str):
+                link_field = str(link_field) if link_field is not None else ''
+            if not isinstance(nickname, str):
+                nickname = str(nickname) if nickname is not None else ''
+            if not isinstance(title, str):
+                title = str(title) if title is not None else ''
+            
             url_match = re.search(r'\[([^\]]+)\]', link_field)
             forum_url = url_match.group(1) if url_match else link_field
             
@@ -127,34 +135,50 @@ def fetch_bitable_records(token, table_id, date_str):
     return all_records
 
 def update_approved_projects(sections):
-    """Sync approved_projects.json from wiki."""
+    """Sync approved_projects.json from wiki.
+    
+    Strategy: Start with existing local records as baseline, then merge in
+    newly fetched records from wiki. If a batch fails to fetch, existing
+    records from that batch are preserved rather than lost.
+    """
     approved_path = DATA_DIR / 'approved_projects.json'
     with open(approved_path, 'r', encoding='utf-8') as f:
         existing_data = json.load(f)
-    existing_ids = {r['topic_id'] for r in existing_data.get('records', [])}
     
-    all_records = []
+    # Start with existing records as dict (preserves data even if some batches fail)
+    unique_records = {}
+    for r in existing_data.get('records', []):
+        tid = r.get('topic_id', '')
+        if tid:
+            unique_records[tid] = r
+    existing_ids = set(unique_records.keys())
+    
+    fetch_errors = []
+    new_from_wiki = []
     for section in sections:
         print(f"  Processing {section['title']}...")
         try:
             bitable = fetch_bitable_info(section['id'])
             records = fetch_bitable_records(bitable['token'], bitable['table_id'], section['date'])
             print(f"    Fetched {len(records)} records")
-            all_records.extend(records)
+            new_from_wiki.extend(records)
         except Exception as e:
-            print(f"    ERROR: {e}")
+            err_msg = f"Failed to fetch batch '{section['title']}': {e}"
+            print(f"    ERROR: {err_msg}")
             traceback.print_exc()
+            fetch_errors.append(err_msg)
     
-    unique_records = {}
-    for r in all_records:
+    # Merge wiki records into unique_records (overwriting with fresh data)
+    for r in new_from_wiki:
         tid = r['topic_id']
-        if tid not in unique_records:
-            unique_records[tid] = r
+        unique_records[tid] = r
     
     new_records = [r for tid, r in unique_records.items() if tid not in existing_ids]
-    print(f"\nTotal unique approved records from wiki: {len(unique_records)}")
+    print(f"\nTotal unique approved records (merged): {len(unique_records)}")
     print(f"Existing local records: {len(existing_ids)}")
-    print(f"New records to process: {len(new_records)}")
+    print(f"New records added: {len(new_records)}")
+    if fetch_errors:
+        print(f"WARNING: {len(fetch_errors)} batch(es) failed to fetch, existing data preserved")
     
     today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     updated_approved = {
@@ -166,7 +190,7 @@ def update_approved_projects(sections):
         json.dump(updated_approved, f, ensure_ascii=False, indent=2)
     print(f"Saved approved_projects.json with {len(unique_records)} records")
     
-    return unique_records, new_records
+    return unique_records, new_records, fetch_errors
 
 def update_demos_json_approved(wiki_ids):
     """Step 3: Check and fix approved status in demos.json."""
@@ -315,8 +339,9 @@ def main():
         
         # Step 2: Update approved_projects.json
         print("\n[Step 2] Syncing approved_projects.json...")
-        wiki_ids, new_records = update_approved_projects(sections)
+        wiki_ids, new_records, fetch_errors = update_approved_projects(sections)
         wiki_id_set = set(wiki_ids.keys())
+        issues.extend(fetch_errors)
         
         # Step 3: Check approved status in demos.json
         print("\n[Step 3] Checking approved status in demos.json...")
