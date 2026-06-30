@@ -192,16 +192,73 @@ def update_approved_projects(sections):
     
     return unique_records, new_records, fetch_errors
 
-def update_demos_json_approved(wiki_ids):
-    """Step 3: Check and fix approved status in demos.json."""
+def infer_tags(title):
+    """Infer track tags from title text."""
+    tag_map = {
+        '学习工作': '学习工作',
+        '生活娱乐': '生活娱乐',
+        '社会服务': '社会服务',
+        '硬件交互': '硬件交互',
+        '社会公益': '社会公益',
+    }
+    for kw, tag in tag_map.items():
+        if kw in str(title):
+            return [tag]
+    return ['野蛮生长']
+
+def ensure_demo_dir_has_record(demos_data, tid):
+    """Check if demos/<tid>/ has files and patch the record accordingly."""
+    demo_dir = DEMOS_DIR / str(tid)
+    if not demo_dir.is_dir():
+        return False
+    for r in demos_data['demos']:
+        if r['topic_id'] == tid and r.get('has_demo'):
+            return False  # already has demo
+    # Find HTML file in the directory
+    html_files = [f for f in demo_dir.iterdir() if f.suffix.lower() == '.html' and f.is_file()]
+    if not html_files:
+        for sub in demo_dir.iterdir():
+            if sub.is_dir() and sub.name != '__MACOSX':
+                sub_html = [f for f in sub.iterdir() if f.suffix.lower() == '.html' and f.is_file()]
+                if sub_html:
+                    html_files = sub_html
+                    break
+    if not html_files:
+        return False
+    # Find or create the record
+    record = None
+    for r in demos_data['demos']:
+        if r['topic_id'] == tid:
+            record = r
+            break
+    if not record:
+        return False
+    html_file = html_files[0]
+    record['has_demo'] = True
+    record['demo_file'] = str(html_file)
+    rel = html_file.relative_to(PROJECT_ROOT)
+    record['demo_url'] = str(rel)
+    record['demo_type'] = 'attachment'
+    return True
+
+def update_demos_json_approved(wiki_ids, new_approved_records):
+    """Step 3: Sync approved status and add missing records in demos.json.
+    
+    Args:
+        wiki_ids: set of topic_id strings from approved_projects.json
+        new_approved_records: list of records newly added from this sync
+    """
     demos_json_path = DATA_DIR / 'demos.json'
     if not demos_json_path.exists():
         print("demos.json not found, skipping approved status check")
-        return 0
+        return 0, []
     
     with open(demos_json_path, 'r', encoding='utf-8') as f:
         demos_data = json.load(f)
     
+    existing_ids = {r['topic_id'] for r in demos_data.get('demos', [])}
+    
+    # 1. Mark existing records as approved
     updated_count = 0
     for demo in demos_data.get('demos', []):
         tid = str(demo.get('topic_id', ''))
@@ -209,6 +266,83 @@ def update_demos_json_approved(wiki_ids):
             demo['approved'] = True
             demo['approved_source'] = 'lark_bitable'
             updated_count += 1
+    
+    # 2. Add minimal records for newly approved topics not yet in demos.json
+    needs_demo_crawl = []  # topic_ids that need demo recheck
+    added_count = 0
+    fixed_from_disk = 0
+    for rec in new_approved_records:
+        tid = int(rec['topic_id'])
+        if tid in existing_ids:
+            # Already in demos.json, check if it needs demo recheck
+            for r in demos_data['demos']:
+                if r['topic_id'] == tid and not r.get('has_demo'):
+                    needs_demo_crawl.append(tid)
+                    break
+            continue
+        
+        # Create minimal record
+        title = rec.get('title', '')
+        # Check if demo dir already exists on disk
+        demo_dir = DEMOS_DIR / str(tid)
+        has_demo = False
+        demo_file = None
+        demo_url = None
+        if demo_dir.is_dir():
+            for f in demo_dir.iterdir():
+                if f.suffix.lower() == '.html' and f.is_file():
+                    has_demo = True
+                    demo_file = str(f)
+                    demo_url = f'demos/{tid}/{f.name}'
+                    break
+            if not has_demo:
+                for sub in demo_dir.iterdir():
+                    if sub.is_dir() and sub.name != '__MACOSX':
+                        for f2 in sub.iterdir():
+                            if f2.suffix.lower() == '.html' and f2.is_file():
+                                has_demo = True
+                                demo_file = str(f2)
+                                demo_url = f'demos/{tid}/{sub.name}/{f2.name}'
+                                break
+                        if has_demo:
+                            break
+        
+        demos_data['demos'].append({
+            'topic_id': tid,
+            'title': str(title) if title else f'Topic {tid}',
+            'forum_url': rec.get('forum_url', ''),
+            'author': str(rec.get('nickname', 'unknown')) if rec.get('nickname') else 'unknown',
+            'approved': True,
+            'approved_source': 'lark_bitable',
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'tags': infer_tags(title),
+            'views': 0,
+            'like_count': 0,
+            'excerpt': str(title)[:200] if title else '',
+            'cover_image': None,
+            'demo_type': 'attachment' if has_demo else None,
+            'demo_file': demo_file,
+            'demo_url': demo_url,
+            'external_url': None,
+            'has_demo': has_demo,
+            'archived': False,
+            'insight': str(title)[:200] if title else '',
+        })
+        existing_ids.add(tid)
+        added_count += 1
+        
+        if not has_demo:
+            needs_demo_crawl.append(tid)
+        else:
+            fixed_from_disk += 1
+    
+    # 3. Fix existing records that have demo files on disk but has_demo=False
+    for r in demos_data['demos']:
+        if r.get('approved') and not r.get('has_demo'):
+            if ensure_demo_dir_has_record(demos_data, r['topic_id']):
+                fixed_from_disk += 1
+                if r['topic_id'] in needs_demo_crawl:
+                    needs_demo_crawl.remove(r['topic_id'])
     
     active = [d for d in demos_data.get('demos', []) if not d.get('archived', False)]
     demos_data['total_count'] = len(active)
@@ -218,9 +352,89 @@ def update_demos_json_approved(wiki_ids):
     
     with open(demos_json_path, 'w', encoding='utf-8') as f:
         json.dump(demos_data, f, ensure_ascii=False, indent=2)
-    print(f"Updated {updated_count} demos to approved=True")
+    
+    print(f"Updated {updated_count} existing demos to approved=True")
+    print(f"Added {added_count} new approved records to demos.json")
+    print(f"Fixed {fixed_from_disk} records with existing demo files on disk")
+    print(f"Need demo crawl: {len(needs_demo_crawl)} records")
     print(f"Stats: total={demos_data['total_count']}, approved={demos_data['approved_count']}, unapproved={demos_data['unapproved_count']}")
-    return updated_count
+    return updated_count + added_count, needs_demo_crawl
+
+def crawl_missing_demos(topic_ids):
+    """Step 4: Crawl demo attachments for approved topics that have no demo.
+    
+    Uses crawler_v2.py's DiscourseClient + DemoExtractor to recheck each
+    topic and download HTML/ZIP attachments.
+    """
+    if not topic_ids:
+        print("No topics need demo crawl, skipping")
+        return 0
+    
+    print(f"\n[Step 4] Crawling demos for {len(topic_ids)} approved topics without demo...")
+    sys.path.insert(0, str(CRAWLER_DIR))
+    from crawler_v2 import DemoHallCrawler
+    
+    crawler = DemoHallCrawler()
+    crawler.data_mgr.data = json.load(open(DATA_DIR / 'demos.json', 'r'))
+    
+    # Build lookup for topic_ids
+    target_ids = set(topic_ids)
+    updated = 0
+    errors = []
+    
+    for i, record in enumerate(crawler.data_mgr.data['demos']):
+        tid = record['topic_id']
+        if tid not in target_ids:
+            continue
+        
+        print(f"  [{i+1}/{len(topic_ids)}] Rechecking topic {tid}: {record.get('title', '')[:40]}...")
+        
+        try:
+            detail = crawler.client.get_topic_detail(tid)
+        except Exception as e:
+            err = f"Topic {tid}: fetch error - {e}"
+            errors.append(err)
+            print(f"    ERROR: {err}")
+            continue
+        
+        demo_info = crawler.extractor.extract_from_topic(detail)
+        
+        if not demo_info.get('has_demo'):
+            print(f"    Still no demo")
+            continue
+        
+        record['has_demo'] = True
+        record['demo_type'] = demo_info.get('demo_type')
+        record['external_url'] = demo_info.get('external_url')
+        
+        if demo_info.get('attachment_url'):
+            try:
+                crawler._download_and_process_attachment(demo_info, tid, record)
+            except Exception as e:
+                err = f"Topic {tid}: download error - {e}"
+                errors.append(err)
+                print(f"    ERROR: {err}")
+                record['has_demo'] = False
+                continue
+        
+        if record.get('has_demo'):
+            updated += 1
+            print(f"    FOUND DEMO: {record.get('demo_url', record.get('external_url', 'N/A'))}")
+        
+        # Checkpoint save every 25 records
+        if (updated + 1) % 25 == 0:
+            crawler.data_mgr.save()
+            print(f"    [Checkpoint] Saved after {updated + 1} demos found")
+    
+    # Final save
+    crawler.data_mgr.save()
+    print(f"Demo crawl complete: {updated}/{len(topic_ids)} demos found")
+    if errors:
+        print(f"Errors: {len(errors)}")
+        for e in errors[:5]:
+            print(f"  - {e}")
+    
+    return updated
 
 def render_demos_min_js():
     """Regenerate demos.min.js from demos.json."""
@@ -343,17 +557,25 @@ def main():
         wiki_id_set = set(wiki_ids.keys())
         issues.extend(fetch_errors)
         
-        # Step 3: Check approved status in demos.json
-        print("\n[Step 3] Checking approved status in demos.json...")
-        updated = update_demos_json_approved(wiki_id_set)
+        # Step 3: Sync approved status + add missing records in demos.json
+        print("\n[Step 3] Syncing approved status in demos.json...")
+        updated, needs_demo_crawl = update_demos_json_approved(wiki_id_set, new_records)
         
-        # Step 4: Render
-        print("\n[Step 4] Rendering demos.min.js and index.html...")
+        # Step 4: Crawl demo attachments for topics without demos
+        if needs_demo_crawl:
+            demos_found = crawl_missing_demos(needs_demo_crawl)
+            if demos_found > 0:
+                print(f"Crawled {demos_found} new demos")
+        else:
+            print("\n[Step 4] No topics need demo crawl, skipping")
+        
+        # Step 5: Render
+        print("\n[Step 5] Rendering demos.min.js and index.html...")
         render_demos_min_js()
         render_index_html()
         
-        # Step 5: Update README
-        print("\n[Step 5] Updating README.md...")
+        # Step 6: Update README
+        print("\n[Step 6] Updating README.md...")
         update_readme()
         
         print("\n[Done] Update completed successfully!")
