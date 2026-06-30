@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能像素天气画板</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0b0e1a;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+        .container {
+            background: #141828;
+            padding: 30px 30px 35px;
+            border-radius: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+            text-align: center;
+        }
+        h1 {
+            color: #b7c9f2;
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+        }
+        .input-area {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+        input {
+            padding: 10px 18px;
+            border-radius: 60px;
+            border: none;
+            background: #1f2740;
+            color: #eef3ff;
+            font-size: 1rem;
+            width: 200px;
+            outline: 1px solid #3d4a6b;
+            transition: 0.2s;
+        }
+        input:focus { outline: 2px solid #6d8cff; background: #1b2338; }
+        button {
+            padding: 10px 28px;
+            border: none;
+            border-radius: 60px;
+            background: #4c6af0;
+            color: white;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: 0.2s;
+            box-shadow: 0 4px 12px rgba(76, 106, 240, 0.3);
+        }
+        button:hover { background: #3b56d6; transform: scale(1.02); }
+        #canvasWrap {
+            background: #0b0e1a;
+            border-radius: 24px;
+            padding: 12px;
+            display: inline-block;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.6);
+        }
+        canvas {
+            display: block;
+            border-radius: 16px;
+            width: 400px;
+            height: 400px;
+            image-rendering: pixelated;
+        }
+        .info {
+            margin-top: 18px;
+            color: #8699c9;
+            font-size: 0.95rem;
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        .info span { background: #1f2740; padding: 6px 18px; border-radius: 40px; }
+        #saveBtn {
+            margin-top: 16px;
+            background: #2d354f;
+            color: #b7c9f2;
+            padding: 8px 24px;
+            border-radius: 40px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: 0.2s;
+        }
+        #saveBtn:hover { background: #3f4a6b; }
+        .status {
+            color: #6d8cff;
+            margin-top: 12px;
+            font-size: 0.9rem;
+            min-height: 1.5em;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>☁️ 像素天气画板</h1>
+    <div class="input-area">
+        <input type="text" id="cityInput" placeholder="输入城市名 (如 Beijing)" value="Beijing">
+        <button id="fetchBtn">生成像素天气</button>
+    </div>
+    <div id="canvasWrap">
+        <canvas id="weatherCanvas" width="200" height="200"></canvas>
+    </div>
+    <div class="info" id="infoPanel">
+        <span>🌡️ --°C</span>
+        <span>💧 --%</span>
+        <span>💨 -- km/h</span>
+    </div>
+    <button id="saveBtn">⬇ 保存为 PNG</button>
+    <div class="status" id="statusMsg">✨ 输入城市，点击生成</div>
+</div>
+<script>
+    (function() {
+        const canvas = document.getElementById('weatherCanvas');
+        const ctx = canvas.getContext('2d');
+        const cityInput = document.getElementById('cityInput');
+        const fetchBtn = document.getElementById('fetchBtn');
+        const statusMsg = document.getElementById('statusMsg');
+        const infoSpans = document.querySelectorAll('#infoPanel span');
+        const saveBtn = document.getElementById('saveBtn');
+
+        const GRID = 20;
+        const PIXEL = 10;
+
+        function generatePalette(condition, temp, humidity) {
+            let hue = 40, sat = 70, light = 60;
+            if (condition.includes('rain') || condition.includes('drizzle') || condition.includes('shower')) {
+                hue = 210; sat = 60; light = 45;
+            } else if (condition.includes('snow') || condition.includes('sleet')) {
+                hue = 200; sat = 20; light = 85;
+            } else if (condition.includes('cloud') || condition.includes('overcast')) {
+                hue = 30; sat = 40; light = 55;
+            } else if (condition.includes('sunny') || condition.includes('clear')) {
+                hue = 45; sat = 80; light = 70;
+            } else {
+                hue = 220; sat = 50; light = 50;
+            }
+            if (temp !== null && !isNaN(temp)) {
+                const t = Math.min(40, Math.max(-10, temp));
+                const offset = (t - 15) * 1.5;
+                hue = Math.min(360, Math.max(0, hue + offset));
+            }
+            if (humidity !== null && !isNaN(humidity)) {
+                sat = Math.min(95, sat + (humidity - 50) * 0.3);
+            }
+            return { hue, sat, light };
+        }
+
+        function generatePixelMatrix(baseHue, baseSat, baseLight) {
+            const matrix = [];
+            for (let i = 0; i < GRID; i++) {
+                const row = [];
+                for (let j = 0; j < GRID; j++) {
+                    const h = (baseHue + (Math.random() - 0.5) * 30 + 360) % 360;
+                    const s = Math.min(100, Math.max(20, baseSat + (Math.random() - 0.5) * 40));
+                    const l = Math.min(95, Math.max(20, baseLight + (Math.random() - 0.5) * 30));
+                    row.push({ h, s, l });
+                }
+                matrix.push(row);
+            }
+            return matrix;
+        }
+
+        function drawPixelMatrix(matrix, windOffset = 0) {
+            ctx.clearRect(0, 0, 200, 200);
+            const offsetX = Math.sin(windOffset * 0.05) * 2;
+            for (let i = 0; i < GRID; i++) {
+                for (let j = 0; j < GRID; j++) {
+                    const { h, s, l } = matrix[i][j];
+                    ctx.fillStyle = `hsl(${h}, ${s}%, ${l}%)`;
+                    const x = j * PIXEL + offsetX * (i / GRID) * 0.8;
+                    const y = i * PIXEL + Math.cos(windOffset * 0.05 + i * 0.3) * 1.2;
+                    ctx.fillRect(x, y, PIXEL - 0.8, PIXEL - 0.8);
+                }
+            }
+        }
+
+        let currentMatrix = null;
+        let windAngle = 0;
+        let animId = null;
+        let currentWeather = { condition: 'clear', temp: null, humidity: null, wind: null };
+
+        async function fetchWeather(city) {
+            try {
+                statusMsg.textContent = '⏳ 获取天气数据...';
+                const url = `https://wttr.in/${encodeURIComponent(city)}?format=%C|%t|%h|%w`;
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('网络响应错误');
+                const text = await res.text();
+                const parts = text.split('|').map(s => s.trim());
+                if (parts.length < 4) throw new Error('数据格式异常');
+                const condition = parts[0].toLowerCase();
+                const tempStr = parts[1].replace('°C', '').replace('+', '');
+                const temp = parseFloat(tempStr);
+                const humidity = parseFloat(parts[2].replace('%', ''));
+                const windStr = parts[3].replace('km/h', '').trim();
+                const wind = parseFloat(windStr);
+                return { condition, temp, humidity, wind };
+            } catch (e) {
+                console.error(e);
+                return null;
+            }
+        }
+
+        async function updateWeather() {
+            if (animId) { cancelAnimationFrame(animId); animId = null; }
+            const city = cityInput.value.trim() || 'Beijing';
+            const data = await fetchWeather(city);
+            if (!data) {
+                statusMsg.textContent = '❌ 获取天气失败，使用随机模拟';
+                const conds = ['sunny', 'rain', 'cloud', 'snow'];
+                const fallback = {
+                    condition: conds[Math.floor(Math.random() * conds.length)],
+                    temp: Math.round(Math.random() * 30 - 5),
+                    humidity: Math.round(Math.random() * 80 + 20),
+                    wind: Math.round(Math.random() * 40)
+                };
+                applyWeather(fallback);
+                return;
+            }
+            applyWeather(data);
+        }
+
+        function applyWeather(data) {
+            currentWeather = data;
+            const { condition, temp, humidity, wind } = data;
+            infoSpans[0].textContent = `🌡️ ${temp !== null && !isNaN(temp) ? temp + '°C' : '--°C'}`;
+            infoSpans[1].textContent = `💧 ${humidity !== null && !isNaN(humidity) ? humidity + '%' : '--%'}`;
+            infoSpans[2].textContent = `💨 ${wind !== null && !isNaN(wind) ? wind + ' km/h' : '-- km/h'}`;
+
+            const pal = generatePalette(condition, temp, humidity);
+            currentMatrix = generatePixelMatrix(pal.hue, pal.sat, pal.light);
+            statusMsg.textContent = `✅ 已生成 ${condition} 像素画 (${temp}°C)`;
+            windAngle = 0;
+            function animate() {
+                windAngle += 1.2;
+                if (currentMatrix) {
+                    drawPixelMatrix(currentMatrix, windAngle);
+                }
+                animId = requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+        function saveImage() {
+            const link = document.createElement('a');
+            link.download = `pixel_weather_${Date.now()}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        fetchBtn.addEventListener('click', updateWeather);
+        saveBtn.addEventListener('click', saveImage);
+        cityInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') updateWeather(); });
+
+        updateWeather();
+    })();
+</script>
+</body>
+</html>

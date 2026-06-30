@@ -1,0 +1,1929 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>原创武侠 2D 居中版</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #050505;
+      color: #f8e8bb;
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      overflow: hidden;
+      touch-action: none;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #stage {
+      width: min(100vw, 470px);
+      height: min(100vh, 900px);
+      background: #000;
+      position: relative;
+      box-shadow: 0 0 40px rgba(0,0,0,.85);
+      overflow: hidden;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      image-rendering: auto;
+      background: #000;
+    }
+    #toast {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 112px;
+      min-height: 54px;
+      padding: 10px 12px;
+      border: 2px solid #111;
+      outline: 2px solid #555;
+      background: rgba(235, 235, 235, .94);
+      color: #111;
+      font-size: 15px;
+      line-height: 1.45;
+      display: none;
+      z-index: 4;
+    }
+    #actionBtn {
+      border: 1px solid rgba(255,255,255,.22);
+      background: rgba(20,20,20,.72);
+      color: #ffe58e;
+      font-weight: 800;
+      font-size: 18px;
+    }
+    #actionBtn {
+      position: absolute;
+      right: 18px;
+      bottom: 184px;
+      width: 78px;
+      height: 78px;
+      border-radius: 50%;
+      z-index: 3;
+      color: #fff0af;
+      background: radial-gradient(circle, rgba(148,50,26,.95), rgba(66,20,14,.86));
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game" width="470" height="900"></canvas>
+    <div id="toast"></div>
+    <button id="actionBtn">互动</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const toast = document.getElementById("toast");
+
+    const terrainImgs = {};
+    const terrainSources = {
+      grass: "assets/uploaded_grass_tile.jpg",
+      road: "assets/uploaded_grass_tile.jpg",
+      wall: "assets/wuxia_wall_refined.jpg",
+      tree: "assets/user_tree_tile.png"
+    };
+    let terrainReady = false;
+    const wallPieceImgs = {};
+    const wallPieceSources = {
+      straight: "assets/wall_game_straight.png",
+      corner: "assets/wall_game_corner.png",
+      gate: "assets/wall_game_gate.png",
+      water: "assets/wall_game_water.png",
+      window: "assets/wall_game_window.png",
+      ruined: "assets/wall_game_ruined.png"
+    };
+    let wallPiecesReady = false;
+    const houseSpriteImgs = {};
+    const houseSpriteSources = {
+      courtyard: "assets/house_style_ancient_complete_tulou_cut.png",
+      village: "assets/house_style_ancient_tiled_house_cut.png",
+      shop: "assets/house_style_ancient_full_grass_hut_cut.png",
+      inn: "assets/house_style_ancient_tiled_house_cut.png",
+      yamen: "assets/yamen_courtyard_style_b_cut.png",
+      yamen_a: "assets/yamen_courtyard_style_a_cut.png",
+      yamen_c: "assets/yamen_courtyard_style_c_cut.png",
+      yamen_main: "assets/yamen_realistic_old_cut.png",
+      courtyard_main: "assets/ancient_courtyard_guest_main_cut.png"
+    };
+    let houseSpritesReady = false;
+
+    const TILE = 40;
+    let zoom = 1.47;
+    let isMoving = false;
+    let lastTapTime = 0;
+    let pinchStartDistance = 0;
+    let pinchStartZoom = 1;
+    let suppressNextClick = false;
+    let pointerMoved = false;
+    let lastPointer = null;
+    const MAP_TOP = 88;
+    const MAP_H = 586;
+    const MAP_W = 470;
+    const CENTER_X = Math.floor(MAP_W / 2);
+    const CENTER_Y = MAP_TOP + Math.floor(MAP_H / 2) + 16;
+
+    const hero = {
+      x: 24, y: 26, rx: 24, ry: 26, face: "down",
+      hp: 86, maxHp: 100, mp: 38, maxMp: 50,
+      gold: 10, ingot: 200, herbs: 2, rep: 0, sword: false
+    };
+    if (typeof window !== "undefined") { window.hero = hero; }
+
+    const quest = { accepted: false, bandits: 0, done: false };
+    let battle = null;
+    let messageUntil = 0;
+
+    const W = 50;
+    const H = 56;
+    const world = [];
+    for (let y = 0; y < H; y++) {
+      const row = [];
+      for (let x = 0; x < W; x++) row.push("void");
+      world.push(row);
+    }
+
+    function setRect(x1, y1, x2, y2, type) {
+      for (let y = y1; y <= y2; y++) for (let x = x1; x <= x2; x++) {
+        if (x >= 0 && y >= 0 && x < W && y < H) world[y][x] = type;
+      }
+    }
+
+    // === 建州小县城布局 ===
+    // 按福建建州/建瓯一带的感觉处理：山水夹城、临溪成街、小城墙、灰瓦白墙、巷道不完全方正。
+    setRect(3, 5, 46, 50, "dirt");
+
+    // 城北山林扩展：让土楼能挪到北郊，不再压在城里。
+    setRect(2, 0, 47, 9, "dirt");
+
+    // 溪水从东侧折到南侧，形成南方山城临水格局。
+    setRect(38, 6, 43, 41, "water");
+    setRect(15, 42, 43, 47, "water");
+    setRect(24, 42, 27, 47, "stone"); // 南桥
+    setRect(35, 24, 43, 27, "stone"); // 东桥
+
+    // 小县城墙，规模收紧，不做大城市四正街坊。
+    setRect(11, 11, 35, 11, "wall");
+    setRect(11, 36, 35, 36, "wall");
+    setRect(11, 12, 11, 35, "wall");
+    setRect(35, 12, 35, 35, "wall");
+    setRect(23, 36, 26, 36, "gate"); // 南门通溪桥
+    setRect(11, 23, 11, 25, "gate"); // 西门通山道
+    setRect(35, 24, 35, 26, "gate"); // 东门通溪市
+
+    // 主街顺溪而走，街巷略散，不做大城十字街。
+    setRect(23, 11, 26, 40, "stone");
+    setRect(11, 23, 35, 25, "stone");
+    setRect(18, 17, 22, 19, "dirt");
+    setRect(27, 18, 34, 20, "dirt");
+    setRect(15, 29, 22, 31, "dirt");
+    setRect(27, 29, 34, 31, "dirt");
+    setRect(24, 37, 27, 42, "stone");
+
+    // 县衙前坪、溪市、街口空地。
+    setRect(19, 13, 29, 16, "stone");
+    setRect(28, 26, 35, 30, "stone");
+    setRect(17, 33, 23, 35, "stone");
+    setRect(16, 22, 20, 26, "dirt");
+
+    // 城内不再保留亮绿色草格，统一换成暗土地面，避免建筑旁边出现违和绿格。
+    for (let yy = 12; yy <= 35; yy++) {
+      for (let xx = 12; xx <= 34; xx++) {
+        if (world[yy]?.[xx] === "grass") world[yy][xx] = "dirt";
+      }
+    }
+
+    // 城外山林与田路。
+    setRect(3, 5, 10, 50, "dirt");
+    setRect(3, 5, 46, 9, "dirt");
+    setRect(3, 39, 14, 50, "dirt");
+    setRect(4, 23, 11, 25, "dirt");
+
+    // 彻底去掉可见地图里的亮绿色草格，避免建筑和道路旁出现突兀的绿色方块。
+    for (let yy = 0; yy < H; yy++) {
+      for (let xx = 0; xx < W; xx++) {
+        if (world[yy][xx] === "grass") world[yy][xx] = "dirt";
+      }
+    }
+
+    // 拼装式院落：院墙、院门、主房、厢房独立组合。
+    const houses = [
+      {
+        // 原"建州土楼"位置改成新县衙正堂，占格调整为 6×6，共 36 格。
+        name: "府衙大堂", x: 21, y: 11, w: 6, h: 6, sprite: "yamen_main",
+        enter: [
+          [23,16],[24,16],
+          [22,15],[23,15],[24,15],[25,15],
+          [22,14],[23,14],[24,14],[25,14],
+          [22,13],[23,13],[24,13],[25,13],
+          [23,12],[24,12]
+        ],
+        solid: [
+          [21,11],[22,11],[25,11],[26,11]
+        ],
+        parts: [
+          { kind: "gate", x: 23, y: 16, w: 2, h: 1 },
+          { kind: "main", x: 21, y: 11, w: 6, h: 4, roof: "south" },
+        ]
+      },
+      {
+        // 土楼搬到城北郊外，占格调整为 7×7，共 49 格。
+        name: "建州土楼", x: 13, y: 1, w: 7, h: 7, sprite: "courtyard",
+        enter: [
+          [16,7],[15,7],[17,7],
+          [15,6],[16,6],[17,6],
+          [15,5],[16,5],[17,5],
+          [15,4],[16,4],[17,4],
+          [15,3],[16,3],[17,3]
+        ],
+        solid: [
+          [13,1],[14,1],[18,1],[19,1],
+          [13,2],[19,2],
+          [13,3],[19,3],
+          [13,4],[19,4],
+          [13,5],[19,5],
+          [13,6],[19,6],
+          [13,7],[14,7],[18,7],[19,7]
+        ],
+        parts: [
+          { kind: "gate", x: 16, y: 7, w: 1, h: 1 },
+          { kind: "main", x: 13, y: 1, w: 7, h: 7, roof: "south" },
+        ]
+      },
+      {
+        name: "詹家院", x: 14, y: 16, w: 7, h: 6, sprite: "village",
+        enter: [
+          [18,20],[18,19],
+          [15,19],[16,19],[15,20],[16,20],
+          [16,18],[17,18],[18,18],[19,18],
+          [16,20],[17,20],[18,20],[19,20]
+        ],
+        parts: [
+          { kind: "wall", x: 14, y: 16, w: 7, h: 1 }, { kind: "wall", x: 14, y: 21, w: 7, h: 1 },
+          { kind: "wall", x: 14, y: 17, w: 1, h: 4 }, { kind: "wall", x: 20, y: 17, w: 1, h: 4 },
+          { kind: "gate", x: 17, y: 21, w: 2, h: 1 },
+          { kind: "main", x: 15, y: 16, w: 5, h: 2, roof: "south" },
+          { kind: "side", x: 15, y: 19, w: 2, h: 2, roof: "thatch" },
+        ]
+      },
+      {
+        name: "茶商院", x: 29, y: 17, w: 7, h: 6, sprite: "village",
+        enter: [
+          [33,21],[33,20],
+          [33,20],[34,20],[33,21],[34,21],
+          [30,19],[31,19],[32,19],[33,19],[34,19],
+          [30,20],[31,20],[32,20],
+          [30,21],[31,21],[32,21]
+        ],
+        parts: [
+          { kind: "wall", x: 29, y: 17, w: 7, h: 1 }, { kind: "wall", x: 29, y: 22, w: 7, h: 1 },
+          { kind: "wall", x: 29, y: 18, w: 1, h: 4 }, { kind: "wall", x: 35, y: 18, w: 1, h: 4 },
+          { kind: "gate", x: 32, y: 22, w: 2, h: 1 },
+          { kind: "main", x: 30, y: 17, w: 5, h: 2, roof: "south" },
+          { kind: "side", x: 33, y: 20, w: 2, h: 2, roof: "south" },
+        ]
+      },
+      {
+        name: "林家院", x: 14, y: 29, w: 7, h: 6, sprite: "village",
+        enter: [
+          [18,30],[18,31],
+          [15,30],[16,30],[15,31],[16,31],
+          [16,32],[17,32],[18,32],[19,32],
+          [15,33],[16,33],[17,33],[18,33],[19,33]
+        ],
+        parts: [
+          { kind: "wall", x: 14, y: 29, w: 7, h: 1 }, { kind: "wall", x: 14, y: 34, w: 7, h: 1 },
+          { kind: "wall", x: 14, y: 30, w: 1, h: 4 }, { kind: "wall", x: 20, y: 30, w: 1, h: 4 },
+          { kind: "gate", x: 17, y: 29, w: 2, h: 1 },
+          { kind: "main", x: 15, y: 32, w: 5, h: 2, roof: "south" },
+          { kind: "side", x: 15, y: 30, w: 2, h: 2, roof: "thatch" },
+        ]
+      },
+      {
+        name: "溪口客栈", x: 28, y: 28, w: 8, h: 6, sprite: "inn",
+        enter: [
+          [32,29],[32,30],
+          [29,29],[30,29],[33,29],[34,29],
+          [29,30],[30,30],[31,30],[32,30],[33,30],[34,30],
+          [29,31],[30,31],[31,31],[32,31],[33,31],[34,31]
+        ],
+        parts: [
+          { kind: "wall", x: 28, y: 28, w: 8, h: 1 }, { kind: "wall", x: 28, y: 33, w: 8, h: 1 },
+          { kind: "wall", x: 28, y: 29, w: 1, h: 4 }, { kind: "wall", x: 35, y: 29, w: 1, h: 4 },
+          { kind: "gate", x: 31, y: 28, w: 2, h: 1 },
+          { kind: "main", x: 29, y: 31, w: 6, h: 2, roof: "south" },
+          { kind: "side", x: 29, y: 29, w: 2, h: 2, roof: "wood" },
+          { kind: "side", x: 33, y: 29, w: 2, h: 2, roof: "wood" },
+        ]
+      },
+      {
+        name: "药铺", x: 17, y: 37, w: 6, h: 4, sprite: "shop",
+        enter: [[20,39],[19,39],[18,39],[20,40],[19,40]],
+        parts: [
+          { kind: "main", x: 17, y: 38, w: 5, h: 2, roof: "south" },
+          { kind: "gate", x: 19, y: 40, w: 2, h: 1 },
+        ]
+      },
+      {
+        name: "溪边茅屋", x: 30, y: 37, w: 5, h: 4, sprite: "shop",
+        enter: [[32,39],[31,39],[33,39],[32,40],[31,40]],
+        parts: [
+          { kind: "main", x: 30, y: 38, w: 4, h: 2, roof: "thatch" },
+          { kind: "gate", x: 32, y: 40, w: 1, h: 1 },
+          { kind: "fence", x: 30, y: 37, w: 6, h: 1 },
+        ]
+      },
+      {
+        name: "县衙门", x: 1, y: 9, w: 13, h: 11, sprite: "yamen",
+        enter: [
+          [7,19],[7,18],[7,17],[7,16],[7,15],[7,14],[7,13],
+          [6,17],[8,17],[6,15],[8,15],
+          [2,11],[3,11],[2,12],[3,12],[2,13],[3,13],[2,14],[3,14],
+          [11,11],[12,11],[11,12],[12,12],[11,13],[12,13],[11,14],[12,14],
+          [4,15],[5,15],[6,15],[8,15],[9,15],[10,15],
+          [4,16],[5,16],[6,16],[7,16],[8,16],[9,16],[10,16],
+          [4,17],[5,17],[6,17],[8,17],[9,17],[10,17],
+          [4,18],[5,18],[6,18],[7,18],[8,18],[9,18],[10,18]
+        ],
+        solid: [
+          [5,12],[6,12],[8,12],[9,12]
+        ],
+        parts: [
+          { kind: "gate", x: 7, y: 19, w: 1, h: 1 },
+          { kind: "main", x: 4, y: 11, w: 7, h: 4, roof: "south" },
+        ]
+      },
+      {
+        name: "府衙偏院", x: 1, y: 22, w: 12, h: 11, sprite: "yamen_a",
+        enter: [
+          [7,32],[7,31],[7,30],[7,29],[7,28],
+          [6,29],[8,29],
+          [1,24],[2,24],[1,25],[2,25],[1,26],[2,26],[1,27],[2,27],
+          [10,24],[11,24],[10,25],[11,25],[10,26],[11,26],[10,27],[11,27],
+          [3,28],[4,28],[5,28],[6,28],[8,28],[9,28],[10,28],
+          [3,29],[4,29],[5,29],[6,29],[7,29],[8,29],[9,29],[10,29],
+          [3,30],[4,30],[5,30],[6,30],[7,30],[8,30],[9,30],[10,30],
+          [3,31],[4,31],[5,31],[6,31],[7,31],[8,31],[9,31],[10,31]
+        ],
+        solid: [
+          [4,25],[5,25],[7,25],[8,25]
+        ],
+        parts: [
+          { kind: "gate", x: 7, y: 32, w: 1, h: 1 },
+          { kind: "main", x: 3, y: 24, w: 7, h: 4, roof: "south" },
+        ]
+      },
+      {
+        name: "州府老宅", x: 1, y: 36, w: 12, h: 11, sprite: "yamen_c",
+        enter: [
+          [6,46],[6,45],[6,44],[6,43],[6,42],
+          [5,43],[7,43],
+          [1,38],[2,38],[1,39],[2,39],[1,40],[2,40],[1,41],[2,41],
+          [10,38],[11,38],[10,39],[11,39],[10,40],[11,40],[10,41],[11,41],
+          [3,42],[4,42],[5,42],[7,42],[8,42],[9,42],[10,42],
+          [3,43],[4,43],[5,43],[6,43],[7,43],[8,43],[9,43],[10,43],
+          [3,44],[4,44],[5,44],[6,44],[7,44],[8,44],[9,44],[10,44],
+          [3,45],[4,45],[5,45],[6,45],[7,45],[8,45],[9,45],[10,45]
+        ],
+        solid: [
+          [4,39],[5,39],[7,39],[8,39]
+        ],
+        parts: [
+          { kind: "gate", x: 6, y: 46, w: 1, h: 1 },
+          { kind: "main", x: 3, y: 38, w: 7, h: 4, roof: "south" },
+        ]
+      },
+      {
+        name: "李家大院", x: 34, y: 0, w: 12, h: 9, sprite: "courtyard_main",
+        enter: [
+          [40,8],[40,7],[40,6],[40,5],[40,4],
+          [39,5],[41,5],
+          [34,1],[35,1],[34,2],[35,2],[34,3],[34,4],
+          [44,1],[45,1],[44,2],[45,2],[44,3],[45,3],[44,4],[45,4],
+          [36,5],[37,5],[38,5],[40,5],[41,5],[42,5],[43,5],
+          [36,6],[37,6],[38,6],[39,6],[40,6],[41,6],[42,6],[43,6],
+          [36,7],[37,7],[38,7],[39,7],[40,7],[41,7],[42,7],[43,7]
+        ],
+        solid: [
+          [37,2],[38,2],[40,2],[41,2]
+        ],
+        parts: [
+          { kind: "gate", x: 40, y: 8, w: 1, h: 1 },
+          { kind: "main", x: 36, y: 1, w: 7, h: 4, roof: "south" },
+        ]
+      },
+    ];
+
+    // 房子周围不要露出亮绿色草格，统一换成石板/暗土地基。
+    houses.forEach(h => {
+      const pad = h.sprite === "shop" ? 1 : 2;
+      for (let yy = h.y - pad; yy < h.y + h.h + pad; yy++) {
+        for (let xx = h.x - pad; xx < h.x + h.w + pad; xx++) {
+          if (xx >= 0 && yy >= 0 && xx < W && yy < H && world[yy][xx] !== "water") {
+            world[yy][xx] = h.sprite === "shop" ? "dirt" : "stone";
+          }
+        }
+      }
+    });
+
+    // 房子按真实部件占地挡路：只挡 main/side/wall 这些实体格，不再向外扩张矩形。
+    // 每栋房子都有可进入格；客房和门口、院内都可以进。
+    const houseBlockCells = new Set();
+    const houseEnterCells = new Set();
+    houses.forEach(h => {
+      const gate = h.parts.find(p => p.kind === "gate");
+      if (gate) {
+        for (let yy = gate.y; yy < gate.y + gate.h; yy++) {
+          for (let xx = gate.x; xx < gate.x + gate.w; xx++) {
+            if (xx >= 0 && yy >= 0 && xx < W && yy < H) houseEnterCells.add(`${xx},${yy}`);
+          }
+        }
+      }
+      (h.enter || []).forEach(([ex, ey]) => {
+        if (ex >= 0 && ey >= 0 && ex < W && ey < H) houseEnterCells.add(`${ex},${ey}`);
+      });
+      if (h.solid) {
+        h.solid.forEach(([sx, sy]) => {
+          const key = `${sx},${sy}`;
+          if (sx >= 0 && sy >= 0 && sx < W && sy < H && !houseEnterCells.has(key)) houseBlockCells.add(key);
+        });
+      } else {
+        // 带围墙的院子：内部主屋/厢房区域允许走入（"客房可进"），只让围墙挡路。
+        const hasWall = h.parts.some(p => p.kind === "wall");
+        h.parts.forEach(p => {
+          if (p.kind === "wall") {
+            for (let yy = p.y; yy < p.y + p.h; yy++) {
+              for (let xx = p.x; xx < p.x + p.w; xx++) {
+                if (xx >= 0 && yy >= 0 && xx < W && yy < H) {
+                  const key = `${xx},${yy}`;
+                  if (!houseEnterCells.has(key)) houseBlockCells.add(key);
+                }
+              }
+            }
+            return;
+          }
+          if (p.kind !== "main" && p.kind !== "side") return;
+          // 没有围墙的小屋（药铺/溪边茅屋等）：main 仍然挡，但只挡屋身的 1 格中心，让周围草地可走。
+          if (hasWall) return;
+          // 房屋正中 1 格作为屋身阻挡，门口由 enter 列表保证可进。
+          const cx = Math.floor(p.x + p.w / 2);
+          const cy = Math.floor(p.y + p.h / 2);
+          if (cx >= 0 && cy >= 0 && cx < W && cy < H) {
+            const key = `${cx},${cy}`;
+            if (!houseEnterCells.has(key)) houseBlockCells.add(key);
+          }
+        });
+      }
+    });
+    houseEnterCells.forEach(key => houseBlockCells.delete(key));
+    // 土楼体量变大后覆盖了旧院子位置，旧院子的墙体碰撞会变成“看不见的阻挡”。
+    // 这里清空土楼占地区域内的旧碰撞，只保留土楼自己声明的实体墙格。
+    const tulou = houses.find(h => h.sprite === "courtyard");
+    if (tulou && tulou.solid) {
+      for (let yy = tulou.y; yy < tulou.y + tulou.h; yy++) {
+        for (let xx = tulou.x; xx < tulou.x + tulou.w; xx++) {
+          houseBlockCells.delete(`${xx},${yy}`);
+        }
+      }
+      tulou.solid.forEach(([sx, sy]) => {
+        const key = `${sx},${sy}`;
+        if (!houseEnterCells.has(key)) houseBlockCells.add(key);
+      });
+    }
+
+    // 这些手绘围墙组件本身带透视角度，直接拉伸会歪斜。
+    // 先撤掉大图叠加，保留横平竖直的格子围墙，后续需要重新切成正交小段再接入。
+    const wallDecorations = [];
+
+    const rocks = [
+      [18,22],[31,22],[17,28],[32,28],[21,37],[28,37],[12,42],[38,42]
+    ];
+    const trees = [
+      [5,8],[6,10],[5,12],[6,14],[5,37],[6,39],[7,41],
+      [42,8],[43,10],[44,12],[43,38],[44,40],[42,42],
+      [13,11],[36,11],[12,23],[37,23],[12,36],[37,36],
+      [21,23],[28,23],[21,29],[28,29]
+    ];
+
+    const npcs = [
+      { id: "elder", name: "县太爷", x: 27, y: 22, icon: "♟", color: "#ba58db",
+        text: "少侠，西门外有贼人劫掠百姓。先替本县击退两个山贼，再来领赏。" },
+      { id: "temple", name: "城隍庙", x: 20, y: 25, icon: "♜", color: "#b85bd8",
+        text: "庙中石碑写着：行走江湖，以义为先。此处可恢复少量内力。" },
+      { id: "merchant", name: "行脚商", x: 33, y: 27, icon: "袋", color: "#d08c3b",
+        text: "金疮药三两一瓶。江湖路远，少侠身上多备些药总没坏处。" },
+      { id: "cave", name: "西门", x: 7, y: 26, icon: "门", color: "#777",
+        text: "西门外的山道上，传来刀兵之声。小心山贼埋伏。" }
+    ];
+
+    const enemies = [
+      { id: "b1", name: "黑衣山贼", x: 6, y: 26, hp: 36, maxHp: 36, atk: 7, alive: true },
+      { id: "b2", name: "持刀山贼", x: 43, y: 27, hp: 42, maxHp: 42, atk: 8, alive: true }
+    ];
+
+    const items = [
+      { name: "金疮药", x: 24, y: 44, type: "herb", taken: false },
+      { name: "散碎银两", x: 17, y: 27, type: "gold", taken: false },
+      { name: "金疮药", x: 38, y: 20, type: "herb", taken: false }
+    ];
+
+    const logs = ["主线：去西门外剿灭山贼"];
+
+    function tileSize() {
+      return TILE * zoom;
+    }
+
+    function camera() {
+      const ts = tileSize();
+      const cx = hero.rx ?? hero.x;
+      const cy = hero.ry ?? hero.y;
+      return {
+        x: cx * ts + ts / 2 - CENTER_X,
+        y: cy * ts + ts / 2 - CENTER_Y
+      };
+    }
+
+    function worldToScreen(x, y) {
+      const c = camera();
+      const ts = tileSize();
+      return { sx: x * ts - c.x, sy: y * ts - c.y };
+    }
+
+    function screenToWorld(x, y) {
+      const c = camera();
+      const ts = tileSize();
+      return {
+        x: Math.floor((x + c.x) / ts),
+        y: Math.floor((y + c.y) / ts)
+      };
+    }
+
+    function blocked(x, y) {
+      if (x < 0 || y < 0 || x >= W || y >= H) return true;
+      const t = world[y][x];
+      if (t === "water") return true;
+      if (houseBlockCells.has(`${x},${y}`)) return true;
+      return npcs.some(n => n.x === x && n.y === y) || enemies.some(e => e.alive && e.x === x && e.y === y);
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawTopBar();
+      drawMap();
+      drawLocationPanel();
+      drawBottomBar();
+      drawBattlePanel();
+    }
+
+    function drawTopBar() {
+      const g = ctx.createLinearGradient(0, 0, 0, 86);
+      g.addColorStop(0, "#050606");
+      g.addColorStop(.55, "#151a1a");
+      g.addColorStop(1, "#273030");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 470, 86);
+      ctx.fillStyle = "rgba(0,0,0,.45)";
+      ctx.fillRect(0, 0, 470, 13);
+      ctx.fillStyle = "rgba(255,255,255,.06)";
+      ctx.fillRect(0, 4, 470, 7);
+      ctx.fillStyle = "rgba(0,0,0,.42)";
+      ctx.fillRect(0, 72, 470, 14);
+      ctx.strokeStyle = "#3b4544";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, 83); ctx.lineTo(470, 83); ctx.stroke();
+
+      ctx.shadowColor = "#000";
+      ctx.shadowBlur = 3;
+      ctx.fillStyle = "#f5f5f5";
+      ctx.font = "bold 16px Microsoft YaHei";
+      ctx.fillText("沧州", 22, 32);
+      ctx.fillText("(17,6)", 18, 56);
+      ctx.shadowBlur = 0;
+
+      drawCoin(83, 30, "#b8c4d0", "◉");
+      text(hero.ingot, 116, 34, "#eee", "bold 17px Microsoft YaHei");
+      drawCoin(85, 56, "#e2a72d", "◔");
+      text(hero.gold, 116, 61, "#ffe85b", "bold 17px Microsoft YaHei");
+
+      roundIcon(184, 43, 18, "#b32322", "+", "#fff");
+      verticalText("索利", 236, 21);
+      drawScroll(220, 38);
+      text("可领取", 218, 72, "#17ff32", "bold 12px Microsoft YaHei");
+      roundIcon(281, 43, 15, "#ddd", "勾", "#222");
+      verticalText("会员", 315, 21);
+      drawChest(329, 35);
+      verticalText("背包", 371, 21);
+      drawBag(391, 43);
+      verticalText("菜单", 450, 21);
+      drawMenu(432, 45);
+    }
+
+    function drawMap() {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(4, MAP_TOP, MAP_W - 8, MAP_H);
+      ctx.clip();
+      ctx.fillStyle = "#1e4214";
+      ctx.fillRect(0, MAP_TOP, 470, MAP_H);
+
+      const c = camera();
+      const ts = tileSize();
+      const startX = Math.floor(c.x / ts) - 2;
+      const startY = Math.floor((c.y + MAP_TOP) / ts) - 2;
+      const endX = startX + Math.ceil(MAP_W / ts) + 4;
+      const endY = startY + Math.ceil(MAP_H / ts) + 5;
+
+      for (let y = startY; y <= endY; y++) for (let x = startX; x <= endX; x++) {
+        const { sx, sy } = worldToScreen(x, y);
+        drawGround(sx, sy, world[y]?.[x] || "void", x, y);
+      }
+
+      for (let gx = Math.floor(c.x / ts) - 3; gx < Math.floor(c.x / ts) + Math.ceil(MAP_W / ts) + 4; gx++) {
+        const sx = gx * ts - c.x;
+        ctx.strokeStyle = "rgba(55,55,55,.34)";
+        ctx.beginPath(); ctx.moveTo(sx, MAP_TOP); ctx.lineTo(sx, MAP_TOP + MAP_H); ctx.stroke();
+      }
+      for (let gy = Math.floor((c.y + MAP_TOP) / ts) - 2; gy < Math.floor((c.y + MAP_TOP) / ts) + Math.ceil(MAP_H / ts) + 5; gy++) {
+        const sy = gy * ts - c.y;
+        ctx.strokeStyle = "rgba(55,55,55,.34)";
+        ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(470, sy); ctx.stroke();
+      }
+
+      rocks.forEach(([x, y]) => drawRock(x, y));
+      trees.forEach(([x, y]) => drawTree(x, y));
+      wallDecorations.forEach(drawWallDecoration);
+      houses.forEach(drawHouse);
+      items.forEach(drawItem);
+      npcs.forEach(drawNpc);
+      enemies.forEach(drawEnemy);
+      drawArrow();
+      drawHero();
+      drawFog();
+
+      ctx.restore();
+      ctx.strokeStyle = "#0b0b0b";
+      ctx.lineWidth = 8;
+      ctx.strokeRect(5, MAP_TOP + 2, 460, MAP_H - 4);
+      ctx.strokeStyle = "#161616";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(9, MAP_TOP + 7, 452, MAP_H - 14);
+      ctx.strokeStyle = "#2c2c2c";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9, MAP_TOP + 8, 452, MAP_H - 16);
+
+      text("主线：", 20, MAP_TOP + MAP_H - 23, "#ffff2e", "bold 17px Microsoft YaHei");
+      text("去西门外剿灭山贼", 68, MAP_TOP + MAP_H - 23, "#fff", "bold 17px Microsoft YaHei");
+      text(`缩放 ${Math.round(zoom * 100)}%`, 380, MAP_TOP + 24, "#d7d7d7", "12px Microsoft YaHei");
+    }
+
+    function drawGround(sx, sy, t, gx = 0, gy = 0) {
+      const ts = tileSize();
+      if (t === "water") {
+        const g = ctx.createLinearGradient(sx, sy, sx + ts, sy + ts);
+        g.addColorStop(0, "#1d4a4b");
+        g.addColorStop(.55, "#17383e");
+        g.addColorStop(1, "#0d2328");
+        ctx.fillStyle = g;
+        ctx.fillRect(sx, sy, ts, ts);
+        ctx.strokeStyle = "rgba(151,205,190,.25)";
+        ctx.lineWidth = Math.max(1, ts * .035);
+        ctx.beginPath();
+        ctx.moveTo(sx + ts * .12, sy + ts * .45);
+        ctx.quadraticCurveTo(sx + ts * .42, sy + ts * .28, sx + ts * .74, sy + ts * .45);
+        ctx.quadraticCurveTo(sx + ts * .9, sy + ts * .56, sx + ts * 1.05, sy + ts * .44);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(0,0,0,.22)";
+        ctx.strokeRect(sx, sy, ts, ts);
+        return;
+      }
+      if (t === "void") {
+        if (terrainReady && terrainImgs.grass) {
+          drawTerrainImage(terrainImgs.grass, sx, sy, ts, "grass", gx, gy);
+        } else {
+          ctx.fillStyle = "#244915";
+          ctx.fillRect(sx, sy, ts, ts);
+        }
+        return;
+      }
+      if (terrainReady && terrainImgs.grass && t !== "tree") {
+        drawTerrainImage(terrainImgs.grass, sx, sy, ts, "grass", gx, gy);
+        return;
+      }
+      const colors = {
+        grass: ["#4a3524", "#7a5737"],
+        stone: ["#3a403d", "#76817a"],
+        dirt: ["#5c3821", "#a27445"],
+        wall: ["#686f6c", "#a3aca6"],
+        gate: ["#4a504d", "#8a908b"]
+      };
+      const pair = colors[t] || colors.grass;
+      const g = ctx.createLinearGradient(sx, sy, sx + ts, sy + ts);
+      g.addColorStop(0, pair[0]);
+      g.addColorStop(1, pair[1]);
+      ctx.fillStyle = g;
+      ctx.fillRect(sx, sy, ts, ts);
+      const n = noise(Math.floor((sx + 9999) / Math.max(1, ts)), Math.floor((sy + 7777) / Math.max(1, ts)));
+      ctx.fillStyle = t === "grass" ? `rgba(90,150,50,${.08 + n * .08})` : `rgba(255,255,255,${.03 + n * .04})`;
+      for (let i = 0; i < 5; i++) {
+        const px = sx + ((n * 97 + i * 13) % 28) / 32 * ts;
+        const py = sy + ((n * 61 + i * 17) % 28) / 32 * ts;
+        ctx.fillRect(px, py, Math.max(1, ts * .045), Math.max(1, ts * .045));
+      }
+      if (t === "stone" || t === "dirt") {
+        ctx.strokeStyle = t === "stone" ? "rgba(18,22,20,.35)" : "rgba(40,22,12,.32)";
+        ctx.lineWidth = Math.max(1, ts * .025);
+        ctx.beginPath();
+        ctx.moveTo(sx + ts * .18, sy + ts * .25);
+        ctx.quadraticCurveTo(sx + ts * .5, sy + ts * .08, sx + ts * .78, sy + ts * .22);
+        ctx.moveTo(sx + ts * .2, sy + ts * .72);
+        ctx.quadraticCurveTo(sx + ts * .48, sy + ts * .56, sx + ts * .82, sy + ts * .75);
+        ctx.stroke();
+        if (t === "stone") {
+          ctx.fillStyle = "rgba(185,197,190,.35)";
+          ctx.beginPath();
+          ctx.ellipse(sx + ts * .34, sy + ts * .34, ts * .12, ts * .07, -.4, 0, Math.PI * 2);
+          ctx.ellipse(sx + ts * .66, sy + ts * .59, ts * .14, ts * .08, .2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      if (t === "wall") {
+        const verticalWall = (world[gy - 1]?.[gx] === "wall" || world[gy + 1]?.[gx] === "wall") &&
+          !(world[gy]?.[gx - 1] === "wall" || world[gy]?.[gx + 1] === "wall");
+        if (verticalWall) drawVerticalStoneWall(sx + ts * .12, sy, ts * .76, ts);
+        else drawHorizontalStoneWall(sx, sy + ts * .08, ts, ts * .84);
+      }
+    }
+
+    function drawHouse(h) {
+      const ts = tileSize();
+      const bounds = { x1: h.x, y1: h.y, x2: h.x + h.w, y2: h.y + h.h };
+      const topLeft = worldToScreen(bounds.x1, bounds.y1);
+      const bottomRight = worldToScreen(bounds.x2, bounds.y2);
+      if (bottomRight.sx < 0 || topLeft.sx > MAP_W || bottomRight.sy < MAP_TOP || topLeft.sy > MAP_TOP + MAP_H) return;
+
+      const spriteBounds = h.sprite && drawIntegratedHouseSprite(h, topLeft, bottomRight, ts);
+      if (spriteBounds) {
+        return;
+      }
+
+      // 院内压一层暗绿/土色，让房子像拼在地面上而不是贴图盖上去。
+      ctx.fillStyle = "rgba(78,74,42,.18)";
+      ctx.fillRect(topLeft.sx, topLeft.sy, h.w * ts, h.h * ts);
+      drawCourtyardPaving(topLeft.sx, topLeft.sy, h.w * ts, h.h * ts, ts);
+
+      // 先画院墙、栅栏，再画房屋主体，最后画门。
+      h.parts.filter(p => p.kind === "wall" || p.kind === "fence").forEach(drawHousePart);
+      h.parts.filter(p => p.kind === "main" || p.kind === "side").forEach(drawHousePart);
+      h.parts.filter(p => p.kind === "gate").forEach(drawHousePart);
+    }
+
+    function drawIntegratedHouseSprite(h, topLeft, bottomRight, ts) {
+      const img = houseSpriteImgs[h.sprite];
+      if (!houseSpritesReady || !img || !img.complete || !img.naturalWidth) return false;
+      const cfg = {
+        courtyard: { maxTiles: 7.05, lift: -.10, shadow: .58, anchor: "gate" },
+        inn: { maxTiles: 3.15, lift: .03, shadow: .40, anchor: "center" },
+        village: { maxTiles: 2.85, lift: .03, shadow: .38, anchor: "center" },
+        shop: { maxTiles: 2.55, lift: .02, shadow: .34, anchor: "center" },
+        yamen: { maxTiles: 7.15, lift: -.08, shadow: .54, anchor: "gate" },
+        yamen_a: { maxTiles: 6.75, lift: -.08, shadow: .52, anchor: "gate" },
+        yamen_c: { maxTiles: 6.65, lift: -.08, shadow: .52, anchor: "gate" },
+        yamen_main: { maxTiles: 6.05, lift: -.08, shadow: .52, anchor: "gate" },
+        courtyard_main: { maxTiles: 6.55, lift: -.08, shadow: .50, anchor: "gate" }
+      }[h.sprite] || { maxTiles: 2.6, lift: .03, shadow: .36, anchor: "center" };
+
+      // 单体房子按占地中心绘制，保留斜俯视体积感。
+      const mainPart = h.parts.find(p => p.kind === "main") || h.parts.find(p => p.kind === "gate") || h;
+      const gatePart = h.parts.find(p => p.kind === "gate");
+      const center = worldToScreen(mainPart.x + mainPart.w / 2, mainPart.y + mainPart.h / 2);
+      const maxSide = ts * cfg.maxTiles;
+      let drawW, drawH;
+      if (img.naturalWidth >= img.naturalHeight) {
+        drawW = maxSide;
+        drawH = drawW * img.naturalHeight / img.naturalWidth;
+      } else {
+        drawH = maxSide;
+        drawW = drawH * img.naturalWidth / img.naturalHeight;
+      }
+      const dx = Math.round(center.sx - drawW / 2);
+      let dy = Math.round(center.sy - drawH / 2 - drawH * cfg.lift);
+      if (cfg.anchor === "gate" && gatePart) {
+        const gateFoot = worldToScreen(gatePart.x + gatePart.w / 2, gatePart.y + gatePart.h + .15);
+        dy = Math.round(gateFoot.sy - drawH * .92);
+      }
+
+      ctx.save();
+      // 不再画底部阴影或底边压暗，让房子干净地立在地面上。
+      const oldSmooth = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, dx, dy, Math.round(drawW), Math.round(drawH));
+      ctx.imageSmoothingEnabled = oldSmooth;
+      ctx.restore();
+      return { x: dx, y: dy, w: drawW, h: drawH };
+    }
+
+    function drawCourtyardPaving(x, y, w, h, ts) {
+      const pad = ts * .7;
+      const px = x + pad, py = y + pad;
+      const pw = Math.max(0, w - pad * 2), ph = Math.max(0, h - pad * 2);
+      if (pw < ts || ph < ts) return;
+      ctx.fillStyle = "rgba(91,82,55,.18)";
+      ctx.fillRect(px, py, pw, ph);
+      const cell = Math.max(6, ts * .42);
+      ctx.strokeStyle = "rgba(32,30,24,.20)";
+      ctx.lineWidth = Math.max(1, .55 * zoom);
+      for (let gx = px; gx < px + pw; gx += cell) {
+        ctx.beginPath(); ctx.moveTo(gx, py); ctx.lineTo(gx, py + ph); ctx.stroke();
+      }
+      for (let gy = py; gy < py + ph; gy += cell) {
+        ctx.beginPath(); ctx.moveTo(px, gy); ctx.lineTo(px + pw, gy); ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(180,170,125,.12)";
+      ctx.fillRect(px + pw * .18, py + ph * .18, pw * .2, Math.max(1, ph * .035));
+      ctx.fillStyle = "rgba(0,0,0,.16)";
+      ctx.fillRect(px, py + ph - ts * .18, pw, ts * .18);
+    }
+
+    function drawWallDecoration(wd) {
+      if (!wallPiecesReady) return;
+      const img = wallPieceImgs[wd.key];
+      if (!img || !img.complete || !img.naturalWidth) return;
+      const ts = tileSize();
+      const { sx, sy } = worldToScreen(wd.x, wd.y);
+      const dw = wd.w * ts, dh = wd.h * ts;
+      if (sx + dw < -80 || sx > MAP_W + 80 || sy + dh < MAP_TOP - 80 || sy > MAP_TOP + MAP_H + 80) return;
+      ctx.drawImage(img, sx, sy, dw, dh);
+    }
+
+    function drawHousePart(p) {
+      const ts = tileSize();
+      const { sx, sy } = worldToScreen(p.x, p.y);
+      const w = p.w * ts, h = p.h * ts;
+      if (p.kind === "wall") return drawLowWall(sx, sy, w, h);
+      if (p.kind === "fence") return drawFence(sx, sy, w, h);
+      if (p.kind === "gate") return drawYardGate(sx, sy, w, h);
+      drawRoomBlock(sx, sy, w, h, p.roof || "gray", p.kind);
+    }
+
+    function drawLowWall(x, y, w, h) {
+      const vertical = h > w * 1.25;
+      if (vertical) return drawVerticalStoneWall(x, y, w, h);
+      drawHorizontalStoneWall(x, y, w, h);
+    }
+
+    function drawHorizontalStoneWall(x, y, w, h) {
+      // 正交横墙：灰白墙身 + 黑灰瓦帽 + 石台基，严格横平竖直。
+      const capH = h * .34;
+      const bodyY = y + h * .25;
+      const bodyH = h * .62;
+      ctx.fillStyle = "rgba(0,0,0,.30)";
+      ctx.fillRect(x + w * .04, y + h * .18, w, h * .78);
+
+      // 墙身
+      const wallGrad = ctx.createLinearGradient(x, bodyY, x, bodyY + bodyH);
+      wallGrad.addColorStop(0, "#b6b8ad");
+      wallGrad.addColorStop(.55, "#858a82");
+      wallGrad.addColorStop(1, "#535b55");
+      ctx.fillStyle = wallGrad;
+      ctx.fillRect(x, bodyY, w, bodyH);
+
+      // 石台基
+      ctx.fillStyle = "#5d665f";
+      ctx.fillRect(x, y + h * .70, w, h * .18);
+      const baseBlocks = Math.max(2, Math.floor(w / (10 * zoom)));
+      for (let i = 0; i < baseBlocks; i++) {
+        const bx = x + i * w / baseBlocks;
+        const bw = w / baseBlocks;
+        ctx.strokeStyle = "rgba(22,24,22,.7)";
+        ctx.lineWidth = Math.max(1, .65 * zoom);
+        ctx.strokeRect(bx, y + h * .70, bw, h * .18);
+        ctx.fillStyle = "rgba(225,230,210,.18)";
+        ctx.fillRect(bx + bw * .12, y + h * .73, bw * .46, h * .035);
+      }
+
+      // 黑瓦墙帽
+      const roofGrad = ctx.createLinearGradient(x, y, x, y + capH);
+      roofGrad.addColorStop(0, "#888b82");
+      roofGrad.addColorStop(.35, "#454b46");
+      roofGrad.addColorStop(1, "#181c19");
+      ctx.fillStyle = roofGrad;
+      ctx.beginPath();
+      ctx.moveTo(x - w * .03, y + h * .26);
+      ctx.lineTo(x + w * .06, y + h * .04);
+      ctx.lineTo(x + w * .94, y + h * .04);
+      ctx.lineTo(x + w * 1.03, y + h * .26);
+      ctx.lineTo(x + w * .98, y + h * .38);
+      ctx.lineTo(x + w * .02, y + h * .38);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "#101310";
+      ctx.lineWidth = Math.max(1, 1.1 * zoom);
+      ctx.stroke();
+
+      // 瓦片节奏
+      ctx.strokeStyle = "rgba(188,194,180,.45)";
+      ctx.lineWidth = Math.max(1, .55 * zoom);
+      const tiles = Math.max(4, Math.floor(w / (6 * zoom)));
+      for (let i = 1; i < tiles; i++) {
+        const px = x + i * w / tiles;
+        ctx.beginPath();
+        ctx.moveTo(px, y + h * .08);
+        ctx.lineTo(px - w * .025, y + h * .36);
+        ctx.stroke();
+      }
+
+      // 做旧细节
+      ctx.strokeStyle = "rgba(37,38,33,.42)";
+      ctx.lineWidth = Math.max(1, .55 * zoom);
+      ctx.beginPath();
+      ctx.moveTo(x + w * .18, y + h * .45);
+      ctx.quadraticCurveTo(x + w * .25, y + h * .55, x + w * .22, y + h * .68);
+      ctx.moveTo(x + w * .72, y + h * .43);
+      ctx.quadraticCurveTo(x + w * .66, y + h * .55, x + w * .78, y + h * .66);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(54,86,38,.28)";
+      ctx.fillRect(x + w * .12, y + h * .80, w * .18, h * .045);
+      ctx.fillRect(x + w * .66, y + h * .78, w * .22, h * .045);
+
+      ctx.strokeStyle = "#111411";
+      ctx.lineWidth = Math.max(1, zoom);
+      ctx.strokeRect(x, bodyY, w, bodyH);
+    }
+
+    function drawVerticalStoneWall(x, y, w, h) {
+      // 正交竖墙：不旋转透视图，直接按竖向格子画，保证不歪。
+      ctx.fillStyle = "rgba(0,0,0,.28)";
+      ctx.fillRect(x + w * .18, y + h * .02, w * .78, h);
+
+      const wallGrad = ctx.createLinearGradient(x, y, x + w, y);
+      wallGrad.addColorStop(0, "#aeb2a8");
+      wallGrad.addColorStop(.55, "#747b73");
+      wallGrad.addColorStop(1, "#424a44");
+      ctx.fillStyle = wallGrad;
+      ctx.fillRect(x + w * .18, y, w * .62, h);
+
+      // 侧向黑瓦帽
+      const roofGrad = ctx.createLinearGradient(x, y, x + w, y);
+      roofGrad.addColorStop(0, "#81857c");
+      roofGrad.addColorStop(.45, "#3f4640");
+      roofGrad.addColorStop(1, "#171b18");
+      ctx.fillStyle = roofGrad;
+      ctx.fillRect(x + w * .04, y, w * .28, h);
+      ctx.strokeStyle = "#101310";
+      ctx.lineWidth = Math.max(1, 1.1 * zoom);
+      ctx.strokeRect(x + w * .04, y, w * .28, h);
+
+      const blocks = Math.max(3, Math.floor(h / (11 * zoom)));
+      for (let i = 0; i < blocks; i++) {
+        const by = y + i * h / blocks;
+        const bh = h / blocks;
+        ctx.strokeStyle = "rgba(18,21,18,.65)";
+        ctx.lineWidth = Math.max(1, .65 * zoom);
+        ctx.strokeRect(x + w * .18, by, w * .62, bh);
+        ctx.fillStyle = "rgba(220,230,210,.16)";
+        ctx.fillRect(x + w * .28, by + bh * .16, w * .28, bh * .08);
+      }
+
+      ctx.fillStyle = "rgba(56,86,38,.24)";
+      ctx.fillRect(x + w * .60, y + h * .12, w * .08, h * .16);
+      ctx.fillRect(x + w * .58, y + h * .68, w * .08, h * .18);
+      ctx.strokeStyle = "#111411";
+      ctx.lineWidth = Math.max(1, zoom);
+      ctx.strokeRect(x + w * .18, y, w * .62, h);
+    }
+
+    function drawFence(x, y, w, h) {
+      ctx.strokeStyle = "#6a4728";
+      ctx.lineWidth = Math.max(2, 2 * zoom);
+      ctx.beginPath();
+      ctx.moveTo(x, y + h * .65);
+      ctx.lineTo(x + w, y + h * .65);
+      ctx.stroke();
+      for (let px = x + 4 * zoom; px < x + w; px += 8 * zoom) {
+        ctx.beginPath();
+        ctx.moveTo(px, y + h * .2);
+        ctx.lineTo(px, y + h);
+        ctx.stroke();
+      }
+    }
+
+    function drawYardGate(x, y, w, h) {
+      ctx.fillStyle = "rgba(0,0,0,.22)";
+      ctx.fillRect(x + w * .12, y + h * .2, w * .76, h * .82);
+      ctx.fillStyle = "#3d2617";
+      ctx.fillRect(x + w * .18, y + h * .1, w * .64, h * .8);
+      ctx.fillStyle = "#6b4426";
+      ctx.fillRect(x + w * .28, y + h * .16, w * .18, h * .68);
+      ctx.fillRect(x + w * .54, y + h * .16, w * .18, h * .68);
+      ctx.strokeStyle = "rgba(180,125,68,.28)";
+      ctx.lineWidth = Math.max(1, .6 * zoom);
+      for (let i = 0; i < 3; i++) {
+        const px = x + w * (.3 + i * .12);
+        ctx.beginPath();
+        ctx.moveTo(px, y + h * .2);
+        ctx.lineTo(px, y + h * .78);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#a56b31";
+      ctx.beginPath(); ctx.arc(x + w * .48, y + h * .48, Math.max(1.2, 1.8 * zoom), 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + w * .56, y + h * .48, Math.max(1.2, 1.8 * zoom), 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#1a1009";
+      ctx.lineWidth = Math.max(1, zoom);
+      ctx.strokeRect(x + w * .18, y + h * .1, w * .64, h * .8);
+    }
+
+    function drawWallPieceFit(key, x, y, w, h, exact = false) {
+      const img = wallPieceImgs[key];
+      if (!wallPiecesReady || !img || !img.complete || !img.naturalWidth) return false;
+      ctx.save();
+      if (!exact && h > w * 1.45) {
+        ctx.translate(x + w / 2, y + h / 2);
+        ctx.rotate(Math.PI / 2);
+        ctx.drawImage(img, -h * .62, -w * 1.25, h * 1.24, w * 2.5);
+      } else {
+        const padX = exact ? 0 : w * .12;
+        const lift = exact ? 0 : h * 1.55;
+        const drawH = exact ? h : h * 2.95;
+        ctx.drawImage(img, x - padX, y - lift, w + padX * 2, drawH);
+      }
+      ctx.restore();
+      return true;
+    }
+
+    function drawRoomBlock(x, y, w, h, roof, kind) {
+      // 按参考图调整：蓝灰瓦大屋顶、红褐木梁、浅墙体、侧面阴影，整体更立体。
+      const isMain = kind === "main";
+      if (isMain) {
+        x -= w * .08;
+        y -= h * .54;
+        w *= 1.16;
+        h *= 1.72;
+      } else {
+        x -= w * .05;
+        y -= h * .30;
+        w *= 1.10;
+        h *= 1.38;
+      }
+
+      // 地面投影，先压出体积。
+      const shadow = ctx.createRadialGradient(x + w * .55, y + h * .86, 2, x + w * .55, y + h * .86, w * .62);
+      shadow.addColorStop(0, "rgba(0,0,0,.38)");
+      shadow.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = shadow;
+      ctx.fillRect(x - w * .16, y + h * .42, w * 1.28, h * .62);
+
+      // 石台基
+      ctx.fillStyle = "#6b6f63";
+      ctx.fillRect(x + w * .12, y + h * .79, w * .78, h * .08);
+      ctx.strokeStyle = "#252a24";
+      ctx.lineWidth = Math.max(1, .7 * zoom);
+      ctx.strokeRect(x + w * .12, y + h * .79, w * .78, h * .08);
+      for (let i = 1; i < 5; i++) {
+        const px = x + w * (.12 + i * .15);
+        ctx.beginPath();
+        ctx.moveTo(px, y + h * .80);
+        ctx.lineTo(px, y + h * .86);
+        ctx.stroke();
+      }
+
+      // 墙身和木构，参考图里房子红褐柱子明显。
+      const wallTop = y + h * .43;
+      const wallH = h * .39;
+      const wallGrad = ctx.createLinearGradient(x, wallTop, x, wallTop + wallH);
+      wallGrad.addColorStop(0, "#d6c49a");
+      wallGrad.addColorStop(.55, "#b88b5a");
+      wallGrad.addColorStop(1, "#704323");
+      ctx.fillStyle = wallGrad;
+      ctx.fillRect(x + w * .16, wallTop, w * .70, wallH);
+      ctx.strokeStyle = "#24140c";
+      ctx.lineWidth = Math.max(1, zoom);
+      ctx.strokeRect(x + w * .16, wallTop, w * .70, wallH);
+
+      ctx.fillStyle = "#7b3420";
+      [0.19, 0.36, 0.64, 0.82].forEach(px => {
+        ctx.fillRect(x + w * px, wallTop + h * .02, Math.max(2, w * .035), wallH * .92);
+      });
+      ctx.fillStyle = "#4e2116";
+      ctx.fillRect(x + w * .16, wallTop, w * .70, Math.max(2, h * .035));
+      ctx.fillRect(x + w * .16, wallTop + wallH * .84, w * .70, Math.max(2, h * .03));
+      ctx.fillStyle = "rgba(110,45,26,.65)";
+      ctx.fillRect(x + w * .18, wallTop + wallH * .18, w * .64, Math.max(2, h * .028));
+      ctx.fillRect(x + w * .18, wallTop + wallH * .48, w * .64, Math.max(2, h * .022));
+
+      // 门窗细节
+      ctx.fillStyle = "#26130d";
+      ctx.fillRect(x + w * .44, y + h * .61, w * .15, h * .20);
+      ctx.fillStyle = "#1c100b";
+      ctx.fillRect(x + w * .23, y + h * .57, w * .13, h * .10);
+      ctx.fillRect(x + w * .67, y + h * .57, w * .13, h * .10);
+      ctx.strokeStyle = "rgba(232,185,105,.32)";
+      ctx.strokeRect(x + w * .23, y + h * .57, w * .13, h * .10);
+      ctx.strokeRect(x + w * .67, y + h * .57, w * .13, h * .10);
+      ctx.strokeStyle = "rgba(182,118,65,.42)";
+      ctx.beginPath();
+      ctx.moveTo(x + w * .265, y + h * .57); ctx.lineTo(x + w * .265, y + h * .67);
+      ctx.moveTo(x + w * .705, y + h * .57); ctx.lineTo(x + w * .705, y + h * .67);
+      ctx.stroke();
+
+      // 前屋檐暗面，增强上下层次。
+      ctx.fillStyle = "rgba(24,24,22,.52)";
+      ctx.beginPath();
+      ctx.moveTo(x + w * .05, y + h * .52);
+      ctx.lineTo(x + w * .95, y + h * .52);
+      ctx.lineTo(x + w * .86, y + h * .66);
+      ctx.lineTo(x + w * .14, y + h * .66);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#7f3822";
+      ctx.fillRect(x + w * .13, y + h * .64, w * .74, Math.max(2, h * .035));
+
+      // 主屋顶：蓝灰瓦、两坡面、厚屋檐。
+      const roofA = roof === "thatch" ? "#73572a" : roof === "wood" ? "#5b3a25" : "#2d4152";
+      const roofB = roof === "thatch" ? "#a6813a" : roof === "wood" ? "#805833" : "#4f6b80";
+      const roofC = roof === "thatch" ? "#3f2d16" : roof === "wood" ? "#2b1b11" : "#182734";
+      const rg = ctx.createLinearGradient(x, y + h * .06, x, y + h * .64);
+      rg.addColorStop(0, "#8ea1a8");
+      rg.addColorStop(.22, roofB);
+      rg.addColorStop(.66, roofA);
+      rg.addColorStop(1, roofC);
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.moveTo(x - w * .02, y + h * .45);
+      ctx.quadraticCurveTo(x + w * .17, y + h * .28, x + w * .50, y + h * .06);
+      ctx.quadraticCurveTo(x + w * .83, y + h * .28, x + w * 1.02, y + h * .45);
+      ctx.lineTo(x + w * .86, y + h * .63);
+      ctx.lineTo(x + w * .14, y + h * .63);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "#101519";
+      ctx.lineWidth = Math.max(1.3, 1.5 * zoom);
+      ctx.stroke();
+
+      // 左右飞檐小卷角
+      ctx.strokeStyle = "#0f1418";
+      ctx.lineWidth = Math.max(1.2, 1.4 * zoom);
+      ctx.beginPath();
+      ctx.moveTo(x - w * .02, y + h * .45);
+      ctx.quadraticCurveTo(x - w * .09, y + h * .42, x + w * .02, y + h * .35);
+      ctx.moveTo(x + w * 1.02, y + h * .45);
+      ctx.quadraticCurveTo(x + w * 1.09, y + h * .42, x + w * .98, y + h * .35);
+      ctx.stroke();
+
+      // 屋脊和高光线。
+      ctx.strokeStyle = "#b8b7a0";
+      ctx.lineWidth = Math.max(1, 1.25 * zoom);
+      ctx.beginPath();
+      ctx.moveTo(x + w * .18, y + h * .34);
+      ctx.quadraticCurveTo(x + w * .50, y + h * .11, x + w * .82, y + h * .34);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(226,226,190,.16)";
+      ctx.fillRect(x + w * .21, y + h * .36, w * .18, Math.max(1, h * .025));
+      ctx.fillStyle = "rgba(0,0,0,.26)";
+      ctx.fillRect(x + w * .10, y + h * .62, w * .80, Math.max(2, h * .035));
+
+      // 瓦片：一排排弧形瓦，参考图里屋顶的关键美感。
+      const cols = Math.max(9, Math.floor(w / (2.7 * zoom)));
+      ctx.strokeStyle = "rgba(9,17,24,.62)";
+      ctx.lineWidth = Math.max(1, .62 * zoom);
+      for (let i = 1; i < cols; i++) {
+        const t = i / cols;
+        const px = x + w * (.08 + t * .84);
+        ctx.beginPath();
+        ctx.moveTo(px, y + h * .24);
+        ctx.quadraticCurveTo(px - w * .035, y + h * .43, px - w * .055, y + h * .61);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(150,174,178,.42)";
+      ctx.lineWidth = Math.max(1, .52 * zoom);
+      for (let j = 0; j < 6; j++) {
+        const py = y + h * (.30 + j * .052);
+        ctx.beginPath();
+        ctx.moveTo(x + w * .14, py);
+        ctx.quadraticCurveTo(x + w * .50, py + h * .025, x + w * .86, py);
+        ctx.stroke();
+      }
+
+      // 下层檐口瓦片小颗粒
+      ctx.fillStyle = "#16222c";
+      const mini = Math.max(5, Math.floor(w / (6 * zoom)));
+      for (let i = 0; i < mini; i++) {
+        const px = x + w * (.17 + i * .66 / mini);
+        ctx.beginPath();
+        ctx.ellipse(px, y + h * .62, w * .028, h * .025, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawFog() {
+      const grad = ctx.createRadialGradient(CENTER_X, CENTER_Y, 120, CENTER_X, CENTER_Y, 345);
+      grad.addColorStop(0, "rgba(0,0,0,0)");
+      grad.addColorStop(.54, "rgba(0,0,0,.02)");
+      grad.addColorStop(1, "rgba(0,0,0,.55)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, MAP_TOP, 470, MAP_H);
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.fillRect(0, MAP_TOP, 8, MAP_H);
+      ctx.fillRect(462, MAP_TOP, 8, MAP_H);
+    }
+
+    function drawRock(x, y) {
+      const { sx, sy } = worldToScreen(x, y);
+      const s = zoom;
+      if (sy < MAP_TOP - 40 || sy > MAP_TOP + MAP_H + 40) return;
+      ctx.fillStyle = "#909e99";
+      ctx.beginPath();
+      ctx.ellipse(sx + 15 * s, sy + 18 * s, 9 * s, 5 * s, -.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,.25)";
+      ctx.beginPath();
+      ctx.ellipse(sx + 12 * s, sy + 15 * s, 3 * s, 1.4 * s, -.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#39403d";
+      ctx.stroke();
+    }
+
+    function drawTree(x, y) {
+      const { sx, sy } = worldToScreen(x, y);
+      const s = zoom;
+      if (terrainReady) {
+        ctx.fillStyle = "rgba(0,0,0,.34)";
+        ctx.beginPath(); ctx.ellipse(sx + 19 * s, sy + 31 * s, 22 * s, 7 * s, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.drawImage(terrainImgs.tree, sx - 8 * s, sy - 17 * s, 54 * s, 54 * s);
+        return;
+      }
+      ctx.fillStyle = "#2c1c11";
+      ctx.fillRect(sx + 13 * s, sy + 18 * s, 8 * s, 14 * s);
+      ctx.fillStyle = "rgba(0,0,0,.22)";
+      ctx.beginPath(); ctx.ellipse(sx + 22 * s, sy + 29 * s, 20 * s, 7 * s, 0, 0, Math.PI * 2); ctx.fill();
+      [["#174e1a", 13, 16, 13], ["#267a2c", 23, 12, 14], ["#2f9236", 28, 21, 11], ["#1f6725", 17, 24, 12]].forEach(([c, ox, oy, r]) => {
+        ctx.fillStyle = c;
+        ctx.beginPath(); ctx.arc(sx + ox * s, sy + oy * s, r * s, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.fillStyle = "rgba(112,214,87,.18)";
+      ctx.beginPath(); ctx.arc(sx + 18 * s, sy + 10 * s, 6 * s, 0, Math.PI * 2); ctx.fill();
+    }
+
+    function drawItem(it) {
+      if (it.taken) return;
+      const { sx, sy } = worldToScreen(it.x, it.y);
+      const s = zoom;
+      if (it.type === "gold") {
+        ctx.fillStyle = "#ffd65c";
+        ctx.beginPath(); ctx.ellipse(sx + 16 * s, sy + 18 * s, 8 * s, 5 * s, -.25, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fff2a2";
+        ctx.beginPath(); ctx.ellipse(sx + 13 * s, sy + 16 * s, 3 * s, 1.5 * s, -.25, 0, Math.PI * 2); ctx.fill();
+      } else {
+        drawTempleIcon(sx + 16 * s, sy + 18 * s, s * .62);
+      }
+    }
+
+    function drawNpc(n) {
+      const { sx, sy } = worldToScreen(n.x, n.y);
+      if (n.id === "elder") drawOfficial(sx + 16 * zoom, sy + 19 * zoom, zoom);
+      else if (n.id === "temple") drawTempleIcon(sx + 16 * zoom, sy + 18 * zoom, zoom);
+      else if (n.id === "merchant") drawMiniBag(sx + 16 * zoom, sy + 18 * zoom, zoom);
+      else drawCaveIcon(sx + 16 * zoom, sy + 18 * zoom, zoom);
+    }
+
+    function drawEnemy(e) {
+      if (!e.alive) return;
+      const { sx, sy } = worldToScreen(e.x, e.y);
+      const s = zoom;
+      drawBandit(sx + 16 * s, sy + 19 * s, s);
+      ctx.fillStyle = "#222";
+      ctx.fillRect(sx + 4 * s, sy + 30 * s, 24 * s, 4 * s);
+      ctx.fillStyle = "#d74235";
+      ctx.fillRect(sx + 4 * s, sy + 30 * s, 24 * s * e.hp / e.maxHp, 4 * s);
+    }
+
+    function drawHero() {
+      const s = zoom;
+      const sx = CENTER_X - 16 * s;
+      const sy = CENTER_Y - 16 * s;
+      ctx.fillStyle = "rgba(0,0,0,.45)";
+      ctx.beginPath(); ctx.ellipse(CENTER_X, CENTER_Y + 16 * s, 17 * s, 6 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#1b0f09";
+      ctx.beginPath(); ctx.arc(sx + 14 * s, sy + 14 * s, 13 * s, Math.PI * .55, Math.PI * 1.65); ctx.fill();
+      const cloth = ctx.createLinearGradient(sx + 8 * s, sy + 14 * s, sx + 26 * s, sy + 36 * s);
+      cloth.addColorStop(0, "#f7d48b");
+      cloth.addColorStop(1, "#b96d2e");
+      ctx.fillStyle = cloth;
+      ctx.beginPath();
+      ctx.moveTo(sx + 16 * s, sy + 15 * s);
+      ctx.lineTo(sx + 27 * s, sy + 34 * s);
+      ctx.lineTo(sx + 7 * s, sy + 34 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#f5d2a0";
+      ctx.beginPath(); ctx.arc(sx + 17 * s, sy + 12 * s, 10 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#101010";
+      ctx.beginPath(); ctx.arc(sx + 13 * s, sy + 8 * s, 10 * s, Math.PI * .75, Math.PI * 2.12); ctx.fill();
+      ctx.fillRect(sx + 7 * s, sy + 5 * s, 22 * s, 7 * s);
+      ctx.fillStyle = "#24120b";
+      ctx.fillRect(sx + 5 * s, sy + 13 * s, 7 * s, 19 * s);
+      ctx.fillStyle = "#ffe2b8";
+      ctx.fillRect(sx + 18 * s, sy + 13 * s, 2 * s, 2 * s);
+      ctx.strokeStyle = "#e8e8e8";
+      ctx.lineWidth = Math.max(1, 2 * s);
+      ctx.beginPath();
+      ctx.moveTo(sx + 25 * s, sy + 21 * s);
+      ctx.lineTo(sx + 37 * s, sy + 9 * s);
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(sx + 20 * s, sy + 11 * s, 2 * s, 2 * s);
+    }
+
+    function drawArrow() {
+      const target = enemies.find(e => e.alive) || npcs[0];
+      if (!target) return;
+      const dx = target.x - hero.x;
+      const dy = target.y - hero.y;
+      if (Math.abs(dx) + Math.abs(dy) < 3) return;
+      const ang = Math.atan2(dy, dx);
+      const x = CENTER_X + Math.cos(ang) * 54;
+      const y = CENTER_Y + Math.sin(ang) * 54;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(ang);
+      ctx.fillStyle = "#ff6a00";
+      ctx.beginPath();
+      ctx.moveTo(18, 0); ctx.lineTo(-14, -12); ctx.lineTo(-7, 0); ctx.lineTo(-14, 12);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawLocationPanel() {
+      const y = 690;
+      ctx.fillStyle = "#050505";
+      ctx.fillRect(0, 674, 470, 72);
+      ctx.fillStyle = "#111";
+      jaggedPanel(7, y - 3, 456, 61, "#0c0c0c");
+      jaggedPanel(12, y + 2, 446, 51, "#d6d6d6");
+      drawTempleIcon(56, y + 27, .9);
+      text("城隍庙", 80, y + 33, "#111", "bold 16px Microsoft YaHei");
+      drawOfficial(237, y + 28, .8);
+      text("县太爷", 260, y + 33, "#111", "bold 16px Microsoft YaHei");
+    }
+
+    function drawBottomBar() {
+      const y = 748;
+      const g = ctx.createLinearGradient(0, y, 0, 900);
+      g.addColorStop(0, "#202829");
+      g.addColorStop(.18, "#101414");
+      g.addColorStop(1, "#030303");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, y, 470, 152);
+      ctx.fillStyle = "rgba(255,255,255,.05)";
+      ctx.fillRect(0, y + 3, 470, 5);
+      const items = [
+        ["人物", "侠"], ["包裹", "袋"], ["任务", "卷"], ["武功", "武"], ["聚宝阁", "火"]
+      ];
+      for (let i = 0; i < items.length; i++) {
+        const x = 30 + i * 88;
+        ctx.fillStyle = "#111";
+        ctx.beginPath(); ctx.arc(x, y + 52, 30, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "#2a2a2a"; ctx.stroke();
+        if (items[i][0] === "人物") drawPortraitIcon(x, y + 52);
+        else if (items[i][0] === "包裹") drawBag(x, y + 52);
+        else if (items[i][0] === "任务") drawScroll(x, y + 52);
+        else if (items[i][0] === "聚宝阁") drawFlame(x, y + 52);
+        else roundIcon(x, y + 52, 20, i === 0 ? "#56412b" : "#38589e", items[i][1], "#ffe5a0");
+        verticalText(items[i][0], x - 36, y + 25);
+      }
+      ctx.fillStyle = "#ff1f1f";
+      ctx.beginPath(); ctx.arc(296, y + 17, 8, 0, Math.PI * 2); ctx.fill();
+    }
+
+    function drawBattlePanel() {
+      if (!battle) return;
+      ctx.fillStyle = "rgba(0,0,0,.75)";
+      ctx.fillRect(20, 110, 430, 105);
+      ctx.strokeStyle = "#c58a3b";
+      ctx.strokeRect(20, 110, 430, 105);
+      text(`遭遇：${battle.name}`, 38, 140, "#ffe58e", "bold 18px Microsoft YaHei");
+      text(`气血 ${hero.hp}/${hero.maxHp}    内力 ${hero.mp}/${hero.maxMp}`, 38, 168, "#fff", "15px Microsoft YaHei");
+      text("点右侧按钮普攻，双击按钮施展剑招；点人物吃药", 38, 196, "#d8d8d8", "15px Microsoft YaHei");
+    }
+
+    function move(dx, dy) {
+      if (battle || isMoving) return;
+      hero.face = dx > 0 ? "right" : dx < 0 ? "left" : dy < 0 ? "up" : "down";
+      const nx = hero.x + dx, ny = hero.y + dy;
+      const enemy = enemies.find(e => e.alive && e.x === nx && e.y === ny);
+      if (enemy) return startBattle(enemy);
+      if (!blocked(nx, ny)) {
+        animateStep(nx, ny);
+      }
+    }
+
+    function animateStep(nx, ny) {
+      const fromX = hero.x;
+      const fromY = hero.y;
+      hero.x = nx;
+      hero.y = ny;
+      isMoving = true;
+      const start = performance.now();
+      const duration = 165;
+      function frame(now) {
+        const t = Math.min(1, (now - start) / duration);
+        const eased = t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        hero.rx = fromX + (nx - fromX) * eased;
+        hero.ry = fromY + (ny - fromY) * eased;
+        draw();
+        if (t < 1) requestAnimationFrame(frame);
+        else {
+          hero.rx = hero.x;
+          hero.ry = hero.y;
+          isMoving = false;
+          pickup();
+          draw();
+        }
+      }
+      requestAnimationFrame(frame);
+    }
+
+    function stepToward(tx, ty) {
+      if (battle) return;
+      const dx = tx - hero.x;
+      const dy = ty - hero.y;
+      if (dx === 0 && dy === 0) return interact();
+      let sx = 0, sy = 0;
+      if (Math.abs(dx) >= Math.abs(dy)) sx = Math.sign(dx);
+      else sy = Math.sign(dy);
+      move(sx, sy);
+    }
+
+    function interact() {
+      if (toast.style.display === "block" && Date.now() < messageUntil) {
+        toast.style.display = "none";
+        return;
+      }
+      const near = npcs.find(n => Math.abs(n.x - hero.x) + Math.abs(n.y - hero.y) <= 1);
+      if (!near) return show("附近没有可互动对象。靠近人物、地点或山贼再点互动。");
+      if (near.id === "elder") {
+        quest.accepted = true;
+        if (quest.bandits >= 2 && !quest.done) {
+          quest.done = true;
+          hero.sword = true;
+          hero.gold += 30;
+          hero.rep += 20;
+          show("县太爷：少侠果然好身手。这三十两银子给你，另赠你一式「清风剑法」。");
+        } else if (quest.done) {
+          show("县太爷：青石一带暂得安宁，少侠可继续向北闯荡。");
+        } else {
+          show("县太爷：" + near.text);
+        }
+      } else if (near.id === "temple") {
+        hero.mp = Math.min(hero.maxMp, hero.mp + 12);
+        show("你在城隍庙前调息片刻，内力恢复了一些。");
+      } else if (near.id === "merchant") {
+        if (hero.gold >= 3) {
+          hero.gold -= 3; hero.herbs++;
+          show("行脚商：收你三两，金疮药一瓶。");
+        } else show("行脚商：少侠银两不足，买不了药。");
+      } else show(near.name + "：" + near.text);
+      draw();
+    }
+
+    function pickup() {
+      const it = items.find(i => !i.taken && i.x === hero.x && i.y === hero.y);
+      if (!it) return;
+      it.taken = true;
+      if (it.type === "herb") {
+        hero.herbs++;
+        show("你拾起一瓶金疮药。");
+      } else {
+        hero.gold += 8;
+        show("你拾起八两散碎银两。");
+      }
+    }
+
+    function startBattle(enemy) {
+      battle = enemy;
+      if (!quest.accepted) quest.accepted = true;
+      show(`遭遇${enemy.name}！点右侧按钮普攻，双击按钮放剑招。`);
+      draw();
+    }
+
+    function attack(skill) {
+      if (!battle) return;
+      let dmg = 9 + Math.floor(Math.random() * 7);
+      if (skill) {
+        if (hero.mp < 6) return show("内力不足，无法施展剑招。");
+        hero.mp -= 6;
+        dmg += hero.sword ? 13 : 6;
+      }
+      battle.hp -= dmg;
+      if (battle.hp <= 0) {
+        battle.alive = false;
+        quest.bandits++;
+        hero.gold += 9;
+        hero.rep += 5;
+        show(`${battle.name}败退。获得九两银子。进度：${quest.bandits}/2`);
+        battle = null;
+        draw();
+        return;
+      }
+      const edmg = battle.atk + Math.floor(Math.random() * 4);
+      hero.hp -= edmg;
+      if (hero.hp <= 0) {
+        hero.hp = 1;
+        hero.x = 24; hero.y = 26; hero.rx = 24; hero.ry = 26;
+        battle = null;
+        show("你伤势过重，被路人救回县衙门口。");
+      } else show(`${skill ? "剑招命中" : "挥剑进击"}，造成 ${dmg} 点伤害。${battle.name}反击，你受 ${edmg} 点伤害。`, 1800);
+      draw();
+    }
+
+    function heal() {
+      if (hero.herbs <= 0) return show("没有金疮药。");
+      hero.herbs--;
+      hero.hp = Math.min(hero.maxHp, hero.hp + 35);
+      show("服用金疮药，恢复三十五点气血。");
+      draw();
+    }
+
+    function show(msg, ms = 2600) {
+      toast.textContent = msg;
+      toast.style.display = "block";
+      messageUntil = Date.now() + ms;
+      setTimeout(() => {
+        if (Date.now() >= messageUntil) toast.style.display = "none";
+      }, ms + 50);
+    }
+
+    function text(str, x, y, color, font) {
+      ctx.fillStyle = color;
+      ctx.font = font;
+      ctx.fillText(String(str), x, y);
+    }
+    function verticalText(str, x, y) {
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 13px Microsoft YaHei";
+      for (let i = 0; i < str.length; i++) ctx.fillText(str[i], x, y + i * 14);
+    }
+    function roundIcon(x, y, r, bg, label, color) {
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#111"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.font = "bold 17px Microsoft YaHei";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, x, y);
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
+    }
+    function drawCoin(x, y, color, label) {
+      roundIcon(x, y, 10, color, label, "#222");
+    }
+    function drawScroll(x, y) {
+      ctx.fillStyle = "#d7b16b";
+      ctx.fillRect(x - 13, y - 17, 26, 34);
+      ctx.strokeStyle = "#5e371b"; ctx.strokeRect(x - 13, y - 17, 26, 34);
+      ctx.fillStyle = "#6b3e1c";
+      ctx.fillRect(x - 9, y - 7, 18, 3);
+      ctx.fillRect(x - 9, y + 2, 18, 3);
+    }
+    function drawChest(x, y) {
+      ctx.fillStyle = "#8d4e21"; ctx.fillRect(x - 15, y - 8, 30, 22);
+      ctx.fillStyle = "#d28a33"; ctx.fillRect(x - 15, y - 18, 30, 12);
+      ctx.strokeStyle = "#25130b"; ctx.strokeRect(x - 15, y - 18, 30, 32);
+      ctx.fillStyle = "#ffe36c"; ctx.fillRect(x - 3, y - 4, 6, 8);
+    }
+    function drawBag(x, y) {
+      ctx.fillStyle = "#be7a2e";
+      ctx.beginPath(); ctx.ellipse(x, y + 4, 18, 20, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#734018"; ctx.fillRect(x - 10, y - 18, 20, 10);
+      ctx.strokeStyle = "#2b180d"; ctx.stroke();
+    }
+    function drawMenu(x, y) {
+      ctx.fillStyle = "#dec587";
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(x - 15, y - 14 + i * 11, 30, 5);
+        ctx.strokeStyle = "#5c3a1e"; ctx.strokeRect(x - 15, y - 14 + i * 11, 30, 5);
+      }
+    }
+    function drawFlame(x, y) {
+      ctx.fillStyle = "#58a436";
+      ctx.beginPath(); ctx.arc(x, y + 6, 21, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#ffe94b";
+      ctx.beginPath(); ctx.moveTo(x, y - 22); ctx.bezierCurveTo(x + 22, y, x + 7, y + 22, x, y + 18); ctx.bezierCurveTo(x - 18, y + 5, x - 4, y - 8, x, y - 22); ctx.fill();
+    }
+    function drawMarker(x, y, color, label, scale = 1) {
+      const r = 10 * scale;
+      ctx.fillStyle = "rgba(0,0,0,.45)";
+      ctx.beginPath(); ctx.ellipse(x, y + 12 * scale, 13 * scale, 5 * scale, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#111"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = `bold ${Math.max(9, 12 * scale)}px Microsoft YaHei`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(label, x, y);
+      ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+    }
+
+    function roundedRect(x, y, w, h, r, fill) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      if (fill) ctx.fill();
+      else ctx.stroke();
+    }
+
+    function jaggedPanel(x, y, w, h, color) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x + 5, y);
+      ctx.lineTo(x + w - 7, y + 2);
+      ctx.lineTo(x + w, y + 8);
+      ctx.lineTo(x + w - 3, y + h - 6);
+      ctx.lineTo(x + w - 10, y + h);
+      ctx.lineTo(x + 7, y + h - 1);
+      ctx.lineTo(x, y + h - 8);
+      ctx.lineTo(x + 3, y + 7);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawTempleIcon(x, y, s = 1) {
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.beginPath(); ctx.ellipse(x, y + 12 * s, 15 * s, 5 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#c65be3";
+      ctx.beginPath();
+      ctx.moveTo(x, y - 16 * s);
+      ctx.quadraticCurveTo(x + 14 * s, y - 6 * s, x + 9 * s, y + 8 * s);
+      ctx.quadraticCurveTo(x, y + 18 * s, x - 9 * s, y + 8 * s);
+      ctx.quadraticCurveTo(x - 14 * s, y - 6 * s, x, y - 16 * s);
+      ctx.fill();
+      ctx.fillStyle = "#5d2373";
+      ctx.beginPath(); ctx.arc(x, y + 1 * s, 6 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#f5d6ff";
+      ctx.beginPath(); ctx.arc(x, y - 1 * s, 3 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#1b0d20";
+      ctx.lineWidth = Math.max(1, 2 * s);
+      ctx.stroke();
+    }
+
+    function drawOfficial(x, y, s = 1) {
+      ctx.fillStyle = "rgba(0,0,0,.4)";
+      ctx.beginPath(); ctx.ellipse(x, y + 13 * s, 14 * s, 5 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#47215c";
+      roundedRect(x - 8 * s, y - 5 * s, 16 * s, 21 * s, 4 * s, true);
+      ctx.fillStyle = "#f1c28b";
+      ctx.beginPath(); ctx.arc(x, y - 10 * s, 8 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#2b102f";
+      ctx.fillRect(x - 10 * s, y - 19 * s, 20 * s, 8 * s);
+      ctx.fillStyle = "#b858d5";
+      ctx.beginPath(); ctx.arc(x, y + 4 * s, 6 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#110714";
+      ctx.lineWidth = Math.max(1, 1.6 * s);
+      ctx.strokeRect(x - 8 * s, y - 5 * s, 16 * s, 21 * s);
+    }
+
+    function drawBandit(x, y, s = 1) {
+      ctx.fillStyle = "rgba(0,0,0,.42)";
+      ctx.beginPath(); ctx.ellipse(x, y + 13 * s, 14 * s, 5 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#5b1714";
+      ctx.beginPath();
+      ctx.moveTo(x, y - 4 * s);
+      ctx.lineTo(x + 10 * s, y + 16 * s);
+      ctx.lineTo(x - 10 * s, y + 16 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#d1a06c";
+      ctx.beginPath(); ctx.arc(x, y - 10 * s, 7 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#111";
+      ctx.fillRect(x - 9 * s, y - 16 * s, 18 * s, 5 * s);
+      ctx.strokeStyle = "#ddd";
+      ctx.lineWidth = Math.max(1, 1.5 * s);
+      ctx.beginPath();
+      ctx.moveTo(x + 9 * s, y);
+      ctx.lineTo(x + 20 * s, y - 9 * s);
+      ctx.stroke();
+    }
+
+    function drawMiniBag(x, y, s = 1) {
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.beginPath(); ctx.ellipse(x, y + 12 * s, 14 * s, 5 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#b06b2e";
+      ctx.beginPath(); ctx.ellipse(x, y + 4 * s, 12 * s, 15 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#6b3517";
+      ctx.fillRect(x - 8 * s, y - 13 * s, 16 * s, 7 * s);
+      ctx.strokeStyle = "#211107";
+      ctx.lineWidth = Math.max(1, 1.5 * s);
+      ctx.stroke();
+    }
+
+    function drawCaveIcon(x, y, s = 1) {
+      ctx.fillStyle = "rgba(0,0,0,.45)";
+      ctx.beginPath(); ctx.ellipse(x, y + 12 * s, 17 * s, 5 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#626262";
+      ctx.beginPath();
+      ctx.moveTo(x - 14 * s, y + 12 * s);
+      ctx.quadraticCurveTo(x - 8 * s, y - 15 * s, x, y - 17 * s);
+      ctx.quadraticCurveTo(x + 12 * s, y - 12 * s, x + 14 * s, y + 12 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#161616";
+      ctx.beginPath();
+      ctx.moveTo(x - 7 * s, y + 12 * s);
+      ctx.quadraticCurveTo(x, y - 5 * s, x + 7 * s, y + 12 * s);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawPortraitIcon(x, y) {
+      ctx.fillStyle = "#c8a36b";
+      ctx.beginPath(); ctx.arc(x, y - 6, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#1b120d";
+      ctx.beginPath(); ctx.arc(x - 4, y - 10, 12, Math.PI * .7, Math.PI * 1.9); ctx.fill();
+      ctx.fillStyle = "#5a3b25";
+      ctx.beginPath();
+      ctx.moveTo(x - 16, y + 21);
+      ctx.lineTo(x, y + 1);
+      ctx.lineTo(x + 18, y + 21);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function noise(x, y) {
+      const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+      return v - Math.floor(v);
+    }
+
+    function drawTerrainImage(img, x, y, size, type, gx = 0, gy = 0) {
+      const n = noise(gx * 13 + 19, gy * 17 + 37);
+      const srcSize = Math.min(img.width, img.height);
+      const max = Math.max(1, img.width - srcSize);
+      const sx = Math.floor(n * max);
+      const sy = Math.floor(noise(gx * 23 + 7, gy * 29 + 11) * max);
+      ctx.drawImage(img, sx, sy, srcSize, srcSize, x, y, size, size);
+
+      ctx.strokeStyle = "rgba(0,0,0,.18)";
+      ctx.strokeRect(x, y, size, size);
+    }
+
+    function loadTerrainImages() {
+      const entries = Object.entries(terrainSources);
+      let done = 0;
+      entries.forEach(([key, src]) => {
+        const img = new Image();
+        img.onload = () => {
+          done++;
+          if (done === entries.length) {
+            terrainReady = true;
+            draw();
+          }
+        };
+        img.onerror = () => {
+          done++;
+          if (done === entries.length) draw();
+        };
+        img.src = src;
+        terrainImgs[key] = img;
+      });
+    }
+
+    function loadWallPieceImages() {
+      const entries = Object.entries(wallPieceSources);
+      let done = 0;
+      entries.forEach(([key, src]) => {
+        const img = new Image();
+        img.onload = () => {
+          done++;
+          if (done === entries.length) {
+            wallPiecesReady = true;
+            draw();
+          }
+        };
+        img.onerror = () => {
+          done++;
+          if (done === entries.length) draw();
+        };
+        img.src = src;
+        wallPieceImgs[key] = img;
+      });
+    }
+
+    function loadHouseSpriteImages() {
+      const entries = Object.entries(houseSpriteSources);
+      let done = 0;
+      entries.forEach(([key, src]) => {
+        const img = new Image();
+        img.onload = () => {
+          done++;
+          if (done === entries.length) {
+            houseSpritesReady = true;
+            draw();
+          }
+        };
+        img.onerror = () => {
+          done++;
+          if (done === entries.length) draw();
+        };
+        img.src = src;
+        houseSpriteImgs[key] = img;
+      });
+    }
+
+    document.getElementById("actionBtn").onclick = () => {
+      if (!battle) return interact();
+      const now = Date.now();
+      if (now - lastTapTime < 320) attack(true);
+      else attack(false);
+      lastTapTime = now;
+    };
+
+    canvas.addEventListener("click", e => e.preventDefault());
+
+    canvas.addEventListener("touchstart", e => {
+      if (e.touches.length === 2) {
+        suppressNextClick = true;
+        pinchStartDistance = touchDistance(e.touches[0], e.touches[1]);
+        pinchStartZoom = zoom;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", e => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        suppressNextClick = true;
+        const d = touchDistance(e.touches[0], e.touches[1]);
+        zoom = Math.max(.78, Math.min(1.7, pinchStartZoom * d / pinchStartDistance));
+        draw();
+      }
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", e => {
+      if (e.touches.length < 2 && pinchStartDistance) {
+        pinchStartDistance = 0;
+        setTimeout(() => suppressNextClick = false, 180);
+      }
+    });
+
+    canvas.addEventListener("wheel", e => {
+      e.preventDefault();
+      zoom = Math.max(.78, Math.min(1.7, zoom + (e.deltaY > 0 ? -.08 : .08)));
+      draw();
+    }, { passive: false });
+
+    canvas.addEventListener("dblclick", e => e.preventDefault());
+
+    canvas.addEventListener("pointerdown", e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width * 470;
+      const y = (e.clientY - rect.top) / rect.height * 900;
+      lastPointer = { x, y };
+      pointerMoved = false;
+      if (y >= 748 && y <= 840 && x <= 70) heal();
+    });
+
+    canvas.addEventListener("pointermove", e => {
+      if (!lastPointer) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width * 470;
+      const y = (e.clientY - rect.top) / rect.height * 900;
+      if (Math.hypot(x - lastPointer.x, y - lastPointer.y) > 8) pointerMoved = true;
+    });
+
+    canvas.addEventListener("pointerup", e => {
+      if (suppressNextClick || pointerMoved || battle) {
+        lastPointer = null;
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width * 470;
+      const y = (e.clientY - rect.top) / rect.height * 900;
+      lastPointer = null;
+      if (y < MAP_TOP || y > MAP_TOP + MAP_H) return;
+      const target = screenToWorld(x, y);
+      stepToward(target.x, target.y);
+    });
+
+    function touchDistance(a, b) {
+      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    }
+
+    loadTerrainImages();
+    loadWallPieceImages();
+    loadHouseSpriteImages();
+    show("已把精修素材放进游戏里，点一次仍然只走一格。", 2400);
+    draw();
+  </script>
+</body>
+</html>
