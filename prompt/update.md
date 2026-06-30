@@ -444,6 +444,38 @@ git push origin main
 **解决方案**：后续需在爬虫中增加标签标准化映射逻辑，将非标准标签映射到五大标准赛道（学习工作、生活娱乐、社会服务、社会公益、硬件交互）或"野蛮生长"。
 
 
+### 问题 14：approved 记录已下载 Demo 但 has_demo=False（2026-06-30 复查发现）
+
+**现象**：743 条 approved 记录显示「暂无 Demo」，但其中 403 条在 `demos/<topic_id>/` 目录中已存在 HTML 文件。
+
+**根因**：爬虫 `_download_and_process_attachment()` 成功下载文件并修改了内存中的 `demo_record`，但在 `add_or_update()` + `save()` 执行前因超时中断。下次重启时，`is_existing=True` 导致该记录被跳过，始终维持 `has_demo=False`。
+
+**修复**：编写一次性修复脚本扫描 `demos/` 磁盘目录，为 403 条记录补回 `has_demo=True`、`demo_file`、`demo_url`。
+
+**状态**：已修复（commit ad71a11e）。
+
+### 问题 15：Extra topics 下载后完全从 demos.json 丢失（2026-06-30 复查发现）
+
+**现象**：254 个 `demos/` 文件夹（topic_id > 50000）对应的记录完全不在 `demos.json` 中，网站卡片不显示这些帖子。
+
+**根因**：`_crawl_discourse_extra()` 方法遍历 Discourse API 获取不在 approved 列表中的新帖子，下载附件后调用 `add_or_update()`，但**该方法内没有任何 `save()` 调用**。爬虫在 Extra topics 阶段超时后，所有新增记录全部丢失。
+
+**修复**：
+1. 将 320 条磁盘记录反写回 `demos.json`
+2. 在 `crawler_v2.py` 的 `_crawl_discourse_extra()` 中增加每 50 条 checkpoint save + 阶段结束最终 save
+
+**状态**：已修复（commit ad71a11e）。
+
+### 问题 16：checkpoint 间隔过大导致数据丢失（2026-06-30 复查发现）
+
+**现象**：approved 阶段每 100 条才 checkpoint 一次，处理时间远超 timeout 阈值。
+
+**根因**：每条记录需下载 HTML/ZIP 附件（含网络 IO 和解压），100 条的处理时间常超过 15-20 分钟。timeout 30 分钟下，若前半段处理较慢，后半段的 save 可能无法执行。
+
+**修复**：将 approved 阶段 checkpoint 间隔从 100 条降至 **25 条**。
+
+**状态**：已修复（commit ad71a11e）。
+
 ## 注意事项
 
 1. **增量更新原则**：只处理新增或变更的数据，已有数据不要重复爬取。判断依据是 `topic_id` 是否已在 `demos.json` 中存在。
