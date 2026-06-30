@@ -476,6 +476,21 @@ git push origin main
 
 **状态**：已修复（commit ad71a11e）。
 
+### 问题 17：daily_update.py 新增 approved 记录后未爬取 Demo（2026-06-30 最终确认）
+
+**现象**：每次 daily_update.py 同步审核名单后，新增的 approved 记录被创建为 `has_demo=False` 的最小记录，但后续爬虫运行因 `is_existing=True` 跳过它们，导致这些帖子的 Demo 永远无法被自动抓取。用户多次反馈"最新一批灵感贴没有正常抓取 HTML 原帖"。
+
+**根因**：`daily_update.py` 只做了审核名单同步和 approved 状态标记，但没有调用爬虫来获取新 approved 记录的 Demo 附件。当这些记录以 `has_demo=False` 写入 `demos.json` 后，爬虫的增量逻辑（`is_existing=True` 则跳过）使它们被永久跳过。
+
+**影响**：新增 approved 记录中约 92% 的帖子实际上传了 HTML Demo，但网站上始终显示「暂无 Demo」。以 6月30日批次为例：topic_id > 50000 的 239 条 approved 无 demo 记录中，221 条（92.5%）经 recheck 确认论坛上有 Demo 附件。
+
+**解决方案**：
+1. 已修复数据：运行 `recheck_no_demo()` 扫描了 topic_id > 50000 的 239 条记录，成功找回 221 条 Demo
+2. 代码修复：`daily_update.py` 在完成审核名单同步后，必须对新增 approved 记录（即之前不在 demos.json 中的记录）执行 Demo 爬取，或者至少标记它们需要被 recheck
+3. 备选方案：在 `crawler_v2.py` 的 `crawl()` 方法中，对 approved 但 `has_demo=False` 的记录也进行重新检查（而不仅仅是跳过）
+
+**状态**：数据已修复（commit a746f784），代码修复待实现。
+
 ## 注意事项
 
 1. **增量更新原则**：只处理新增或变更的数据，已有数据不要重复爬取。判断依据是 `topic_id` 是否已在 `demos.json` 中存在。
