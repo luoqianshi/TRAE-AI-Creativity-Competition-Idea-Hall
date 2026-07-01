@@ -1,0 +1,373 @@
+{% extends "base.html" %}
+{% block title %}快递管理{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header flex flex-between">
+    <h2 class="card-title">快递管理</h2>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="showInModal()">收件入库</button>
+      <button class="btn btn-success" onclick="showSendModal()">发快递</button>
+    </div>
+  </div>
+
+  <div class="search-bar">
+    <input type="text" class="form-input" id="keyword" placeholder="搜索内部码/备注..." onkeydown="if(event.key==='Enter')searchExpress()">
+    <button class="btn btn-primary" onclick="searchExpress()">搜索</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>内部码</th>
+          <th>类型</th>
+          <th>状态</th>
+          <th>备注</th>
+          <th>费用</th>
+          <th>入库时间</th>
+          <th>截止时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="express-tbody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var expressList = [];
+
+// Init shared express form helpers
+ExpressForms.init();
+
+function searchExpress() {
+  expressDetailCache = {};
+  var kw = document.getElementById('keyword').value.trim();
+  apiGet('/api/express/list' + (kw ? '?keyword=' + encodeURIComponent(kw) : '')).then(function(data) {
+    expressList = data || [];
+    renderTable();
+  }).catch(function(e) { console.error(e); });
+}
+
+function renderTable() {
+  var tbody = document.getElementById('express-tbody');
+  if (!expressList.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);">暂无数据</td></tr>';
+    return;
+  }
+  tbody.innerHTML = expressList.map(function(e) {
+    var id = e.internal_id || e._id || '';
+    var safeId = id.replace(/[^a-zA-Z0-9]/g, '_');
+    var typeHtml = e.express_type === 'receive' ? '<span class="badge badge-blue">收件</span>' : '<span class="badge badge-green">寄件</span>';
+    var statusHtml = statusBadge(e.status);
+    var remarksHtml = formatRemarks(e.remarks);
+    var feeHtml = e.display_fee ? formatMoney(e.display_fee) : '-';
+    if (e.display_fee && e.express_type === 'receive') feeHtml = '<span style="color:var(--blue-600);">代收</span> ' + feeHtml;
+    else if (e.display_fee && e.express_type === 'send') feeHtml = '<span style="color:var(--green-600);">发出</span> ' + feeHtml;
+    var createdAt = formatDate(e.created_at);
+    var deadlineTime = e.deadline_time ? formatDate(e.deadline_time) : '-';
+    var actionsHtml = renderActions(e);
+    return '<tr id="row-' + safeId + '">' +
+      '<td>' + escapeHtml(e.internal_id || '') + '</td>' +
+      '<td>' + typeHtml + '</td>' +
+      '<td>' + statusHtml + '</td>' +
+      '<td>' + remarksHtml + '</td>' +
+      '<td>' + feeHtml + '</td>' +
+      '<td>' + createdAt + '</td>' +
+      '<td>' + deadlineTime + '</td>' +
+      '<td class="actions">' + actionsHtml + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+function formatRemarks(remarks) {
+  if (!remarks || !remarks.length) return '-';
+  var shown = remarks.slice(0, 2).map(function(r) {
+    return '<span class="remark-kv">' + escapeHtml(r.key || '') + ': ' + escapeHtml(r.value || '') + '</span>';
+  });
+  var dots = remarks.length > 2 ? '<span class="remark-more"> ...</span>' : '';
+  return shown.join(' ') + dots;
+}
+
+function renderActions(e) {
+  var id = e.internal_id || e._id || '';
+  var parts = [];
+
+  if (e.status === 'in_stock') {
+    if (e.express_type === 'send') {
+      parts.push('<button class="btn btn-success btn-xs" onclick="collectExpress(\'' + id + '\')">揽收</button>');
+    } else {
+      parts.push('<button class="btn btn-success btn-xs" onclick="pickupExpress(\'' + id + '\')">取件</button>');
+    }
+    parts.push('<button class="btn btn-warning btn-xs" onclick="returnExpress(\'' + id + '\')">退回</button>');
+    parts.push('<button class="btn btn-danger btn-xs" onclick="wasteExpress(\'' + id + '\')">报损</button>');
+    if (e.express_type !== 'send') {
+      parts.push('<button class="btn btn-warning btn-xs" onclick="rejectExpress(\'' + id + '\')">拒收</button>');
+    }
+  }
+
+  parts.push('<button class="btn btn-outline btn-xs" onclick="showEditModal(\'' + id + '\')">编辑</button>');
+  parts.push('<button class="btn btn-outline btn-xs" onclick="showForceStatusModal(\'' + id + '\')">强制改状态</button>');
+  parts.push('<button class="btn btn-outline btn-xs" onclick="toggleExpressDetail(\'' + id + '\')">详情</button>');
+
+  return parts.join(' ');
+}
+
+// ---- Modals ----
+
+// Shared: file upload state
+var uploadedFileUrl = '';
+
+// ---- In modal ----
+function showInModal() {
+  uploadedFileUrl = '';
+  openModal(
+    '<div class="modal-header"><h3 class="modal-title">收件入库</h3><button class="modal-close" onclick="closeModal()">×</button></div>' +
+    '<div class="modal-body">' +
+    '<div class="form-group"><label class="form-label">照片 <span style="color:red;">*</span></label><div class="upload-group"><input type="file" accept="image/*" style="display:none;" onchange="FileUploader.handle(this).then(function(res){uploadedFileUrl=res.file_url}).catch(function(e){showToast(e.message||\'上传失败\',\'error\')})"><button type="button" class="btn btn-outline btn-sm upload-btn" onclick="this.previousElementSibling.click()">上传照片</button><div class="upload-preview"></div></div></div>' +
+    '<div class="form-group"><label class="form-label">单号</label><input class="form-input" id="in-tracking"></div>' +
+    '<div class="form-group"><label class="form-label">备注</label><div id="in-remarks-container"></div><button class="btn btn-outline btn-xs mt-8" onclick="RemarksEditor.addRow(\'in-remarks-container\')">+ 添加备注</button></div>' +
+    '<div class="form-group"><label class="form-label">代收费用</label><input class="form-input" id="in-fee" type="number" step="0.01"></div>' +
+    '<div class="form-group"><label class="form-label">截止时间</label><input class="form-input" id="in-deadline" type="datetime-local"></div>' +
+    '</div>' +
+    '<div class="modal-footer"><button class="btn btn-primary" onclick="submitIn()">提交</button><button class="btn btn-outline" onclick="closeModal()">取消</button></div>'
+  );
+  setTimeout(function() {
+    RemarksEditor.render('in-remarks-container', []);
+    ExpressForms.fillDeadline('in-deadline');
+    ExpressForms.fillReceiveFee('in-fee');
+  }, 50);
+}
+
+function submitIn() {
+  ExpressForms.submitReceive({
+    uploadedUrl: uploadedFileUrl,
+    remarksContainerId: 'in-remarks-container',
+    trackingInputId: 'in-tracking',
+    feeInputId: 'in-fee',
+    deadlineInputId: 'in-deadline',
+    onSuccess: function() { closeModal(); searchExpress(); }
+  });
+}
+
+// ---- Send modal ----
+function showSendModal() {
+  uploadedFileUrl = '';
+  openModal(
+    '<div class="modal-header"><h3 class="modal-title">发快递</h3><button class="modal-close" onclick="closeModal()">×</button></div>' +
+    '<div class="modal-body">' +
+    '<div class="form-group"><label class="form-label">照片 <span style="color:red;">*</span></label><div class="upload-group"><input type="file" accept="image/*" style="display:none;" onchange="FileUploader.handle(this).then(function(res){uploadedFileUrl=res.file_url}).catch(function(e){showToast(e.message||\'上传失败\',\'error\')})"><button type="button" class="btn btn-outline btn-sm upload-btn" onclick="this.previousElementSibling.click()">上传照片</button><div class="upload-preview"></div></div></div>' +
+    '<div class="form-group"><label class="form-label">单号</label><input class="form-input" id="send-tracking"></div>' +
+    '<div class="form-group"><label class="form-label">备注</label><div id="send-remarks-container"></div><button class="btn btn-outline btn-xs mt-8" onclick="RemarksEditor.addRow(\'send-remarks-container\')">+ 添加备注</button></div>' +
+    '<div class="form-group"><label class="form-label">发出费用</label><input class="form-input" id="send-fee" type="number" step="0.01"></div>' +
+    '</div>' +
+    '<div class="modal-footer"><button class="btn btn-primary" onclick="submitSend()">提交</button><button class="btn btn-outline" onclick="closeModal()">取消</button></div>'
+  );
+  setTimeout(function() {
+    RemarksEditor.render('send-remarks-container', []);
+    ExpressForms.fillSendFee('send-fee');
+  }, 50);
+}
+
+function submitSend() {
+  ExpressForms.submitSend({
+    uploadedUrl: uploadedFileUrl,
+    remarksContainerId: 'send-remarks-container',
+    trackingInputId: 'send-tracking',
+    feeInputId: 'send-fee',
+    onSuccess: function() { closeModal(); searchExpress(); }
+  });
+}
+
+// ---- Pickup confirm ----
+function pickupExpress(id) {
+  if (!confirm('确定取件吗？')) return;
+  var item = expressList.find(function(e) { return (e.internal_id || e._id) === id; });
+  if (!item) return;
+  apiPost('/api/express/out', {internal_id: item.internal_id}).then(function() {
+    showToast('取件成功', 'success');
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Collect (for send type) ----
+function collectExpress(id) {
+  if (!confirm('确定揽收吗？')) return;
+  apiPut('/api/express/' + id + '/collect').then(function() {
+    showToast('揽收成功', 'success');
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Return ----
+function returnExpress(id) {
+  if (!confirm('确定退回吗？')) return;
+  apiPut('/api/express/' + id + '/return').then(function() {
+    showToast('已退回', 'success');
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Waste ----
+function wasteExpress(id) {
+  if (!confirm('确定报损吗？')) return;
+  apiPut('/api/express/' + id + '/waste').then(function() {
+    showToast('已报损', 'success');
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Reject ----
+function rejectExpress(id) {
+  if (!confirm('确定拒收吗？')) return;
+  apiPut('/api/express/' + id + '/reject').then(function() {
+    showToast('已拒收', 'success');
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Edit modal ----
+function showEditModal(id) {
+  var item = expressList.find(function(e) { return (e.internal_id || e._id) === id; });
+  if (!item) return;
+  var tracking = '';
+  var remarks = item.remarks || [];
+  for (var i = 0; i < remarks.length; i++) {
+    if (remarks[i].key === '单号') { tracking = remarks[i].value || ''; break; }
+  }
+  openModal(
+    '<div class="modal-header"><h3 class="modal-title">编辑快递</h3><button class="modal-close" onclick="closeModal()">×</button></div>' +
+    '<div class="modal-body">' +
+    '<div class="form-group"><label class="form-label">单号</label><input class="form-input" id="edit-tracking" value="' + escapeHtml(tracking) + '"></div>' +
+    '<div class="form-group"><label class="form-label">备注</label><div id="edit-remarks-container"></div><button class="btn btn-outline btn-xs mt-8" onclick="RemarksEditor.addRow(\'edit-remarks-container\')">+ 添加备注</button></div>' +
+    '<div class="form-group"><label class="form-label">' + (item.express_type === 'receive' ? '代收费用' : '发出费用') + '</label><input class="form-input" id="edit-fee" type="number" step="0.01" value="' + (item.display_fee || '') + '"></div>' +
+    '<div class="form-group"><label class="form-label">截止时间</label><input class="form-input" id="edit-deadline" type="datetime-local" value="' + utcIsoToDatetimeLocal(item.deadline_time) + '"></div>' +
+    '</div>' +
+    '<div class="modal-footer"><button class="btn btn-primary" onclick="submitEdit(\'' + id + '\')">保存</button><button class="btn btn-outline" onclick="closeModal()">取消</button></div>'
+  );
+  setTimeout(function() {
+    RemarksEditor.render('edit-remarks-container', item.remarks || []);
+  }, 50);
+}
+
+function submitEdit(id) {
+  var remarks = [];
+  try { remarks = JSON.parse(document.getElementById('edit-remarks-container').getAttribute('data-remarks') || '[]'); } catch(e) {}
+  var data = {
+    tracking_number: document.getElementById('edit-tracking').value.trim() || undefined,
+    remarks: remarks,
+    display_fee: document.getElementById('edit-fee').value ? truncateMoney(parseFloat(document.getElementById('edit-fee').value)) : undefined,
+    deadline_time: localToUtcIso(document.getElementById('edit-deadline').value) || undefined
+  };
+  apiPut('/api/express/' + id, data).then(function() {
+    showToast('编辑成功', 'success');
+    closeModal();
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Force status modal ----
+function showForceStatusModal(id) {
+  openModal(
+    '<div class="modal-header"><h3 class="modal-title">强制改状态</h3><button class="modal-close" onclick="closeModal()">×</button></div>' +
+    '<div class="modal-body">' +
+    '<div class="form-group"><label class="form-label">新状态</label><select class="form-select" id="force-status">' +
+    '<option value="in_stock">在库</option>' +
+    '<option value="picked">已取件</option>' +
+    '<option value="collected">已揽收</option>' +
+    '<option value="returned">已退回</option>' +
+    '<option value="wasted">已报损</option>' +
+    '<option value="rejected">已拒收</option>' +
+    '</select></div>' +
+    '</div>' +
+    '<div class="modal-footer"><button class="btn btn-primary" onclick="submitForceStatus(\'' + id + '\')">确认</button><button class="btn btn-outline" onclick="closeModal()">取消</button></div>'
+  );
+}
+
+function submitForceStatus(id) {
+  var status = document.getElementById('force-status').value;
+  apiPut('/api/express/' + id + '/force-status', {status: status}).then(function() {
+    showToast('状态已更新', 'success');
+    closeModal();
+    searchExpress();
+  }).catch(function(e) { console.error(e); });
+}
+
+// ---- Detail toggle ----
+var expressDetailCache = {};
+
+function toggleExpressDetail(id) {
+  var row = document.getElementById('express-detail-' + id.replace(/[^a-zA-Z0-9]/g, '_'));
+  if (row) {
+    row.remove();
+    delete expressDetailCache[id];
+    return;
+  }
+
+  function renderDetail(doc) {
+    expressDetailCache[id] = doc;
+    var remarksHtml = '';
+    if (doc.remarks && doc.remarks.length) {
+      remarksHtml = doc.remarks.map(function(r) {
+        return '<span class="remark-kv">' + escapeHtml(r.key || '') + ': ' + escapeHtml(r.value || '') + '</span>';
+      }).join(' ');
+    }
+    var photoHtml = doc.photo_url
+      ? '<div style="margin-top:8px;"><strong>底单：</strong><br><img src="' + escapeHtml(doc.photo_url) + '" style="max-width:300px;max-height:300px;border:1px solid var(--gray-300);border-radius:4px;margin-top:4px" onerror="this.outerHTML=\'<span style=color:var(--gray-500)>加载失败</span>\'"></div>'
+      : '<span style="color:var(--gray-500)">无</span>';
+
+    var safeId = id.replace(/[^a-zA-Z0-9]/g, '_');
+    var tr = document.createElement('tr');
+    tr.id = 'express-detail-' + safeId;
+    tr.innerHTML = '<td colspan="8" style="background:var(--gray-50);padding:16px">' +
+      '<div style="display:flex;gap:24px;flex-wrap:wrap">' +
+        '<div style="flex:1;min-width:200px">' +
+          '<div><strong>单号：</strong>' + escapeHtml(doc.internal_id || '') + '</div>' +
+          '<div><strong>订单号：</strong>' + escapeHtml(doc.order_no || '-') + '</div>' +
+          '<div><strong>类型：</strong>' + (doc.express_type === 'receive' ? '收件' : '寄件') + '</div>' +
+          '<div><strong>状态：</strong>' + statusBadge(doc.status) + '</div>' +
+          '<div><strong>费用：</strong>' + formatMoney(doc.display_fee || 0) + '</div>' +
+          '<div><strong>入库时间：</strong>' + formatDate(doc.inbound_time || doc.created_at) + '</div>' +
+          '<div><strong>截止时间：</strong>' + (doc.deadline_time ? formatDate(doc.deadline_time) : '-') + '</div>' +
+        '</div>' +
+        '<div style="flex:1;min-width:200px">' +
+          '<div><strong>备注：</strong>' + (remarksHtml || '-') + '</div>' +
+          photoHtml +
+        '</div>' +
+      '</div>' +
+    '</td>';
+
+    var allRows = document.querySelectorAll('#express-tbody tr');
+    var inserted = false;
+    for (var i = 0; i < allRows.length; i++) {
+      if (allRows[i].id && allRows[i].id.startsWith('row-')) {
+        var btn = allRows[i].querySelector('[onclick*="toggleExpressDetail"]');
+        if (btn && btn.textContent.trim() === '详情' && !inserted) {
+          var foundId = btn.getAttribute('onclick').match(/toggleExpressDetail\('([^']+)'\)/);
+          if (foundId && foundId[1] === id) {
+            allRows[i].insertAdjacentElement('afterend', tr);
+            inserted = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (expressDetailCache[id]) {
+    renderDetail(expressDetailCache[id]);
+  } else {
+    apiGet('/api/express/' + id).then(function(doc) {
+      renderDetail(doc);
+    }).catch(function() {
+      showToast('加载详情失败', 'error');
+    });
+  }
+}
+
+// ---- Init ----
+searchExpress();
+</script>
+{% endblock %}

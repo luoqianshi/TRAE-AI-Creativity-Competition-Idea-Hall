@@ -1,0 +1,2347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0F172A">
+    <meta name="description" content="安全驾驶监测 - 实时监测驾驶员疲劳状态">
+    <title>安全驾驶监测</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --primary: #0F172A;
+            --secondary: #1E293B;
+            --accent: #F97316;
+            --danger: #EF4444;
+            --success: #22C55E;
+            --warning: #EAB308;
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --glass: rgba(30, 41, 59, 0.75);
+            --glow: 0 0 20px rgba(249, 115, 22, 0.3);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .app {
+            max-width: 100%;
+            min-height: 100vh;
+            background: linear-gradient(135deg, var(--primary) 0%, #1a1f35 100%);
+        }
+
+        .header {
+            padding: 16px 20px;
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), var(--danger));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav { display: flex; gap: 8px; }
+
+        .nav-btn {
+            background: transparent;
+            border: 1px solid var(--text-secondary);
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        .nav-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        .page {
+            display: none;
+            padding: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .page.active { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .camera-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            border-radius: 20px;
+            overflow: hidden;
+            background: var(--secondary);
+            box-shadow: var(--glow);
+            border: 3px solid transparent;
+            transition: border-color 0.3s;
+        }
+
+        .camera-container.alert-active {
+            animation: pulse-border 0.5s infinite;
+        }
+
+        @keyframes pulse-border {
+            0%, 100% { border-color: var(--danger); box-shadow: 0 0 30px rgba(239, 68, 68, 0.6); }
+            50% { border-color: var(--accent); box-shadow: 0 0 30px rgba(249, 115, 22, 0.6); }
+        }
+
+        #videoElement {
+            width: 100%;
+            display: block;
+            transform: scaleX(-1);
+        }
+
+        #canvasElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+
+        .camera-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 12px 16px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.85));
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .camera-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .status-dot.blinking { animation: blink 1s infinite; }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Debug panel overlay */
+        .debug-panel {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #00ff00;
+            line-height: 1.6;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .camera-container.camera-hidden {
+            height: 240px;
+        }
+
+        .camera-container.camera-hidden .debug-panel {
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 14px;
+            padding: 16px 24px;
+            background: rgba(0,0,0,0.9);
+        }
+
+        .camera-container.camera-hidden .camera-overlay {
+            background: rgba(0,0,0,0.9);
+        }
+
+        .debug-row { display: flex; justify-content: space-between; gap: 16px; }
+        .debug-label { color: #888; }
+        .debug-val { font-weight: bold; }
+        .debug-val.normal { color: #00ff00; }
+        .debug-val.warn { color: #EAB308; }
+        .debug-val.danger { color: #EF4444; }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+            max-width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .status-card {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            padding: 14px;
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: all 0.3s;
+        }
+
+        .status-card.warning {
+            border-color: var(--warning);
+            box-shadow: 0 0 15px rgba(234, 179, 8, 0.2);
+        }
+
+        .status-card.danger {
+            border-color: var(--danger);
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+        }
+
+        .status-card.success { border-color: var(--success); }
+
+        .status-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-sub {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: 'Courier New', monospace;
+        }
+
+        .status-value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 22px;
+            font-weight: 600;
+        }
+
+        .status-value.danger { color: var(--danger); }
+        .status-value.warning { color: var(--warning); }
+        .status-value.success { color: var(--success); }
+
+        .status-unit { font-size: 11px; color: var(--text-secondary); margin-left: 2px; }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+            max-width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: none;
+            font-family: 'Noto Sans SC', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), var(--danger));
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(249, 115, 22, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--text-secondary);
+        }
+
+        .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+        .alert-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: transparent;
+            display: none;
+            justify-content: center;
+            align-items: flex-start;
+            z-index: 999;
+            padding-top: 120px;
+            pointer-events: none;
+        }
+
+        .alert-overlay.active { display: flex; }
+
+        .alert-content {
+            background: var(--secondary);
+            border: 2px solid var(--danger);
+            border-radius: 24px;
+            padding: 32px;
+            text-align: center;
+            max-width: 320px;
+            animation: shake 0.5s, pulse-alert 1s infinite;
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.5);
+            pointer-events: auto;
+        }
+
+        @keyframes pulse-alert {
+            0%, 100% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.5); }
+            50% { box-shadow: 0 0 50px rgba(239, 68, 68, 0.8); }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
+        }
+
+        .alert-icon { font-size: 64px; margin-bottom: 16px; }
+        .alert-title { font-family: 'Orbitron', sans-serif; font-size: 20px; color: var(--danger); margin-bottom: 12px; }
+        .alert-message { font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; }
+
+        .alert-dismiss {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 12px 32px;
+            border-radius: 12px;
+            font-size: 14px;
+            cursor: pointer;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        .settings-section {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .settings-title {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .setting-item:last-child { border-bottom: none; }
+        .setting-label { font-size: 14px; }
+        .setting-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        .toggle { position: relative; width: 48px; height: 26px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--secondary);
+            border-radius: 26px;
+            transition: 0.3s;
+            border: 1px solid var(--text-secondary);
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px; width: 20px;
+            left: 2px; bottom: 2px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+
+        .toggle input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+        .toggle input:checked + .toggle-slider:before { transform: translateX(22px); }
+
+        .select-wrapper { position: relative; }
+
+        .select-wrapper select {
+            appearance: none;
+            background: var(--secondary);
+            border: 1px solid var(--text-secondary);
+            border-radius: 8px;
+            padding: 8px 32px 8px 12px;
+            color: var(--text-primary);
+            font-size: 13px;
+            cursor: pointer;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        .select-wrapper::after {
+            content: "▼";
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 10px;
+            color: var(--text-secondary);
+            pointer-events: none;
+        }
+
+        .stats-overview {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-box {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .stat-number { font-family: 'Orbitron', sans-serif; font-size: 28px; font-weight: 600; color: var(--accent); }
+        .stat-label { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+
+        .record-list {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .record-item {
+            padding: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .record-item:last-child { border-bottom: none; }
+        .record-date { font-size: 13px; color: var(--text-primary); }
+        .record-details { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+
+        .record-alerts {
+            background: var(--danger);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .record-alerts.safe { background: var(--success); }
+
+        .empty-state { text-align: center; padding: 40px; color: var(--text-secondary); }
+        .empty-state p { margin-top: 12px; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--primary); }
+        ::-webkit-scrollbar-thumb { background: var(--secondary); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid var(--secondary);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--primary);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+        }
+
+        .loading-text { margin-top: 16px; font-size: 14px; color: var(--text-secondary); }
+        .loading-error { color: var(--danger); text-align: center; padding: 20px; max-width: 400px; }
+
+        .wake-lock-indicator {
+            position: fixed;
+            top: 70px; right: 20px;
+            background: var(--success);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            display: none;
+            z-index: 100;
+        }
+
+        .wake-lock-indicator.active { display: block; }
+
+        .permission-hint {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            max-width: 400px;
+            margin: 40px auto;
+        }
+
+        @media (max-width: 480px) {
+            .header { padding: 12px 16px; }
+            .logo { font-size: 14px; }
+            .nav-btn { padding: 6px 12px; font-size: 12px; }
+            .page { padding: 16px; }
+            .status-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .status-value { font-size: 18px; }
+            .controls { flex-direction: column; }
+            .stats-overview { grid-template-columns: 1fr; }
+            .debug-panel { font-size: 10px; padding: 6px 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text">正在加载人脸检测模型...</div>
+        <div class="loading-text" style="font-size:12px; margin-top:8px; opacity:0.6;">首次加载需要下载模型文件，请稍候</div>
+    </div>
+
+    <div id="wakeLockIndicator" class="wake-lock-indicator">屏幕常亮已开启</div>
+
+    <div id="alertOverlay" class="alert-overlay">
+        <div class="alert-content">
+            <div class="alert-icon">⚠️</div>
+            <div class="alert-title" id="alertTitle">疲劳警告</div>
+            <div class="alert-message" id="alertMessage">检测到疲劳迹象，请立即休息！</div>
+            <button class="alert-dismiss" id="alertDismiss">关闭警告</button>
+        </div>
+    </div>
+
+    <div id="permissionOverlay" class="alert-overlay" style="pointer-events: none;">
+        <div class="alert-content" style="pointer-events: auto; max-width: 360px;">
+            <div class="alert-icon">📷</div>
+            <div class="alert-title">需要摄像头权限</div>
+            <div class="alert-message" style="text-align: left; font-size: 14px; line-height: 1.8;">
+                <p style="margin-bottom: 10px;">本应用需要使用前置摄像头进行疲劳检测，请按以下步骤开启权限：</p>
+                <p style="margin-bottom: 6px;"><strong>手机浏览器：</strong></p>
+                <p style="margin-bottom: 6px; padding-left: 16px;">1. 点击地址栏左侧的 🔒 或 ⓘ 图标</p>
+                <p style="margin-bottom: 6px; padding-left: 16px;">2. 找到「摄像头」或「相机」选项</p>
+                <p style="margin-bottom: 10px; padding-left: 16px;">3. 选择「允许」</p>
+                <p style="margin-bottom: 6px;"><strong>电脑浏览器：</strong></p>
+                <p style="margin-bottom: 6px; padding-left: 16px;">1. 点击地址栏右侧的摄像头图标</p>
+                <p style="padding-left: 16px;">2. 选择「始终允许」后刷新页面</p>
+            </div>
+            <button class="alert-dismiss" id="permissionDismiss">我知道了</button>
+        </div>
+    </div>
+
+    <div class="app">
+        <header class="header">
+            <div class="logo">
+                <img src="logo.svg" alt="Logo" style="width: 32px; height: 32px;">
+            </div>
+            <nav class="nav">
+                <button class="nav-btn active" data-page="monitor">监测</button>
+                <button class="nav-btn" data-page="dashboard">数据</button>
+                <button class="nav-btn" data-page="settings">设置</button>
+            </nav>
+        </header>
+
+        <main id="monitorPage" class="page active">
+            <div class="camera-container" id="cameraContainer">
+                <video id="videoElement" playsinline autoplay muted></video>
+                <canvas id="canvasElement"></canvas>
+                <div class="debug-panel" id="debugPanel">
+                    <div class="debug-row"><span class="debug-label">眼睛比:</span><span class="debug-val" id="debugEAR">--</span></div>
+                    <div class="debug-row"><span class="debug-label">基线:</span><span class="debug-val" id="debugBase">--</span></div>
+                    <div class="debug-row"><span class="debug-label">嘴巴比:</span><span class="debug-val" id="debugMAR">--</span></div>
+                    <div class="debug-row"><span class="debug-label">俯仰角:</span><span class="debug-val" id="debugPitch">--</span></div>
+                    <div class="debug-row"><span class="debug-label">眨眼/分:</span><span class="debug-val" id="debugBlink">--</span></div>
+                    <div class="debug-row"><span class="debug-label">哈欠:</span><span class="debug-val" id="debugYawn">0</span></div>
+                    <div class="debug-row"><span class="debug-label">人脸:</span><span class="debug-val" id="debugFace">否</span></div>
+                </div>
+                <div class="camera-overlay">
+                    <div class="camera-status">
+                        <div class="status-dot" id="statusDot"></div>
+                        <span id="statusText">准备就绪</span>
+                    </div>
+                    <div style="display:flex; gap:12px; align-items:center;">
+                        <button id="debugToggle" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; padding:4px 8px; border-radius:4px; font-size:10px; cursor:pointer;">隐藏摄像头</button>
+                        <span id="fpsDisplay" style="font-size: 12px; color: var(--text-secondary); font-family:'Courier New',monospace;">-- FPS</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-grid">
+                <div class="status-card" id="perclosCard">
+                    <div class="status-label">
+                        <span>👁️</span> 眼睛闭合率
+                    </div>
+                    <div class="status-value" id="perclosValue">0<span class="status-unit">%</span></div>
+                    <div class="status-sub" id="earDisplay">EAR: --</div>
+                </div>
+
+                <div class="status-card" id="yawnCard">
+                    <div class="status-label">
+                        <span>😮</span> 嘴巴张开度
+                    </div>
+                    <div class="status-value" id="marValue">0<span class="status-unit">%</span></div>
+                    <div class="status-sub" id="yawnDisplay">哈欠: 0次</div>
+                </div>
+
+                <div class="status-card" id="headCard">
+                    <div class="status-label">
+                        <span>🙈</span> 头部角度
+                    </div>
+                    <div class="status-value" id="headPose">正常</div>
+                    <div class="status-sub" id="pitchDisplay">Pitch: --°</div>
+                </div>
+
+                <div class="status-card" id="timeCard">
+                    <div class="status-label">
+                        <span>⏱️</span> 连续驾驶
+                    </div>
+                    <div class="status-value" id="drivingTime">0<span class="status-unit">分钟</span></div>
+                    <div class="status-sub" id="gpsDisplay">GPS: 未定位</div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button class="btn btn-primary" id="startBtn">
+                    <span>▶</span> 开始监测
+                </button>
+                <button class="btn btn-secondary" id="stopBtn" disabled>
+                    <span>⬛</span> 停止
+                </button>
+            </div>
+
+            <div style="max-width:640px; margin:16px auto 0; font-size:11px; color:var(--text-secondary); text-align:center; line-height:1.8;">
+                使用提示：请正对摄像头，保持面部清晰可见，光线充足<br>
+                免责声明：本应用仅用于驾驶员主动监控自身状态，辅助提高驾驶安全，不用于其他用途的疲劳驾驶判定
+            </div>
+        </main>
+
+        <main id="dashboardPage" class="page">
+            <div class="stats-overview">
+                <div class="stat-box">
+                    <div class="stat-number" id="totalDrives">0</div>
+                    <div class="stat-label">总驾驶次数</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number" id="totalAlerts">0</div>
+                    <div class="stat-label">总预警次数</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number" id="safeDrives">0</div>
+                    <div class="stat-label">安全驾驶次数</div>
+                </div>
+            </div>
+
+            <div class="settings-title">驾驶记录</div>
+            <div class="record-list" id="recordList">
+                <div class="empty-state">
+                    <p>暂无驾驶记录</p>
+                </div>
+            </div>
+        </main>
+
+        <main id="settingsPage" class="page">
+            <div class="settings-section">
+                <div class="settings-title">👁️ 眼睛检测灵敏度</div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">眨眼频率检测</div>
+                        <div class="setting-desc">快速选择预设级别</div>
+                    </div>
+                    <div class="select-wrapper">
+                        <select id="blinkRateSensitivitySelect">
+                            <option value="low">低（不易触发）</option>
+                            <option value="medium" selected>中（推荐）</option>
+                            <option value="high">高（容易触发）</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">眨眼下限</div>
+                        <div class="setting-desc">低于此次数/分触发预警（正常8-20）</div>
+                    </div>
+                    <div class="input-wrapper">
+                        <input type="number" id="blinkRateLowInput" min="1" max="20" value="8" style="width:70px; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.05); color:var(--text-primary); font-size:14px; text-align:center;">
+                        <span style="margin-left:8px; color:var(--text-secondary); font-size:13px;">次/分</span>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">眨眼上限</div>
+                        <div class="setting-desc">高于此次数/分触发预警</div>
+                    </div>
+                    <div class="input-wrapper">
+                        <input type="number" id="blinkRateHighInput" min="10" max="60" value="20" style="width:70px; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.05); color:var(--text-primary); font-size:14px; text-align:center;">
+                        <span style="margin-left:8px; color:var(--text-secondary); font-size:13px;">次/分</span>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">闭眼时长检测</div>
+                        <div class="setting-desc">快速选择预设级别</div>
+                    </div>
+                    <div class="select-wrapper">
+                        <select id="eyeClosureSensitivitySelect">
+                            <option value="low">低（不易触发）</option>
+                            <option value="medium" selected>中（推荐）</option>
+                            <option value="high">高（容易触发）</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">正常眨眼最大时长</div>
+                        <div class="setting-desc">闭眼超过此时长不算眨眼（推荐300-500ms）</div>
+                    </div>
+                    <div class="input-wrapper">
+                        <input type="number" id="blinkMaxMsInput" min="100" max="1000" step="50" value="400" style="width:70px; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.05); color:var(--text-primary); font-size:14px; text-align:center;">
+                        <span style="margin-left:8px; color:var(--text-secondary); font-size:13px;">毫秒</span>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">长闭眼阈值</div>
+                        <div class="setting-desc">闭眼超过此时间算疲劳（推荐500-2000ms）</div>
+                    </div>
+                    <div class="input-wrapper">
+                        <input type="number" id="longClosureMsInput" min="200" max="5000" step="100" value="500" style="width:70px; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.05); color:var(--text-primary); font-size:14px; text-align:center;">
+                        <span style="margin-left:8px; color:var(--text-secondary); font-size:13px;">毫秒</span>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">😮 打哈欠检测</div>
+                        <div class="setting-desc">调整嘴巴张开检测的灵敏度</div>
+                    </div>
+                    <div class="select-wrapper">
+                        <select id="yawnSensitivitySelect">
+                            <option value="low">低（不易触发）</option>
+                            <option value="medium" selected>中（推荐）</option>
+                            <option value="high">高（容易触发）</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">🙈 低头检测</div>
+                        <div class="setting-desc">调整头部倾斜检测的灵敏度</div>
+                    </div>
+                    <div class="select-wrapper">
+                        <select id="headSensitivitySelect">
+                            <option value="low">低（不易触发）</option>
+                            <option value="medium" selected>中（推荐）</option>
+                            <option value="high">高（容易触发）</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">PERCLOS计算窗口</div>
+                        <div class="setting-desc">时间窗口越大，检测越平滑</div>
+                    </div>
+                    <div class="select-wrapper">
+                        <select id="perclosWindowSelect">
+                            <option value="30">30秒（灵敏）</option>
+                            <option value="60" selected>60秒（平衡）</option>
+                            <option value="90">90秒（稳定）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-title">预警响应方式</div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">声音警报</div>
+                        <div class="setting-desc">播放警报音效</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="soundToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">屏幕闪动</div>
+                        <div class="setting-desc">红色边框闪烁提示</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="flashToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">震动提示</div>
+                        <div class="setting-desc">设备震动（需设备支持）</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="vibrateToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">语音提示</div>
+                        <div class="setting-desc">语音播报警告内容</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="speechToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-title">驾驶时间设置</div>
+                <div class="setting-item">
+                    <div>
+                        <div class="setting-label">连续驾驶警告阈值</div>
+                        <div class="setting-desc">超过此时间将提醒休息</div>
+                    </div>
+                    <div class="select-wrapper">
+                        <select id="drivingThresholdSelect">
+                            <option value="2">2小时</option>
+                            <option value="2.5">2.5小时</option>
+                            <option value="3">3小时</option>
+                            <option value="3.5">3.5小时</option>
+                            <option value="4" selected>4小时</option>
+                            <option value="4.5">4.5小时</option>
+                            <option value="5">5小时</option>
+                            <option value="5.5">5.5小时</option>
+                            <option value="6">6小时</option>
+                            <option value="6.5">6.5小时</option>
+                            <option value="7">7小时</option>
+                            <option value="7.5">7.5小时</option>
+                            <option value="8">8小时</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-title">检测说明</div>
+                <div style="font-size:12px; color:var(--text-secondary); line-height:1.8;">
+                    <p><strong style="color:var(--text-primary)">眨眼/闭眼检测：</strong>通过计算眼睛纵横比(EAR)判断眼睛开合状态，PERCLOS值反映一段时间内眼睛闭合的比例。正常EAR约0.25-0.35，闭眼时约0.15以下。</p>
+                    <p style="margin-top:8px;"><strong style="color:var(--text-primary)">打哈欠检测：</strong>通过计算嘴巴纵横比(MAR)判断嘴巴张开程度，持续张嘴超过阈值判定为打哈欠。</p>
+                    <p style="margin-top:8px;"><strong style="color:var(--text-primary)">低头检测：</strong>通过面部关键点计算头部俯仰角，头部持续向下倾斜超过阈值判定为低头。</p>
+                    <p style="margin-top:12px; padding:10px; background:rgba(249,115,22,0.1); border-radius:8px; border-left:3px solid var(--accent);"><strong style="color:var(--accent)">⚠️ 免责声明：</strong>本应用仅用于驾驶员主动监控自身状态，辅助提高驾驶安全，不用于其他用途的疲劳驾驶判定。</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // ==================== App State ====================
+        const AppState = {
+            isMonitoring: false,
+            faceMesh: null,
+            videoElement: null,
+            canvasElement: null,
+            canvasCtx: null,
+            animationId: null,
+            lastFrameTime: 0,
+            frameCount: 0,
+            fps: 0,
+            faceDetected: false,
+            showDebug: true,
+            showCameraFeed: true,
+
+            // Detection state
+            eyeClosureHistory: [],
+            earHistory: [],
+            earSmoothedHistory: [],
+            earBaseline: 0,
+            blinkCount: 0,
+            blinkHistory: [],
+            eyesClosedStart: null,
+            blinkMinEAR: 1.0,
+            closedFrameCount: 0,
+            lastBlinkTime: 0,
+            lastBlinkEndTime: 0,
+            yawnCount: 0,
+            consecutiveYawns: 0,
+            lastYawnTime: 0,
+            mouthOpenStart: null,
+            headDownStart: null,
+            drivingStartTime: null,
+            drivingInterval: null,
+            geolocationWatchId: null,
+            currentPosition: null,
+            totalAlertsThisSession: 0,
+            lastBlinkRate: 0,
+            longestEyeClosure: 0,
+            recentLongClosures: [],
+            monitoringStartTime: null,
+
+            // Current values
+            currentEAR: 0,
+            currentMAR: 0,
+            currentPitch: 0,
+            perclos: 0,
+
+            // Alert state
+            currentAlertLevel: 0,
+            alertActive: false,
+            wakeLock: null,
+            audioContext: null,
+            lastSoundTime: 0,
+
+            // Settings
+            settings: {
+                blinkRateSensitivity: 'medium',
+                blinkRateLow: 8,
+                blinkRateHigh: 20,
+                eyeClosureSensitivity: 'medium',
+                longClosureMs: 500,
+                blinkMaxMs: 400,
+                yawnSensitivity: 'medium',
+                headSensitivity: 'medium',
+                perclosWindow: 60,
+                soundEnabled: true,
+                flashEnabled: true,
+                vibrateEnabled: true,
+                speechEnabled: true,
+                drivingThreshold: 4
+            },
+
+            records: [],
+
+            thresholds: {
+                low:    { earClosed: 0.25, earBlink: 0.21, perclosL1: 20, perclosL2: 35, perclosL3: 50, marOpen: 0.60, yawnDuration: 1000, headDownAngle: 25, blinkClosedMinMs: 100, blinkClosedMaxMs: 600, blinkRateLow: 5, blinkRateHigh: 25, longClosureThresh: 800, longClosureCountL1: 3, longClosureCountL2: 5, longClosureCountL3: 8 },
+                medium: { earClosed: 0.23, earBlink: 0.19, perclosL1: 15, perclosL2: 25, perclosL3: 40, marOpen: 0.50, yawnDuration: 700, headDownAngle: 20, blinkClosedMinMs: 80, blinkClosedMaxMs: 500, blinkRateLow: 8, blinkRateHigh: 20, longClosureThresh: 500, longClosureCountL1: 2, longClosureCountL2: 3, longClosureCountL3: 5 },
+                high:   { earClosed: 0.20, earBlink: 0.17, perclosL1: 10, perclosL2: 20, perclosL3: 30, marOpen: 0.40, yawnDuration: 500, headDownAngle: 15, blinkClosedMinMs: 60, blinkClosedMaxMs: 400, blinkRateLow: 10, blinkRateHigh: 18, longClosureThresh: 400, longClosureCountL1: 1, longClosureCountL2: 2, longClosureCountL3: 3 }
+            }
+        };
+
+        // ==================== MediaPipe Face Mesh Landmark Indices ====================
+        // Right eye (subject's right, appears on left side of mirrored image)
+        // 6 points: outer corner, upper-outer, upper-inner, inner corner, lower-inner, lower-outer
+        const RIGHT_EYE = [33, 160, 158, 133, 153, 144];
+        // Left eye (subject's left, appears on right side of mirrored image)
+        const LEFT_EYE  = [362, 385, 387, 263, 373, 380];
+
+        // Mouth landmarks for MAR (using outer lip points for better visibility)
+        // Upper lip outer: 0 is between nose and upper lip, use multiple upper points
+        // Upper lip outer points: 61 (left), 185, 40, 39, 37, 0, 267, 269, 270, 409, 291 (right)
+        // Lower lip outer points: 375 (right), 321, 405, 314, 17, 84, 181, 91, 146, 61
+        const MOUTH_UPPER_OUTER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
+        const MOUTH_LOWER_OUTER = [375, 321, 405, 314, 17, 84, 181, 91, 146, 61];
+        const MOUTH_UPPER_CENTER = 13;
+        const MOUTH_LOWER_CENTER = 14;
+        const MOUTH_LEFT_CORNER = 78;
+        const MOUTH_RIGHT_CORNER = 308;
+        const MOUTH_LEFT_CORNER_OUTER = 61;
+        const MOUTH_RIGHT_CORNER_OUTER = 291;
+
+        // Nose tip for head pose
+        const NOSE_TIP = 1;
+        const CHIN = 152;
+        const LEFT_EYE_OUTER = 263;
+        const RIGHT_EYE_OUTER = 33;
+
+        // ==================== DOM Elements ====================
+        const el = {
+            loadingOverlay: document.getElementById('loadingOverlay'),
+            videoElement: document.getElementById('videoElement'),
+            canvasElement: document.getElementById('canvasElement'),
+            cameraContainer: document.getElementById('cameraContainer'),
+            startBtn: document.getElementById('startBtn'),
+            stopBtn: document.getElementById('stopBtn'),
+            statusDot: document.getElementById('statusDot'),
+            statusText: document.getElementById('statusText'),
+            fpsDisplay: document.getElementById('fpsDisplay'),
+            debugPanel: document.getElementById('debugPanel'),
+            debugToggle: document.getElementById('debugToggle'),
+            debugEAR: document.getElementById('debugEAR'),
+            debugBase: document.getElementById('debugBase'),
+            debugMAR: document.getElementById('debugMAR'),
+            debugPitch: document.getElementById('debugPitch'),
+            debugBlink: document.getElementById('debugBlink'),
+            debugYawn: document.getElementById('debugYawn'),
+            debugFace: document.getElementById('debugFace'),
+            perclosValue: document.getElementById('perclosValue'),
+            perclosCard: document.getElementById('perclosCard'),
+            earDisplay: document.getElementById('earDisplay'),
+            marValue: document.getElementById('marValue'),
+            yawnCard: document.getElementById('yawnCard'),
+            yawnDisplay: document.getElementById('yawnDisplay'),
+            headPose: document.getElementById('headPose'),
+            headCard: document.getElementById('headCard'),
+            pitchDisplay: document.getElementById('pitchDisplay'),
+            drivingTime: document.getElementById('drivingTime'),
+            gpsDisplay: document.getElementById('gpsDisplay'),
+            alertOverlay: document.getElementById('alertOverlay'),
+            alertTitle: document.getElementById('alertTitle'),
+            alertMessage: document.getElementById('alertMessage'),
+            alertDismiss: document.getElementById('alertDismiss'),
+            permissionOverlay: document.getElementById('permissionOverlay'),
+            permissionDismiss: document.getElementById('permissionDismiss'),
+            wakeLockIndicator: document.getElementById('wakeLockIndicator'),
+            recordList: document.getElementById('recordList'),
+            totalDrives: document.getElementById('totalDrives'),
+            totalAlerts: document.getElementById('totalAlerts'),
+            safeDrives: document.getElementById('safeDrives'),
+            navBtns: document.querySelectorAll('.nav-btn'),
+            pages: document.querySelectorAll('.page')
+        };
+
+        // ==================== Utility Functions ====================
+        function dist(p1, p2) {
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            return Math.sqrt(dx*dx + dy*dy);
+        }
+
+        function dist3D(p1, p2) {
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            const dz = (p1.z || 0) - (p2.z || 0);
+            return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        }
+
+        // Calculate Eye Aspect Ratio (EAR) using 6 eye landmarks
+        // Standard formula: EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+        function calcEAR(eyePts) {
+            if (!eyePts || eyePts.length < 6) return 0;
+            const v1 = dist(eyePts[1], eyePts[5]);
+            const v2 = dist(eyePts[2], eyePts[4]);
+            const h  = dist(eyePts[0], eyePts[3]);
+            if (h < 0.001) return 0;
+            return (v1 + v2) / (2.0 * h);
+        }
+
+        // Calculate Mouth Aspect Ratio (MAR)
+        // Uses multiple points for robustness: averages vertical distances across mouth
+        function calcMAR(landmarks) {
+            // Use inner lip centers (13, 14) and outer corners for primary measurement
+            const upperInner = landmarks[13];
+            const lowerInner = landmarks[14];
+            const leftOuter = landmarks[61];
+            const rightOuter = landmarks[291];
+
+            if (!upperInner || !lowerInner || !leftOuter || !rightOuter) return 0;
+
+            // Vertical distance using inner lip centers
+            const vCenter = dist(upperInner, lowerInner);
+
+            // Additional vertical measurements for robustness (left/right of center)
+            // Upper lip points: 40 (left-upper), 39, 37 (center-upper), 267, 269 (right-upper)
+            // Lower lip points: 146 (left-lower), 91, 17 (center-lower), 405, 321 (right-lower)
+            const vLeft = dist(landmarks[40], landmarks[146]);
+            const vRight = dist(landmarks[269], landmarks[405]);
+
+            // Average vertical distance
+            const vAvg = (vCenter + vLeft + vRight) / 3;
+
+            // Horizontal distance (mouth width) using outer corners
+            const h = dist(leftOuter, rightOuter);
+
+            if (h < 0.001) return 0;
+            return vAvg / h;
+        }
+
+        // Calculate head pitch angle (up/down tilt)
+        function calcHeadPitch(landmarks) {
+            const noseTip = landmarks[NOSE_TIP];
+            const chin = landmarks[CHIN];
+            const leftEye = landmarks[LEFT_EYE_OUTER];
+            const rightEye = landmarks[RIGHT_EYE_OUTER];
+
+            if (!noseTip || !chin || !leftEye || !rightEye) return 0;
+
+            const eyeCenterY = (leftEye.y + rightEye.y) / 2;
+            const faceHeight = dist(noseTip, chin);
+            if (faceHeight < 0.001) return 0;
+
+            // Ratio of nose-to-chin vs eye-to-nose indicates head tilt
+            const eyeToNose = Math.abs(noseTip.y - eyeCenterY);
+            const noseToChin = Math.abs(chin.y - noseTip.y);
+            const ratio = eyeToNose / (noseToChin + 0.001);
+
+            // Normalize to degrees
+            // When head is level, ratio is approximately 0.5 (nose is midway between eyes and chin)
+            // When looking down, nose appears closer to chin (ratio increases)
+            // When looking up, nose appears closer to eyes (ratio decreases)
+            const pitch = (ratio - 0.4) * 90;
+            return Math.max(-45, Math.min(45, pitch));
+        }
+
+        // ==================== Storage ====================
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem('driverMonitorSettings');
+                if (saved) AppState.settings = { ...AppState.settings, ...JSON.parse(saved) };
+            } catch(e) { console.warn('Failed to load settings:', e); }
+            applySettingsUI();
+        }
+
+        function saveSettings() {
+            try { localStorage.setItem('driverMonitorSettings', JSON.stringify(AppState.settings)); }
+            catch(e) { console.warn('Failed to save settings:', e); }
+        }
+
+        function loadRecords() {
+            try {
+                const saved = localStorage.getItem('driverMonitorRecords');
+                if (saved) AppState.records = JSON.parse(saved);
+            } catch(e) { console.warn('Failed to load records:', e); }
+            updateDashboard();
+        }
+
+        function saveRecord(record) {
+            AppState.records.unshift(record);
+            if (AppState.records.length > 50) AppState.records = AppState.records.slice(0, 50);
+            try { localStorage.setItem('driverMonitorRecords', JSON.stringify(AppState.records)); }
+            catch(e) { console.warn('Failed to save record:', e); }
+            updateDashboard();
+        }
+
+        // ==================== Settings UI ====================
+        function applySettingsUI() {
+            document.getElementById('blinkRateSensitivitySelect').value = AppState.settings.blinkRateSensitivity;
+            document.getElementById('blinkRateLowInput').value = AppState.settings.blinkRateLow;
+            document.getElementById('blinkRateHighInput').value = AppState.settings.blinkRateHigh;
+            document.getElementById('eyeClosureSensitivitySelect').value = AppState.settings.eyeClosureSensitivity;
+            document.getElementById('blinkMaxMsInput').value = AppState.settings.blinkMaxMs;
+            document.getElementById('longClosureMsInput').value = AppState.settings.longClosureMs;
+            document.getElementById('yawnSensitivitySelect').value = AppState.settings.yawnSensitivity;
+            document.getElementById('headSensitivitySelect').value = AppState.settings.headSensitivity;
+            document.getElementById('perclosWindowSelect').value = AppState.settings.perclosWindow;
+            document.getElementById('soundToggle').checked = AppState.settings.soundEnabled;
+            document.getElementById('flashToggle').checked = AppState.settings.flashEnabled;
+            document.getElementById('vibrateToggle').checked = AppState.settings.vibrateEnabled;
+            document.getElementById('speechToggle').checked = AppState.settings.speechEnabled;
+            document.getElementById('drivingThresholdSelect').value = AppState.settings.drivingThreshold;
+        }
+
+        function setupSettingsListeners() {
+            document.getElementById('blinkRateSensitivitySelect').addEventListener('change', e => {
+                const level = e.target.value;
+                AppState.settings.blinkRateSensitivity = level;
+                // Apply preset values
+                const preset = AppState.thresholds[level];
+                AppState.settings.blinkRateLow = preset.blinkRateLow;
+                AppState.settings.blinkRateHigh = preset.blinkRateHigh;
+                document.getElementById('blinkRateLowInput').value = preset.blinkRateLow;
+                document.getElementById('blinkRateHighInput').value = preset.blinkRateHigh;
+                saveSettings();
+            });
+            document.getElementById('blinkRateLowInput').addEventListener('change', e => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 1 && val <= 30) {
+                    AppState.settings.blinkRateLow = val;
+                    saveSettings();
+                }
+            });
+            document.getElementById('blinkRateHighInput').addEventListener('change', e => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 5 && val <= 60) {
+                    AppState.settings.blinkRateHigh = val;
+                    saveSettings();
+                }
+            });
+            document.getElementById('eyeClosureSensitivitySelect').addEventListener('change', e => {
+                const level = e.target.value;
+                AppState.settings.eyeClosureSensitivity = level;
+                // Apply preset values
+                const preset = AppState.thresholds[level];
+                AppState.settings.blinkMaxMs = preset.blinkClosedMaxMs;
+                AppState.settings.longClosureMs = preset.longClosureThresh;
+                document.getElementById('blinkMaxMsInput').value = preset.blinkClosedMaxMs;
+                document.getElementById('longClosureMsInput').value = preset.longClosureThresh;
+                saveSettings();
+            });
+            document.getElementById('blinkMaxMsInput').addEventListener('change', e => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 100 && val <= 1000) {
+                    AppState.settings.blinkMaxMs = val;
+                    saveSettings();
+                }
+            });
+            document.getElementById('longClosureMsInput').addEventListener('change', e => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 200 && val <= 5000) {
+                    AppState.settings.longClosureMs = val;
+                    saveSettings();
+                }
+            });
+            document.getElementById('yawnSensitivitySelect').addEventListener('change', e => {
+                AppState.settings.yawnSensitivity = e.target.value; saveSettings();
+            });
+            document.getElementById('headSensitivitySelect').addEventListener('change', e => {
+                AppState.settings.headSensitivity = e.target.value; saveSettings();
+            });
+            document.getElementById('perclosWindowSelect').addEventListener('change', e => {
+                AppState.settings.perclosWindow = parseInt(e.target.value); saveSettings();
+            });
+            document.getElementById('soundToggle').addEventListener('change', e => {
+                AppState.settings.soundEnabled = e.target.checked; saveSettings();
+            });
+            document.getElementById('flashToggle').addEventListener('change', e => {
+                AppState.settings.flashEnabled = e.target.checked; saveSettings();
+            });
+            document.getElementById('vibrateToggle').addEventListener('change', e => {
+                AppState.settings.vibrateEnabled = e.target.checked; saveSettings();
+            });
+            document.getElementById('speechToggle').addEventListener('change', e => {
+                AppState.settings.speechEnabled = e.target.checked; saveSettings();
+            });
+            document.getElementById('drivingThresholdSelect').addEventListener('change', e => {
+                AppState.settings.drivingThreshold = parseFloat(e.target.value); saveSettings();
+            });
+        }
+
+        // ==================== Navigation ====================
+        function setupNavigation() {
+            el.navBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const page = btn.dataset.page;
+                    el.navBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    el.pages.forEach(p => p.classList.remove('active'));
+                    document.getElementById(page + 'Page').classList.add('active');
+                });
+            });
+
+            el.debugToggle.addEventListener('click', () => {
+                AppState.showCameraFeed = !AppState.showCameraFeed;
+                if (AppState.showCameraFeed) {
+                    el.videoElement.style.display = 'block';
+                    el.canvasElement.style.display = 'block';
+                    el.cameraContainer.classList.remove('camera-hidden');
+                    el.debugToggle.textContent = '隐藏摄像头';
+                } else {
+                    el.videoElement.style.display = 'none';
+                    el.canvasElement.style.display = 'none';
+                    el.cameraContainer.classList.add('camera-hidden');
+                    el.debugToggle.textContent = '显示摄像头';
+                }
+            });
+        }
+
+        // ==================== Face Mesh Initialization ====================
+        async function initFaceMesh() {
+            try {
+                if (typeof FaceMesh === 'undefined') {
+                    throw new Error('FaceMesh库未加载，请检查网络连接');
+                }
+
+                AppState.faceMesh = new FaceMesh({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+                });
+
+                AppState.faceMesh.setOptions({
+                    maxNumFaces: 1,
+                    refineLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                AppState.faceMesh.onResults(onFaceResults);
+                await AppState.faceMesh.initialize();
+
+                el.loadingOverlay.style.display = 'none';
+                console.log('Face Mesh initialized successfully');
+            } catch (error) {
+                console.error('Face Mesh init failed:', error);
+                el.loadingOverlay.innerHTML = `
+                    <div class="loading-error">
+                        <p style="font-size:48px; margin-bottom:16px;">⚠️</p>
+                        <p style="font-size:16px; margin-bottom:12px;">人脸检测模型加载失败</p>
+                        <p style="font-size:12px; opacity:0.8;">${error.message}</p>
+                        <p style="font-size:12px; margin-top:16px; opacity:0.6;">请检查网络连接后刷新页面重试<br>需要HTTPS环境或localhost才能访问摄像头</p>
+                        <button onclick="location.reload()" style="margin-top:16px; padding:10px 24px; background:var(--accent); color:white; border:none; border-radius:8px; cursor:pointer; font-size:14px;">刷新页面</button>
+                    </div>
+                `;
+            }
+        }
+
+        // ==================== Camera ====================
+        async function checkCameraPermission() {
+            if (!navigator.permissions || !navigator.permissions.query) {
+                return null;
+            }
+            try {
+                const result = await navigator.permissions.query({ name: 'camera' });
+                return result.state;
+            } catch (e) {
+                console.warn('Permission query not supported:', e);
+                return null;
+            }
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+
+                AppState.videoElement = el.videoElement;
+                AppState.videoElement.srcObject = stream;
+
+                // Wait for video to be ready
+                await new Promise((resolve) => {
+                    if (AppState.videoElement.readyState >= 2) {
+                        resolve();
+                    } else {
+                        AppState.videoElement.onloadedmetadata = () => {
+                            AppState.videoElement.play().then(resolve).catch(resolve);
+                        };
+                    }
+                });
+
+                await AppState.videoElement.play();
+
+                // Set canvas size after video is ready
+                const w = AppState.videoElement.videoWidth || 640;
+                const h = AppState.videoElement.videoHeight || 480;
+                AppState.canvasElement = el.canvasElement;
+                AppState.canvasElement.width = w;
+                AppState.canvasElement.height = h;
+                AppState.canvasCtx = AppState.canvasElement.getContext('2d');
+
+                updateStatus('摄像头已启动，正在检测人脸...', 'success');
+                return true;
+            } catch (error) {
+                console.error('Camera error:', error);
+                let msg = '摄像头访问失败';
+                if (error.name === 'NotAllowedError') {
+                    msg = '摄像头权限被拒绝';
+                    showPermissionGuide();
+                }
+                else if (error.name === 'NotFoundError') msg = '未找到摄像头设备';
+                else if (error.name === 'NotReadableError') msg = '摄像头被其他应用占用';
+                updateStatus(msg, 'danger');
+                return false;
+            }
+        }
+
+        function stopCamera() {
+            if (AppState.videoElement && AppState.videoElement.srcObject) {
+                AppState.videoElement.srcObject.getTracks().forEach(track => track.stop());
+                AppState.videoElement.srcObject = null;
+            }
+            if (AppState.canvasCtx) {
+                AppState.canvasCtx.clearRect(0, 0, el.canvasElement.width, el.canvasElement.height);
+            }
+        }
+
+        function updateStatus(text, color) {
+            el.statusText.textContent = text;
+            const colors = { success: 'var(--success)', danger: 'var(--danger)', warning: 'var(--warning)', idle: 'var(--text-secondary)' };
+            el.statusDot.style.background = colors[color] || colors.idle;
+            el.statusDot.classList.toggle('blinking', color !== 'idle');
+        }
+
+        // ==================== Frame Processing Loop ====================
+        async function processFrame() {
+            if (!AppState.isMonitoring || !AppState.videoElement || !AppState.faceMesh || !AppState.canvasCtx) {
+                AppState.animationId = requestAnimationFrame(processFrame);
+                return;
+            }
+
+            // FPS calculation
+            const now = performance.now();
+            AppState.frameCount++;
+            if (now - AppState.lastFrameTime >= 1000) {
+                AppState.fps = AppState.frameCount;
+                AppState.frameCount = 0;
+                AppState.lastFrameTime = now;
+                el.fpsDisplay.textContent = AppState.fps + ' FPS';
+            }
+
+            try {
+                // Send frame to FaceMesh
+                await AppState.faceMesh.send({ image: AppState.videoElement });
+            } catch (error) {
+                console.error('Frame processing error:', error);
+            }
+
+            AppState.animationId = requestAnimationFrame(processFrame);
+        }
+
+        // ==================== Face Mesh Results Callback ====================
+        function onFaceResults(results) {
+            if (!AppState.isMonitoring) return;
+            if (!AppState.canvasCtx) return;
+
+            try {
+                const ctx = AppState.canvasCtx;
+                const canvasW = el.canvasElement.width;
+                const canvasH = el.canvasElement.height;
+
+                // Clear canvas
+                ctx.clearRect(0, 0, canvasW, canvasH);
+
+                if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+                    AppState.faceDetected = false;
+                    updateStatus('未检测到人脸，请正对摄像头', 'warning');
+                    updateDebugDisplay('--', '--', '--', 'NO');
+                    return;
+                }
+
+                AppState.faceDetected = true;
+                updateStatus('监测中...', 'success');
+
+                const landmarks = results.multiFaceLandmarks[0];
+
+                // Extract eye points
+                const rightEyePts = RIGHT_EYE.map(i => landmarks[i]);
+                const leftEyePts = LEFT_EYE.map(i => landmarks[i]);
+
+                // Calculate EAR for both eyes
+                const rightEAR = calcEAR(rightEyePts);
+                const leftEAR = calcEAR(leftEyePts);
+                const avgEAR = (rightEAR + leftEAR) / 2;
+                AppState.currentEAR = avgEAR;
+
+                // Calculate MAR
+                const mar = calcMAR(landmarks);
+                AppState.currentMAR = mar;
+
+                // Calculate head pitch
+                const pitch = calcHeadPitch(landmarks);
+                AppState.currentPitch = pitch;
+
+                // Draw landmarks on canvas
+                drawKeyPoints(ctx, landmarks, canvasW, canvasH, avgEAR, mar, pitch);
+
+                // Update detection state
+                updateDetection(avgEAR, mar, pitch);
+
+                // Update debug display
+                updateDebugDisplay(
+                    avgEAR.toFixed(3),
+                    mar.toFixed(3),
+                    pitch.toFixed(1) + '°',
+                    'YES'
+                );
+            } catch (e) {
+                console.error('Face results error:', e);
+            }
+        }
+
+        function drawKeyPoints(ctx, landmarks, w, h, ear, mar, pitch) {
+            try {
+                const closureThresh = AppState.thresholds[AppState.settings.eyeClosureSensitivity];
+                const yawnThresh = AppState.thresholds[AppState.settings.yawnSensitivity];
+                const headThresh = AppState.thresholds[AppState.settings.headSensitivity];
+
+                // Safe helper to get landmark
+                const getPt = (idx) => landmarks[idx];
+
+                // Draw eye points
+                const drawEye = (pts, isClosed) => {
+                    const ptsArr = pts.map(i => getPt(i)).filter(Boolean);
+                    if (ptsArr.length < 6) return;
+
+                    ctx.beginPath();
+                    ptsArr.forEach((pt, i) => {
+                        const x = pt.x * w, y = pt.y * h;
+                        if (i === 0) ctx.moveTo(x, y);
+                        else ctx.lineTo(x, y);
+                    });
+                    ctx.closePath();
+                    ctx.fillStyle = isClosed ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.3)';
+                    ctx.fill();
+                    ctx.strokeStyle = isClosed ? '#EF4444' : '#22C55E';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Draw individual points
+                    ptsArr.forEach(pt => {
+                        ctx.beginPath();
+                        ctx.arc(pt.x * w, pt.y * h, 2, 0, Math.PI * 2);
+                        ctx.fillStyle = '#F97316';
+                        ctx.fill();
+                    });
+                };
+
+                const isEyeClosed = ear < closureThresh.earClosed;
+                drawEye(RIGHT_EYE, isEyeClosed);
+                drawEye(LEFT_EYE, isEyeClosed);
+
+                // Draw mouth points
+                const isMouthOpen = mar > yawnThresh.marOpen;
+
+                // Draw inner lip (ellipse-like shape using key points)
+                const innerUpper = [78, 82, 13, 312, 308];
+                const innerLower = [308, 317, 14, 87, 78];
+                ctx.beginPath();
+                let first = true;
+                innerUpper.forEach((idx) => {
+                    const pt = getPt(idx);
+                    if (!pt) return;
+                    const x = pt.x * w, y = pt.y * h;
+                    if (first) { ctx.moveTo(x, y); first = false; }
+                    else ctx.lineTo(x, y);
+                });
+                innerLower.forEach((idx, i) => {
+                    if (i === 0) return;
+                    const pt = getPt(idx);
+                    if (!pt) return;
+                    const x = pt.x * w, y = pt.y * h;
+                    ctx.lineTo(x, y);
+                });
+                ctx.closePath();
+                ctx.strokeStyle = isMouthOpen ? '#EF4444' : '#F97316';
+                ctx.fillStyle = isMouthOpen ? 'rgba(239,68,68,0.3)' : 'rgba(249,115,22,0.2)';
+                ctx.lineWidth = 2;
+                ctx.fill();
+                ctx.stroke();
+
+                // Draw mouth vertical lines (showing openness) - multiple points
+                const mouthPairs = [
+                    [13, 14],
+                    [82, 87],
+                    [312, 317],
+                ];
+                mouthPairs.forEach(([upIdx, lowIdx]) => {
+                    const up = getPt(upIdx);
+                    const low = getPt(lowIdx);
+                    if (up && low) {
+                        ctx.beginPath();
+                        ctx.moveTo(up.x * w, up.y * h);
+                        ctx.lineTo(low.x * w, low.y * h);
+                        ctx.strokeStyle = isMouthOpen ? '#EF4444' : '#22C55E';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                });
+
+                // Draw mouth corners (outer)
+                [61, 291].forEach(idx => {
+                    const pt = getPt(idx);
+                    if (pt) {
+                        ctx.beginPath();
+                        ctx.arc(pt.x * w, pt.y * h, 4, 0, Math.PI * 2);
+                        ctx.fillStyle = '#EAB308';
+                        ctx.fill();
+                    }
+                });
+
+                // Draw nose tip (for head pose reference)
+                const nose = getPt(NOSE_TIP);
+                if (nose) {
+                    ctx.beginPath();
+                    ctx.arc(nose.x * w, nose.y * h, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = Math.abs(pitch) > headThresh.headDownAngle ? '#EF4444' : '#3B82F6';
+                    ctx.fill();
+                }
+            } catch (e) {
+                console.warn('Draw keypoints error:', e);
+            }
+        }
+
+        function updateDebugDisplay(ear, mar, pitch, face) {
+            if (!el.debugEAR) return;
+
+            const closureThresh = AppState.thresholds[AppState.settings.eyeClosureSensitivity];
+            const yawnThresh = AppState.thresholds[AppState.settings.yawnSensitivity];
+            const headThresh = AppState.thresholds[AppState.settings.headSensitivity];
+            el.debugEAR.textContent = ear;
+            if (el.debugBase) {
+                el.debugBase.textContent = AppState.earBaseline > 0 ? AppState.earBaseline.toFixed(3) : '--';
+            }
+            el.debugMAR.textContent = mar;
+            el.debugPitch.textContent = pitch;
+            if (el.debugBlink) {
+                const elapsed = AppState.monitoringStartTime ? (Date.now() - AppState.monitoringStartTime) : 0;
+                if (elapsed >= 15000 && AppState.lastBlinkRate > 0) {
+                    el.debugBlink.textContent = AppState.lastBlinkRate + '/分';
+                } else {
+                    el.debugBlink.textContent = '--';
+                }
+            }
+            if (el.debugYawn) el.debugYawn.textContent = AppState.yawnCount;
+            el.debugFace.textContent = face === 'YES' ? '是' : '否';
+
+            // Color code based on thresholds
+            const earVal = parseFloat(ear);
+            if (isNaN(earVal)) {
+                el.debugEAR.className = 'debug-val';
+            } else if (earVal < closureThresh.earClosed) {
+                el.debugEAR.className = 'debug-val danger';
+            } else if (earVal < closureThresh.earClosed + 0.05) {
+                el.debugEAR.className = 'debug-val warn';
+            } else {
+                el.debugEAR.className = 'debug-val normal';
+            }
+
+            const marVal = parseFloat(mar);
+            if (isNaN(marVal)) {
+                el.debugMAR.className = 'debug-val';
+            } else if (marVal > yawnThresh.marOpen) {
+                el.debugMAR.className = 'debug-val danger';
+            } else if (marVal > yawnThresh.marOpen - 0.15) {
+                el.debugMAR.className = 'debug-val warn';
+            } else {
+                el.debugMAR.className = 'debug-val normal';
+            }
+
+            const pitchVal = parseFloat(pitch);
+            if (isNaN(pitchVal)) {
+                el.debugPitch.className = 'debug-val';
+            } else if (Math.abs(pitchVal) > headThresh.headDownAngle) {
+                el.debugPitch.className = 'debug-val danger';
+            } else if (Math.abs(pitchVal) > headThresh.headDownAngle - 5) {
+                el.debugPitch.className = 'debug-val warn';
+            } else {
+                el.debugPitch.className = 'debug-val normal';
+            }
+        }
+
+        // ==================== Detection Logic ====================
+        function updateDetection(ear, mar, pitch) {
+            const now = Date.now();
+            const closureThresh = AppState.thresholds[AppState.settings.eyeClosureSensitivity];
+            const yawnThresh = AppState.thresholds[AppState.settings.yawnSensitivity];
+            const headThresh = AppState.thresholds[AppState.settings.headSensitivity];
+            const windowMs = AppState.settings.perclosWindow * 1000;
+
+            // ========== EAR Smoothing (3-point moving average) ==========
+            AppState.earSmoothedHistory.push({ time: now, ear: ear });
+            AppState.earSmoothedHistory = AppState.earSmoothedHistory.filter(e => now - e.time <= 300);
+            const smoothWindow = AppState.earSmoothedHistory.slice(-3);
+            const smoothedEAR = smoothWindow.length > 0
+                ? smoothWindow.reduce((sum, e) => sum + e.ear, 0) / smoothWindow.length
+                : ear;
+
+            // ========== EAR Baseline Calculation ==========
+            // Use longer window (10s) and higher percentile (85th) for more stable baseline
+            AppState.earHistory.push({ time: now, ear: smoothedEAR });
+            AppState.earHistory = AppState.earHistory.filter(e => now - e.time <= 10000);
+            if (AppState.earHistory.length > 20) {
+                const ears = AppState.earHistory.map(e => e.ear).sort((a, b) => b - a);
+                // Use 85th percentile as baseline (typical open-eye EAR)
+                const idx = Math.floor(ears.length * 0.15);
+                const newBaseline = ears[idx];
+                // Baseline adaptation - faster than before to adapt to changes
+                if (AppState.earBaseline === 0) {
+                    AppState.earBaseline = newBaseline;
+                } else {
+                    AppState.earBaseline = AppState.earBaseline * 0.9 + newBaseline * 0.1;
+                }
+            }
+
+            // ========== Blink / Eye Closure Detection ==========
+            // Use both absolute threshold AND relative drop from baseline
+            // Relative threshold: EAR must drop below 65% of baseline
+            const absClosed = smoothedEAR < closureThresh.earClosed;
+            const relClosed = AppState.earBaseline > 0 && smoothedEAR < AppState.earBaseline * 0.65;
+            const isEyeClosed = absClosed || relClosed;
+
+            // Track consecutive closed frames for robustness
+            if (isEyeClosed) {
+                AppState.closedFrameCount++;
+            } else {
+                AppState.closedFrameCount = Math.max(0, AppState.closedFrameCount - 1);
+            }
+
+            // Require at least 2 consecutive closed frames to count as eye closure
+            const confirmedClosed = AppState.closedFrameCount >= 2;
+
+            // Get user-configurable thresholds
+            const blinkMaxMs = AppState.settings.blinkMaxMs;
+            const longClosureMs = AppState.settings.longClosureMs;
+
+            // Track eye closure for blink detection
+            if (confirmedClosed) {
+                if (!AppState.eyesClosedStart) {
+                    AppState.eyesClosedStart = now;
+                    AppState.blinkMinEAR = 1.0;
+                }
+                // Track minimum EAR during closure (for waveform validation)
+                if (smoothedEAR < AppState.blinkMinEAR) {
+                    AppState.blinkMinEAR = smoothedEAR;
+                }
+            } else {
+                // Eyes just opened - check if this was a blink or long closure
+                if (AppState.eyesClosedStart) {
+                    const closedDuration = now - AppState.eyesClosedStart;
+                    // Track longest closure
+                    if (closedDuration > AppState.longestEyeClosure) {
+                        AppState.longestEyeClosure = closedDuration;
+                    }
+
+                    // Minimum interval between blinks (refractory period)
+                    const minBlinkInterval = 150;
+                    const tooSoonAfterLastBlink = (now - AppState.lastBlinkEndTime) < minBlinkInterval;
+
+                    // Blink waveform validation: EAR must drop significantly from baseline
+                    const earDropRatio = AppState.earBaseline > 0
+                        ? (AppState.earBaseline - AppState.blinkMinEAR) / AppState.earBaseline
+                        : 0;
+                    const validWaveform = earDropRatio >= 0.18; // At least 18% drop from baseline
+
+                    // Classify based on duration
+                    if (closedDuration >= closureThresh.blinkClosedMinMs && closedDuration <= blinkMaxMs) {
+                        // Valid blink detected (with waveform and interval checks)
+                        if (validWaveform && !tooSoonAfterLastBlink) {
+                            AppState.blinkCount++;
+                            AppState.blinkHistory.push(now);
+                            AppState.blinkHistory = AppState.blinkHistory.filter(t => now - t <= 60000);
+                            AppState.lastBlinkEndTime = now;
+                            console.log(`Blink detected! EAR=${smoothedEAR.toFixed(3)}, minEAR=${AppState.blinkMinEAR.toFixed(3)}, baseline=${AppState.earBaseline.toFixed(3)}, drop=${(earDropRatio*100).toFixed(1)}%, duration=${closedDuration}ms, total=${AppState.blinkCount}`);
+                        } else {
+                            console.log(`Blink rejected: waveform=${validWaveform}, tooSoon=${tooSoonAfterLastBlink}, duration=${closedDuration}ms`);
+                        }
+                    } else if (closedDuration > longClosureMs) {
+                        // Long eye closure (> user-configured threshold) - fatigue indicator
+                        AppState.recentLongClosures.push({ time: now, duration: closedDuration });
+                        AppState.recentLongClosures = AppState.recentLongClosures.filter(e => now - e.time <= 60000);
+                        console.log(`Long eye closure detected: ${closedDuration}ms`);
+                    }
+                    AppState.eyesClosedStart = null;
+                    AppState.blinkMinEAR = 1.0;
+                }
+            }
+
+            // Calculate blink rate (blinks per minute)
+            // Based on monitoring time window, not from first blink
+            const blinkWindow = 60000;
+            const elapsedSinceStart = AppState.monitoringStartTime ? (now - AppState.monitoringStartTime) : 0;
+            const actualWindowMs = Math.min(blinkWindow, elapsedSinceStart);
+            const recentBlinks = AppState.blinkHistory.filter(t => now - t <= actualWindowMs).length;
+            
+            // Only calculate after at least 15 seconds of monitoring
+            const minValidWindow = 15000;
+            if (actualWindowMs >= minValidWindow) {
+                AppState.lastBlinkRate = Math.round((recentBlinks / actualWindowMs) * 60000);
+            } else {
+                AppState.lastBlinkRate = 0;
+            }
+
+            // Update eye closure history for PERCLOS
+            AppState.eyeClosureHistory.push({ time: now, closed: confirmedClosed });
+            AppState.eyeClosureHistory = AppState.eyeClosureHistory.filter(e => now - e.time <= windowMs);
+
+            // Calculate PERCLOS
+            const closedFrames = AppState.eyeClosureHistory.filter(e => e.closed).length;
+            AppState.perclos = AppState.eyeClosureHistory.length > 5
+                ? (closedFrames / AppState.eyeClosureHistory.length) * 100
+                : 0;
+
+            // Update EAR display
+            let eyeStatusText = '';
+            if (confirmedClosed) {
+                if (AppState.eyesClosedStart) {
+                    const dur = now - AppState.eyesClosedStart;
+                    if (dur > longClosureMs) {
+                        eyeStatusText = ` [⚠️长闭眼 ${dur}ms]`;
+                    } else if (dur > blinkMaxMs) {
+                        eyeStatusText = ` [异常闭眼 ${dur}ms]`;
+                    } else {
+                        eyeStatusText = ` [闭眼 ${dur}ms]`;
+                    }
+                } else {
+                    eyeStatusText = ' [闭眼]';
+                }
+            }
+            let blinkRateText = '';
+            if (elapsedSinceStart < 15000) {
+                const secondsLeft = Math.ceil((15000 - elapsedSinceStart) / 1000);
+                blinkRateText = ` | 眨眼校准中(${secondsLeft}s)`;
+            } else {
+                blinkRateText = ` | 眨眼:${AppState.lastBlinkRate}/分`;
+            }
+            const longClosureText = AppState.recentLongClosures.length > 0 ? ` | 长闭眼:${AppState.recentLongClosures.length}次` : '';
+            el.earDisplay.textContent = `EAR: ${smoothedEAR.toFixed(3)}${eyeStatusText}${blinkRateText}${longClosureText}`;
+            el.perclosValue.innerHTML = `${Math.round(AppState.perclos)}<span class="status-unit">%</span>`;
+
+            // Update PERCLOS card styling
+            el.perclosCard.classList.remove('success', 'warning', 'danger');
+            el.perclosValue.classList.remove('success', 'warning', 'danger');
+            if (AppState.perclos >= closureThresh.perclosL3) {
+                el.perclosCard.classList.add('danger');
+                el.perclosValue.classList.add('danger');
+            } else if (AppState.perclos >= closureThresh.perclosL2) {
+                el.perclosCard.classList.add('warning');
+                el.perclosValue.classList.add('warning');
+            } else if (AppState.perclos >= closureThresh.perclosL1) {
+                el.perclosCard.classList.add('warning');
+                el.perclosValue.classList.add('warning');
+            } else {
+                el.perclosCard.classList.add('success');
+                el.perclosValue.classList.add('success');
+            }
+
+            // ========== Yawn Detection ==========
+            const isMouthOpen = mar > yawnThresh.marOpen;
+
+            if (isMouthOpen) {
+                if (!AppState.mouthOpenStart) {
+                    AppState.mouthOpenStart = now;
+                } else {
+                    const openDuration = now - AppState.mouthOpenStart;
+                    if (openDuration > yawnThresh.yawnDuration) {
+                        // Count as new yawn if enough time passed since last one
+                        if (AppState.lastYawnTime < now - 1500) {
+                            AppState.yawnCount++;
+                            AppState.consecutiveYawns++;
+                            AppState.lastYawnTime = now;
+                            console.log(`Yawn detected! MAR=${mar.toFixed(3)}, duration=${openDuration}ms, total=${AppState.yawnCount}`);
+                        }
+                    }
+                }
+            } else {
+                AppState.mouthOpenStart = null;
+                if (now - AppState.lastYawnTime > 5000) {
+                    AppState.consecutiveYawns = 0;
+                }
+            }
+
+            // Update MAR display
+            const marPercent = Math.min(100, Math.round((mar / (yawnThresh.marOpen * 1.5)) * 100));
+            el.marValue.innerHTML = `${marPercent}<span class="status-unit">%</span>`;
+            el.yawnDisplay.textContent = `MAR: ${mar.toFixed(3)} | 哈欠: ${AppState.yawnCount}次`;
+
+            el.yawnCard.classList.remove('success', 'warning', 'danger');
+            el.marValue.classList.remove('success', 'warning', 'danger');
+            if (isMouthOpen && AppState.mouthOpenStart && (now - AppState.mouthOpenStart) > yawnThresh.yawnDuration) {
+                el.yawnCard.classList.add('danger');
+                el.marValue.classList.add('danger');
+            } else if (isMouthOpen) {
+                el.yawnCard.classList.add('warning');
+                el.marValue.classList.add('warning');
+            } else {
+                el.yawnCard.classList.add('success');
+                el.marValue.classList.add('success');
+            }
+
+            // ========== Head Down Detection ==========
+            let headStatus = '正常';
+            const isHeadDown = pitch > headThresh.headDownAngle;
+
+            if (isHeadDown) {
+                if (!AppState.headDownStart) {
+                    AppState.headDownStart = now;
+                }
+                const downDuration = now - AppState.headDownStart;
+                headStatus = downDuration > 2000 ? '⚠️低头!' : '低头';
+            } else {
+                AppState.headDownStart = null;
+            }
+
+            el.headPose.textContent = headStatus;
+            el.pitchDisplay.textContent = `Pitch: ${pitch.toFixed(1)}°`;
+
+            el.headCard.classList.remove('success', 'warning', 'danger');
+            el.headPose.classList.remove('success', 'warning', 'danger');
+            if (headStatus === '⚠️低头!') {
+                el.headCard.classList.add('danger');
+                el.headPose.classList.add('danger');
+            } else if (isHeadDown) {
+                el.headCard.classList.add('warning');
+                el.headPose.classList.add('warning');
+            } else {
+                el.headCard.classList.add('success');
+            }
+
+            // ========== Risk Evaluation ==========
+            evaluateRiskLevel(AppState.perclos, AppState.consecutiveYawns, AppState.lastBlinkRate, pitch, now);
+        }
+
+        function evaluateRiskLevel(perclos, consecutiveYawns, blinkRate, pitch, now) {
+            const closureThresh = AppState.thresholds[AppState.settings.eyeClosureSensitivity];
+            const headThresh = AppState.thresholds[AppState.settings.headSensitivity];
+            let riskLevel = 0;
+            let riskType = [];
+
+            // Eye closure risk (PERCLOS)
+            if (perclos >= closureThresh.perclosL3) { riskLevel = 3; riskType.push('严重闭眼'); }
+            else if (perclos >= closureThresh.perclosL2) { riskLevel = Math.max(riskLevel, 2); riskType.push('中度闭眼'); }
+            else if (perclos >= closureThresh.perclosL1) { riskLevel = Math.max(riskLevel, 1); riskType.push('轻度闭眼'); }
+
+            // Blink rate risk (using custom thresholds from settings)
+            // Too few: staring / drowsiness; Too many: eye irritation / fatigue
+            const low = AppState.settings.blinkRateLow;
+            const high = AppState.settings.blinkRateHigh;
+            const elapsedSinceStart = AppState.monitoringStartTime ? (now - AppState.monitoringStartTime) : 0;
+            // Only evaluate blink rate risk after at least 15 seconds of monitoring
+            if (elapsedSinceStart >= 15000) {
+                if (blinkRate < Math.max(3, low - 5)) { riskLevel = Math.max(riskLevel, 3); riskType.push('眨眼极少'); }
+                else if (blinkRate < low) { riskLevel = Math.max(riskLevel, 2); riskType.push('眨眼偏少'); }
+                else if (blinkRate < low + 2) { riskLevel = Math.max(riskLevel, 1); riskType.push('眨眼略少'); }
+                else if (blinkRate > high + 10) { riskLevel = Math.max(riskLevel, 2); riskType.push('眨眼过多'); }
+                else if (blinkRate > high) { riskLevel = Math.max(riskLevel, 1); riskType.push('眨眼偏多'); }
+            }
+
+            // Long eye closure risk - using closure sensitivity
+            const longClosures = AppState.recentLongClosures.length;
+            if (longClosures >= closureThresh.longClosureCountL3) { riskLevel = Math.max(riskLevel, 3); riskType.push('频繁长闭眼'); }
+            else if (longClosures >= closureThresh.longClosureCountL2) { riskLevel = Math.max(riskLevel, 2); riskType.push('多次长闭眼'); }
+            else if (longClosures >= closureThresh.longClosureCountL1) { riskLevel = Math.max(riskLevel, 1); riskType.push('长闭眼'); }
+
+            // Currently eyes closed for a long time
+            if (AppState.eyesClosedStart) {
+                const currentClosedDur = now - AppState.eyesClosedStart;
+                const lcThresh = AppState.settings.longClosureMs;
+                if (currentClosedDur > lcThresh * 3) { riskLevel = Math.max(riskLevel, 3); riskType.push('持续闭眼!'); }
+                else if (currentClosedDur > lcThresh * 2) { riskLevel = Math.max(riskLevel, 2); riskType.push('长时间闭眼'); }
+            }
+
+            // Yawn risk
+            if (consecutiveYawns >= 3) { riskLevel = Math.max(riskLevel, 3); riskType.push('连续打哈欠'); }
+            else if (consecutiveYawns >= 2) { riskLevel = Math.max(riskLevel, 2); riskType.push('反复打哈欠'); }
+            else if (consecutiveYawns >= 1) { riskLevel = Math.max(riskLevel, 1); riskType.push('打哈欠'); }
+
+            // Head down risk
+            if (AppState.headDownStart && (now - AppState.headDownStart > 3000)) {
+                riskLevel = Math.max(riskLevel, 3);
+                riskType.push('持续低头');
+            } else if (pitch > headThresh.headDownAngle) {
+                riskLevel = Math.max(riskLevel, 1);
+                riskType.push('低头');
+            }
+
+            // Driving time risk
+            if (AppState.drivingStartTime) {
+                const drivingMinutes = (now - AppState.drivingStartTime) / 60000;
+                const thresholdMinutes = AppState.settings.drivingThreshold * 60;
+                if (drivingMinutes >= thresholdMinutes) {
+                    riskLevel = Math.max(riskLevel, 2);
+                    riskType.push('驾驶超时');
+                }
+            }
+
+            // Trigger alert if risk level increased
+            if (riskLevel > AppState.currentAlertLevel) {
+                triggerAlert(riskLevel, riskType);
+            } else if (riskLevel === 0 && AppState.currentAlertLevel > 0) {
+                dismissAlert();
+            }
+
+            AppState.currentAlertLevel = riskLevel;
+        }
+
+        // ==================== Alert System ====================
+        function triggerAlert(level, types) {
+            if (AppState.alertActive) return;
+            AppState.alertActive = true;
+            AppState.totalAlertsThisSession++;
+
+            const alertConfig = {
+                1: { title: '轻微疲劳提醒', msg: '检测到疲劳迹象：' + (types.join('、') || '请保持注意力') },
+                2: { title: '中度疲劳警告', msg: '疲劳程度加深：' + (types.join('、') || '建议尽快休息') },
+                3: { title: '严重疲劳危险！', msg: '危险！' + (types.join('、') || '立即停车休息！') }
+            };
+
+            const config = alertConfig[level] || alertConfig[1];
+
+            el.alertTitle.textContent = config.title;
+            el.alertMessage.textContent = config.msg;
+            el.alertOverlay.classList.add('active');
+
+            if (AppState.settings.flashEnabled) {
+                el.cameraContainer.classList.add('alert-active');
+            }
+
+            // Sound alert
+            if (AppState.settings.soundEnabled) {
+                playAlertSound(level);
+            }
+
+            // Vibration
+            if (AppState.settings.vibrateEnabled && navigator.vibrate) {
+                const pattern = level === 3 ? [300, 100, 300, 100, 300, 100, 500] :
+                               level === 2 ? [300, 150, 300] : [200];
+                try { navigator.vibrate(pattern); } catch(e) {}
+            }
+
+            // Speech
+            if (AppState.settings.speechEnabled) {
+                speak(config.msg);
+            }
+
+            requestWakeLock();
+        }
+
+        function dismissAlert() {
+            AppState.alertActive = false;
+            AppState.currentAlertLevel = 0;
+            el.alertOverlay.classList.remove('active');
+            el.cameraContainer.classList.remove('alert-active');
+            if (navigator.vibrate) { try { navigator.vibrate(0); } catch(e) {} }
+            releaseWakeLock();
+        }
+
+        function showPermissionGuide() {
+            if (el.permissionOverlay) {
+                el.permissionOverlay.classList.add('active');
+            }
+        }
+
+        function hidePermissionGuide() {
+            if (el.permissionOverlay) {
+                el.permissionOverlay.classList.remove('active');
+            }
+        }
+
+        function playAlertSound(level) {
+            const now = Date.now();
+            if (now - AppState.lastSoundTime < 500) return;
+            AppState.lastSoundTime = now;
+
+            try {
+                if (!AppState.audioContext) {
+                    AppState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                const ctx = AppState.audioContext;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = level === 3 ? 'sawtooth' : 'square';
+                osc.frequency.value = level === 3 ? 800 : level === 2 ? 600 : 500;
+
+                gain.gain.setValueAtTime(0.25, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + (level === 3 ? 0.4 : 0.25));
+
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + (level === 3 ? 0.4 : 0.25));
+            } catch(e) { console.warn('Sound error:', e); }
+        }
+
+        function speak(text) {
+            if (!('speechSynthesis' in window)) return;
+            try {
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text);
+                u.lang = 'zh-CN';
+                u.rate = 1.1;
+                u.volume = 0.9;
+                window.speechSynthesis.speak(u);
+            } catch(e) { console.warn('Speech error:', e); }
+        }
+
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator && !AppState.wakeLock) {
+                    AppState.wakeLock = await navigator.wakeLock.request('screen');
+                    el.wakeLockIndicator.classList.add('active');
+                    AppState.wakeLock.addEventListener('release', () => {
+                        el.wakeLockIndicator.classList.remove('active');
+                    });
+                }
+            } catch(e) { console.warn('Wake lock error:', e); }
+        }
+
+        function releaseWakeLock() {
+            if (AppState.wakeLock) {
+                AppState.wakeLock.release().catch(() => {});
+                AppState.wakeLock = null;
+                el.wakeLockIndicator.classList.remove('active');
+            }
+        }
+
+        // ==================== Geolocation ====================
+        function startGeolocation() {
+            if (!('geolocation' in navigator)) {
+                el.gpsDisplay.textContent = 'GPS: 不支持';
+                return;
+            }
+
+            try {
+                AppState.geolocationWatchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        AppState.currentPosition = {
+                            lat: pos.coords.latitude.toFixed(4),
+                            lng: pos.coords.longitude.toFixed(4),
+                            speed: pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) : '0',
+                            accuracy: Math.round(pos.coords.accuracy)
+                        };
+                        el.gpsDisplay.textContent = `GPS: ${AppState.currentPosition.speed}km/h`;
+                    },
+                    (err) => {
+                        el.gpsDisplay.textContent = 'GPS: 获取失败';
+                        console.warn('Geolocation error:', err.message);
+                    },
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+                );
+            } catch(e) {
+                el.gpsDisplay.textContent = 'GPS: 不可用';
+            }
+        }
+
+        function stopGeolocation() {
+            if (AppState.geolocationWatchId) {
+                navigator.geolocation.clearWatch(AppState.geolocationWatchId);
+                AppState.geolocationWatchId = null;
+            }
+        }
+
+        // ==================== Dashboard ====================
+        function updateDashboard() {
+            const totalAlerts = AppState.records.reduce((sum, r) => sum + (r.alerts || 0), 0);
+            const safeDrives = AppState.records.filter(r => (r.alerts || 0) === 0).length;
+
+            el.totalDrives.textContent = AppState.records.length;
+            el.totalAlerts.textContent = totalAlerts;
+            el.safeDrives.textContent = safeDrives;
+
+            if (AppState.records.length === 0) {
+                el.recordList.innerHTML = '<div class="empty-state"><p>暂无驾驶记录</p><p style="font-size:12px; margin-top:8px; opacity:0.6;">完成一次驾驶后将显示记录</p></div>';
+            } else {
+                el.recordList.innerHTML = AppState.records.slice(0, 10).map(r => {
+                    const date = new Date(r.startTime);
+                    const dateStr = date.toLocaleDateString('zh-CN');
+                    const timeStr = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                    const duration = Math.round((r.endTime - r.startTime) / 60000);
+                    const alerts = r.alerts || 0;
+                    return `<div class="record-item">
+                        <div>
+                            <div class="record-date">${dateStr} ${timeStr}</div>
+                            <div class="record-details">驾驶时长: ${duration}分钟</div>
+                        </div>
+                        <div class="record-alerts ${alerts === 0 ? 'safe' : ''}">${alerts === 0 ? '安全' : alerts + '次预警'}</div>
+                    </div>`;
+                }).join('');
+            }
+        }
+
+        // ==================== Monitoring Control ====================
+        async function startMonitoring() {
+            if (AppState.isMonitoring) return;
+
+            updateStatus('正在启动摄像头...', 'warning');
+
+            // Check camera permission first
+            const permState = await checkCameraPermission();
+            if (permState === 'denied') {
+                updateStatus('摄像头权限已被禁止，请手动开启后重试', 'danger');
+                showPermissionGuide();
+                return;
+            }
+
+            // Permission is 'prompt' or not supported - let getUserMedia trigger the request dialog
+            const cameraOk = await startCamera();
+            if (!cameraOk) return;
+
+            AppState.isMonitoring = true;
+            AppState.drivingStartTime = Date.now();
+            AppState.monitoringStartTime = Date.now();
+            AppState.eyeClosureHistory = [];
+            AppState.earHistory = [];
+            AppState.earSmoothedHistory = [];
+            AppState.earBaseline = 0;
+            AppState.blinkCount = 0;
+            AppState.blinkHistory = [];
+            AppState.eyesClosedStart = null;
+            AppState.blinkMinEAR = 1.0;
+            AppState.closedFrameCount = 0;
+            AppState.lastBlinkTime = 0;
+            AppState.lastBlinkEndTime = 0;
+            AppState.lastBlinkRate = 0;
+            AppState.longestEyeClosure = 0;
+            AppState.recentLongClosures = [];
+            AppState.yawnCount = 0;
+            AppState.consecutiveYawns = 0;
+            AppState.lastYawnTime = 0;
+            AppState.mouthOpenStart = null;
+            AppState.headDownStart = null;
+            AppState.currentAlertLevel = 0;
+            AppState.alertActive = false;
+            AppState.totalAlertsThisSession = 0;
+            AppState.perclos = 0;
+            AppState.currentEAR = 0;
+            AppState.currentMAR = 0;
+            AppState.currentPitch = 0;
+
+            el.startBtn.disabled = true;
+            el.stopBtn.disabled = false;
+
+            // Start frame processing
+            AppState.animationId = requestAnimationFrame(processFrame);
+
+            // Driving timer
+            AppState.drivingInterval = setInterval(() => {
+                if (AppState.drivingStartTime) {
+                    const minutes = Math.floor((Date.now() - AppState.drivingStartTime) / 60000);
+                    el.drivingTime.innerHTML = `${minutes}<span class="status-unit">分钟</span>`;
+                }
+            }, 1000);
+
+            startGeolocation();
+            requestWakeLock();
+
+            updateStatus('监测中...', 'success');
+        }
+
+        function stopMonitoring() {
+            if (!AppState.isMonitoring) return;
+
+            // Save record
+            if (AppState.drivingStartTime) {
+                const duration = Date.now() - AppState.drivingStartTime;
+                if (duration > 30000) {
+                    saveRecord({
+                        startTime: AppState.drivingStartTime,
+                        endTime: Date.now(),
+                        alerts: AppState.totalAlertsThisSession,
+                        duration: duration
+                    });
+                }
+            }
+
+            AppState.isMonitoring = false;
+
+            if (AppState.animationId) {
+                cancelAnimationFrame(AppState.animationId);
+                AppState.animationId = null;
+            }
+
+            stopCamera();
+            stopGeolocation();
+            dismissAlert();
+            releaseWakeLock();
+
+            if (AppState.drivingInterval) {
+                clearInterval(AppState.drivingInterval);
+                AppState.drivingInterval = null;
+            }
+
+            AppState.drivingStartTime = null;
+            AppState.monitoringStartTime = null;
+
+            el.startBtn.disabled = false;
+            el.stopBtn.disabled = true;
+            updateStatus('已停止', 'idle');
+            el.fpsDisplay.textContent = '-- FPS';
+            el.gpsDisplay.textContent = 'GPS: 未定位';
+
+            el.perclosValue.innerHTML = '0<span class="status-unit">%</span>';
+            el.earDisplay.textContent = 'EAR: --';
+            el.marValue.innerHTML = '0<span class="status-unit">%</span>';
+            el.yawnDisplay.textContent = 'MAR: -- | 哈欠: 0次';
+            el.headPose.textContent = '正常';
+            el.pitchDisplay.textContent = 'Pitch: --°';
+            el.drivingTime.innerHTML = '0<span class="status-unit">分钟</span>';
+
+            ['perclosCard', 'yawnCard', 'headCard'].forEach(id => {
+                el[id].classList.remove('success', 'warning', 'danger');
+            });
+            ['perclosValue', 'marValue', 'headPose'].forEach(id => {
+                el[id].classList.remove('success', 'warning', 'danger');
+            });
+
+            updateDebugDisplay('--', '--', '--', 'NO');
+        }
+
+        // ==================== Initialization ====================
+        function init() {
+            loadSettings();
+            loadRecords();
+            setupSettingsListeners();
+            setupNavigation();
+
+            el.startBtn.addEventListener('click', startMonitoring);
+            el.stopBtn.addEventListener('click', stopMonitoring);
+            el.alertDismiss.addEventListener('click', dismissAlert);
+            if (el.permissionDismiss) {
+                el.permissionDismiss.addEventListener('click', hidePermissionGuide);
+            }
+
+            // Handle page visibility
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden && AppState.wakeLock) {
+                    releaseWakeLock();
+                } else if (!document.hidden && AppState.isMonitoring) {
+                    requestWakeLock();
+                }
+            });
+
+            // Initialize Face Mesh
+            initFaceMesh();
+        }
+
+        init();
+
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(() => {});
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,437 @@
+{% extends "base.html" %}
+
+{% block title %}订单管理{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header flex flex-between">
+    <h2 class="card-title">订单管理</h2>
+  </div>
+
+  <div class="filter-bar mb-16">
+    <div class="flex gap-8">
+      <button class="btn btn-primary btn-sm" id="tab-today" onclick="switchMode('today')">今日</button>
+      <button class="btn btn-outline btn-sm" id="tab-history" onclick="switchMode('history')">历史</button>
+    </div>
+    <div class="flex gap-8">
+      <input type="date" id="date-picker" class="form-input" style="display:none;" onchange="fetchOrders()">
+    </div>
+  </div>
+
+  <div class="flex gap-8 mb-16">
+    <button class="btn btn-primary btn-xs type-btn" data-type="all" onclick="setType('all')">全部</button>
+    <button class="btn btn-outline btn-xs type-btn" data-type="sale" onclick="setType('sale')">销售</button>
+    <button class="btn btn-outline btn-xs type-btn" data-type="express" onclick="setType('express')">快递</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>订单号</th>
+          <th>类型</th>
+          <th>金额</th>
+          <th>状态</th>
+          <th>时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="orders-tbody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var currentMode = 'today';
+var currentType = 'all';
+
+(function() {
+  var today = new Date();
+  var ds = today.toISOString().substring(0, 10);
+  document.getElementById('date-picker').value = ds;
+})();
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('tab-today').className = mode === 'today' ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+  document.getElementById('tab-history').className = mode === 'history' ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+  document.getElementById('date-picker').style.display = mode === 'history' ? 'inline-block' : 'none';
+  fetchOrders();
+}
+
+function setType(type) {
+  currentType = type;
+  var btns = document.querySelectorAll('.type-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].className = btns[i].getAttribute('data-type') === type ? 'btn btn-primary btn-xs type-btn' : 'btn btn-outline btn-xs type-btn';
+  }
+  fetchOrders();
+}
+
+function typeBadge(type) {
+  if (type === 'sale') return '<span class="badge badge-blue">销售</span>';
+  if (type === 'express') return '<span class="badge badge-green">快递</span>';
+  return '<span class="badge badge-gray">' + escapeHtml(type) + '</span>';
+}
+
+function lineTypeBadge(type) {
+  var map = {
+    'product': 'badge-blue',
+    'express_fee': 'badge-green',
+    'return': 'badge-yellow',
+    'refund': 'badge-red'
+  };
+  var labels = {
+    'product': '商品',
+    'express_fee': '快递费',
+    'return': '退货',
+    'refund': '退款'
+  };
+  var cls = map[type] || 'badge-gray';
+  var label = labels[type] || type;
+  return '<span class="badge ' + cls + '">' + label + '</span>';
+}
+
+async function fetchOrders() {
+  var url;
+  if (currentMode === 'today') {
+    url = '/api/orders/today?type=' + currentType;
+  } else {
+    var date = document.getElementById('date-picker').value;
+    url = '/api/orders/history?date=' + date + '&type=' + currentType;
+  }
+  try {
+    var orders = await apiGet(url);
+    renderTable(orders);
+  } catch (e) {
+    document.getElementById('orders-tbody').innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--gray-400);">加载失败</td></tr>';
+  }
+}
+
+function renderTable(orders) {
+  var tbody = document.getElementById('orders-tbody');
+  if (!orders || orders.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--gray-400);">暂无订单</td></tr>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < orders.length; i++) {
+    var o = orders[i];
+    html += '<tr>';
+    html += '<td>' + escapeHtml(o.order_no) + '</td>';
+    html += '<td>' + typeBadge(o.type) + '</td>';
+    html += '<td>' + formatMoney(o.total_amount) + '</td>';
+    html += '<td>' + orderStatusBadge(o.status) + '</td>';
+    html += '<td>' + formatDate(o.created_at) + '</td>';
+    html += '<td><button class="btn btn-outline btn-xs" onclick="toggleDetail(\'' + escapeHtml(o.order_no) + '\')">详情</button></td>';
+    html += '</tr>';
+    html += '<tr id="detail-' + o.order_no.replace(/[^a-zA-Z0-9]/g, '_') + '" style="display:none;">';
+    html += '<td colspan="6" style="padding:16px;"><div id="detail-content-' + o.order_no.replace(/[^a-zA-Z0-9]/g, '_') + '" style="background:var(--gray-50);border-radius:4px;padding:16px;">加载中...</div></td>';
+    html += '</tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+async function toggleDetail(orderNo) {
+  var safeId = orderNo.replace(/[^a-zA-Z0-9]/g, '_');
+  var detailRow = document.getElementById('detail-' + safeId);
+  var contentDiv = document.getElementById('detail-content-' + safeId);
+
+  if (detailRow.style.display === 'none' || detailRow.style.display === '') {
+    detailRow.style.display = '';
+    try {
+      var detail = await apiGet('/api/orders/' + encodeURIComponent(orderNo));
+      var refunds = [];
+      try {
+        refunds = await apiGet('/api/orders/' + encodeURIComponent(orderNo) + '/refunds');
+      } catch (e) {
+        refunds = [];
+      }
+      var expressDoc = null;
+      if (detail.order_type === 'express' && detail.internal_id) {
+        try {
+          expressDoc = await apiGet('/api/express/' + detail.internal_id);
+        } catch (e) {}
+      }
+      contentDiv.innerHTML = buildDetailHtml(detail, refunds, expressDoc);
+    } catch (e) {
+      contentDiv.innerHTML = '<p style="color:var(--gray-400);">加载详情失败</p>';
+    }
+  } else {
+    detailRow.style.display = 'none';
+  }
+}
+
+function buildDetailHtml(detail, refunds, expressDoc) {
+  var html = '';
+
+  // Express package info
+  if (detail.order_type === 'express' && expressDoc) {
+    var trackingNo = '-';
+    if (expressDoc.remarks) {
+      var tn = expressDoc.remarks.find(function(r) { return r.key === '单号'; });
+      if (tn) trackingNo = tn.value || '';
+    }
+    html += '<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:12px;padding:12px;background:var(--gray-50);border-radius:8px;">';
+    html += '<div style="flex:1;min-width:180px;">';
+    html += '<div><strong>单号：</strong>' + escapeHtml(trackingNo) + '</div>';
+    html += '<div><strong>状态：</strong>' + statusBadge(expressDoc.status) + '</div>';
+    html += '<div><strong>费用：</strong>' + formatMoney(expressDoc.display_fee || 0) + '</div>';
+    html += '<div><strong>入库时间：</strong>' + formatDate(expressDoc.inbound_time || expressDoc.created_at) + '</div>';
+    html += '<div><strong>截止时间：</strong>' + (expressDoc.deadline_time ? formatDate(expressDoc.deadline_time) : '-') + '</div>';
+    if (expressDoc.remarks && expressDoc.remarks.length) {
+      html += '<div style="margin-top:4px;"><strong>备注：</strong>';
+      expressDoc.remarks.forEach(function(r) {
+        html += '<span class="remark-kv">' + escapeHtml(r.key || '') + ': ' + escapeHtml(r.value || '') + '</span> ';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+    if (expressDoc.photo_url) {
+      html += '<div style="flex-shrink:0;">';
+      html += '<strong>底单：</strong><br>';
+      html += '<img src="' + escapeHtml(expressDoc.photo_url) + '" style="max-width:240px;max-height:240px;border:1px solid var(--gray-300);border-radius:4px;margin-top:4px" onerror="this.outerHTML=\'<span style=color:var(--gray-500)>加载失败</span>\'">';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  if (detail.lines && detail.lines.length > 0) {
+    html += '<table class="table" style="margin-bottom:12px;width:100%;">';
+    html += '<thead><tr><th>商品名称</th><th>数量</th><th>单位</th><th>单价</th><th>小计</th><th>类型</th></tr></thead><tbody>';
+    for (var i = 0; i < detail.lines.length; i++) {
+      var line = detail.lines[i];
+      html += '<tr>';
+      html += '<td>' + escapeHtml(line.is_temporary ? '临时商品' : line.product_name) + '</td>';
+      html += '<td>' + (line.is_temporary ? '-' : line.quantity) + '</td>';
+      html += '<td>' + escapeHtml(line.is_temporary ? '-' : (line.unit || '-')) + '</td>';
+      html += '<td>' + formatMoney(line.price) + '</td>';
+      html += '<td>' + formatMoney(line.line_total) + '</td>';
+      html += '<td>' + lineTypeBadge(line.line_type) + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+
+  // Render attachments
+  if (detail.attachments && detail.attachments.length > 0) {
+    html += '<div style="margin-bottom:12px;"><strong>凭证附件</strong></div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    detail.attachments.forEach(function(att) {
+      html += '<img src="' + escapeHtml(att) + '" style="max-width:200px;max-height:200px;border:1px solid var(--gray-300);border-radius:4px;" onerror="this.outerHTML=\'<span style=color:var(--gray-500)>加载失败</span>\'">';
+    });
+    html += '</div>';
+  }
+
+  // Refund records
+  if (refunds && refunds.length > 0) {
+    html += '<div style="margin-bottom:12px;"><strong>退款记录</strong></div>';
+    html += '<table class="table" style="margin-bottom:12px;width:100%;">';
+    html += '<thead><tr><th>退款单号</th><th>类型</th><th>方式</th><th>金额</th><th>明细</th><th>时间</th></tr></thead><tbody>';
+    for (var j = 0; j < refunds.length; j++) {
+      var r = refunds[j];
+      var rtLabel = r.refund_type === 'full' ? '<span class="badge badge-red">全额</span>' : '<span class="badge badge-yellow">部分</span>';
+      var rmLabel = r.refund_mode === 'refund_only' ? '仅退款' : '退货退款';
+      var linesHtml = '';
+      if (r.refund_lines && r.refund_lines.length > 0) {
+        linesHtml = r.refund_lines.map(function(l) { return escapeHtml(typeof l === 'string' ? l : (l.product_name || l)); }).join('<br>');
+      } else {
+        linesHtml = '<span style="color:var(--gray-400);">-</span>';
+      }
+      html += '<tr>';
+      html += '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(r.refund_no || '-') + '</td>';
+      html += '<td>' + rtLabel + '</td>';
+      html += '<td>' + rmLabel + '</td>';
+      html += '<td style="font-weight:600;">' + formatMoney(r.refund_amount) + '</td>';
+      html += '<td style="max-width:200px;font-size:12px;">' + linesHtml + '</td>';
+      html += '<td style="white-space:nowrap;">' + formatDate(r.created_at) + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+
+  // Refund button — sale vs express
+  html += '<div class="flex" style="justify-content:flex-end;">';
+  if (detail.order_type === 'express') {
+    html += '<button class="btn btn-danger btn-sm" onclick="openExpressRefundModal(\'' + escapeHtml(detail.internal_id) + '\', \'' + escapeHtml(detail.order_no) + '\', ' + (detail.total_amount || 0) + ')">退款</button>';
+  } else {
+    html += '<button class="btn btn-danger btn-sm" onclick="openRefundModal(\'' + escapeHtml(detail.order_no) + '\')">退款</button>';
+  }
+  html += '</div>';
+
+  return html;
+}
+
+function openRefundModal(orderNo) {
+  var html = '';
+  html += '<div class="modal-header">';
+  html += '<h3 class="modal-title">订单退款 - ' + escapeHtml(orderNo) + '</h3>';
+  html += '<span class="modal-close" onclick="closeModal()">&times;</span>';
+  html += '</div>';
+
+  html += '<div class="form-group">';
+  html += '<label class="form-label">退款类型</label>';
+  html += '<div class="flex gap-8">';
+  html += '<label><input type="radio" name="refund_type" value="full" checked onchange="onRefundTypeChange()"> 全额退款</label>';
+  html += '<label><input type="radio" name="refund_type" value="partial" onchange="onRefundTypeChange()"> 部分退款</label>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-group">';
+  html += '<label class="form-label">退款方式</label>';
+  html += '<div class="flex gap-8">';
+  html += '<label><input type="radio" name="refund_mode" value="refund_only" checked> 仅退款</label>';
+  html += '<label><input type="radio" name="refund_mode" value="return_and_refund"> 退货退款</label>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-group" id="refund-amount-group" style="display:none;">';
+  html += '<label class="form-label">退款金额</label>';
+  html += '<input type="number" step="0.01" min="0" class="form-input" id="refund-amount" placeholder="请输入退款金额">';
+  html += '</div>';
+
+  html += '<div class="form-group" id="refund-lines-group" style="display:none;">';
+  html += '<label class="form-label">退款明细（可选）</label>';
+  html += '<textarea class="form-textarea" id="refund-lines" rows="3" placeholder="每行一条退款明细"></textarea>';
+  html += '</div>';
+
+  html += '<div class="modal-footer">';
+  html += '<button class="btn btn-outline" onclick="closeModal()">取消</button>';
+  html += '<button class="btn btn-danger" id="refund-submit-btn" onclick="submitRefund(\'' + escapeHtml(orderNo) + '\')">确认退款</button>';
+  html += '</div>';
+
+  openModal(html);
+}
+
+function onRefundTypeChange() {
+  var partial = document.querySelector('input[name="refund_type"]:checked').value === 'partial';
+  document.getElementById('refund-amount-group').style.display = partial ? 'block' : 'none';
+  document.getElementById('refund-lines-group').style.display = partial ? 'block' : 'none';
+}
+
+async function submitRefund(orderNo) {
+  var refundTypeEl = document.querySelector('input[name="refund_type"]:checked');
+  var refundModeEl = document.querySelector('input[name="refund_mode"]:checked');
+  if (!refundTypeEl || !refundModeEl) {
+    showToast('请选择退款类型和退款方式', 'error');
+    return;
+  }
+
+  var data = {
+    refund_type: refundTypeEl.value,
+    refund_mode: refundModeEl.value
+  };
+
+  if (data.refund_type === 'partial') {
+    var amount = truncateMoney(parseFloat(document.getElementById('refund-amount').value));
+    if (isNaN(amount) || amount <= 0) {
+      showToast('请输入有效的退款金额', 'error');
+      return;
+    }
+    data.refund_amount = amount;
+
+    var linesVal = document.getElementById('refund-lines').value.trim();
+    if (linesVal) {
+      data.refund_lines = linesVal.split('\n').filter(function(l) { return l.trim(); });
+    }
+  }
+
+  var btn = document.getElementById('refund-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '提交中...';
+
+  try {
+    await apiPost('/api/orders/' + encodeURIComponent(orderNo) + '/refund', data);
+    showToast('退款成功', 'success');
+    closeModal();
+    fetchOrders();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '确认退款';
+  }
+}
+
+// ---- Express refund modal ----
+function openExpressRefundModal(internalId, orderNo, totalAmount) {
+  totalAmount = totalAmount || 0;
+  openModal(
+    '<div class="modal-header"><h3 class="modal-title">快递退款 - ' + escapeHtml(orderNo) + '</h3><button type="button" class="modal-close" onclick="closeModal()">×</button></div>' +
+    '<div class="modal-body">' +
+    '<div style="background:var(--warning-bg);border:1px solid var(--warning);border-radius:8px;padding:12px;margin-bottom:16px;">' +
+      '<div style="font-size:13px;color:var(--danger);"><strong>订单总额：</strong>' + formatMoney(totalAmount) + '</div>' +
+      '<div style="font-size:12px;color:var(--danger);margin-top:4px;">系统会自动累加已退款金额，超出部分将拒绝</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">退款类型</label>' +
+      '<div class="flex" style="gap:12px">' +
+        '<label><input type="radio" name="express-refund-type" value="full" checked onchange="onExpressRefundTypeChange()"> 全额退款（' + formatMoney(totalAmount) + '）</label>' +
+        '<label><input type="radio" name="express-refund-type" value="partial" onchange="onExpressRefundTypeChange()"> 部分退款</label>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">退款方式</label>' +
+      '<div style="display:flex; gap:12px; margin-top:8px">' +
+        '<label style="flex:1; padding:12px; border:2px solid var(--gray-300); border-radius:8px; cursor:pointer">' +
+          '<input type="radio" name="express-refund-mode" value="return" checked style="margin-right:6px">' +
+          '<div style="font-weight:700">退款并退回</div>' +
+          '<div style="font-size:12px;color:var(--gray-600);margin-top:4px">包裹 → 已退回 | 订单 → 自动计算</div>' +
+        '</label>' +
+        '<label style="flex:1; padding:12px; border:2px solid var(--gray-300); border-radius:8px; cursor:pointer">' +
+          '<input type="radio" name="express-refund-mode" value="waste" style="margin-right:6px">' +
+          '<div style="font-weight:700">退款并报损</div>' +
+          '<div style="font-size:12px;color:var(--gray-600);margin-top:4px">包裹 → 已报损 | 订单 → 自动计算</div>' +
+        '</label>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group" style="display:none;" id="express-refund-amount-group"><label class="form-label">退款金额</label><input class="form-input" id="express-refund-amount" type="number" step="0.01" placeholder="请输入退款金额"></div>' +
+    '<div class="form-group"><label class="form-label">退款原因</label><textarea class="form-textarea" id="express-refund-reason" rows="3"></textarea></div>' +
+    '</div>' +
+    '<div class="modal-footer"><button type="button" class="btn btn-primary" id="express-refund-submit-btn" onclick="submitExpressRefund(\'' + escapeHtml(internalId) + '\', ' + totalAmount + ')">确认退款</button><button type="button" class="btn btn-outline" onclick="closeModal()">取消</button></div>'
+  );
+}
+
+function onExpressRefundTypeChange() {
+  var partial = document.querySelector('input[name="express-refund-type"]:checked').value === 'partial';
+  document.getElementById('express-refund-amount-group').style.display = partial ? 'block' : 'none';
+}
+
+async function submitExpressRefund(internalId, totalAmount) {
+  var typeRadio = document.querySelector('input[name="express-refund-type"]:checked');
+  var isPartial = typeRadio && typeRadio.value === 'partial';
+  var modeRadio = document.querySelector('input[name="express-refund-mode"]:checked');
+  var mode = modeRadio ? modeRadio.value : 'return';
+  var reason = document.getElementById('express-refund-reason').value.trim();
+
+  var refundAmount;
+  if (isPartial) {
+    refundAmount = truncateMoney(parseFloat(document.getElementById('express-refund-amount').value));
+    if (!refundAmount || refundAmount <= 0) { showToast('请输入有效的退款金额', 'error'); return; }
+  } else {
+    refundAmount = totalAmount;
+  }
+
+  var btn = document.getElementById('express-refund-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '提交中...';
+
+  try {
+    var body = {
+      express_refund_mode: mode,
+      refund_amount: refundAmount,
+      reason: reason || undefined
+    };
+    var resp = await apiPost('/api/express/' + internalId + '/refund', body);
+    showToast('退款成功（订单状态：' + (resp.order_status === 'refunded' ? '已全额退款' : '部分退款') + '）', 'success');
+    closeModal();
+    fetchOrders();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '确认退款';
+  }
+}
+
+// Initial load
+fetchOrders();
+</script>
+{% endblock %}

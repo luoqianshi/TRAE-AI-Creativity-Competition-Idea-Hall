@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>动线沙盘 — AI Agent 驱动的线下空间布局仿真系统</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#080b14;
+  --grid:rgba(255,255,255,0.04);
+  --grid-strong:rgba(255,255,255,0.08);
+  --cyan:#00d4ff;
+  --amber:#ffb800;
+  --green:#00e87b;
+  --red:#ff4d6a;
+  --text:#e0e6f0;
+  --text-dim:rgba(224,230,240,0.55);
+  --surface:rgba(255,255,255,0.03);
+  --border:rgba(255,255,255,0.08);
+  --font-mono:"SF Mono","Fira Code","JetBrains Mono",Menlo,Consolas,monospace;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font-sans);
+  line-height:1.6;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+.grid-bg{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px),
+    linear-gradient(var(--grid-strong) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid-strong) 1px,transparent 1px);
+  background-size:20px 20px,20px 20px,100px 100px,100px 100px;
+}
+section{position:relative;z-index:1;padding:100px 40px;max-width:1200px;margin:0 auto}
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding-top:60px}
+.hero-badge{
+  font-family:var(--font-mono);font-size:12px;letter-spacing:0.1em;
+  color:var(--cyan);border:1px solid var(--cyan);
+  padding:6px 16px;border-radius:2px;margin-bottom:40px;
+  text-transform:uppercase;opacity:0;animation:fadeUp 0.8s 0.2s forwards;
+}
+.hero h1{
+  font-size:clamp(48px,8vw,80px);font-weight:700;
+  letter-spacing:-0.03em;line-height:1.05;
+  margin-bottom:24px;opacity:0;animation:fadeUp 0.8s 0.4s forwards;
+}
+.hero h1 span{color:var(--cyan)}
+.hero p.hero-headline{
+  font-size:clamp(20px,3vw,28px);color:var(--text);max-width:700px;
+  font-weight:500;line-height:1.5;letter-spacing:-0.01em;
+  opacity:0;animation:fadeUp 0.8s 0.6s forwards;
+  margin-bottom:16px;
+}
+.hero p.hero-sub{
+  font-size:16px;color:var(--text-dim);max-width:600px;line-height:1.7;
+  opacity:0;animation:fadeUp 0.8s 0.8s forwards;
+}
+.hero-stats{
+  display:flex;align-items:center;gap:32px;margin-top:48px;
+  opacity:0;animation:fadeUp 0.8s 1s forwards;
+}
+.hero-stat{display:flex;flex-direction:column;align-items:center;gap:6px}
+.hero-stat-num{
+  font-family:var(--font-mono);font-size:28px;font-weight:700;
+  color:var(--cyan);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;
+}
+.hero-stat-label{font-size:12px;color:var(--text-dim)}
+.hero-stat-divider{width:1px;height:36px;background:var(--border)}
+.section-label{
+  font-family:var(--font-mono);font-size:11px;letter-spacing:0.15em;
+  color:var(--cyan);text-transform:uppercase;margin-bottom:16px;
+  display:flex;align-items:center;gap:12px;
+}
+.section-label::before{content:"";width:24px;height:1px;background:var(--cyan)}
+.section-title{
+  font-size:clamp(28px,4vw,40px);font-weight:600;
+  letter-spacing:-0.02em;margin-bottom:16px;
+}
+.section-desc{color:var(--text-dim);max-width:560px;margin-bottom:48px;font-size:15px}
+</style>
+<style>
+/* Path Dual Panel */
+.path-dual-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.layout-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.path-panel{
+  border:1px solid var(--border);border-radius:4px;
+  background:var(--surface);overflow:hidden;
+}
+.path-panel-header{
+  display:flex;align-items:center;gap:8px;
+  padding:12px 16px;border-bottom:1px solid var(--border);
+}
+.path-panel-dot{width:6px;height:6px;border-radius:50%}
+.path-panel-title{font-family:var(--font-mono);font-size:11px;color:var(--text-dim);letter-spacing:0.05em}
+.path-panel-body{padding:16px}
+.path-panel-body svg{width:100%;height:auto;display:block}
+
+.path-line{
+  fill:none;stroke:var(--cyan);stroke-width:2;
+  stroke-dasharray:1000;stroke-dashoffset:1000;
+  animation:drawPath 3s ease-in-out forwards infinite;
+}
+.path-line-alt{
+  fill:none;stroke:var(--amber);stroke-width:2;stroke-opacity:0.6;
+  stroke-dasharray:800;stroke-dashoffset:800;
+  animation:drawPath 3.5s 0.5s ease-in-out forwards infinite;
+}
+.station{fill:none;stroke:rgba(255,255,255,0.2);stroke-width:1}
+.station-label{fill:var(--text-dim);font-size:9px;font-family:var(--font-mono)}
+
+/* Simulation Section - Upgraded */
+.sim-container{display:grid;grid-template-columns:1fr 320px;gap:24px}
+.sim-floor{
+  position:relative;aspect-ratio:4/3;
+  border:1px solid var(--border);border-radius:4px;
+  background:var(--surface);overflow:hidden;
+}
+.sim-floor::after{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(180deg,transparent 0%,rgba(0,212,255,0.02) 50%,transparent 100%);
+  animation:scanline 4s linear infinite;
+  pointer-events:none;
+}
+.sim-floor svg{width:100%;height:100%}
+.equip-block{fill:rgba(255,255,255,0.04);stroke:rgba(255,255,255,0.15);stroke-width:0.8}
+.equip-label{fill:rgba(255,255,255,0.5);font-size:7px;font-family:var(--font-mono);text-anchor:middle}
+.heat-zone{opacity:0.12;animation:heatPulse 3s ease-in-out infinite}
+.agent-body{filter:drop-shadow(0 0 6px var(--cyan))}
+.agent-status{
+  font-size:6.5px;font-family:var(--font-mono);
+  fill:var(--text);paint-order:stroke;
+  stroke:var(--bg);stroke-width:2px;
+}
+.trail-path{
+  fill:none;stroke-width:1.5;opacity:0.4;
+  stroke-dasharray:600;stroke-dashoffset:600;
+  animation:trailDraw 6s linear infinite;
+}
+
+/* Sim Panel Upgraded */
+.sim-panel{display:flex;flex-direction:column;gap:10px}
+.sim-status-bar{
+  border:1px solid var(--border);border-radius:4px;
+  padding:12px 16px;background:var(--surface);
+  display:flex;align-items:center;gap:12px;
+}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:blink 1.5s ease-in-out infinite}
+.status-text{font-family:var(--font-mono);font-size:11px;color:var(--green)}
+.status-time{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--text-dim)}
+.sim-card{
+  border:1px solid var(--border);border-radius:4px;
+  padding:14px 16px;background:var(--surface);
+}
+.sim-card-label{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:0.08em;
+  color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;
+}
+.sim-card-value{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}
+.sim-card-unit{font-size:12px;color:var(--text-dim);margin-left:4px}
+.agent-row{
+  display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-bottom:1px solid var(--border);
+}
+.agent-row:last-child{border-bottom:none}
+.agent-indicator{width:8px;height:8px;border-radius:50%}
+.agent-name{font-family:var(--font-mono);font-size:11px;color:var(--text);min-width:60px}
+.agent-task{font-size:12px;color:var(--text-dim);flex:1}
+.agent-step{font-family:var(--font-mono);font-size:10px;color:var(--cyan)}
+.order-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);
+}
+.order-item:last-child{border-bottom:none}
+.order-name{font-size:12px;color:var(--text)}
+.order-badge{
+  font-family:var(--font-mono);font-size:9px;padding:2px 8px;
+  border-radius:2px;letter-spacing:0.05em;
+}
+.order-badge.making{background:rgba(0,212,255,0.15);color:var(--cyan)}
+.order-badge.queue{background:rgba(255,184,0,0.15);color:var(--amber)}
+.order-badge.done{background:rgba(0,232,123,0.15);color:var(--green)}
+
+/* Comparison Section */
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+.compare-card{
+  border:1px solid var(--border);border-radius:4px;
+  padding:32px;background:var(--surface);position:relative;overflow:hidden;
+}
+.compare-card::before{content:"";position:absolute;top:0;left:0;right:0;height:2px}
+.compare-card.before::before{background:var(--red)}
+.compare-card.after::before{background:var(--green)}
+.compare-tag{
+  font-family:var(--font-mono);font-size:11px;letter-spacing:0.1em;
+  text-transform:uppercase;margin-bottom:20px;
+}
+.compare-card.before .compare-tag{color:var(--red)}
+.compare-card.after .compare-tag{color:var(--green)}
+.metric{display:flex;justify-content:space-between;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--border)}
+.metric:last-child{border-bottom:none}
+.metric-name{font-size:14px;color:var(--text-dim)}
+.metric-val{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.compare-card.before .metric-val{color:var(--text)}
+.compare-card.after .metric-val{color:var(--green)}
+.improve{text-align:center;padding:48px 0 0}
+.improve-num{font-size:64px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums;letter-spacing:-0.03em}
+.improve-label{font-size:14px;color:var(--text-dim);margin-top:8px}
+
+/* Extend Section */
+.extend-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.extend-item{
+  border:1px solid var(--border);border-radius:4px;
+  padding:24px;background:var(--surface);transition:border-color 0.3s ease;
+}
+.extend-item:hover{border-color:var(--cyan)}
+.extend-icon{
+  width:32px;height:32px;margin-bottom:16px;
+  border:1px solid var(--cyan);border-radius:2px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;color:var(--cyan);
+}
+.extend-item h4{font-size:15px;font-weight:500;margin-bottom:8px}
+.extend-item p{font-size:13px;color:var(--text-dim);line-height:1.5}
+
+/* Footer */
+.footer{text-align:center;padding:80px 40px;border-top:1px solid var(--border)}
+.footer p{color:var(--text-dim);font-size:14px}
+.footer .brand{font-size:24px;font-weight:600;margin-bottom:12px;color:var(--text);letter-spacing:-0.02em}
+
+/* Animations */
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes drawPath{0%{stroke-dashoffset:1000}50%{stroke-dashoffset:0}100%{stroke-dashoffset:-1000}}
+@keyframes scanline{0%{transform:translateY(-100%)}100%{transform:translateY(100%)}}
+@keyframes heatPulse{0%,100%{opacity:0.08}50%{opacity:0.18}}
+@keyframes trailDraw{0%{stroke-dashoffset:600}100%{stroke-dashoffset:-600}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes pulse{0%{transform:scale(1);opacity:0.6}100%{transform:scale(3);opacity:0}}
+.reveal{opacity:0;transform:translateY(30px);transition:opacity 0.8s ease,transform 0.8s ease}
+.reveal.visible{opacity:1;transform:translateY(0)}
+@media(max-width:768px){
+  section{padding:60px 20px}
+  .path-dual-grid{grid-template-columns:1fr}
+  .layout-editor-grid{grid-template-columns:1fr}
+  .sim-container{grid-template-columns:1fr}
+  .compare-grid{grid-template-columns:1fr}
+  .extend-grid{grid-template-columns:1fr}
+  .hero h1{font-size:36px}
+  .hero-stats{gap:20px;flex-wrap:wrap;justify-content:center}
+  .hero-stat-num{font-size:22px}
+  .hero p.hero-headline{font-size:20px}
+}
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-badge">AI-Powered Spatial Simulation</div>
+  <h1>动线<span>沙盘</span></h1>
+  <p class="hero-headline">每一种布局方案在落地之前，<br>AI 已经替你「走过」一百遍、「算过」一百遍</p>
+  <p class="hero-sub">用 AI Agent 模拟真实店员，在虚拟空间中跑通你的布局方案。<br>不停业、不改造、不试错——数分钟完成过去数周的验证工作。</p>
+  <div class="hero-stats">
+    <div class="hero-stat">
+      <span class="hero-stat-num">100x</span>
+      <span class="hero-stat-label">验证速度提升</span>
+    </div>
+    <div class="hero-stat-divider"></div>
+    <div class="hero-stat">
+      <span class="hero-stat-num">0</span>
+      <span class="hero-stat-label">实体改造成本</span>
+    </div>
+    <div class="hero-stat-divider"></div>
+    <div class="hero-stat">
+      <span class="hero-stat-num">+52.9%</span>
+      <span class="hero-stat-label">产能提升</span>
+    </div>
+  </div>
+</section>
+
+<!-- Section 0: Layout Editor -->
+<section>
+  <div class="reveal">
+    <div class="section-label">Core Feature 01</div>
+    <h2 class="section-title">双视角布局编辑</h2>
+    <p class="section-desc">俯视角规划整体动线与大型设备摆放，垂直视角调整台面物料与小家电布局。拖拽式交互，所见即所得，零门槛完成空间设计。</p>
+  </div>
+  <div class="layout-editor-grid reveal">
+    <!-- Left: Top-down view -->
+    <div class="path-panel">
+      <div class="path-panel-header">
+        <span class="path-panel-dot" style="background:var(--cyan)"></span>
+        <span class="path-panel-title">俯视角 · 平面布局</span>
+        <span style="margin-left:auto;font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">SCALE 1:50</span>
+      </div>
+      <div class="path-panel-body">
+        <svg viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet">
+          <!-- Grid -->
+          <defs>
+            <pattern id="editorGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+              <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+            </pattern>
+          </defs>
+          <rect x="10" y="10" width="380" height="240" fill="url(#editorGrid)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+          
+          <!-- Equipment blocks (draggable feel with selection handles) -->
+          <!-- 收银台 -->
+          <rect x="25" y="25" width="70" height="35" fill="rgba(0,212,255,0.08)" stroke="var(--cyan)" stroke-width="1" rx="2"/>
+          <text x="60" y="46" class="equip-label" style="fill:var(--cyan)">收银台</text>
+          <!-- Selection handles -->
+          <rect x="23" y="23" width="4" height="4" fill="var(--cyan)" rx="1"/>
+          <rect x="91" y="23" width="4" height="4" fill="var(--cyan)" rx="1"/>
+          <rect x="23" y="56" width="4" height="4" fill="var(--cyan)" rx="1"/>
+          <rect x="91" y="56" width="4" height="4" fill="var(--cyan)" rx="1"/>
+
+          <!-- 制冰机 -->
+          <rect x="110" y="25" width="55" height="35" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="137" y="46" class="equip-label">制冰机</text>
+
+          <!-- 意式咖啡机 -->
+          <rect x="180" y="25" width="75" height="35" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="217" y="46" class="equip-label">咖啡机</text>
+
+          <!-- 萃茶机 -->
+          <rect x="270" y="25" width="55" height="35" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="297" y="46" class="equip-label">萃茶机</text>
+
+          <!-- 果糖机 -->
+          <rect x="340" y="25" width="40" height="35" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="360" y="46" class="equip-label">果糖</text>
+
+          <!-- 调配台 (large) -->
+          <rect x="25" y="100" width="160" height="40" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="105" y="123" class="equip-label">调配操作台</text>
+
+          <!-- 封口机 -->
+          <rect x="200" y="100" width="60" height="40" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="230" y="123" class="equip-label">封口机</text>
+
+          <!-- 出品口 -->
+          <rect x="280" y="100" width="100" height="40" fill="rgba(0,232,123,0.06)" stroke="var(--green)" stroke-width="0.8" rx="2" stroke-dasharray="4 2"/>
+          <text x="330" y="123" class="equip-label" style="fill:var(--green)">出品口</text>
+
+          <!-- 冷藏柜 -->
+          <rect x="25" y="180" width="90" height="45" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="70" y="205" class="equip-label">冷藏柜</text>
+
+          <!-- 物料架 -->
+          <rect x="130" y="180" width="80" height="45" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="170" y="205" class="equip-label">物料架</text>
+
+          <!-- 水槽 -->
+          <rect x="225" y="180" width="60" height="45" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="255" y="205" class="equip-label">水槽</text>
+
+          <!-- Drag arrow indicator -->
+          <g opacity="0.6">
+            <line x1="60" y1="70" x2="60" y2="88" stroke="var(--cyan)" stroke-width="1" stroke-dasharray="2 2"/>
+            <polygon points="56,88 60,94 64,88" fill="var(--cyan)"/>
+          </g>
+
+          <!-- Dimension annotation -->
+          <line x1="25" y1="252" x2="185" y2="252" stroke="rgba(255,255,255,0.3)" stroke-width="0.5"/>
+          <line x1="25" y1="249" x2="25" y2="255" stroke="rgba(255,255,255,0.3)" stroke-width="0.5"/>
+          <line x1="185" y1="249" x2="185" y2="255" stroke="rgba(255,255,255,0.3)" stroke-width="0.5"/>
+          <text x="105" y="260" style="font-size:7px;fill:rgba(255,255,255,0.4);font-family:var(--font-mono);text-anchor:middle">3.2m</text>
+        </svg>
+      </div>
+    </div>
+    <!-- Right: Front/vertical view -->
+    <div class="path-panel">
+      <div class="path-panel-header">
+        <span class="path-panel-dot" style="background:var(--amber)"></span>
+        <span class="path-panel-title">垂直视角 · 台面布局</span>
+        <span style="margin-left:auto;font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">调配操作台</span>
+      </div>
+      <div class="path-panel-body">
+        <svg viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet">
+          <!-- Background shelf structure -->
+          <rect x="10" y="10" width="380" height="260" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+          <!-- Shelf layers -->
+          <line x1="10" y1="70" x2="390" y2="70" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+          <line x1="10" y1="140" x2="390" y2="140" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+          <line x1="10" y1="210" x2="390" y2="210" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+          <text x="395" y="45" style="font-size:6px;fill:rgba(255,255,255,0.3);font-family:var(--font-mono)" text-anchor="end">上层</text>
+          <text x="395" y="110" style="font-size:6px;fill:rgba(255,255,255,0.3);font-family:var(--font-mono)" text-anchor="end">中层</text>
+          <text x="395" y="178" style="font-size:6px;fill:rgba(255,255,255,0.3);font-family:var(--font-mono)" text-anchor="end">下层</text>
+          <text x="395" y="245" style="font-size:6px;fill:rgba(255,255,255,0.3);font-family:var(--font-mono)" text-anchor="end">台面</text>
+
+          <!-- Top shelf: syrups -->
+          <rect x="25" y="30" width="22" height="35" fill="rgba(255,184,0,0.1)" stroke="rgba(255,184,0,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="36" y="55" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">焦糖</text>
+          <rect x="52" y="30" width="22" height="35" fill="rgba(255,184,0,0.1)" stroke="rgba(255,184,0,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="63" y="55" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">香草</text>
+          <rect x="79" y="30" width="22" height="35" fill="rgba(255,184,0,0.1)" stroke="rgba(255,184,0,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="90" y="55" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">榛果</text>
+          <rect x="106" y="30" width="22" height="35" fill="rgba(255,184,0,0.1)" stroke="rgba(255,184,0,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="117" y="55" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">黑糖</text>
+
+          <rect x="160" y="25" width="30" height="40" fill="rgba(0,212,255,0.08)" stroke="rgba(0,212,255,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="175" y="50" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">茶叶罐</text>
+          <rect x="195" y="25" width="30" height="40" fill="rgba(0,212,255,0.08)" stroke="rgba(0,212,255,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="210" y="50" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">茶叶罐</text>
+          <rect x="230" y="25" width="30" height="40" fill="rgba(0,212,255,0.08)" stroke="rgba(0,212,255,0.4)" stroke-width="0.6" rx="2"/>
+          <text x="245" y="50" style="font-size:5px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">茶叶罐</text>
+
+          <!-- Middle shelf: cups and lids -->
+          <rect x="25" y="80" width="40" height="50" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.6" rx="2"/>
+          <text x="45" y="108" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">大杯</text>
+          <rect x="70" y="80" width="40" height="50" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.6" rx="2"/>
+          <text x="90" y="108" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">中杯</text>
+          <rect x="115" y="95" width="35" height="35" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.6" rx="2"/>
+          <text x="132" y="116" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">杯盖</text>
+
+          <rect x="180" y="80" width="50" height="50" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.6" rx="2"/>
+          <text x="205" y="108" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">吸管</text>
+          <rect x="235" y="80" width="50" height="50" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.6" rx="2"/>
+          <text x="260" y="108" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">封口膜</text>
+
+          <!-- Lower shelf: toppings -->
+          <rect x="25" y="150" width="45" height="50" fill="rgba(0,232,123,0.06)" stroke="rgba(0,232,123,0.3)" stroke-width="0.6" rx="2"/>
+          <text x="47" y="178" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">珍珠</text>
+          <rect x="75" y="150" width="45" height="50" fill="rgba(0,232,123,0.06)" stroke="rgba(0,232,123,0.3)" stroke-width="0.6" rx="2"/>
+          <text x="97" y="178" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">椰果</text>
+          <rect x="125" y="150" width="45" height="50" fill="rgba(0,232,123,0.06)" stroke="rgba(0,232,123,0.3)" stroke-width="0.6" rx="2"/>
+          <text x="147" y="178" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">芋圆</text>
+          <rect x="175" y="150" width="45" height="50" fill="rgba(0,232,123,0.06)" stroke="rgba(0,232,123,0.3)" stroke-width="0.6" rx="2"/>
+          <text x="197" y="178" style="font-size:6px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">红豆</text>
+
+          <!-- Countertop: active items being dragged -->
+          <rect x="25" y="218" width="55" height="40" fill="rgba(255,184,0,0.08)" stroke="var(--amber)" stroke-width="1" rx="2"/>
+          <text x="52" y="241" class="equip-label" style="fill:var(--amber)">量杯</text>
+          <!-- Selection handles on active item -->
+          <rect x="23" y="216" width="4" height="4" fill="var(--amber)" rx="1"/>
+          <rect x="76" y="216" width="4" height="4" fill="var(--amber)" rx="1"/>
+          <rect x="23" y="254" width="4" height="4" fill="var(--amber)" rx="1"/>
+          <rect x="76" y="254" width="4" height="4" fill="var(--amber)" rx="1"/>
+
+          <rect x="95" y="218" width="55" height="40" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="122" y="241" class="equip-label">雪克杯</text>
+
+          <rect x="165" y="218" width="50" height="40" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="190" y="241" class="equip-label">电子秤</text>
+
+          <rect x="230" y="218" width="55" height="40" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.2)" stroke-width="0.8" rx="2"/>
+          <text x="257" y="241" class="equip-label">搅拌器</text>
+
+          <!-- Drag indicator on countertop item -->
+          <g opacity="0.5">
+            <line x1="52" y1="210" x2="52" y2="215" stroke="var(--amber)" stroke-width="1"/>
+            <polygon points="48,210 52,205 56,210" fill="var(--amber)"/>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Section 2: Simulation - Upgraded -->
+<section>
+  <div class="reveal">
+    <div class="section-label">Core Feature 02</div>
+    <h2 class="section-title">Agent 仿真引擎</h2>
+    <p class="section-desc">每个 AI Agent 模拟一名真实店员，具备操作设备、取用物料、制作餐品的完整能力。在虚拟空间中按真实订单流执行任务，数分钟内完成数百轮模拟。</p>
+  </div>
+  <div class="sim-container reveal">
+    <div class="sim-floor">
+      <svg viewBox="0 0 480 360" preserveAspectRatio="xMidYMid meet">
+        <!-- Floor outline -->
+        <rect x="10" y="10" width="460" height="340" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+        <!-- Grid lines -->
+        <line x1="10" y1="120" x2="470" y2="120" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+        <line x1="10" y1="230" x2="470" y2="230" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+        <line x1="160" y1="10" x2="160" y2="350" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+        <line x1="320" y1="10" x2="320" y2="350" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+
+        <!-- Top row: Main workstations -->
+        <rect x="25" y="25" width="90" height="50" class="equip-block"/>
+        <text x="70" y="47" class="equip-label">收银台</text>
+        <text x="70" y="60" style="font-size:5px;fill:rgba(255,255,255,0.3);font-family:var(--font-mono);text-anchor:middle">POS</text>
+
+        <rect x="130" y="25" width="70" height="50" class="equip-block"/>
+        <text x="165" y="47" class="equip-label">制冰机</text>
+        <rect x="135" y="55" width="12" height="12" fill="rgba(0,212,255,0.1)" stroke="rgba(0,212,255,0.3)" stroke-width="0.5" rx="1"/>
+        <rect x="152" y="55" width="12" height="12" fill="rgba(0,212,255,0.1)" stroke="rgba(0,212,255,0.3)" stroke-width="0.5" rx="1"/>
+
+        <rect x="215" y="25" width="90" height="50" class="equip-block"/>
+        <text x="260" y="47" class="equip-label">意式咖啡机</text>
+        <rect x="225" y="55" width="30" height="12" fill="rgba(255,184,0,0.1)" stroke="rgba(255,184,0,0.3)" stroke-width="0.5" rx="1"/>
+        <rect x="260" y="55" width="30" height="12" fill="rgba(255,184,0,0.1)" stroke="rgba(255,184,0,0.3)" stroke-width="0.5" rx="1"/>
+
+        <rect x="320" y="25" width="70" height="50" class="equip-block"/>
+        <text x="355" y="47" class="equip-label">萃茶机</text>
+
+        <rect x="405" y="25" width="55" height="50" class="equip-block"/>
+        <text x="432" y="52" class="equip-label">果糖机</text>
+
+        <!-- Middle row: Prep area -->
+        <rect x="25" y="135" width="120" height="45" class="equip-block"/>
+        <text x="85" y="160" class="equip-label">调配操作台</text>
+        <rect x="35" y="163" width="8" height="8" fill="rgba(255,255,255,0.08)" rx="4"/>
+        <rect x="48" y="163" width="8" height="8" fill="rgba(255,255,255,0.08)" rx="4"/>
+        <rect x="61" y="163" width="8" height="8" fill="rgba(255,255,255,0.08)" rx="4"/>
+        <rect x="74" y="163" width="8" height="8" fill="rgba(255,255,255,0.08)" rx="4"/>
+
+        <rect x="160" y="135" width="80" height="45" class="equip-block"/>
+        <text x="200" y="160" class="equip-label">封口机</text>
+
+        <rect x="255" y="135" width="90" height="45" class="equip-block"/>
+        <text x="300" y="160" class="equip-label">打包台</text>
+
+        <rect x="360" y="135" width="100" height="45" class="equip-block"/>
+        <text x="410" y="155" class="equip-label">出品口</text>
+        <text x="410" y="168" style="font-size:5px;fill:rgba(0,232,123,0.6);font-family:var(--font-mono);text-anchor:middle">OUTPUT</text>
+
+        <!-- Bottom row: Storage -->
+        <rect x="25" y="250" width="130" height="55" class="equip-block"/>
+        <text x="90" y="275" class="equip-label">冷藏柜 (鲜奶/水果)</text>
+
+        <rect x="170" y="250" width="100" height="55" class="equip-block"/>
+        <text x="220" y="275" class="equip-label">物料架</text>
+        <text x="220" y="288" style="font-size:5px;fill:rgba(255,255,255,0.3);font-family:var(--font-mono);text-anchor:middle">茶叶/糖浆/杯具</text>
+
+        <rect x="285" y="250" width="80" height="55" class="equip-block"/>
+        <text x="325" y="278" class="equip-label">水槽</text>
+
+        <rect x="380" y="250" width="80" height="55" class="equip-block"/>
+        <text x="420" y="278" class="equip-label">垃圾分类</text>
+
+        <!-- Heat zones -->
+        <ellipse cx="260" cy="50" rx="50" ry="30" fill="var(--amber)" class="heat-zone"/>
+        <ellipse cx="85" cy="157" rx="65" ry="25" fill="var(--cyan)" class="heat-zone" style="animation-delay:1s"/>
+        <ellipse cx="410" cy="157" rx="50" ry="25" fill="var(--green)" class="heat-zone" style="animation-delay:2s"/>
+
+        <!-- Agent 1 path and body -->
+        <path d="M90,280 C90,220 85,180 85,157 C85,130 165,50 260,50 C340,50 355,135 300,157 C260,170 410,155 410,157" class="trail-path" stroke="var(--cyan)"/>
+        <circle r="6" fill="var(--cyan)" class="agent-body">
+          <animateMotion dur="6s" repeatCount="indefinite" path="M90,280 C90,220 85,180 85,157 C85,130 165,50 260,50 C340,50 355,135 300,157 C260,170 410,155 410,157"/>
+        </circle>
+        <text class="agent-status" dy="-12">
+          <animateMotion dur="6s" repeatCount="indefinite" path="M90,280 C90,220 85,180 85,157 C85,130 165,50 260,50 C340,50 355,135 300,157 C260,170 410,155 410,157"/>
+          取料 → 萃取 → 出品
+        </text>
+
+        <!-- Agent 2 path and body -->
+        <path d="M220,280 C220,220 200,180 200,157 C200,130 140,80 165,50 C180,30 130,80 85,157 C60,200 160,155 200,157" class="trail-path" stroke="var(--amber)" style="animation-delay:2s"/>
+        <circle r="6" fill="var(--amber)" class="agent-body">
+          <animateMotion dur="7s" repeatCount="indefinite" path="M220,280 C220,220 200,180 200,157 C200,130 140,80 165,50 C180,30 130,80 85,157 C60,200 160,155 200,157"/>
+        </circle>
+        <text class="agent-status" dy="-12">
+          <animateMotion dur="7s" repeatCount="indefinite" path="M220,280 C220,220 200,180 200,157 C200,130 140,80 165,50 C180,30 130,80 85,157 C60,200 160,155 200,157"/>
+          制冰 → 调配 → 封口
+        </text>
+
+        <!-- Agent 3 path and body -->
+        <path d="M420,280 C420,220 410,180 410,157 C410,130 350,50 355,50 C380,50 300,135 300,157 C300,180 360,200 410,157" class="trail-path" stroke="var(--green)" style="animation-delay:4s"/>
+        <circle r="6" fill="var(--green)" class="agent-body">
+          <animateMotion dur="5.5s" repeatCount="indefinite" path="M420,280 C420,220 410,180 410,157 C410,130 350,50 355,50 C380,50 300,135 300,157 C300,180 360,200 410,157"/>
+        </circle>
+        <text class="agent-status" dy="-12">
+          <animateMotion dur="5.5s" repeatCount="indefinite" path="M420,280 C420,220 410,180 410,157 C410,130 350,50 355,50 C380,50 300,135 300,157 C300,180 360,200 410,157"/>
+          萃茶 → 打包 → 出品
+        </text>
+      </svg>
+    </div>
+    <div class="sim-panel">
+      <!-- Status bar -->
+      <div class="sim-status-bar">
+        <div class="status-dot"></div>
+        <span class="status-text">仿真运行中</span>
+        <span class="status-time" id="simTime">00:03:27</span>
+      </div>
+      <!-- Agent status -->
+      <div class="sim-card">
+        <div class="sim-card-label">Agent 实时状态</div>
+        <div class="agent-row">
+          <div class="agent-indicator" style="background:var(--cyan)"></div>
+          <span class="agent-name">Agent 1</span>
+          <span class="agent-task">制作冰美式</span>
+          <span class="agent-step">4/5</span>
+        </div>
+        <div class="agent-row">
+          <div class="agent-indicator" style="background:var(--amber)"></div>
+          <span class="agent-name">Agent 2</span>
+          <span class="agent-task">制作杨枝甘露</span>
+          <span class="agent-step">2/6</span>
+        </div>
+        <div class="agent-row">
+          <div class="agent-indicator" style="background:var(--green)"></div>
+          <span class="agent-name">Agent 3</span>
+          <span class="agent-task">制作伯爵红茶</span>
+          <span class="agent-step">3/4</span>
+        </div>
+      </div>
+      <!-- Order queue -->
+      <div class="sim-card">
+        <div class="sim-card-label">订单队列</div>
+        <div class="order-item">
+          <span class="order-name">冰美式 x1</span>
+          <span class="order-badge making">制作中</span>
+        </div>
+        <div class="order-item">
+          <span class="order-name">杨枝甘露 x1</span>
+          <span class="order-badge making">制作中</span>
+        </div>
+        <div class="order-item">
+          <span class="order-name">伯爵红茶拿铁 x2</span>
+          <span class="order-badge queue">排队中</span>
+        </div>
+        <div class="order-item">
+          <span class="order-name">生椰拿铁 x1</span>
+          <span class="order-badge queue">排队中</span>
+        </div>
+        <div class="order-item">
+          <span class="order-name">芝芝莓莓 x1</span>
+          <span class="order-badge done">已完成</span>
+        </div>
+      </div>
+      <!-- Metrics row -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="sim-card">
+          <div class="sim-card-label">已出品</div>
+          <div class="sim-card-value" style="color:var(--green)" id="orderCount">127</div>
+        </div>
+        <div class="sim-card">
+          <div class="sim-card-label">平均耗时</div>
+          <div class="sim-card-value" style="color:var(--cyan)">2.4<span class="sim-card-unit">min</span></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="sim-card">
+          <div class="sim-card-label">空间利用</div>
+          <div class="sim-card-value" style="color:var(--amber)">87.3<span class="sim-card-unit">%</span></div>
+        </div>
+        <div class="sim-card">
+          <div class="sim-card-label">动线冲突</div>
+          <div class="sim-card-value" style="color:var(--red)">2<span class="sim-card-unit">/h</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- Section 1: Path Animation -->
+<section>
+  <div class="reveal">
+    <div class="section-label">Core Feature 03</div>
+    <h2 class="section-title">动线可视化</h2>
+    <p class="section-desc">仿真结束后，系统自动生成动线轨迹图与操作热区图。哪段路径走得最多、哪个工位最拥堵，一目了然。</p>
+  </div>
+  <div class="path-dual-grid reveal">
+    <!-- Left: Movement Paths -->
+    <div class="path-panel">
+      <div class="path-panel-header">
+        <span class="path-panel-dot" style="background:var(--cyan)"></span>
+        <span class="path-panel-title">动线轨迹 · 实时描绘</span>
+      </div>
+      <div class="path-panel-body">
+        <svg viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet">
+          <!-- Floor plan -->
+          <rect x="10" y="10" width="380" height="260" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.8"/>
+          <!-- Workstations -->
+          <rect x="25" y="25" width="80" height="40" class="equip-block"/>
+          <text x="65" y="48" class="equip-label">制冰区</text>
+          <rect x="120" y="25" width="70" height="40" class="equip-block"/>
+          <text x="155" y="48" class="equip-label">萃取区</text>
+          <rect x="205" y="25" width="80" height="40" class="equip-block"/>
+          <text x="245" y="48" class="equip-label">调配区</text>
+          <rect x="300" y="25" width="80" height="40" class="equip-block"/>
+          <text x="340" y="48" class="equip-label">打包区</text>
+          <rect x="25" y="180" width="100" height="50" class="equip-block"/>
+          <text x="75" y="208" class="equip-label">物料储存</text>
+          <rect x="140" y="180" width="70" height="50" class="equip-block"/>
+          <text x="175" y="208" class="equip-label">冷藏柜</text>
+          <rect x="300" y="180" width="80" height="50" class="equip-block"/>
+          <text x="340" y="208" class="equip-label">出品口</text>
+          <!-- Agent 1 path (cyan) -->
+          <path d="M75,230 C75,160 65,90 65,45 C65,30 120,45 155,45 C190,45 220,45 245,45 C280,45 310,60 340,45 L340,180" class="path-line" style="stroke:var(--cyan);stroke-width:1.5"/>
+          <circle r="4" fill="var(--cyan)" style="filter:drop-shadow(0 0 4px var(--cyan))">
+            <animateMotion dur="4s" repeatCount="indefinite" path="M75,230 C75,160 65,90 65,45 C65,30 120,45 155,45 C190,45 220,45 245,45 C280,45 310,60 340,45 L340,180"/>
+          </circle>
+          <!-- Agent 2 path (amber) -->
+          <path d="M175,230 C175,160 155,90 155,45 C155,30 200,60 245,45 C270,38 300,100 340,180" class="path-line-alt" style="stroke:var(--amber);stroke-width:1.5;animation-delay:1s"/>
+          <circle r="4" fill="var(--amber)" style="filter:drop-shadow(0 0 4px var(--amber))">
+            <animateMotion dur="5s" repeatCount="indefinite" path="M175,230 C175,160 155,90 155,45 C155,30 200,60 245,45 C270,38 300,100 340,180"/>
+          </circle>
+          <!-- Agent 3 path (green) -->
+          <path d="M75,230 C100,180 130,120 155,45 C170,20 260,60 245,45 C230,30 260,100 300,130 C320,145 340,160 340,180" class="path-line" style="stroke:var(--green);stroke-width:1.5;animation-delay:2s;stroke-dasharray:600;stroke-dashoffset:600"/>
+          <circle r="4" fill="var(--green)" style="filter:drop-shadow(0 0 4px var(--green))">
+            <animateMotion dur="6s" repeatCount="indefinite" path="M75,230 C100,180 130,120 155,45 C170,20 260,60 245,45 C230,30 260,100 300,130 C320,145 340,160 340,180"/>
+          </circle>
+          <!-- Legend -->
+          <line x1="25" y1="258" x2="40" y2="258" stroke="var(--cyan)" stroke-width="1.5"/>
+          <text x="44" y="261" style="font-size:7px;fill:var(--text-dim);font-family:var(--font-mono)">Agent 1</text>
+          <line x1="90" y1="258" x2="105" y2="258" stroke="var(--amber)" stroke-width="1.5"/>
+          <text x="109" y="261" style="font-size:7px;fill:var(--text-dim);font-family:var(--font-mono)">Agent 2</text>
+          <line x1="155" y1="258" x2="170" y2="258" stroke="var(--green)" stroke-width="1.5"/>
+          <text x="174" y="261" style="font-size:7px;fill:var(--text-dim);font-family:var(--font-mono)">Agent 3</text>
+        </svg>
+      </div>
+    </div>
+    <!-- Right: Heat Map -->
+    <div class="path-panel">
+      <div class="path-panel-header">
+        <span class="path-panel-dot" style="background:var(--amber)"></span>
+        <span class="path-panel-title">操作热区 · 频率分布</span>
+      </div>
+      <div class="path-panel-body">
+        <svg viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <filter id="heatBlur" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="8"/>
+            </filter>
+            <filter id="heatBlurSmall" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="5"/>
+            </filter>
+            <linearGradient id="legend-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#1a3a5c" stop-opacity="1"/>
+              <stop offset="25%" stop-color="#00d4ff" stop-opacity="1"/>
+              <stop offset="50%" stop-color="#ffb800" stop-opacity="1"/>
+              <stop offset="75%" stop-color="#ff8c00" stop-opacity="1"/>
+              <stop offset="100%" stop-color="#ff2020" stop-opacity="1"/>
+            </linearGradient>
+          </defs>
+          <!-- Floor plan wireframe underneath -->
+          <rect x="10" y="10" width="380" height="260" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+          <rect x="25" y="25" width="80" height="40" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+          <rect x="120" y="25" width="70" height="40" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+          <rect x="205" y="25" width="80" height="40" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+          <rect x="300" y="25" width="80" height="40" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+          <rect x="25" y="180" width="100" height="50" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+          <rect x="140" y="180" width="70" height="50" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+          <rect x="300" y="180" width="80" height="50" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.5"/>
+
+          <!-- Heatmap layer: dense blurred circles mimicking real thermal imaging -->
+          <g filter="url(#heatBlur)" opacity="0.85">
+            <!-- Hotspot: 调配区 (highest) -->
+            <circle cx="245" cy="45" r="28" fill="#ff2020" opacity="0.55"/>
+            <circle cx="238" cy="50" r="18" fill="#ff4500" opacity="0.4"/>
+            <circle cx="252" cy="40" r="14" fill="#ff6030" opacity="0.35"/>
+            <circle cx="230" cy="42" r="10" fill="#ff2020" opacity="0.3"/>
+            <!-- Hotspot: 萃取区 (high) -->
+            <circle cx="155" cy="45" r="24" fill="#ff4500" opacity="0.5"/>
+            <circle cx="148" cy="48" r="16" fill="#ff6030" opacity="0.35"/>
+            <circle cx="162" cy="40" r="12" fill="#ff8c00" opacity="0.3"/>
+            <!-- Medium: 打包区 -->
+            <circle cx="340" cy="45" r="22" fill="#ff8c00" opacity="0.4"/>
+            <circle cx="335" cy="50" r="14" fill="#ffb800" opacity="0.3"/>
+            <circle cx="348" cy="38" r="10" fill="#ff8c00" opacity="0.25"/>
+            <!-- Medium: 制冰区 -->
+            <circle cx="65" cy="45" r="20" fill="#ffb800" opacity="0.38"/>
+            <circle cx="60" cy="50" r="13" fill="#ff8c00" opacity="0.25"/>
+            <circle cx="72" cy="40" r="9" fill="#ffb800" opacity="0.2"/>
+            <!-- Medium: 出品口 -->
+            <circle cx="340" cy="200" r="22" fill="#ff8c00" opacity="0.4"/>
+            <circle cx="335" cy="205" r="15" fill="#ffb800" opacity="0.3"/>
+            <circle cx="348" cy="195" r="10" fill="#ff8c00" opacity="0.2"/>
+            <!-- Low: 物料储存 -->
+            <circle cx="75" cy="200" r="20" fill="#00d4ff" opacity="0.3"/>
+            <circle cx="68" cy="205" r="12" fill="#1a8ab5" opacity="0.2"/>
+            <!-- Low: 冷藏柜 -->
+            <circle cx="175" cy="200" r="18" fill="#00d4ff" opacity="0.25"/>
+            <circle cx="170" cy="205" r="11" fill="#1a8ab5" opacity="0.18"/>
+            <!-- Corridor heat (movement between stations) -->
+            <circle cx="155" cy="100" r="12" fill="#ffb800" opacity="0.15"/>
+            <circle cx="245" cy="95" r="14" fill="#ff8c00" opacity="0.18"/>
+            <circle cx="200" cy="110" r="10" fill="#ffb800" opacity="0.12"/>
+            <circle cx="300" cy="105" r="11" fill="#ffb800" opacity="0.13"/>
+            <circle cx="120" cy="130" r="9" fill="#00d4ff" opacity="0.12"/>
+            <circle cx="340" cy="120" r="12" fill="#ffb800" opacity="0.15"/>
+            <circle cx="200" cy="160" r="8" fill="#00d4ff" opacity="0.1"/>
+          </g>
+
+          <!-- Station labels on top -->
+          <text x="65" y="48" class="equip-label" style="fill:rgba(255,255,255,0.85)">制冰区</text>
+          <text x="155" y="48" class="equip-label" style="fill:rgba(255,255,255,0.85)">萃取区</text>
+          <text x="245" y="48" class="equip-label" style="fill:rgba(255,255,255,0.85)">调配区</text>
+          <text x="340" y="48" class="equip-label" style="fill:rgba(255,255,255,0.85)">打包区</text>
+          <text x="75" y="208" class="equip-label" style="fill:rgba(255,255,255,0.7)">物料储存</text>
+          <text x="175" y="208" class="equip-label" style="fill:rgba(255,255,255,0.7)">冷藏柜</text>
+          <text x="340" y="208" class="equip-label" style="fill:rgba(255,255,255,0.85)">出品口</text>
+
+          <!-- Frequency annotations -->
+          <text x="245" y="62" style="font-size:8px;fill:rgba(255,255,255,0.95);font-family:var(--font-mono);text-anchor:middle;font-weight:600">372次/h</text>
+          <text x="155" y="62" style="font-size:8px;fill:rgba(255,255,255,0.95);font-family:var(--font-mono);text-anchor:middle;font-weight:600">298次/h</text>
+          <text x="340" y="62" style="font-size:7px;fill:rgba(255,255,255,0.85);font-family:var(--font-mono);text-anchor:middle">186次/h</text>
+          <text x="65" y="62" style="font-size:7px;fill:rgba(255,255,255,0.85);font-family:var(--font-mono);text-anchor:middle">154次/h</text>
+          <text x="340" y="218" style="font-size:7px;fill:rgba(255,255,255,0.85);font-family:var(--font-mono);text-anchor:middle">201次/h</text>
+          <text x="75" y="218" style="font-size:7px;fill:rgba(255,255,255,0.7);font-family:var(--font-mono);text-anchor:middle">89次/h</text>
+
+          <!-- Legend bar -->
+          <rect x="25" y="252" width="140" height="8" rx="4" fill="url(#legend-grad)"/>
+          <text x="25" y="272" style="font-size:7px;fill:var(--text-dim);font-family:var(--font-mono)">低频</text>
+          <text x="95" y="272" style="font-size:7px;fill:var(--text-dim);font-family:var(--font-mono);text-anchor:middle">中频</text>
+          <text x="165" y="272" style="font-size:7px;fill:var(--text-dim);font-family:var(--font-mono)" text-anchor="end">高频</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- Section 3: Comparison -->
+<section>
+  <div class="reveal">
+    <div class="section-label">Core Feature 04</div>
+    <h2 class="section-title">多方案量化对比</h2>
+    <p class="section-desc">系统自动记录每种布局方案的效率指标，支持 A/B 对比分析，用数据驱动决策而非经验拍脑袋。</p>
+  </div>
+  <div class="compare-grid reveal">
+    <div class="compare-card before">
+      <div class="compare-tag">方案 A — 原始布局</div>
+      <div class="metric"><span class="metric-name">平均出品时间</span><span class="metric-val">4.2 min</span></div>
+      <div class="metric"><span class="metric-name">动线总长度</span><span class="metric-val">18.6 m</span></div>
+      <div class="metric"><span class="metric-name">高峰期产能</span><span class="metric-val">34 杯/h</span></div>
+      <div class="metric"><span class="metric-name">动线交叉次数</span><span class="metric-val">12 次/h</span></div>
+      <div class="metric"><span class="metric-name">空间利用率</span><span class="metric-val">71.2%</span></div>
+    </div>
+    <div class="compare-card after">
+      <div class="compare-tag">方案 B — 优化布局</div>
+      <div class="metric"><span class="metric-name">平均出品时间</span><span class="metric-val">2.4 min</span></div>
+      <div class="metric"><span class="metric-name">动线总长度</span><span class="metric-val">11.3 m</span></div>
+      <div class="metric"><span class="metric-name">高峰期产能</span><span class="metric-val">52 杯/h</span></div>
+      <div class="metric"><span class="metric-name">动线交叉次数</span><span class="metric-val">3 次/h</span></div>
+      <div class="metric"><span class="metric-name">空间利用率</span><span class="metric-val">87.3%</span></div>
+    </div>
+  </div>
+  <div class="improve reveal">
+    <div class="improve-num">+52.9%</div>
+    <div class="improve-label">高峰期产能提升</div>
+  </div>
+</section>
+
+<!-- Section 4: Extension -->
+<section>
+  <div class="reveal">
+    <div class="section-label">Beyond F&B</div>
+    <h2 class="section-title">不止于餐饮</h2>
+    <p class="section-desc">当 AI Agent 可以在任意虚拟空间中模拟真实人的行为，它就能成为所有线下空间的"预体验"工具。</p>
+  </div>
+  <div class="extend-grid reveal">
+    <div class="extend-item">
+      <div class="extend-icon">&#9675;</div>
+      <h4>便民服务大厅</h4>
+      <p>窗口排布优化，减少排队时间，提升办事效率</p>
+    </div>
+    <div class="extend-item">
+      <div class="extend-icon">&#9651;</div>
+      <h4>医院导诊区</h4>
+      <p>引导路径仿真，降低患者迷路率，缩短就诊动线</p>
+    </div>
+    <div class="extend-item">
+      <div class="extend-icon">&#9633;</div>
+      <h4>居家空间</h4>
+      <p>厨房与工作台人体工学验证，装修前先"住"一遍</p>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<section class="footer">
+  <p class="brand">动线沙盘</p>
+  <p>让每一种空间方案在落地之前，都已经被 AI 走过、算过、验证过。</p>
+</section>
+
+<script>
+// Scroll reveal
+const reveals = document.querySelectorAll(".reveal");
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) entry.target.classList.add("visible");
+  });
+}, { threshold: 0.15 });
+reveals.forEach(el => observer.observe(el));
+
+// Simulate order count incrementing
+let count = 127;
+setInterval(() => {
+  count += Math.floor(Math.random() * 2) + 1;
+  const el = document.getElementById("orderCount");
+  if (el) el.textContent = count;
+}, 3000);
+
+// Simulate time ticking
+let seconds = 207;
+setInterval(() => {
+  seconds++;
+  const m = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const s = String(seconds % 60).padStart(2, "0");
+  const el = document.getElementById("simTime");
+  if (el) el.textContent = "00:" + m + ":" + s;
+}, 1000);
+
+// Rotate agent tasks
+const tasks = [
+  ["制作冰美式", "制作生椰拿铁", "制作燕麦拿铁"],
+  ["制作杨枝甘露", "制作芒果冰沙", "制作多肉葡萄"],
+  ["制作伯爵红茶", "制作乌龙奶茶", "制作茉莉绿茶"]
+];
+const steps = ["1/5", "2/6", "3/4", "4/5", "5/5", "2/4", "3/6"];
+setInterval(() => {
+  document.querySelectorAll(".agent-task").forEach((el, i) => {
+    el.textContent = tasks[i][Math.floor(Math.random() * tasks[i].length)];
+  });
+  document.querySelectorAll(".agent-step").forEach(el => {
+    el.textContent = steps[Math.floor(Math.random() * steps.length)];
+  });
+}, 4000);
+
+// Rotate order queue status
+setInterval(() => {
+  const badges = document.querySelectorAll(".order-badge");
+  const statuses = [
+    { cls: "making", text: "制作中" },
+    { cls: "queue", text: "排队中" },
+    { cls: "done", text: "已完成" }
+  ];
+  badges.forEach((badge, i) => {
+    if (Math.random() > 0.7) {
+      const next = i < 2 ? 0 : (i < 4 ? 1 : 2);
+      const s = statuses[Math.min(next + (Math.random() > 0.5 ? 1 : 0), 2)];
+      badge.className = "order-badge " + s.cls;
+      badge.textContent = s.text;
+    }
+  });
+}, 5000);
+</script>
+</body>
+</html>

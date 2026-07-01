@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI「知识热力图」考试复盘知识漏洞可视化诊断系统</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ===== RESET & BASE ===== */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg-deep:#060a1e;--bg-primary:#0a0e27;--bg-card:rgba(15,20,50,0.6);
+  --glass:rgba(255,255,255,0.03);--glass-border:rgba(255,255,255,0.06);
+  --text-primary:#e8eaf6;--text-secondary:#8a8fb5;--text-muted:#5c6088;
+  --accent-blue:#4fc3f7;--accent-purple:#b388ff;--accent-cyan:#80deea;
+  --heat-0:#1a1a2e;--heat-1:#b71c1c;--heat-2:#e65100;--heat-3:#f9a825;--heat-4:#2e7d32;--heat-5:#00695c;
+  --glow-blue:0 0 30px rgba(79,195,247,0.15);
+  --glow-purple:0 0 30px rgba(179,136,255,0.15);
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{
+  font-family:'Noto Sans SC','Inter',sans-serif;
+  background:var(--bg-deep);color:var(--text-primary);
+  overflow-x:hidden;line-height:1.7;
+}
+::selection{background:rgba(79,195,247,0.3);color:#fff}
+
+/* ===== SCROLLBAR ===== */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg-deep)}
+::-webkit-scrollbar-thumb{background:linear-gradient(var(--accent-blue),var(--accent-purple));border-radius:3px}
+
+/* ===== CANVAS BG ===== */
+#bgCanvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+
+/* ===== LAYOUT ===== */
+.container{max-width:1200px;margin:0 auto;padding:0 32px;position:relative;z-index:1}
+section{padding:100px 0;position:relative}
+
+/* ===== HERO ===== */
+.hero{min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.hero::before{
+  content:'';position:absolute;top:50%;left:50%;width:800px;height:800px;
+  background:radial-gradient(circle,rgba(79,195,247,0.06) 0%,rgba(179,136,255,0.04) 40%,transparent 70%);
+  transform:translate(-50%,-50%);pointer-events:none;
+}
+.hero-content{text-align:center;position:relative;z-index:2}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 20px;border-radius:100px;
+  background:rgba(79,195,247,0.08);border:1px solid rgba(79,195,247,0.2);
+  font-size:13px;color:var(--accent-blue);font-weight:500;
+  margin-bottom:32px;letter-spacing:1px;
+}
+.hero-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent-blue);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.5)}}
+.hero h1{
+  font-size:clamp(36px,5vw,64px);font-weight:900;line-height:1.15;
+  background:linear-gradient(135deg,#e8eaf6 0%,var(--accent-blue) 50%,var(--accent-purple) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:20px;
+}
+.hero-sub{font-size:clamp(16px,2vw,20px);color:var(--text-secondary);max-width:680px;margin:0 auto 48px;line-height:1.8}
+
+/* Hero Heatmap Preview */
+.hero-heatmap{
+  display:inline-grid;grid-template-columns:repeat(12,1fr);gap:3px;
+  padding:16px;border-radius:16px;
+  background:rgba(10,14,39,0.8);border:1px solid var(--glass-border);
+  backdrop-filter:blur(20px);
+}
+.hero-cell{
+  width:28px;height:28px;border-radius:4px;
+  animation:cellFade 3s ease-in-out infinite;
+}
+@keyframes cellFade{0%,100%{opacity:.7}50%{opacity:1}}
+
+/* ===== SECTION HEADERS ===== */
+.section-header{text-align:center;margin-bottom:64px}
+.section-tag{
+  display:inline-block;padding:6px 16px;border-radius:6px;
+  background:rgba(79,195,247,0.08);border:1px solid rgba(79,195,247,0.15);
+  font-size:12px;color:var(--accent-blue);font-weight:600;letter-spacing:2px;
+  text-transform:uppercase;margin-bottom:16px;
+}
+.section-header h2{
+  font-size:clamp(28px,3.5vw,42px);font-weight:800;
+  background:linear-gradient(135deg,#e8eaf6,var(--accent-cyan));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:16px;
+}
+.section-header p{font-size:16px;color:var(--text-secondary);max-width:600px;margin:0 auto}
+
+/* ===== PAIN POINTS ===== */
+.pain-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}
+.pain-card{
+  padding:32px;border-radius:16px;
+  background:var(--glass);border:1px solid var(--glass-border);
+  backdrop-filter:blur(12px);
+  transition:all .4s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;
+}
+.pain-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--accent-blue),var(--accent-purple),transparent);
+  opacity:0;transition:opacity .4s;
+}
+.pain-card:hover{transform:translateY(-4px);border-color:rgba(79,195,247,0.15)}
+.pain-card:hover::before{opacity:1}
+.pain-icon{
+  width:48px;height:48px;border-radius:12px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:22px;margin-bottom:20px;
+  background:linear-gradient(135deg,rgba(79,195,247,0.1),rgba(179,136,255,0.1));
+  border:1px solid rgba(79,195,247,0.1);
+}
+.pain-card h3{font-size:18px;font-weight:700;margin-bottom:10px;color:var(--text-primary)}
+.pain-card p{font-size:14px;color:var(--text-secondary);line-height:1.7}
+
+/* ===== DEMO SECTION ===== */
+.demo-section{background:linear-gradient(180deg,transparent 0%,rgba(79,195,247,0.02) 50%,transparent 100%)}
+.demo-container{
+  border-radius:20px;overflow:hidden;
+  background:rgba(10,14,39,0.7);border:1px solid var(--glass-border);
+  backdrop-filter:blur(20px);
+}
+/* Demo Header */
+.demo-toolbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 24px;border-bottom:1px solid var(--glass-border);
+  background:rgba(255,255,255,0.02);
+}
+.demo-dots{display:flex;gap:8px}
+.demo-dots span{width:12px;height:12px;border-radius:50%}
+.demo-dots span:nth-child(1){background:#ff5f57}
+.demo-dots span:nth-child(2){background:#ffbd2e}
+.demo-dots span:nth-child(3){background:#28c840}
+.demo-title{font-size:13px;color:var(--text-muted);font-family:'JetBrains Mono',monospace}
+
+/* Demo Body */
+.demo-body{display:flex;min-height:560px}
+.demo-left{width:280px;border-right:1px solid var(--glass-border);padding:24px;flex-shrink:0}
+.demo-right{flex:1;padding:24px;overflow-y:auto}
+
+/* Subject Tabs */
+.subject-tabs{display:flex;flex-direction:column;gap:8px;margin-bottom:24px}
+.subject-tab{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 16px;border-radius:10px;cursor:pointer;
+  background:transparent;border:1px solid transparent;
+  color:var(--text-secondary);font-size:14px;font-weight:500;
+  transition:all .3s;
+}
+.subject-tab:hover{background:rgba(255,255,255,0.03);color:var(--text-primary)}
+.subject-tab.active{
+  background:rgba(79,195,247,0.08);border-color:rgba(79,195,247,0.2);
+  color:var(--accent-blue);
+}
+.subject-tab .tab-icon{font-size:18px}
+.subject-tab .tab-count{
+  margin-left:auto;font-size:11px;padding:2px 8px;border-radius:10px;
+  background:rgba(255,255,255,0.05);color:var(--text-muted);
+}
+
+/* Preset Scenarios */
+.demo-presets{margin-top:20px}
+.demo-presets h4{font-size:12px;color:var(--text-muted);margin-bottom:12px;letter-spacing:1px;text-transform:uppercase}
+.preset-btn{
+  display:block;width:100%;padding:10px 14px;margin-bottom:8px;
+  border-radius:8px;border:1px solid var(--glass-border);
+  background:var(--glass);color:var(--text-secondary);
+  font-size:13px;cursor:pointer;text-align:left;
+  transition:all .3s;
+}
+.preset-btn:hover{border-color:rgba(179,136,255,0.3);color:var(--accent-purple)}
+.preset-btn.active{border-color:rgba(179,136,255,0.4);background:rgba(179,136,255,0.08);color:var(--accent-purple)}
+
+/* Heatmap Display */
+.heatmap-wrapper{margin-bottom:24px}
+.heatmap-legend{
+  display:flex;align-items:center;gap:8px;margin-bottom:16px;
+  font-size:12px;color:var(--text-muted);
+}
+.legend-bar{
+  width:160px;height:10px;border-radius:5px;
+  background:linear-gradient(90deg,var(--heat-1),var(--heat-2),var(--heat-3),var(--heat-4),var(--heat-5));
+}
+.heatmap-grid{display:flex;flex-direction:column;gap:2px}
+.heatmap-row{display:flex;align-items:center;gap:2px}
+.heatmap-label{
+  width:90px;font-size:11px;color:var(--text-muted);
+  font-family:'JetBrains Mono',monospace;text-align:right;
+  padding-right:10px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.heatmap-cells{display:flex;gap:2px;flex:1}
+.heat-cell{
+  flex:1;height:32px;border-radius:3px;cursor:pointer;
+  transition:all .3s;position:relative;min-width:12px;
+}
+.heat-cell:hover{transform:scaleY(1.3);z-index:2;box-shadow:0 0 12px rgba(0,0,0,0.5)}
+.heat-cell .tooltip{
+  position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);
+  padding:6px 12px;border-radius:6px;
+  background:rgba(10,14,39,0.95);border:1px solid var(--glass-border);
+  font-size:11px;color:var(--text-primary);white-space:nowrap;
+  pointer-events:none;opacity:0;transition:opacity .2s;z-index:10;
+}
+.heat-cell:hover .tooltip{opacity:1}
+
+/* Stats Cards */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.stat-card{
+  padding:16px;border-radius:10px;text-align:center;
+  background:var(--glass);border:1px solid var(--glass-border);
+}
+.stat-value{font-size:24px;font-weight:800;font-family:'JetBrains Mono',monospace;margin-bottom:4px}
+.stat-label{font-size:11px;color:var(--text-muted)}
+.stat-value.danger{color:#ef5350}
+.stat-value.warning{color:#ffa726}
+.stat-value.good{color:#66bb6a}
+.stat-value.info{color:var(--accent-blue)}
+
+/* Review Plan */
+.plan-section{margin-top:8px}
+.plan-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:16px;
+}
+.plan-header h3{font-size:16px;font-weight:700;color:var(--text-primary)}
+.generate-btn{
+  padding:10px 24px;border-radius:8px;border:none;cursor:pointer;
+  background:linear-gradient(135deg,var(--accent-blue),var(--accent-purple));
+  color:#fff;font-size:13px;font-weight:600;
+  transition:all .3s;position:relative;overflow:hidden;
+}
+.generate-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(79,195,247,0.3)}
+.generate-btn::after{
+  content:'';position:absolute;top:0;left:-100%;width:100%;height:100%;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.2),transparent);
+  transition:left .5s;
+}
+.generate-btn:hover::after{left:100%}
+
+.plan-cards{display:flex;flex-direction:column;gap:12px}
+.plan-card{
+  padding:16px 20px;border-radius:12px;
+  background:var(--glass);border:1px solid var(--glass-border);
+  display:flex;align-items:flex-start;gap:16px;
+  opacity:0;transform:translateY(10px);
+  animation:planIn .5s forwards;
+}
+.plan-card:nth-child(1){animation-delay:.1s}
+.plan-card:nth-child(2){animation-delay:.25s}
+.plan-card:nth-child(3){animation-delay:.4s}
+.plan-card:nth-child(4){animation-delay:.55s}
+@keyframes planIn{to{opacity:1;transform:translateY(0)}}
+.plan-priority{
+  width:32px;height:32px;border-radius:8px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;color:#fff;
+}
+.plan-priority.p1{background:linear-gradient(135deg,#d32f2f,#b71c1c)}
+.plan-priority.p2{background:linear-gradient(135deg,#f57c00,#e65100)}
+.plan-priority.p3{background:linear-gradient(135deg,#fbc02d,#f9a825)}
+.plan-priority.p4{background:linear-gradient(135deg,#388e3c,#2e7d32)}
+.plan-info{flex:1}
+.plan-info h4{font-size:14px;font-weight:600;margin-bottom:4px}
+.plan-info .plan-meta{font-size:12px;color:var(--text-muted);margin-bottom:6px}
+.plan-info .plan-action{font-size:13px;color:var(--text-secondary);line-height:1.6}
+.plan-tag{
+  display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;
+  margin-right:6px;margin-top:6px;
+}
+.plan-tag.time{background:rgba(79,195,247,0.1);color:var(--accent-blue)}
+.plan-tag.improve{background:rgba(102,187,106,0.1);color:#66bb6a}
+
+/* ===== FEATURES ===== */
+.features-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px}
+.feature-card{
+  padding:36px;border-radius:16px;
+  background:var(--glass);border:1px solid var(--glass-border);
+  backdrop-filter:blur(12px);
+  transition:all .4s;position:relative;overflow:hidden;
+}
+.feature-card:hover{border-color:rgba(79,195,247,0.15);transform:translateY(-4px)}
+.feature-num{
+  font-size:48px;font-weight:900;
+  font-family:'JetBrains Mono',monospace;
+  background:linear-gradient(135deg,rgba(79,195,247,0.15),rgba(179,136,255,0.15));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:16px;line-height:1;
+}
+.feature-card h3{font-size:18px;font-weight:700;margin-bottom:10px}
+.feature-card p{font-size:14px;color:var(--text-secondary);line-height:1.7}
+
+/* ===== TECH ARCHITECTURE ===== */
+.tech-section{background:linear-gradient(180deg,transparent,rgba(179,136,255,0.02),transparent)}
+.tech-flow{
+  display:flex;align-items:stretch;gap:0;
+  padding:32px;border-radius:16px;
+  background:var(--glass);border:1px solid var(--glass-border);
+  overflow-x:auto;
+}
+.tech-step{
+  flex:1;min-width:160px;padding:24px 20px;text-align:center;
+  position:relative;
+}
+.tech-step::after{
+  content:'';position:absolute;top:50%;right:-12px;
+  width:24px;height:2px;
+  background:linear-gradient(90deg,var(--accent-blue),transparent);
+}
+.tech-step:last-child::after{display:none}
+.tech-icon{
+  width:56px;height:56px;border-radius:14px;margin:0 auto 16px;
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+  background:linear-gradient(135deg,rgba(79,195,247,0.1),rgba(179,136,255,0.1));
+  border:1px solid rgba(79,195,247,0.15);
+}
+.tech-step h4{font-size:14px;font-weight:600;margin-bottom:8px}
+.tech-step p{font-size:12px;color:var(--text-muted);line-height:1.6}
+
+/* ===== USER STORIES ===== */
+.stories-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px}
+.story-card{
+  padding:32px;border-radius:16px;
+  background:var(--glass);border:1px solid var(--glass-border);
+  position:relative;
+}
+.story-card::before{
+  content:'"';position:absolute;top:16px;right:24px;
+  font-size:64px;color:rgba(79,195,247,0.08);font-family:Georgia,serif;line-height:1;
+}
+.story-quote{font-size:14px;color:var(--text-secondary);line-height:1.8;margin-bottom:20px;font-style:italic}
+.story-author{display:flex;align-items:center;gap:12px}
+.story-avatar{
+  width:40px;height:40px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;
+  background:linear-gradient(135deg,rgba(79,195,247,0.15),rgba(179,136,255,0.15));
+}
+.story-name{font-size:13px;font-weight:600}
+.story-role{font-size:11px;color:var(--text-muted)}
+
+/* ===== FOOTER ===== */
+.footer{
+  text-align:center;padding:48px 0;
+  border-top:1px solid var(--glass-border);
+}
+.footer p{font-size:13px;color:var(--text-muted)}
+
+/* ===== SCROLL ANIMATIONS ===== */
+.reveal{opacity:0;transform:translateY(30px);transition:all .8s cubic-bezier(.4,0,.2,1)}
+.reveal.visible{opacity:1;transform:translateY(0)}
+.reveal-delay-1{transition-delay:.1s}
+.reveal-delay-2{transition-delay:.2s}
+.reveal-delay-3{transition-delay:.3s}
+
+/* ===== RESPONSIVE ===== */
+@media(max-width:768px){
+  .container{padding:0 20px}
+  section{padding:60px 0}
+  .demo-body{flex-direction:column}
+  .demo-left{width:100%;border-right:none;border-bottom:1px solid var(--glass-border)}
+  .stats-row{grid-template-columns:repeat(2,1fr)}
+  .tech-flow{flex-direction:column}
+  .tech-step::after{display:none}
+  .hero-heatmap{grid-template-columns:repeat(8,1fr)}
+  .hero-cell{width:20px;height:20px}
+}
+</style>
+</head>
+<body>
+
+<!-- Background Canvas -->
+<canvas id="bgCanvas"></canvas>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="hero-content">
+    <div class="hero-badge">学习工作赛道 &middot; AI教育工具</div>
+    <h1>AI「知识热力图」<br>考试复盘知识漏洞诊断系统</h1>
+    <p class="hero-sub">拍照上传试卷，AI 自动拆解知识点掌握度，生成可视化热力图。<br>一眼看穿知识盲区，让每一分钟复习都精准命中薄弱环节。</p>
+    <div class="hero-heatmap" id="heroHeatmap"></div>
+  </div>
+</section>
+
+<!-- ===== PAIN POINTS ===== -->
+<section id="pain">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">Problem</div>
+      <h2>考后复盘的三大困境</h2>
+      <p>每次考试后，学生都面临相同的困境——知道考得不好，却不知从何补起</p>
+    </div>
+    <div class="pain-grid">
+      <div class="pain-card reveal reveal-delay-1">
+        <div class="pain-icon">&#x1F50D;</div>
+        <h3>盲区不可见</h3>
+        <p>总分和排名只能反映整体水平，无法定位具体知识点的掌握情况。"函数"到底差在定义域还是值域？完全无从得知。</p>
+      </div>
+      <div class="pain-card reveal reveal-delay-2">
+        <div class="pain-icon">&#x1F4DA;</div>
+        <h3>复盘低效</h3>
+        <p>手动整理错题本平均耗时2小时以上，且容易遗漏。70%的学生在整理后再也不回看，投入与产出严重不对等。</p>
+      </div>
+      <div class="pain-card reveal reveal-delay-3">
+        <div class="pain-icon">&#x1F3AF;</div>
+        <h3>复习无方向</h3>
+        <p>考前不知道重点在哪，只能从头到尾翻书。反复刷已经掌握的章节，真正薄弱的知识点反而被反复跳过。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== INTERACTIVE DEMO ===== -->
+<section class="demo-section" id="demo">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">Interactive Demo</div>
+      <h2>交互演示：知识漏洞热力图</h2>
+      <p>选择学科和考试场景，实时查看知识点掌握度热力图和个性化复习方案</p>
+    </div>
+    <div class="demo-container reveal">
+      <!-- Toolbar -->
+      <div class="demo-toolbar">
+        <div class="demo-dots"><span></span><span></span><span></span></div>
+        <div class="demo-title">knowledge_heatmap_v2.0 &mdash; interactive preview</div>
+        <div style="width:52px"></div>
+      </div>
+      <!-- Body -->
+      <div class="demo-body">
+        <!-- Left Panel -->
+        <div class="demo-left">
+          <div class="subject-tabs" id="subjectTabs">
+            <div class="subject-tab active" data-subject="math"><span class="tab-icon">&#x1F4D0;</span>数学<span class="tab-count">24点</span></div>
+            <div class="subject-tab" data-subject="physics"><span class="tab-icon">&#x26A1;</span>物理<span class="tab-count">18点</span></div>
+            <div class="subject-tab" data-subject="chemistry"><span class="tab-icon">&#x1F9EA;</span>化学<span class="tab-count">18点</span></div>
+          </div>
+          <div class="demo-presets">
+            <h4>预设考试场景</h4>
+            <button class="preset-btn active" data-preset="midterm">&#x1F4DD; 期中考试 &middot; 综合</button>
+            <button class="preset-btn" data-preset="weak">&#x1F6A8; 薄弱生 &middot; 基础卷</button>
+            <button class="preset-btn" data-preset="strong">&#x1F31F; 优等生 &middot; 提高卷</button>
+          </div>
+          <div style="margin-top:24px;padding:16px;border-radius:10px;background:rgba(79,195,247,0.04);border:1px solid rgba(79,195,247,0.08)">
+            <div style="font-size:12px;color:var(--accent-blue);font-weight:600;margin-bottom:8px">&#x1F4A1; 热力图阅读指南</div>
+            <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+              <span style="color:#ef5350">&#x25A0;</span> 深红 = 严重薄弱（&lt;40%）<br>
+              <span style="color:#ffa726">&#x25A0;</span> 橙色 = 需要加强（40-60%）<br>
+              <span style="color:#fdd835">&#x25A0;</span> 黄色 = 基本掌握（60-80%）<br>
+              <span style="color:#66bb6a">&#x25A0;</span> 绿色 = 完全掌握（&gt;80%）
+            </div>
+          </div>
+        </div>
+        <!-- Right Panel -->
+        <div class="demo-right" id="demoRight">
+          <!-- Stats -->
+          <div class="stats-row" id="statsRow">
+            <div class="stat-card"><div class="stat-value danger" id="statWeak">0</div><div class="stat-label">薄弱知识点</div></div>
+            <div class="stat-card"><div class="stat-value warning" id="statMid">0</div><div class="stat-label">待加强</div></div>
+            <div class="stat-card"><div class="stat-value good" id="statOk">0</div><div class="stat-label">基本掌握</div></div>
+            <div class="stat-card"><div class="stat-value info" id="statRate">0%</div><div class="stat-label">综合掌握率</div></div>
+          </div>
+          <!-- Heatmap -->
+          <div class="heatmap-wrapper">
+            <div class="heatmap-legend">
+              <span>薄弱</span>
+              <div class="legend-bar"></div>
+              <span>掌握</span>
+            </div>
+            <div class="heatmap-grid" id="heatmapGrid"></div>
+          </div>
+          <!-- Review Plan -->
+          <div class="plan-section">
+            <div class="plan-header">
+              <h3>&#x1F3AF; AI 复习方案推荐</h3>
+              <button class="generate-btn" id="generateBtn" onclick="generatePlan()">生成复习方案</button>
+            </div>
+            <div class="plan-cards" id="planCards"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== CORE FEATURES ===== -->
+<section id="features">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">Core Features</div>
+      <h2>四层核心能力</h2>
+      <p>从试卷拍照到复习方案，全流程 AI 驱动</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-num">01</div>
+        <h3>OCR 试卷识别 + 知识点标注</h3>
+        <p>拍照上传试卷，AI 自动识别每道题目，匹配课标知识树，标注对应的章节、知识点和难度等级。支持手写体和印刷体混合识别。</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-num">02</div>
+        <h3>多维掌握度评估模型</h3>
+        <p>综合正确率、答题时长、步骤完整度三个维度，为每个知识点计算掌握度得分（0-100），而非简单的对/错二分法。</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-3">
+        <div class="feature-num">03</div>
+        <h3>知识漏洞热力图可视化</h3>
+        <p>按学科-章节-知识点三级结构生成热力图，颜色深浅直观反映掌握程度。支持历次考试叠加对比，追踪知识漏洞的修复进度。</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-num">04</div>
+        <h3>个性化复习路径推荐</h3>
+        <p>基于遗忘曲线和知识依赖关系，AI 生成优先级排序的复习方案：先补哪块、用什么方式练、预计需要多少时间，精确到每天的任务清单。</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-num">05</div>
+        <h3>历次考试趋势追踪</h3>
+        <p>多次考试数据自动累积，生成知识掌握度的动态变化趋势。哪些漏洞已修复、哪些在恶化，一目了然。支持导出 PDF 诊断报告。</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-3">
+        <div class="feature-num">06</div>
+        <h3>智能错题归因分析</h3>
+        <p>不只记录错题，更分析错因——是概念不清、计算失误还是审题疏漏？同一知识点的不同错因对应不同的复习策略。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TECH ARCHITECTURE ===== -->
+<section class="tech-section" id="tech">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">Architecture</div>
+      <h2>技术原理与架构</h2>
+      <p>五层处理流水线，从图像输入到方案输出全链路自动化</p>
+    </div>
+    <div class="tech-flow reveal">
+      <div class="tech-step">
+        <div class="tech-icon">&#x1F4F7;</div>
+        <h4>图像采集层</h4>
+        <p>试卷拍照 / 截图导入<br>自适应矫正与增强</p>
+      </div>
+      <div class="tech-step">
+        <div class="tech-icon">&#x1F9E0;</div>
+        <h4>AI 解析层</h4>
+        <p>OCR 文字识别<br>题目分割与知识点映射</p>
+      </div>
+      <div class="tech-step">
+        <div class="tech-icon">&#x1F4CA;</div>
+        <h4>评估计算层</h4>
+        <p>多维掌握度评分<br>知识依赖图谱推理</p>
+      </div>
+      <div class="tech-step">
+        <div class="tech-icon">&#x1F5FA;</div>
+        <h4>可视化渲染层</h4>
+        <p>热力图生成引擎<br>趋势图与对比图渲染</p>
+      </div>
+      <div class="tech-step">
+        <div class="tech-icon">&#x1F3AF;</div>
+        <h4>方案输出层</h4>
+        <p>复习路径规划<br>错题推送与每日任务</p>
+      </div>
+    </div>
+    <div style="margin-top:32px;padding:24px 32px;border-radius:12px;background:var(--glass);border:1px solid var(--glass-border)" class="reveal">
+      <div style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--accent-cyan)">&#x2699; 核心技术栈</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <span style="padding:6px 14px;border-radius:6px;font-size:12px;background:rgba(79,195,247,0.08);border:1px solid rgba(79,195,247,0.12);color:var(--accent-blue)">PaddleOCR 文字识别</span>
+        <span style="padding:6px 14px;border-radius:6px;font-size:12px;background:rgba(179,136,255,0.08);border:1px solid rgba(179,136,255,0.12);color:var(--accent-purple)">BERT 知识点分类</span>
+        <span style="padding:6px 14px;border-radius:6px;font-size:12px;background:rgba(128,222,234,0.08);border:1px solid rgba(128,222,234,0.12);color:var(--accent-cyan)">知识图谱 DAG 推理</span>
+        <span style="padding:6px 14px;border-radius:6px;font-size:12px;background:rgba(102,187,106,0.08);border:1px solid rgba(102,187,106,0.12);color:#66bb6a">Ebbinghaus 遗忘曲线</span>
+        <span style="padding:6px 14px;border-radius:6px;font-size:12px;background:rgba(255,167,38,0.08);border:1px solid rgba(255,167,38,0.12);color:#ffa726">Canvas 热力图渲染</span>
+        <span style="padding:6px 14px;border-radius:6px;font-size:12px;background:rgba(239,83,80,0.08);border:1px solid rgba(239,83,80,0.12);color:#ef5350">微信小程序框架</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== USER STORIES ===== -->
+<section id="stories">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">User Stories</div>
+      <h2>真实使用场景</h2>
+      <p>看看不同学习者如何使用知识热力图提升复习效率</p>
+    </div>
+    <div class="stories-grid">
+      <div class="story-card reveal reveal-delay-1">
+        <p class="story-quote">高三模考数学只考了 98 分，以前不知道从何补起。用了热力图才发现，解析几何其实只扣了 4 分，真正拖分的是数列递推和概率统计，集中攻了两周，下次考了 117。</p>
+        <div class="story-author">
+          <div class="story-avatar">&#x1F468;&#x200D;&#x1F393;</div>
+          <div><div class="story-name">陈同学</div><div class="story-role">高三理科生 &middot; 高考冲刺</div></div>
+        </div>
+      </div>
+      <div class="story-card reveal reveal-delay-2">
+        <p class="story-quote">作为物理老师，以前讲评试卷只能按大题号顺序讲。现在能看到每个学生的热力图，针对性地布置分层作业，班级平均分提升了 8 分。</p>
+        <div class="story-author">
+          <div class="story-avatar">&#x1F469;&#x200D;&#x1F3EB;</div>
+          <div><div class="story-name">王老师</div><div class="story-role">初中物理教师 &middot; 分层教学</div></div>
+        </div>
+      </div>
+      <div class="story-card reveal reveal-delay-3">
+        <p class="story-quote">大学期末复习周，5门课的知识点堆在一起完全没头绪。把往年真题上传后，热力图直接告诉我每科的重点和盲区，复习效率翻倍，全部通过。</p>
+        <div class="story-author">
+          <div class="story-avatar">&#x1F469;&#x200D;&#x1F4BB;</div>
+          <div><div class="story-name">林同学</div><div class="story-role">大二计算机专业 &middot; 期末备考</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <div class="container">
+    <p>AI「知识热力图」&mdash; 考试复盘知识漏洞可视化诊断系统 &middot; TraeAI 创意大赛作品</p>
+  </div>
+</div>
+
+<script>
+/* ===== DATA ===== */
+const SUBJECTS = {
+  math: {
+    name: '数学',
+    chapters: [
+      { name: '代数基础', points: ['集合运算','函数概念','指数函数','对数函数','幂函数','函数应用'] },
+      { name: '三角函数', points: ['三角定义','诱导公式','和差公式','倍角公式','图像变换','解三角形'] },
+      { name: '数列', points: ['等差数列','等比数列','递推公式','求和方法','数列应用','综合题'] },
+      { name: '立体几何', points: ['空间向量','线面关系','面面关系','空间角','距离计算','综合证明'] },
+      { name: '概率统计', points: ['古典概型','条件概率','随机变量','分布列','统计推断','回归分析'] }
+    ],
+    presets: {
+      midterm: [72,85,45,38,55,68, 80,75,42,50,65,78, 30,25,35,40,28,22, 60,55,50,45,48,42, 70,75,65,60,68,72],
+      weak:    [35,40,25,20,30,38, 45,35,22,28,40,50, 15,18,20,22,15,12, 30,25,28,22,20,18, 40,45,35,30,38,42],
+      strong:  [90,95,82,78,88,92, 85,88,75,80,90,95, 70,65,72,68,75,80, 88,85,82,78,80,85, 92,90,85,88,90,95]
+    }
+  },
+  physics: {
+    name: '物理',
+    chapters: [
+      { name: '力学', points: ['运动学','牛顿定律','功和能','动量守恒','万有引力','机械波'] },
+      { name: '电磁学', points: ['静电场','恒定电流','磁场','电磁感应','交变电流','电磁波'] },
+      { name: '热学光学', points: ['分子动理论','气体定律','热力学定律','光的折射','光的干涉','光电效应'] }
+    ],
+    presets: {
+      midterm: [75,68,55,42,60,70, 48,55,40,35,50,65, 72,65,60,78,55,45],
+      weak:    [40,35,28,22,30,38, 25,30,20,18,28,35, 42,38,35,45,30,25],
+      strong:  [92,88,80,75,85,90, 82,85,78,72,80,88, 90,85,82,92,80,78]
+    }
+  },
+  chemistry: {
+    name: '化学',
+    chapters: [
+      { name: '基本概念', points: ['物质的量','离子反应','氧化还原','元素周期律','化学键','化学方程式'] },
+      { name: '反应原理', points: ['化学反应速率','化学平衡','电离平衡','水解平衡','沉淀溶解','电化学'] },
+      { name: '有机化学', points: ['烃类','卤代烃','醇和酚','醛和酸','酯和油脂','高分子'] }
+    ],
+    presets: {
+      midterm: [65,72,48,55,60,70, 42,38,45,40,35,50, 68,55,50,45,42,38],
+      weak:    [35,40,25,30,32,38, 20,18,22,20,18,25, 38,28,25,22,20,18],
+      strong:  [88,90,78,82,85,92, 75,72,78,75,70,80, 90,82,80,78,75,72]
+    }
+  }
+};
+
+let currentSubject = 'math';
+let currentPreset = 'midterm';
+let currentData = [];
+
+/* ===== HEATMAP COLOR ===== */
+function getHeatColor(score) {
+  if (score >= 80) return `rgba(46,125,50,${0.4 + score/250})`;
+  if (score >= 60) return `rgba(249,168,37,${0.4 + score/250})`;
+  if (score >= 40) return `rgba(230,81,0,${0.4 + score/250})`;
+  return `rgba(183,28,28,${0.4 + score/250})`;
+}
+function getHeatBg(score) {
+  if (score >= 80) return '#2e7d32';
+  if (score >= 60) return '#f9a825';
+  if (score >= 40) return '#e65100';
+  return '#b71c1c';
+}
+
+/* ===== RENDER HEATMAP ===== */
+function renderHeatmap() {
+  const subj = SUBJECTS[currentSubject];
+  const data = subj.presets[currentPreset];
+  currentData = data;
+  const grid = document.getElementById('heatmapGrid');
+  grid.innerHTML = '';
+  let idx = 0;
+  subj.chapters.forEach((ch, ci) => {
+    const row = document.createElement('div');
+    row.className = 'heatmap-row';
+    const label = document.createElement('div');
+    label.className = 'heatmap-label';
+    label.textContent = ch.name;
+    label.title = ch.name;
+    row.appendChild(label);
+    const cells = document.createElement('div');
+    cells.className = 'heatmap-cells';
+    ch.points.forEach((pt, pi) => {
+      const score = data[idx] || 0;
+      const cell = document.createElement('div');
+      cell.className = 'heat-cell';
+      cell.style.background = getHeatColor(score);
+      cell.innerHTML = `<div class="tooltip">${pt}：${score}%</div>`;
+      cell.style.animationDelay = (idx * 30) + 'ms';
+      cells.appendChild(cell);
+      idx++;
+    });
+    row.appendChild(cells);
+    grid.appendChild(row);
+  });
+  updateStats(data);
+  document.getElementById('planCards').innerHTML = '';
+}
+
+/* ===== UPDATE STATS ===== */
+function updateStats(data) {
+  let weak=0, mid=0, ok=0, sum=0;
+  data.forEach(v => {
+    sum += v;
+    if (v < 40) weak++;
+    else if (v < 60) mid++;
+    else if (v < 80) ok++;
+  });
+  const rate = Math.round(sum / data.length);
+  animateNum('statWeak', weak);
+  animateNum('statMid', mid);
+  animateNum('statOk', ok);
+  document.getElementById('statRate').textContent = rate + '%';
+}
+function animateNum(id, target) {
+  const el = document.getElementById(id);
+  let cur = 0;
+  const step = Math.max(1, Math.floor(target / 20));
+  const timer = setInterval(() => {
+    cur += step;
+    if (cur >= target) { cur = target; clearInterval(timer); }
+    el.textContent = cur;
+  }, 30);
+}
+
+/* ===== GENERATE PLAN ===== */
+function generatePlan() {
+  const subj = SUBJECTS[currentSubject];
+  const data = currentData;
+  const items = [];
+  let idx = 0;
+  subj.chapters.forEach(ch => {
+    ch.points.forEach(pt => {
+      items.push({ name: pt, chapter: ch.name, score: data[idx] });
+      idx++;
+    });
+  });
+  items.sort((a, b) => a.score - b.score);
+  const top4 = items.slice(0, 4);
+  const actions = {
+    '集合运算': '复习集合的交并补运算规则，完成10道基础练习',
+    '函数概念': '梳理函数定义域、值域的求法，重点突破复合函数',
+    '指数函数': '绘制指数函数图像，理解底数对图像的影响',
+    '对数函数': '对数运算法则专项训练，结合图像理解性质',
+    '幂函数': '五类幂函数图像对比记忆，归纳共同性质',
+    '函数应用': '函数建模应用题专练，掌握常见建模方法',
+    '三角定义': '单位圆定义复习，三角函数值的符号判断',
+    '诱导公式': '诱导公式推导练习，口诀记忆+10道计算训练',
+    '和差公式': '和差角公式推导与应用，配合15道典型题',
+    '倍角公式': '倍角公式正用逆用训练，与和差公式综合练习',
+    '图像变换': '三角函数图像平移伸缩变换，数形结合专项',
+    '解三角形': '正余弦定理应用，解三角形综合题5道',
+    '等差数列': '等差数列通项与前n项和公式推导训练',
+    '等比数列': '等比数列性质应用，公比分类讨论练习',
+    '递推公式': '递推关系转化为通项公式的方法总结与练习',
+    '求和方法': '裂项求和、错位相减等6种求和方法专项',
+    '数列应用': '数列建模应用题，结合不等式的综合题',
+    '综合题': '数列与函数、不等式交叉综合题训练',
+    '空间向量': '空间向量运算与坐标表示，基底法练习',
+    '线面关系': '线面平行与垂直的判定定理复习与证明',
+    '面面关系': '面面平行与垂直的判定与性质综合',
+    '空间角': '用向量法求空间角，建立坐标系练习',
+    '距离计算': '点到面距离的向量求法，典型例题精练',
+    '综合证明': '空间几何综合证明题，向量法与几何法对比',
+    '古典概型': '古典概型的等可能性分析，排列组合结合',
+    '条件概率': '条件概率公式应用，全概率公式与贝叶斯',
+    '随机变量': '离散型随机变量分布列的求解与验证',
+    '分布列': '二项分布与超几何分布的识别与计算',
+    '统计推断': '用样本估计总体，置信区间与假设检验',
+    '回归分析': '线性回归方程的求解与残差分析',
+    '运动学': '匀变速直线运动公式综合运用',
+    '牛顿定律': '受力分析与牛顿第二定律综合应用',
+    '功和能': '动能定理与机械能守恒的判定与应用',
+    '动量守恒': '动量守恒定律的适用条件与碰撞问题',
+    '万有引力': '天体运动公式推导，卫星变轨问题',
+    '机械波': '波动图像与振动图像的区别与联系',
+    '静电场': '电场强度与电势的计算，等势面分析',
+    '恒定电流': '闭合电路欧姆定律，动态电路分析',
+    '磁场': '安培力与洛伦兹力的方向判断和计算',
+    '电磁感应': '法拉第电磁感应定律，楞次定律应用',
+    '交变电流': '交流电四值计算，变压器原理',
+    '电磁波': '电磁波谱与特性，麦克斯韦方程组定性理解',
+    '分子动理论': '分子力与分子势能，布朗运动理解',
+    '气体定律': '理想气体状态方程应用，等值过程分析',
+    '热力学定律': '热力学第一定律的能量守恒分析',
+    '光的折射': '折射定律与全反射，光路图绘制',
+    '光的干涉': '双缝干涉条纹间距公式，薄膜干涉',
+    '光电效应': '光电效应方程应用，波粒二象性理解',
+    '物质的量': '摩尔计算与阿伏加德罗常数应用',
+    '离子反应': '离子方程式书写与离子共存判断',
+    '氧化还原': '氧化还原反应配平与电子转移分析',
+    '元素周期律': '元素性质递变规律，周期表应用',
+    '化学键': '离子键与共价键判断，电子式书写',
+    '化学方程式': '化学方程式配平与计算综合训练',
+    '化学反应速率': '速率计算与影响因素分析',
+    '化学平衡': '平衡移动判断与平衡常数计算',
+    '电离平衡': '弱电解质电离平衡分析，Ka应用',
+    '水解平衡': '盐类水解规律与离子浓度比较',
+    '沉淀溶解': 'Ksp计算与沉淀转化应用',
+    '电化学': '原电池与电解池的电极反应书写',
+    '烃类': '烷烯炔的性质对比，同分异构体书写',
+    '卤代烃': '卤代烃取代与消去反应条件判断',
+    '醇和酚': '醇的氧化与消去，酚的弱酸性验证',
+    '醛和酸': '醛的银镜反应，羧酸的酯化反应',
+    '酯和油脂': '酯的水解条件，油脂的皂化反应',
+    '高分子': '加聚与缩聚反应，高分子材料分类'
+  };
+  const times = ['2小时','1.5小时','1小时','45分钟'];
+  const improves = ['预计提升15-20分','预计提升10-15分','预计提升8-12分','预计提升5-8分'];
+  const priorities = ['p1','p2','p3','p4'];
+  const container = document.getElementById('planCards');
+  container.innerHTML = '';
+  top4.forEach((item, i) => {
+    const card = document.createElement('div');
+    card.className = 'plan-card';
+    card.innerHTML = `
+      <div class="plan-priority ${priorities[i]}">P${i+1}</div>
+      <div class="plan-info">
+        <h4>${item.chapter} &middot; ${item.name}</h4>
+        <div class="plan-meta">当前掌握度 ${item.score}% &mdash; ${item.score<40?'严重薄弱':item.score<60?'需要加强':'基本掌握'}</div>
+        <div class="plan-action">${actions[item.name] || '针对该知识点进行专项复习和练习'}</div>
+        <span class="plan-tag time">&#x23F1; ${times[i]}</span>
+        <span class="plan-tag improve">&#x2191; ${improves[i]}</span>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+/* ===== TAB EVENTS ===== */
+document.querySelectorAll('.subject-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.subject-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentSubject = tab.dataset.subject;
+    renderHeatmap();
+  });
+});
+document.querySelectorAll('.preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentPreset = btn.dataset.preset;
+    renderHeatmap();
+  });
+});
+
+/* ===== HERO HEATMAP ===== */
+function initHeroHeatmap() {
+  const container = document.getElementById('heroHeatmap');
+  const colors = ['#b71c1c','#c62828','#d32f2f','#e65100','#ef6c00','#f57c00','#f9a825','#fbc02d','#fdd835','#c0ca33','#7cb342','#66bb6a','#4caf50','#43a047','#388e3c','#2e7d32'];
+  for (let i = 0; i < 60; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'hero-cell';
+    const c = colors[Math.floor(Math.random() * colors.length)];
+    cell.style.background = c;
+    cell.style.opacity = 0.5 + Math.random() * 0.5;
+    cell.style.animationDelay = (Math.random() * 3) + 's';
+    container.appendChild(cell);
+  }
+}
+
+/* ===== CANVAS BACKGROUND ===== */
+function initBgCanvas() {
+  const canvas = document.getElementById('bgCanvas');
+  const ctx = canvas.getContext('2d');
+  let w, h, particles = [];
+  function resize() {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  const symbols = ['∫','∑','π','Δ','∞','√','θ','λ','μ','σ','α','β','γ','φ','ω','∂','∇','ε'];
+  for (let i = 0; i < 35; i++) {
+    particles.push({
+      x: Math.random() * w, y: Math.random() * h,
+      vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3,
+      symbol: symbols[Math.floor(Math.random() * symbols.length)],
+      size: 12 + Math.random() * 14, alpha: 0.03 + Math.random() * 0.06,
+      rotation: Math.random() * Math.PI * 2, rotSpeed: (Math.random() - 0.5) * 0.005
+    });
+  }
+  function draw() {
+    ctx.clearRect(0, 0, w, h);
+    particles.forEach(p => {
+      p.x += p.vx; p.y += p.vy; p.rotation += p.rotSpeed;
+      if (p.x < -50) p.x = w + 50;
+      if (p.x > w + 50) p.x = -50;
+      if (p.y < -50) p.y = h + 50;
+      if (p.y > h + 50) p.y = -50;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rotation);
+      ctx.font = `${p.size}px "JetBrains Mono", monospace`;
+      ctx.fillStyle = `rgba(79,195,247,${p.alpha})`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.symbol, 0, 0);
+      ctx.restore();
+    });
+    // Draw connections
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 200) {
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.strokeStyle = `rgba(79,195,247,${0.02 * (1 - dist/200)})`;
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+/* ===== SCROLL REVEAL ===== */
+function initReveal() {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+}
+
+/* ===== INIT ===== */
+window.addEventListener('DOMContentLoaded', () => {
+  initHeroHeatmap();
+  initBgCanvas();
+  renderHeatmap();
+  setTimeout(initReveal, 100);
+});
+</script>
+</body>
+</html>

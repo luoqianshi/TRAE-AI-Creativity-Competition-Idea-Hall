@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PromptCanvas — AI 实时数字世界</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --ease:cubic-bezier(.4,0,.2,1);
+    --ease-out:cubic-bezier(0,0,.2,1);
+    --ease-spring:cubic-bezier(.34,1.56,.64,1);
+  }
+  html,body{width:100%;height:100%;overflow:hidden;background:#050507;
+    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI','PingFang SC','Noto Sans CJK SC',sans-serif;
+    color:#fff;-webkit-font-smoothing:antialiased}
+
+  /* ===== GPU Canvas ===== */
+  #gpu-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:0;display:block}
+
+  /* ===== Transition Overlay (cross-fade) ===== */
+  #transition-overlay{
+    position:fixed;inset:0;z-index:5;pointer-events:none;
+    background-size:cover;background-position:center;
+    opacity:0;transition:opacity .9s var(--ease);
+  }
+  #transition-overlay.visible{opacity:1}
+  #transition-overlay.fading{opacity:0}
+
+  /* ===== Blur overlay during generation ===== */
+  #gen-blur{
+    position:fixed;inset:0;z-index:6;pointer-events:none;
+    backdrop-filter:blur(0px);background:rgba(5,5,7,0);
+    transition:backdrop-filter .6s var(--ease),background .6s var(--ease);
+  }
+  #gen-blur.active{backdrop-filter:blur(8px);background:rgba(5,5,7,.15)}
+
+  /* ===== Landing Page ===== */
+  #landing{
+    position:fixed;inset:0;z-index:10;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    transition:opacity .6s var(--ease),transform .6s var(--ease);
+  }
+  #landing.fade-out{opacity:0;transform:scale(.96);pointer-events:none}
+
+  .landing-content{
+    position:relative;width:100%;max-width:640px;padding:0 24px;
+    display:flex;flex-direction:column;align-items:center;text-align:center;
+  }
+  /* Radial darkening behind text for legibility */
+  .landing-content::before{
+    content:'';position:absolute;left:50%;top:50%;
+    transform:translate(-50%,-50%);
+    width:780px;height:460px;border-radius:50%;
+    background:radial-gradient(ellipse,rgba(5,5,10,.6) 0%,rgba(5,5,10,.3) 45%,transparent 80%);
+    z-index:-1;pointer-events:none;
+  }
+
+  /* Logo */
+  .logo{
+    font-size:clamp(2.4rem,5vw,3.2rem);
+    font-weight:700;letter-spacing:-.04em;
+    background:linear-gradient(135deg,#ffffff 0%,#e0d4ff 40%,#2dd4bf 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 2px 40px rgba(0,0,0,.3),0 0 60px rgba(5,5,10,.6);
+    margin-bottom:12px;
+    animation:logoIn 1s var(--ease-out) both;
+  }
+  @keyframes logoIn{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+  .tagline{
+    font-size:clamp(.95rem,1.8vw,1.1rem);
+    font-weight:500;color:rgba(255,255,255,.95);
+    letter-spacing:.01em;line-height:1.5;
+    margin-bottom:6px;
+    text-shadow:0 1px 20px rgba(0,0,0,.9),0 0 40px rgba(5,5,10,.8),0 2px 4px rgba(0,0,0,.8);
+    animation:taglineIn 1s var(--ease-out) .15s both;
+  }
+  @keyframes taglineIn{from{opacity:0;transform:translateY(10px)}to{opacity:.95;transform:translateY(0)}}
+
+  .tagline-zh{
+    font-size:clamp(.8rem,1.4vw,.9rem);
+    font-weight:500;color:rgba(255,255,255,.8);
+    margin-bottom:36px;letter-spacing:.02em;
+    text-shadow:0 1px 16px rgba(0,0,0,.9),0 0 30px rgba(5,5,10,.7),0 2px 4px rgba(0,0,0,.7);
+    animation:taglineIn 1s var(--ease-out) .3s both;
+  }
+
+  /* Input row */
+  .input-row{
+    display:flex;align-items:center;gap:8px;width:100%;
+    background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:14px;
+    backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+    box-shadow:0 8px 32px rgba(0,0,0,.25);
+    padding:6px 6px 6px 18px;
+    transition:border-color .3s var(--ease),box-shadow .3s var(--ease);
+    animation:taglineIn 1s var(--ease-out) .45s both;
+  }
+  .input-row:focus-within{
+    border-color:rgba(124,92,255,.4);
+    box-shadow:0 8px 32px rgba(0,0,0,.25),0 0 0 3px rgba(124,92,255,.1);
+  }
+  .input-row input{
+    flex:1;background:transparent;border:none;outline:none;
+    color:#fff;font-size:1rem;font-weight:400;
+    font-family:inherit;padding:10px 0;
+  }
+  .input-row input::placeholder{color:rgba(255,255,255,.35)}
+
+  .btn-generate{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    padding:10px 20px;border:none;cursor:pointer;
+    background:linear-gradient(135deg,#7c5cff 0%,#5d3fd0 100%);
+    color:#fff;font-size:.875rem;font-weight:500;font-family:inherit;
+    border-radius:10px;transition:all .25s var(--ease);
+    white-space:nowrap;min-width:96px;height:40px;
+  }
+  .btn-generate:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(124,92,255,.3)}
+  .btn-generate:active{transform:translateY(0)}
+  .btn-generate .spinner{
+    display:none;width:16px;height:16px;
+    border:2px solid rgba(255,255,255,.15);border-top-color:rgba(255,255,255,.8);
+    border-radius:50%;animation:spin .8s linear infinite;
+  }
+  .btn-generate.loading .spinner{display:block}
+  .btn-generate.loading .btn-text{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* Example prompts */
+  .examples{
+    display:flex;gap:8px;flex-wrap:wrap;justify-content:center;
+    margin-top:24px;
+    animation:taglineIn 1s var(--ease-out) .6s both;
+  }
+  .ex-prompt{
+    padding:8px 16px;border:1px solid rgba(255,255,255,.1);
+    background:rgba(255,255,255,.05);backdrop-filter:blur(12px);
+    color:rgba(255,255,255,.6);font-size:.8rem;font-family:inherit;
+    border-radius:20px;cursor:pointer;
+    transition:all .25s var(--ease);letter-spacing:.02em;
+  }
+  .ex-prompt:hover{
+    background:rgba(255,255,255,.1);color:rgba(255,255,255,.9);
+    border-color:rgba(255,255,255,.2);transform:translateY(-1px);
+  }
+
+  /* ===== Floating prompt log (shows AI "creating" messages) ===== */
+  #prompt-log{
+    position:fixed;bottom:32px;left:50%;transform:translateX(-50%);
+    z-index:15;display:flex;flex-direction:column;align-items:center;gap:8px;
+    pointer-events:none;max-width:90%;
+  }
+  .log-msg{
+    padding:10px 20px;
+    background:rgba(10,10,15,.6);backdrop-filter:blur(20px);
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:12px;font-size:.85rem;color:rgba(255,255,255,.85);
+    font-weight:300;letter-spacing:.01em;
+    animation:msgIn .5s var(--ease-spring) both;
+    text-shadow:0 1px 8px rgba(0,0,0,.5);
+  }
+  .log-msg.fading{animation:msgOut .6s var(--ease) forwards}
+  @keyframes msgIn{from{opacity:0;transform:translateY(12px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+  @keyframes msgOut{to{opacity:0;transform:translateY(-8px) scale(.97)}}
+
+  /* ===== Status bar ===== */
+  #status-bar{
+    position:fixed;bottom:0;left:0;right:0;z-index:12;
+    display:flex;align-items:center;justify-content:center;gap:20px;
+    padding:10px 24px;
+    background:rgba(5,5,7,.4);backdrop-filter:blur(16px);
+    border-top:1px solid rgba(255,255,255,.06);
+    font-size:.72rem;font-weight:400;color:rgba(255,255,255,.35);
+    letter-spacing:.02em;
+    opacity:0;transform:translateY(100%);
+    transition:opacity .5s var(--ease),transform .5s var(--ease);
+  }
+  #status-bar.show{opacity:1;transform:translateY(0)}
+  .status-item{display:flex;align-items:center;gap:6px}
+  .status-dot{width:6px;height:6px;border-radius:50%;background:#2dd4bf;display:inline-block}
+  .compile-ok .status-dot{background:#2dd4bf}
+  .compile-err .status-dot{background:#ef4444}
+  #status-fps{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<canvas id="gpu-canvas"></canvas>
+<div id="transition-overlay"></div>
+<div id="gen-blur"></div>
+
+<!-- Landing Page -->
+<div id="landing">
+  <div class="landing-content">
+    <h1 class="logo">PromptCanvas</h1>
+    <p class="tagline">Create living worlds with AI.</p>
+    <p class="tagline-zh">不是生成图片，而是创造实时运行的数字世界</p>
+
+    <div class="input-row">
+      <input type="text" id="prompt-input" placeholder="描述一个你想要的世界..." autocomplete="off" />
+      <button class="btn-generate" id="btn-gen">
+        <span class="spinner"></span>
+        <span class="btn-text">生成</span>
+      </button>
+    </div>
+
+    <div class="examples">
+      <button class="ex-prompt" data-action="galaxy">蓝色银河</button>
+      <button class="ex-prompt" data-action="meteor">增加流星</button>
+      <button class="ex-prompt" data-action="blackhole">中心黑洞</button>
+      <button class="ex-prompt" data-action="accretion">吸积盘</button>
+      <button class="ex-prompt" data-action="purple">紫色赛博朋克</button>
+      <button class="ex-prompt" data-action="speed">时间加速</button>
+    </div>
+  </div>
+</div>
+
+<div id="prompt-log"></div>
+
+<div id="status-bar">
+  <div class="status-item compile-ok" id="status-compile">
+    <span class="status-dot"></span>编译OK
+  </div>
+  <div class="status-item" id="status-template">galaxy</div>
+  <div class="status-item" id="status-fps">-- fps</div>
+  <div class="status-item">WebGL2</div>
+</div>
+
+<!-- Three.js -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ===== Galaxy Shader (standalone, uniform-driven) =====
+const VERT = `
+varying vec2 vUv;
+void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }
+`;
+
+const FRAG = `
+precision highp float;
+uniform float iTime;
+uniform vec2  iResolution;
+uniform vec2  iMouse;
+uniform float uArms;
+uniform float uDensity;
+uniform float uHue;
+uniform float uSpeed;
+uniform float uMeteor;
+uniform float uBlackhole;
+uniform float uAccretion;
+varying vec2  vUv;
+
+float hash21(vec2 p){
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float fbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for(int i = 0; i < 6; i++){ v += a * noise(p); p *= 2.0; a *= 0.5; }
+  return v;
+}
+float warpedFbm(vec2 p, float t){
+  vec2 q = vec2(fbm(p + vec2(0.0, t * 0.1)), fbm(p + vec2(5.2, 1.3) + vec2(t * 0.08, 0.0)));
+  return fbm(p + 2.0 * q);
+}
+vec3 hsv2rgb(vec3 c){
+  vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+void main(){
+  vec2 fragCoord = vUv * iResolution;
+  fragCoord.y = iResolution.y - fragCoord.y;
+
+  vec2 res = iResolution.xy;
+  vec2 uv = (fragCoord - 0.5 * res) / res.y;
+  vec2 mouseOffset = (iMouse.xy - 0.5 * res) / res.y * 0.06;
+  uv += mouseOffset;
+
+  float r = length(uv);
+  float a = atan(uv.y, uv.x);
+  float t = iTime * uSpeed;
+  a += t;
+
+  float arms = uArms;
+  float spiralAngle = a * arms + r * 5.5 - t * 1.5;
+  float spiral = 0.5 + 0.5 * sin(spiralAngle);
+  spiral = pow(spiral, 4.0);
+
+  float dustFlow = warpedFbm(uv * 2.5 + vec2(t * 0.3, -t * 0.15), t);
+  float dustLane = smoothstep(0.35, 0.65, dustFlow);
+
+  float disk = exp(-r * 1.0) * spiral;
+  disk *= 1.0 - (1.0 - dustLane) * 0.25;
+  float nebula = warpedFbm(uv * 4.0 + vec2(t * 0.2, 0.0), t * 0.5);
+  disk *= 0.75 + 0.25 * nebula;
+  disk *= uDensity * 10.0;
+
+  float blackhole = uBlackhole;
+  float coreSuppress = 1.0 - blackhole;
+
+  float bulge = exp(-r * 5.0) * 1.0 * coreSuppress;
+  float core = exp(-r * 22.0) * 3.0 * coreSuppress;
+  float coreGlow = exp(-r * 3.0) * 0.4 * coreSuppress;
+
+  float armHueVal = uHue + nebula * 0.08 - r * 0.05;
+  vec3 armColor = hsv2rgb(vec3(armHueVal, 0.45, 0.85));
+  armColor = mix(armColor, armColor * 0.65, smoothstep(0.0, 0.6, r));
+  float hotspot = pow(max(0.0, nebula - 0.55), 2.0) * 2.0;
+  armColor += vec3(0.5, 0.7, 1.0) * hotspot * disk * 0.3;
+
+  float coreHueShift = smoothstep(0.75, 0.90, uHue);
+  vec3 bulgeColor = mix(vec3(1.0, 0.85, 0.55), hsv2rgb(vec3(uHue, 0.3, 1.0)), coreHueShift * 0.7);
+  bulgeColor = mix(bulgeColor, vec3(1.0, 0.95, 0.80), smoothstep(0.0, 0.25, r) * (1.0 - coreHueShift));
+  vec3 coreColor = mix(vec3(1.0, 0.97, 0.90), hsv2rgb(vec3(uHue, 0.1, 1.0)), coreHueShift);
+
+  vec3 col = vec3(0.0);
+  col += armColor * disk;
+  col += bulgeColor * bulge;
+  col += coreColor * core;
+  col += bulgeColor * coreGlow * 0.5;
+  col += vec3(0.35, 0.15, 0.08) * dustLane * exp(-r * 2.5) * 0.15;
+
+  // Accretion disk
+  if (uAccretion > 0.01) {
+    float accR = 0.18;
+    float accWidth = 0.06;
+    float accRing = exp(-pow((r - accR) / accWidth, 2.0));
+    float accAngle = atan(uv.y, uv.x) + t * 4.0;
+    float accPattern = 0.5 + 0.5 * sin(accAngle * 4.0 + r * 15.0);
+    float dopplerSide = 0.5 + 0.5 * cos(atan(uv.y, uv.x) - 1.5);
+    vec3 accColor = hsv2rgb(vec3(uHue + 0.05, 0.7, 1.0));
+    col += accColor * accRing * accPattern * (0.3 + dopplerSide * 0.7) * uAccretion * 3.0;
+  }
+
+  // Black hole
+  if (uBlackhole > 0.01) {
+    float bhSize = 0.12 + 0.03 * uBlackhole;
+    float bhMask = 1.0 - smoothstep(bhSize * 0.7, bhSize, r);
+    col *= 1.0 - bhMask * uBlackhole;
+    float ringR = bhSize * 1.4;
+    float ringDist = abs(r - ringR);
+    float lensRing = exp(-ringDist * 40.0) * uBlackhole * 0.8;
+    col += vec3(1.0, 0.9, 0.7) * lensRing;
+  }
+
+  // Meteors
+  if (uMeteor > 0.01) {
+    for(int m = 0; m < 3; m++) {
+      float seed = float(m) * 2.7;
+      float phase = fract(iTime * (0.12 + seed * 0.02) + seed * 0.3);
+      if (phase < 0.7) {
+        float angle = 0.5 + seed * 0.8;
+        vec2 start = vec2(cos(angle), sin(angle)) * 1.8;
+        vec2 end = vec2(cos(angle + 2.8), sin(angle + 2.8)) * 0.3;
+        vec2 pos = mix(start, end, phase / 0.7);
+        vec2 dir = normalize(end - start);
+        vec2 toPos = uv - pos;
+        float proj = dot(toPos, dir);
+        float perp = length(toPos - dir * proj);
+        float trail = exp(-perp * 120.0) * smoothstep(-0.4, 0.0, proj);
+        float fade = sin(phase / 0.7 * 3.14159);
+        vec3 mColor = mix(vec3(1.0,0.95,0.85), vec3(0.9,0.95,1.0), fract(seed));
+        col += mColor * trail * fade * uMeteor;
+      }
+    }
+  }
+
+  // Stars
+  vec2 starUv = fragCoord / res * 120.0;
+  float star = hash21(floor(starUv));
+  star = pow(star, 60.0) * 1.2;
+  float twinkle = 0.4 + 0.6 * sin(iTime * 2.5 + starUv.x * 8.0 + starUv.y * 5.0);
+  float starHue = hash21(floor(starUv) + 0.5);
+  vec3 starColor = mix(vec3(1.0, 0.9, 0.7), vec3(0.7, 0.85, 1.0), starHue);
+  col += starColor * star * twinkle;
+
+  vec2 starUv2 = fragCoord / res * 280.0;
+  float star2 = hash21(floor(starUv2));
+  star2 = pow(star2, 80.0) * 0.5;
+  col += vec3(0.8, 0.85, 1.0) * star2;
+
+  col *= 1.0 - smoothstep(0.5, 1.4, r) * 0.6;
+  col = col / (1.0 + col * 0.4);
+  col = pow(col, vec3(0.92));
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// ===== Renderer Setup =====
+const canvas = document.getElementById('gpu-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.Float32BufferAttribute([-1,-1,0, 3,-1,0, -1,3,0], 3));
+geo.setAttribute('uv', new THREE.Float32BufferAttribute([0,0, 2,0, 0,2], 2));
+
+// Shader parameters (uniforms — no recompilation needed for changes!)
+const params = {
+  arms: 2.0,
+  density: 0.6,
+  hue: 0.62,
+  speed: 0.05,
+  meteor: 0.0,
+  blackhole: 0.0,
+  accretion: 0.0,
+};
+
+const uniforms = {
+  iTime: { value: 0 },
+  iResolution: { value: new THREE.Vector2(1, 1) },
+  iMouse: { value: new THREE.Vector2(0, 0) },
+  uArms: { value: params.arms },
+  uDensity: { value: params.density },
+  uHue: { value: params.hue },
+  uSpeed: { value: params.speed },
+  uMeteor: { value: params.meteor },
+  uBlackhole: { value: params.blackhole },
+  uAccretion: { value: params.accretion },
+};
+
+const material = new THREE.ShaderMaterial({
+  vertexShader: VERT,
+  fragmentShader: FRAG,
+  uniforms,
+  depthTest: false,
+  depthWrite: false,
+});
+
+const quad = new THREE.Mesh(geo, material);
+scene.add(quad);
+
+// Mouse
+let mouseTarget = new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2);
+let mouseCurrent = new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2);
+window.addEventListener('pointermove', (e) => {
+  mouseTarget.set(e.clientX, window.innerHeight - e.clientY);
+});
+
+// Resize
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  uniforms.iResolution.value.set(w, h);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// FPS tracking
+let fpsHistory = [];
+let lastFrame = null;
+const fpsEl = document.getElementById('status-fps');
+
+// Render loop
+const clock = new THREE.Clock();
+function loop() {
+  requestAnimationFrame(loop);
+  mouseCurrent.lerp(mouseTarget, 0.05);
+  uniforms.iMouse.value.copy(mouseCurrent);
+  uniforms.iTime.value = clock.getElapsedTime();
+  renderer.render(scene, camera);
+
+  const now = performance.now();
+  if (lastFrame) {
+    const dt = now - lastFrame;
+    fpsHistory.push(1000 / dt);
+    if (fpsHistory.length > 60) fpsHistory.shift();
+    if (fpsHistory.length >= 30) {
+      const avg = fpsHistory.reduce((a,b)=>a+b,0) / fpsHistory.length;
+      fpsEl.textContent = Math.round(avg) + ' fps';
+    }
+  }
+  lastFrame = now;
+}
+loop();
+
+// ===== UI Logic =====
+const landing = document.getElementById('landing');
+const promptInput = document.getElementById('prompt-input');
+const btnGen = document.getElementById('btn-gen');
+const promptLog = document.getElementById('prompt-log');
+const statusBar = document.getElementById('status-bar');
+const overlay = document.getElementById('transition-overlay');
+const genBlur = document.getElementById('gen-blur');
+
+let isFirst = true;
+
+// Show a floating message (like AI "creating")
+function showLog(text, duration = 2500) {
+  const msg = document.createElement('div');
+  msg.className = 'log-msg';
+  msg.textContent = text;
+  promptLog.appendChild(msg);
+  setTimeout(() => {
+    msg.classList.add('fading');
+    setTimeout(() => msg.remove(), 600);
+  }, duration);
+}
+
+// Typing effect for log messages
+function typeLog(text, speed = 35) {
+  return new Promise(resolve => {
+    const msg = document.createElement('div');
+    msg.className = 'log-msg';
+    promptLog.appendChild(msg);
+    let i = 0;
+    const timer = setInterval(() => {
+      if (i < text.length) {
+        msg.textContent = text.slice(0, i + 1);
+        i++;
+      } else {
+        clearInterval(timer);
+        setTimeout(() => {
+          msg.classList.add('fading');
+          setTimeout(() => msg.remove(), 600);
+        }, 1800);
+        resolve();
+      }
+    }, speed);
+  });
+}
+
+function setLoading(loading) {
+  btnGen.classList.toggle('loading', loading);
+}
+
+// Keyword-driven parameter changes
+const actions = {
+  galaxy: {
+    msgs: ['正在构建你的银河世界……', '已生成基础螺旋结构，星云开始流动。'],
+    apply: (p) => { p.arms = 2.0; p.density = 0.6; p.hue = 0.58; p.speed = 0.05; p.meteor = 0; p.blackhole = 0; p.accretion = 0; }
+  },
+  meteor: {
+    msgs: ['正在加入流星轨迹……', '流星已划过夜空。'],
+    apply: (p) => { p.meteor = Math.min(p.meteor + 0.8, 1.0); }
+  },
+  blackhole: {
+    msgs: ['银河中心开始坍缩……', '黑洞正在形成，引力透镜效应启动。'],
+    apply: (p) => { p.blackhole = Math.min(p.blackhole + 0.8, 1.0); }
+  },
+  accretion: {
+    msgs: ['正在构建吸积盘……', '高温物质环绕黑洞旋转，多普勒效应启动。'],
+    apply: (p) => { p.accretion = Math.min(p.accretion + 0.8, 1.0); }
+  },
+  purple: {
+    msgs: ['正在重塑风格……', '世界已变为紫色赛博朋克风格。'],
+    apply: (p) => { p.hue = 0.80; }
+  },
+  speed: {
+    msgs: ['时间流速已提升……', '世界加速演化。'],
+    apply: (p) => { p.speed = Math.min(p.speed * 4, 0.5); }
+  },
+};
+
+// Keyword detection from free text
+function detectAction(text) {
+  if (text.includes('银河') || text.includes('galaxy')) return 'galaxy';
+  if (text.includes('流星')) return 'meteor';
+  if (text.includes('黑洞') || text.includes('坍缩')) return 'blackhole';
+  if (text.includes('吸积')) return 'accretion';
+  if (text.includes('紫') || text.includes('赛博')) return 'purple';
+  if (text.includes('加速') || text.includes('快')) return 'speed';
+  if (text.includes('蓝')) { return { custom: true, apply: (p) => { p.hue = 0.58; }, msgs: ['正在调整色调……', '银河已转为冷蓝色调。'] }; }
+  if (text.includes('红')) { return { custom: true, apply: (p) => { p.hue = 0.02; }, msgs: ['正在调整色调……', '银河已转为暖红色调。'] }; }
+  if (text.includes('绿')) { return { custom: true, apply: (p) => { p.hue = 0.33; }, msgs: ['正在调整色调……', '银河已转为翠绿色调。'] }; }
+  return null;
+}
+
+async function handleAction(actionKey) {
+  let action = actionKey.custom ? actionKey : actions[actionKey];
+  if (!action) return;
+
+  if (isFirst) {
+    // First time: hide landing, show status bar
+    statusBar.classList.add('show');
+    isFirst = false;
+  }
+
+  setLoading(true);
+  genBlur.classList.add('active');
+
+  // Apply parameter changes (smooth tween)
+  const oldParams = { ...params };
+  action.apply(params);
+
+  // Show messages with typing effect
+  await new Promise(r => setTimeout(r, 300));
+  for (let i = 0; i < action.msgs.length; i++) {
+    await typeLog(action.msgs[i], 30);
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  // Tween uniform values for smooth visual transition
+  const tweenStart = performance.now();
+  const tweenDuration = 1200;
+  function tween() {
+    const elapsed = performance.now() - tweenStart;
+    const progress = Math.min(elapsed / tweenDuration, 1);
+    const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+    uniforms.uArms.value = oldParams.arms + (params.arms - oldParams.arms) * eased;
+    uniforms.uDensity.value = oldParams.density + (params.density - oldParams.density) * eased;
+    uniforms.uHue.value = oldParams.hue + (params.hue - oldParams.hue) * eased;
+    uniforms.uSpeed.value = oldParams.speed + (params.speed - oldParams.speed) * eased;
+    uniforms.uMeteor.value = oldParams.meteor + (params.meteor - oldParams.meteor) * eased;
+    uniforms.uBlackhole.value = oldParams.blackhole + (params.blackhole - oldParams.blackhole) * eased;
+    uniforms.uAccretion.value = oldParams.accretion + (params.accretion - oldParams.accretion) * eased;
+    if (progress < 1) requestAnimationFrame(tween);
+  }
+  tween();
+
+  setLoading(false);
+  genBlur.classList.remove('active');
+}
+
+// Button events
+btnGen.addEventListener('click', () => {
+  const text = promptInput.value.trim();
+  if (!text) return;
+  promptInput.value = '';
+  const action = detectAction(text);
+  if (action) {
+    handleAction(action);
+  } else {
+    showLog('试试：蓝色银河 / 增加流星 / 中心黑洞 / 紫色赛博朋克');
+  }
+});
+
+promptInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') btnGen.click();
+});
+
+document.querySelectorAll('.ex-prompt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const actionKey = btn.dataset.action;
+    handleAction(actionKey);
+  });
+});
+
+// Show initial hint after a moment
+setTimeout(() => {
+  showLog('点击下方按钮，开始创造你的世界', 3000);
+}, 2000);
+</script>
+
+</body>
+</html>

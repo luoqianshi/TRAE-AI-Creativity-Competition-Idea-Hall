@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>拍照姿势辅助定位</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        h1 { text-align: center; margin-bottom: 30px; font-size: 28px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .main-content { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+        .section { background: rgba(255,255,255,0.05); border-radius: 20px; padding: 25px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .section-title { font-size: 18px; margin-bottom: 20px; color: #a0aec0; }
+        #upload-area { border: 3px dashed rgba(255,255,255,0.2); border-radius: 15px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.3s; }
+        #upload-area:hover { border-color: #667eea; background: rgba(102,126,234,0.1); }
+        #upload-area.dragover { border-color: #764ba2; background: rgba(118,75,162,0.15); }
+        #upload-icon { font-size: 48px; margin-bottom: 15px; opacity: 0.6; }
+        #upload-text { font-size: 16px; color: #a0aec0; }
+        #upload-input { display: none; }
+        #reference-preview { width: 100%; border-radius: 12px; max-height: 400px; object-fit: contain; display: none; }
+        #camera-container { position: relative; width: 100%; aspect-ratio: 3/4; background: #000; border-radius: 15px; overflow: hidden; }
+        #video { width: 100%; height: 100%; object-fit: cover; }
+        #overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .controls { margin-top: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        .control-label { font-size: 14px; color: #a0aec0; }
+        input[type="range"] { width: 100%; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.1); outline: none; -webkit-appearance: none; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #667eea; cursor: pointer; }
+        button { padding: 12px 24px; border: none; border-radius: 10px; font-size: 16px; cursor: pointer; transition: all 0.3s; font-weight: 500; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
+        .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
+        .btn-secondary:hover { background: rgba(255,255,255,0.15); }
+        .btn-group { display: flex; gap: 10px; }
+        .btn-group button { flex: 1; }
+        .status { margin-top: 15px; padding: 12px; border-radius: 10px; font-size: 14px; }
+        .status-success { background: rgba(72,187,120,0.15); color: #48bb78; }
+        .status-warning { background: rgba(250,204,21,0.15); color: #facc15; }
+        .status-error { background: rgba(239,68,68,0.15); color: #ef4444; }
+        .tips { margin-top: 20px; padding: 15px; background: rgba(102,126,234,0.1); border-radius: 10px; font-size: 14px; color: #a0aec0; line-height: 1.6; }
+        .tips ul { list-style: none; padding-left: 0; }
+        .tips li::before { content: '✓'; color: #667eea; margin-right: 8px; }
+        @media (max-width: 768px) { .main-content { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 拍照姿势辅助定位</h1>
+        <div class="main-content">
+            <div class="section">
+                <div class="section-title">🎯 上传参考照片</div>
+                <div id="upload-area" onclick="document.getElementById('upload-input').click()">
+                    <div id="upload-icon">📷</div>
+                    <div id="upload-text">点击或拖拽上传想要复刻的搞怪照片</div>
+                </div>
+                <input type="file" id="upload-input" accept="image/*" onchange="handleFileUpload(event)">
+                <img id="reference-preview" alt="参考照片">
+                <div id="status" class="status"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">🎬 摄像头预览</div>
+                <div id="camera-container">
+                    <video id="video" autoplay playsinline></video>
+                    <canvas id="overlay-canvas"></canvas>
+                </div>
+                <div class="controls">
+                    <div class="control-group">
+                        <div class="control-label">骨架透明度: <span id="opacity-value">70%</span></div>
+                        <input type="range" id="opacity-slider" min="0" max="100" value="70" oninput="updateOpacity(this.value)">
+                    </div>
+                    <div class="control-group">
+                        <div class="control-label">骨架大小: <span id="scale-value">100%</span></div>
+                        <input type="range" id="scale-slider" min="50" max="150" value="100" oninput="updateScale(this.value)">
+                    </div>
+                    <div class="btn-group">
+                    <button class="btn-secondary" onclick="startCamera()">打开摄像头</button>
+                    <button class="btn-secondary" onclick="toggleMirror()">镜像翻转</button>
+                </div>
+                    <button class="btn-primary" onclick="capturePhoto()">📸 拍摄照片</button>
+                </div>
+                <div class="tips">
+                    <strong>使用提示：</strong>
+                    <ul>
+                        <li>上传一张清晰的人物全身照</li>
+                        <li>骨架会直接显示在右侧区域</li>
+                        <li>点击"打开摄像头"可叠加实时画面</li>
+                        <li>调整透明度和大小，找到最佳对齐效果</li>
+                        <li>身体对齐虚线后点击拍摄</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let referenceLandmarks = [];
+        let video = document.getElementById('video');
+        let overlayCanvas = document.getElementById('overlay-canvas');
+        let overlayCtx = overlayCanvas.getContext('2d');
+        let opacity = 0.7;
+        let scale = 1;
+        let isFrontCamera = true;
+        let isMirror = true;
+        let stream = null;
+
+        const connections = [
+            ['nose', 'left_eye'], ['nose', 'right_eye'],
+            ['left_eye', 'left_ear'], ['right_eye', 'right_ear'],
+            ['nose', 'left_shoulder'], ['nose', 'right_shoulder'],
+            ['left_shoulder', 'left_elbow'], ['left_elbow', 'left_wrist'],
+            ['right_shoulder', 'right_elbow'], ['right_elbow', 'right_wrist'],
+            ['left_wrist', 'left_thumb'], ['right_wrist', 'right_thumb'],
+            ['left_wrist', 'left_index'], ['right_wrist', 'right_index'],
+            ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'],
+            ['left_hip', 'right_hip'], ['left_hip', 'left_knee'],
+            ['left_knee', 'left_ankle'], ['right_hip', 'right_knee'],
+            ['right_knee', 'right_ankle'], ['left_ankle', 'left_heel'],
+            ['right_ankle', 'right_heel'], ['left_heel', 'left_foot_index'],
+            ['right_heel', 'right_foot_index']
+        ];
+
+        const skeletonColors = [
+            { stroke: 'rgba(102, 126, 234, ', fill: 'rgba(118, 75, 162, ' },
+            { stroke: 'rgba(239, 68, 68, ', fill: 'rgba(185, 28, 28, ' },
+            { stroke: 'rgba(72, 187, 120, ', fill: 'rgba(22, 163, 74, ' },
+            { stroke: 'rgba(251, 146, 60, ', fill: 'rgba(234, 88, 12, ' },
+            { stroke: 'rgba(168, 85, 247, ', fill: 'rgba(126, 34, 206, ' }
+        ];
+
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                document.getElementById('reference-preview').src = e.target.result;
+                document.getElementById('reference-preview').style.display = 'block';
+                
+                updateStatus('正在分析照片中的人体姿势...', 'warning');
+                
+                try {
+                    const response = await fetch('/api/pose', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({image: e.target.result})
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        referenceLandmarks = Array.isArray(result.landmarks) ? result.landmarks : [result.landmarks];
+                        const count = result.count || referenceLandmarks.length;
+                        updateStatus(`✅ 姿势提取成功！检测到 ${count} 个人物，骨架已显示在右侧`, 'success');
+                        drawLoop();
+                    } else {
+                        updateStatus('❌ 分析失败: ' + (result.error || '未知错误'), 'error');
+                    }
+                } catch (error) {
+                    updateStatus('❌ 服务器连接失败: ' + error.message, 'error');
+                    console.error('Server pose error:', error);
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function startCamera() {
+            try {
+                const constraints = {
+                    video: { 
+                        facingMode: isFrontCamera ? 'user' : 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                };
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    overlayCanvas.width = video.videoWidth;
+                    overlayCanvas.height = video.videoHeight;
+                    drawLoop();
+                };
+            } catch (err) {
+                updateStatus('无法访问摄像头: ' + err.message, 'error');
+            }
+        }
+
+        function drawLoop() {
+            requestAnimationFrame(drawLoop);
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            
+            if (!referenceLandmarks || referenceLandmarks.length === 0) return;
+
+            let width = overlayCanvas.width;
+            let height = overlayCanvas.height;
+            
+            if (width === 0 || height === 0) {
+                const container = document.getElementById('camera-container');
+                if (container) {
+                    width = container.clientWidth;
+                    height = container.clientHeight;
+                    overlayCanvas.width = width;
+                    overlayCanvas.height = height;
+                } else {
+                    return;
+                }
+            }
+            
+            const centerX = width / 2;
+            const centerY = height / 2;
+
+            overlayCtx.save();
+            if (isMirror) overlayCtx.translate(width, 0);
+            if (isMirror) overlayCtx.scale(-1, 1);
+
+            referenceLandmarks.forEach((landmarks, index) => {
+                const colors = skeletonColors[index % skeletonColors.length];
+                
+                overlayCtx.strokeStyle = colors.stroke + (1 - opacity) + ')';
+                overlayCtx.lineWidth = 4;
+                overlayCtx.setLineDash([15, 8]);
+
+                connections.forEach(conn => {
+                    const start = landmarks[conn[0]];
+                    const end = landmarks[conn[1]];
+                    if (start && end && start.visibility > 0.1 && end.visibility > 0.1) {
+                        const startX = centerX + (start.x - 0.5) * width * scale;
+                        const startY = centerY + (start.y - 0.5) * height * scale;
+                        const endX = centerX + (end.x - 0.5) * width * scale;
+                        const endY = centerY + (end.y - 0.5) * height * scale;
+                        
+                        overlayCtx.beginPath();
+                        overlayCtx.moveTo(startX, startY);
+                        overlayCtx.lineTo(endX, endY);
+                        overlayCtx.stroke();
+                    }
+                });
+
+                overlayCtx.setLineDash([]);
+                Object.values(landmarks).forEach(landmark => {
+                    if (landmark && landmark.visibility > 0.1) {
+                        const x = centerX + (landmark.x - 0.5) * width * scale;
+                        const y = centerY + (landmark.y - 0.5) * height * scale;
+                        overlayCtx.beginPath();
+                        overlayCtx.arc(x, y, 6, 0, Math.PI * 2);
+                        overlayCtx.fillStyle = colors.fill + (1 - opacity) + ')';
+                        overlayCtx.fill();
+                        overlayCtx.beginPath();
+                        overlayCtx.arc(x, y, 3, 0, Math.PI * 2);
+                        overlayCtx.fillStyle = `rgba(255, 255, 255, ${1 - opacity})`;
+                        overlayCtx.fill();
+                    }
+                });
+            });
+
+            overlayCtx.restore();
+        }
+
+        function toggleCamera() {
+            isFrontCamera = !isFrontCamera;
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            startCamera();
+        }
+
+        function toggleMirror() {
+            isMirror = !isMirror;
+        }
+
+        function updateOpacity(value) {
+            opacity = 1 - (value / 100);
+            document.getElementById('opacity-value').textContent = (100 - value) + '%';
+        }
+
+        function updateScale(value) {
+            scale = value / 100;
+            document.getElementById('scale-value').textContent = value + '%';
+        }
+
+        function ensureCanvasSize() {
+            if (video.videoWidth && video.videoHeight) {
+                overlayCanvas.width = video.videoWidth;
+                overlayCanvas.height = video.videoHeight;
+            }
+        }
+
+        function capturePhoto() {
+            if (!video.videoWidth || !video.videoHeight) {
+                updateStatus('❌ 请先打开摄像头再拍摄', 'error');
+                return;
+            }
+            
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            const ctx = captureCanvas.getContext('2d');
+            
+            if (isMirror) {
+                ctx.translate(captureCanvas.width, 0);
+                ctx.scale(-1, 1);
+            }
+            
+            ctx.drawImage(video, 0, 0);
+
+            const link = document.createElement('a');
+            link.download = `photo-${Date.now()}.png`;
+            link.href = captureCanvas.toDataURL('image/png');
+            link.click();
+            updateStatus('📸 照片已保存（仅摄像头画面）！', 'success');
+        }
+
+        function updateStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status status-${type}`;
+            status.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

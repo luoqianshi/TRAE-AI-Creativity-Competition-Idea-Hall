@@ -1,0 +1,458 @@
+{% extends "base.html" %}
+{% block title %}工作台{% endblock %}
+
+{% block content %}
+<style>
+.tab-nav { display:flex; gap:4px; margin-bottom:16px; flex-wrap:wrap; }
+.tab-nav button { padding:8px 16px; border:1px solid var(--gray-300); background:#fff; color:var(--gray-700); border-radius:6px; cursor:pointer; font-size:14px; }
+.tab-nav button.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+.stats-row { display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap; }
+.stat-card { flex:1; min-width:160px; background:#fff; border-radius:8px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); text-align:center; }
+.stat-card .stat-value { font-size:28px; font-weight:700; color:var(--primary); }
+.stat-card .stat-label { font-size:13px; color:var(--gray-500); margin-top:4px; }
+.receive-sign-table td, .send-collect-table td { vertical-align:middle; }
+@media (prefers-color-scheme: dark) {
+  .tab-nav button { background:var(--gray-100); color:var(--gray-600); border-color:var(--gray-300); }
+  .stat-card { background:var(--gray-100); box-shadow:0 1px 3px rgba(0,0,0,.3); }
+}
+</style>
+
+<div class="tab-nav" id="tab-nav">
+  <button class="active" data-tab="tab1">总览</button>
+  <button data-tab="tab2">收银台</button>
+  <button data-tab="tab3">代收-入库</button>
+  <button data-tab="tab4">代收-签收/拒收</button>
+  <button data-tab="tab5">发快递-入库</button>
+  <button data-tab="tab6">发快递-揽收</button>
+</div>
+
+<!-- Tab 1: 总览 -->
+<div class="tab-content active" id="tab1">
+  <div class="stats-row" id="stats-row">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-orders">-</div>
+      <div class="stat-label">今日订单数</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-sales">-</div>
+      <div class="stat-label">今日销售额</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-packages">-</div>
+      <div class="stat-label">在库包裹</div>
+    </div>
+  </div>
+  <h3 style="margin-bottom:12px;">待办事项</h3>
+  <div id="overview-todos"></div>
+</div>
+
+<!-- Tab 2: 收银台 -->
+<div class="tab-content" id="tab2">
+  <div class="two-col">
+    <div>
+      <div class="flex flex-between gap-8 mb-16">
+        <div class="search-bar" style="flex:1;margin-bottom:0;">
+          <input type="text" class="form-input" id="wb-search-input" placeholder="搜索商品..." autocomplete="off">
+          <button class="btn btn-primary" id="wb-search-btn">搜索</button>
+        </div>
+        <button class="btn btn-outline" id="wb-temp-btn">临时商品</button>
+      </div>
+      <div class="product-grid" id="wb-product-grid">
+        <div style="grid-column:1/-1;text-align:center;color:var(--gray-400);padding:40px;">输入关键词搜索商品</div>
+      </div>
+    </div>
+    <div class="cart-panel">
+      <div class="cart-header">购物车</div>
+      <div class="cart-body" id="wb-cart-body">
+        <div class="cart-empty">购物车为空</div>
+      </div>
+      <div class="cart-footer">
+        <div class="cart-total" id="wb-cart-total">总计：<span>0 件商品</span> ¥0.00</div>
+        <div class="cart-attachments" id="wb-cart-attachments"></div>
+        <div style="margin-bottom:8px;">
+          <input type="file" accept="image/*" style="display:none;" id="wb-checkout-file" onchange="CartModule.handleUpload(this)">
+          <button type="button" class="btn btn-outline btn-sm" id="wb-upload-btn" onclick="document.getElementById('wb-checkout-file').click()">上传凭证</button>
+        </div>
+        <button class="btn btn-success cart-checkout" id="wb-checkout-btn" disabled>结账</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tab 3: 代收-入库 -->
+<div class="tab-content" id="tab3">
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">代收入库</h2></div>
+    <div style="padding:20px;max-width:500px;">
+      <div class="form-group"><label class="form-label">照片 <span style="color:red;">*</span></label><div class="upload-group"><input type="file" accept="image/*" style="display:none;" onchange="FileUploader.handle(this).then(function(res){window.wbInUploadedUrl=res.file_url})"><button type="button" class="btn btn-outline btn-sm upload-btn" onclick="this.previousElementSibling.click()">上传照片</button><div class="upload-preview" id="in-preview"></div></div></div>
+      <div class="form-group"><label class="form-label">单号</label><input class="form-input" id="in-tracking"></div>
+      <div class="form-group"><label class="form-label">备注</label><div id="in-remarks-container"></div><button type="button" class="btn btn-outline btn-xs mt-8" onclick="RemarksEditor.addRow('in-remarks-container')">+ 添加备注</button></div>
+      <div class="form-group"><label class="form-label">代收费用</label><input class="form-input" id="in-fee" type="number" step="0.01"></div>
+      <div class="form-group"><label class="form-label">截止时间</label><input class="form-input" id="in-deadline" type="datetime-local"></div>
+      <button type="button" class="btn btn-primary" onclick="wbSubmitIn()">提交</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tab 4: 代收-签收/拒收 -->
+<div class="tab-content" id="tab4">
+  <div class="card">
+    <div class="card-header flex flex-between">
+      <h2 class="card-title">代收包裹签收</h2>
+      <button class="btn btn-outline btn-sm" onclick="wbLoadReceiveSign()">刷新</button>
+    </div>
+    <div class="table-wrap">
+      <table class="table receive-sign-table">
+        <thead><tr><th>内部码</th><th>单号</th><th>费用</th><th>入库时间</th><th>截止时间</th><th>操作</th></tr></thead>
+        <tbody id="receive-sign-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Tab 5: 发快递-入库 -->
+<div class="tab-content" id="tab5">
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">发快递入库</h2></div>
+    <div style="padding:20px;max-width:500px;">
+      <div class="form-group"><label class="form-label">照片 <span style="color:red;">*</span></label><div class="upload-group"><input type="file" accept="image/*" style="display:none;" onchange="FileUploader.handle(this).then(function(res){window.wbSendUploadedUrl=res.file_url})"><button type="button" class="btn btn-outline btn-sm upload-btn" onclick="this.previousElementSibling.click()">上传照片</button><div class="upload-preview" id="send-preview"></div></div></div>
+      <div class="form-group"><label class="form-label">单号</label><input class="form-input" id="send-tracking"></div>
+      <div class="form-group"><label class="form-label">备注</label><div id="send-remarks-container"></div><button type="button" class="btn btn-outline btn-xs mt-8" onclick="RemarksEditor.addRow('send-remarks-container')">+ 添加备注</button></div>
+      <div class="form-group"><label class="form-label">发出费用</label><input class="form-input" id="send-fee" type="number" step="0.01"></div>
+      <button type="button" class="btn btn-primary" onclick="wbSubmitSend()">提交</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tab 6: 发快递-揽收 -->
+<div class="tab-content" id="tab6">
+  <div class="card">
+    <div class="card-header flex flex-between">
+      <h2 class="card-title">发快递揽收</h2>
+      <button class="btn btn-outline btn-sm" onclick="wbLoadSendCollect()">刷新</button>
+    </div>
+    <div class="table-wrap">
+      <table class="table send-collect-table">
+        <thead><tr><th>内部码</th><th>单号</th><th>费用</th><th>入库时间</th><th>操作</th></tr></thead>
+        <tbody id="send-collect-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+
+  // Load default deadline/fee from settings (shared module)
+  ExpressForms.init(function() {
+    ExpressForms.fillDeadline('in-deadline');
+    ExpressForms.fillReceiveFee('in-fee');
+    ExpressForms.fillSendFee('send-fee');
+  });
+
+  // ========== Tab Switching ==========
+  function switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.remove('active'); });
+    document.getElementById(tabId).classList.add('active');
+    if (tabId === 'tab1') wbLoadOverview();
+    else if (tabId === 'tab3') { ExpressForms.fillDeadline('in-deadline'); ExpressForms.fillReceiveFee('in-fee'); }
+    else if (tabId === 'tab4') wbLoadReceiveSign();
+    else if (tabId === 'tab5') ExpressForms.fillSendFee('send-fee');
+    else if (tabId === 'tab6') wbLoadSendCollect();
+  }
+
+  var tabBtns = document.querySelectorAll('#tab-nav button');
+  tabBtns.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      tabBtns.forEach(function(b) { b.classList.remove('active'); });
+      this.classList.add('active');
+      switchTab(this.dataset.tab);
+    });
+  });
+
+  // ========== Tab 1: 总览 ==========
+  function wbLoadOverview() {
+    // Stats
+    var p1 = apiGet('/api/orders/today-summary').then(function(data) {
+      document.getElementById('stat-orders').textContent = data.order_count || 0;
+      document.getElementById('stat-sales').textContent = formatMoney(data.total_amount || 0);
+    }).catch(function(e) { console.error(e); });
+
+    var p2 = apiGet('/api/express/list').then(function(data) {
+      var count = 0;
+      (data || []).forEach(function(e) { if (e.status === 'in_stock') count++; });
+      document.getElementById('stat-packages').textContent = count;
+    }).catch(function(e) { console.error(e); });
+
+    var p3 = apiGet('/api/todos?source=all').then(function(data) {
+      var todos = Array.isArray(data) ? data : (data.todos || []);
+      renderOverviewTodos(todos);
+    }).catch(function(e) { console.error(e); });
+
+    return Promise.all([p1, p2, p3]);
+  }
+
+  function renderOverviewTodos(todos) {
+    var pending = todos.filter(function(t) { return !t.is_done; });
+    var container = document.getElementById('overview-todos');
+    if (!pending.length) {
+      container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--gray-400);">暂无待办</div>';
+      return;
+    }
+    pending.sort(function(a, b) {
+      var order = { high: 0, medium: 1 };
+      return (order[a.priority] || 2) - (order[b.priority] || 2);
+    });
+    var html = '';
+    pending.forEach(function(todo) {
+      var priCls = todo.priority === 'high' ? 'priority-high' : 'priority-medium';
+      var borderColor = todo.priority === 'high' ? 'var(--red-500)' : 'var(--yellow-500)';
+      var doneHtml = '<span class="todo-action">' + (todo.is_done
+        ? '<span class="badge badge-green ml-8">已完成</span>'
+        : '<button class="btn btn-xs btn-outline ml-8" onclick="event.stopPropagation();mbMarkDone(\'' + todo._id + '\')">完成</button>') + '</span>';
+      html += '<div class="mb-16 ' + priCls + '" style="border-left:4px solid ' + borderColor + ';border-radius:4px;background:var(--gray-50);padding:12px 16px;box-shadow:0 1px 3px rgba(0,0,0,.08);" data-todo-id="' + todo._id + '">' +
+        '<div class="flex flex-between">' +
+          '<strong>' + escapeHtml(todo.title) + '</strong>' +
+          doneHtml +
+        '</div>' +
+        '<div style="margin-top:6px;color:var(--gray-600);font-size:14px;">' + escapeHtml(todo.content || '') + '</div>' +
+        '<div style="margin-top:6px;font-size:13px;color:var(--gray-500);">' +
+          '<span class="badge badge-gray">' + escapeHtml(todo.type) + '</span> ' +
+          '<span>' + formatDate(todo.created_at) + '</span>' +
+          (todo.related_id ? ' <span style="color:var(--gray-400);">#' + escapeHtml(todo.related_id) + '</span>' : '') +
+        '</div>' +
+      '</div>';
+    });
+    container.innerHTML = html;
+  }
+
+  // ========== Tab 2: 收银台 ==========
+  CartModule.init({
+    searchInput: 'wb-search-input',
+    searchBtn: 'wb-search-btn',
+    productGrid: 'wb-product-grid',
+    cartBody: 'wb-cart-body',
+    cartTotal: 'wb-cart-total',
+    checkoutBtn: 'wb-checkout-btn',
+    tempBtn: 'wb-temp-btn',
+    uploadBtn: 'wb-upload-btn',
+    uploadInput: 'wb-checkout-file',
+    attachmentsContainer: 'wb-cart-attachments',
+    itemUnit: '件商品',
+    onCheckoutSuccess: function() {
+      var activeTab = document.querySelector('.tab-content.active');
+      if (activeTab && activeTab.id === 'tab1') wbLoadOverview();
+    }
+  });
+
+  // ========== Tab 3: 代收-入库 ==========
+  window.wbInUploadedUrl = '';
+
+  window.wbSubmitIn = function() {
+    ExpressForms.submitReceive({
+      uploadedUrl: window.wbInUploadedUrl,
+      remarksContainerId: 'in-remarks-container',
+      trackingInputId: 'in-tracking',
+      feeInputId: 'in-fee',
+      deadlineInputId: 'in-deadline',
+      onSuccess: function() {
+        wbResetInForm();
+        var activeTab = document.querySelector('.tab-content.active');
+        if (activeTab && activeTab.id === 'tab1') wbLoadOverview();
+      }
+    });
+  };
+
+  function wbResetInForm() {
+    window.wbInUploadedUrl = '';
+    var container = document.getElementById('in-remarks-container');
+    if (container) { container.innerHTML = ''; container.setAttribute('data-remarks', '[]'); }
+    var btn = document.querySelector('#tab3 .upload-btn');
+    if (btn) btn.textContent = '上传照片';
+    RemarksEditor.render('in-remarks-container');
+    ExpressForms.fillDeadline('in-deadline');
+    ExpressForms.fillReceiveFee('in-fee');
+  }
+
+  // ========== Tab 5: 发快递-入库 ==========
+  window.wbSendUploadedUrl = '';
+
+  window.wbSubmitSend = function() {
+    ExpressForms.submitSend({
+      uploadedUrl: window.wbSendUploadedUrl,
+      remarksContainerId: 'send-remarks-container',
+      trackingInputId: 'send-tracking',
+      feeInputId: 'send-fee',
+      onSuccess: function() {
+        wbResetSendForm();
+        var activeTab = document.querySelector('.tab-content.active');
+        if (activeTab && activeTab.id === 'tab1') wbLoadOverview();
+      }
+    });
+  };
+
+  function wbResetSendForm() {
+    window.wbSendUploadedUrl = '';
+    document.getElementById('send-preview').innerHTML = '';
+    document.getElementById('send-tracking').value = '';
+    document.getElementById('send-fee').value = '';
+    var container = document.getElementById('send-remarks-container');
+    if (container) { container.innerHTML = ''; container.setAttribute('data-remarks', '[]'); }
+    var btn = document.querySelector('#tab5 .upload-btn');
+    if (btn) btn.textContent = '上传照片';
+    RemarksEditor.render('send-remarks-container');
+    ExpressForms.fillSendFee('send-fee');
+  }
+
+  // ========== Tab 4: 代收-签收/拒收 ==========
+  function wbLoadReceiveSign() {
+    apiGet('/api/express/list').then(function(data) {
+      var items = (data || []).filter(function(e) {
+        return e.express_type === 'receive' && e.status === 'in_stock';
+      });
+      renderReceiveSignTable(items);
+    }).catch(function(e) { console.error(e); });
+  }
+
+  function renderReceiveSignTable(items) {
+    var tbody = document.getElementById('receive-sign-tbody');
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);">暂无待签收包裹</td></tr>';
+      return;
+    }
+    var now = new Date();
+    tbody.innerHTML = items.map(function(e) {
+      var id = e.internal_id || e._id || '';
+      var tracking = '';
+      var remarks = e.remarks || [];
+      for (var i = 0; i < remarks.length; i++) {
+        if (remarks[i].key === '单号') { tracking = remarks[i].value || ''; break; }
+      }
+      var feeHtml = e.display_fee ? '<span style="color:var(--blue-600);">代收</span> ' + formatMoney(e.display_fee) : '-';
+      var createdAt = formatDate(e.created_at);
+      var deadlineHtml = e.deadline_time ? formatDate(e.deadline_time) : '-';
+      // Highlight overdue
+      if (e.deadline_time) {
+        var dl = new Date(e.deadline_time.replace(' ', 'T'));
+        if (!isNaN(dl.getTime()) && dl < now) {
+          deadlineHtml = '<span style="color:var(--red-500);font-weight:600;">' + deadlineHtml + '</span>';
+        }
+      }
+      var rowStyle = '';
+      if (e.deadline_time) {
+        var dl2 = new Date(e.deadline_time.replace(' ', 'T'));
+        if (!isNaN(dl2.getTime()) && dl2 < now) {
+          rowStyle = ' style="background:var(--red-50);"';
+        }
+      }
+      return '<tr' + rowStyle + '>' +
+        '<td>' + escapeHtml(id) + '</td>' +
+        '<td>' + escapeHtml(tracking || '-') + '</td>' +
+        '<td>' + feeHtml + '</td>' +
+        '<td>' + createdAt + '</td>' +
+        '<td>' + deadlineHtml + '</td>' +
+        '<td class="actions">' +
+          '<button class="btn btn-success btn-xs" onclick="wbPickupExpress(\'' + id.replace(/'/g, "\\'") + '\')">取件</button>' +
+          '<button class="btn btn-warning btn-xs" onclick="wbRejectExpress(\'' + id.replace(/'/g, "\\'") + '\')">拒收</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  window.wbPickupExpress = function(id) {
+    if (!confirm('确定取件吗？')) return;
+    apiGet('/api/express/list').then(function(data) {
+      var item = (data || []).find(function(e) { return (e.internal_id || e._id) === id; });
+      if (!item) return;
+      apiPost('/api/express/out', {internal_id: item.internal_id}).then(function() {
+        showToast('取件成功', 'success');
+        wbLoadReceiveSign();
+        wbLoadOverview();
+      }).catch(function(e) { console.error(e); });
+    }).catch(function(e) { console.error(e); });
+  };
+
+  window.wbRejectExpress = function(id) {
+    if (!confirm('确定拒收吗？')) return;
+    apiPut('/api/express/' + id + '/reject').then(function() {
+      showToast('已拒收', 'success');
+      wbLoadReceiveSign();
+      wbLoadOverview();
+    }).catch(function(e) { console.error(e); });
+  };
+
+  // ========== Tab 6: 发快递-揽收 ==========
+  function wbLoadSendCollect() {
+    apiGet('/api/express/list').then(function(data) {
+      var items = (data || []).filter(function(e) {
+        return e.express_type === 'send' && e.status === 'in_stock';
+      });
+      renderSendCollectTable(items);
+    }).catch(function(e) { console.error(e); });
+  }
+
+  function renderSendCollectTable(items) {
+    var tbody = document.getElementById('send-collect-tbody');
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);">暂无待揽收包裹</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(function(e) {
+      var id = e.internal_id || e._id || '';
+      var tracking = '';
+      var remarks = e.remarks || [];
+      for (var i = 0; i < remarks.length; i++) {
+        if (remarks[i].key === '单号') { tracking = remarks[i].value || ''; break; }
+      }
+      var feeHtml = e.display_fee ? '<span style="color:var(--green-600);">发出</span> ' + formatMoney(e.display_fee) : '-';
+      var createdAt = formatDate(e.created_at);
+      return '<tr>' +
+        '<td>' + escapeHtml(id) + '</td>' +
+        '<td>' + escapeHtml(tracking || '-') + '</td>' +
+        '<td>' + feeHtml + '</td>' +
+        '<td>' + createdAt + '</td>' +
+        '<td class="actions">' +
+          '<button class="btn btn-success btn-xs" onclick="wbCollectExpress(\'' + id.replace(/'/g, "\\'") + '\')">揽收</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  window.wbCollectExpress = function(id) {
+    if (!confirm('确定揽收吗？')) return;
+    apiPut('/api/express/' + id + '/collect').then(function() {
+      showToast('揽收成功', 'success');
+      wbLoadSendCollect();
+      wbLoadOverview();
+    }).catch(function(e) { console.error(e); });
+  };
+
+  // ========== Init ==========
+  wbLoadOverview();
+  RemarksEditor.render('in-remarks-container');
+  RemarksEditor.render('send-remarks-container');
+})();
+
+function mbMarkDone(todoId) {
+  var card = document.querySelector('[data-todo-id="' + todoId + '"]');
+  if (!card) return;
+  var btnArea = card.querySelector('.todo-action');
+  var doneBadge = '<span class="badge badge-green ml-8">已完成</span>';
+  card.style.opacity = '0.55';
+  card.style.background = 'var(--gray-100)';
+  btnArea.innerHTML = doneBadge;
+  apiPut('/api/todos/' + todoId + '/done', {}).then(function() {
+    showToast('已标记完成', 'success');
+  }).catch(function() {
+    card.style.opacity = '';
+    card.style.background = '';
+    btnArea.innerHTML = '<button class="btn btn-xs btn-outline ml-8" onclick="event.stopPropagation();mbMarkDone(\'' + todoId + '\')">完成</button>';
+    showToast('操作失败', 'error');
+  });
+}
+</script>
+{% endblock %}
