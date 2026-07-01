@@ -391,6 +391,7 @@ function createCardHTML(demo, highlightTokens) {
   const searchClearBtn = document.getElementById('search-clear');
   const sortSelect = document.getElementById('sort-select');
   const approvedOnlyCheckbox = document.getElementById('approved-only');
+  const demoOnlyCheckbox = document.getElementById('demo-only');
   const resultCountEl = document.getElementById('result-count');
   const noResultsEl = document.getElementById('no-results');
   const noResultsTitleEl = document.getElementById('no-results-title');
@@ -401,6 +402,7 @@ function createCardHTML(demo, highlightTokens) {
   let searchQuery = '';
   let sortBy = 'views';
   let approvedOnly = true;
+  let demoOnly = true;
   let tokens = [];
 
   // ---- Restore from sessionStorage
@@ -413,6 +415,7 @@ function createCardHTML(demo, highlightTokens) {
         searchQuery = typeof parsed.searchQuery === 'string' ? parsed.searchQuery : '';
         sortBy = typeof parsed.sortBy === 'string' ? parsed.sortBy : sortBy;
         approvedOnly = !!parsed.approvedOnly;
+        demoOnly = parsed.demoOnly !== undefined ? !!parsed.demoOnly : demoOnly;
       }
     }
   } catch (e) { /* ignore storage errors */ }
@@ -429,6 +432,9 @@ function createCardHTML(demo, highlightTokens) {
   }
   if (approvedOnlyCheckbox) {
     approvedOnlyCheckbox.checked = approvedOnly;
+  }
+  if (demoOnlyCheckbox) {
+    demoOnlyCheckbox.checked = demoOnly;
   }
   tagPills.forEach(pill => {
     pill.classList.toggle('active', pill.dataset.tag === activeTag);
@@ -506,6 +512,9 @@ function createCardHTML(demo, highlightTokens) {
       if (approvedOnly) {
         lines.push('· 当前仅展示审核通过的作品，试试关闭「仅展示官方审核通过」看更多结果');
       }
+      if (demoOnly) {
+        lines.push('· 当前仅展示有 Demo 的作品，试试关闭「仅展示有 Demo」看更多结果');
+      }
       if (activeTag !== 'all') {
         lines.push(`· 当前筛选了赛道「${escapeHTML(activeTag)}」，试试切换到「全部」`);
       }
@@ -520,7 +529,8 @@ function createCardHTML(demo, highlightTokens) {
           activeTag,
           searchQuery,
           sortBy,
-          approvedOnly
+          approvedOnly,
+          demoOnly
         }));
       }
     } catch (e) { /* ignore */ }
@@ -531,6 +541,10 @@ function createCardHTML(demo, highlightTokens) {
 
     if (approvedOnly) {
       result = result.filter(d => d.approved);
+    }
+
+    if (demoOnly) {
+      result = result.filter(d => d.has_demo);
     }
 
     if (activeTag !== 'all') {
@@ -632,6 +646,14 @@ function createCardHTML(demo, highlightTokens) {
     });
   }
 
+  // Demo-only toggle
+  if (demoOnlyCheckbox) {
+    demoOnlyCheckbox.addEventListener('change', (e) => {
+      demoOnly = e.target.checked;
+      applyFilters();
+    });
+  }
+
   // Clear button in no-results block
   if (noResultsClearBtn) {
     noResultsClearBtn.addEventListener('click', () => {
@@ -639,7 +661,9 @@ function createCardHTML(demo, highlightTokens) {
       if (searchInput) searchInput.value = '';
       activeTag = 'all';
       approvedOnly = false;
+      demoOnly = false;
       if (approvedOnlyCheckbox) approvedOnlyCheckbox.checked = false;
+      if (demoOnlyCheckbox) demoOnlyCheckbox.checked = false;
       tagPills.forEach(pill => {
         pill.classList.toggle('active', pill.dataset.tag === 'all');
       });
