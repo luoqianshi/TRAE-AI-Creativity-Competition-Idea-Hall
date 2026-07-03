@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>清读 - 拍照识文放大读</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: #f7f7f7;
+      color: #1a1a1a;
+    }
+    .page {
+      display: none;
+      min-height: 100vh;
+      padding: 24px 20px;
+    }
+    .page.active { display: block; }
+    #page-loading.active {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* 按钮 */
+    .btn {
+      display: block;
+      width: 100%;
+      max-width: 360px;
+      margin: 18px auto;
+      padding: 24px;
+      border-radius: 20px;
+      font-size: 30px;
+      font-weight: 800;
+      text-align: center;
+      cursor: pointer;
+      border: none;
+      letter-spacing: 2px;
+      transition: transform 0.08s, opacity 0.15s;
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn-primary {
+      background: #1a1a1a;
+      color: #ffffff;
+    }
+    .btn-secondary {
+      background: #ffffff;
+      color: #1a1a1a;
+      border: 4px solid #1a1a1a;
+    }
+    .btn-yellow {
+      background: #ffd700;
+      color: #1a1a1a;
+    }
+
+    /* 结果文字 */
+    .result-box {
+      font-size: 36px;
+      line-height: 1.8;
+      padding: 28px;
+      background: #ffffff;
+      border-radius: 20px;
+      min-height: 320px;
+      word-break: break-word;
+      color: #000000;
+      border: 3px solid #e0e0e0;
+      white-space: pre-wrap;
+    }
+
+    /* 高对比度 */
+    body.high-contrast { background: #000000; }
+    body.high-contrast .result-box {
+      background: #000000;
+      color: #ffff00;
+      border-color: #ffff00;
+    }
+    body.high-contrast .btn-primary {
+      background: #ffff00;
+      color: #000000;
+    }
+    body.high-contrast .btn-secondary {
+      background: #000000;
+      color: #ffff00;
+      border-color: #ffff00;
+    }
+    body.high-contrast .app-subtitle,
+    body.high-contrast .hint-text { color: #cccccc !important; }
+
+    /* 工具栏 */
+    .toolbar {
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 24px;
+    }
+    .tool-btn {
+      padding: 16px 28px;
+      font-size: 24px;
+      font-weight: 800;
+      border-radius: 16px;
+      border: none;
+      cursor: pointer;
+    }
+
+    /* 相机 */
+    #video-preview {
+      width: 100%;
+      max-width: 100%;
+      border-radius: 20px;
+      background: #000;
+      display: block;
+    }
+    .camera-wrap {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .shutter-btn {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 8px solid #1a1a1a;
+      margin: 28px auto 12px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .shutter-btn:active { background: #e0e0e0; transform: scale(0.95); }
+
+    /* 加载 */
+    .spinner {
+      width: 90px;
+      height: 90px;
+      border: 10px solid #e0e0e0;
+      border-top-color: #1a1a1a;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+      margin: 30px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-track {
+      width: 80%;
+      max-width: 320px;
+      height: 22px;
+      background: #e0e0e0;
+      border-radius: 11px;
+      margin: 20px auto;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #1a1a1a;
+      width: 0%;
+      transition: width 0.25s ease;
+    }
+
+    /* 标题 */
+    .app-title {
+      font-size: 64px;
+      font-weight: 900;
+      text-align: center;
+      margin: 50px 0 12px;
+      letter-spacing: 10px;
+    }
+    .app-subtitle {
+      font-size: 26px;
+      text-align: center;
+      color: #666;
+      margin-bottom: 50px;
+      font-weight: 500;
+    }
+    .hint-text {
+      font-size: 20px;
+      color: #999;
+      text-align: center;
+      line-height: 1.7;
+    }
+
+    /* 返回按钮 */
+    .back-btn {
+      font-size: 24px;
+      padding: 12px 20px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-weight: 700;
+      margin-bottom: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* 顶栏 */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 首页 -->
+  <div id="page-home" class="page active">
+    <div style="text-align:center; margin-top: 50px;">
+      <div style="font-size:90px; line-height:1; margin-bottom:16px;">👁️</div>
+      <h1 class="app-title">清读</h1>
+      <p class="app-subtitle">拍照识文 · 大字朗读</p>
+    </div>
+
+    <button class="btn btn-primary" onclick="openCamera()">📷 拍照识字</button>
+    <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">🖼 相册选图</button>
+    <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
+
+    <div style="text-align:center; margin-top: 60px; padding: 0 24px;">
+      <p class="hint-text">
+        说明书字太小？药盒看不清？<br>
+        拍一拍，马上变大字，还能读给您听
+      </p>
+    </div>
+
+    <div style="text-align:center; margin-top: 40px;">
+      <span style="display:inline-block; background:#e8e8e8; color:#555; padding:10px 22px; border-radius:30px; font-size:18px; font-weight:600;">
+        🎯 专为老年人设计
+      </span>
+    </div>
+  </div>
+
+  <!-- 相机页 -->
+  <div id="page-camera" class="page">
+    <button class="back-btn" onclick="backToHome()">← 返回</button>
+    <div class="camera-wrap">
+      <video id="video-preview" autoplay playsinline muted></video>
+      <div style="text-align:center; margin-top: 16px;">
+        <div class="shutter-btn" onclick="takePhoto()"></div>
+        <p style="font-size:22px; color:#555; font-weight:600;">点击圆形按钮拍照</p>
+      </div>
+    </div>
+    <canvas id="capture-canvas" style="display:none;"></canvas>
+  </div>
+
+  <!-- 加载页 -->
+  <div id="page-loading" class="page">
+    <div class="spinner"></div>
+    <p id="loading-title" style="font-size:30px; font-weight:800; margin-top:24px;">正在识别文字...</p>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+    <p id="loading-detail" style="font-size:20px; color:#777; margin-top:12px; font-weight:500;">请稍候</p>
+  </div>
+
+  <!-- 结果页 -->
+  <div id="page-result" class="page">
+    <div class="top-bar">
+      <button class="back-btn" onclick="backToHome()">← 返回首页</button>
+      <button class="tool-btn btn-yellow" onclick="speakText()">🔊 朗读</button>
+    </div>
+
+    <div id="result-box" class="result-box"></div>
+
+    <div class="toolbar">
+      <button class="tool-btn btn-primary" onclick="changeFontSize(-4)">字 -</button>
+      <button class="tool-btn btn-primary" onclick="changeFontSize(4)">字 +</button>
+      <button class="tool-btn btn-secondary" onclick="toggleContrast()">高对比</button>
+      <button class="tool-btn btn-secondary" onclick="openCamera()">重拍</button>
+    </div>
+
+    <p style="font-size:18px; color:#aaa; text-align:center; margin-top: 28px; line-height:1.6;">
+      识别结果仅供参考<br>
+      用药等重要信息请核对原件或咨询专业人员
+    </p>
+  </div>
+
+  <script>
+    /* ========== 状态 ========== */
+    let currentStream = null;
+    let currentText = '';
+    let currentFontSize = 36;
+    let worker = null;
+    let blobUrl = null;
+
+    /* ========== 页面切换 ========== */
+    function showPage(name) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById('page-' + name).classList.add('active');
+    }
+
+    function backToHome() {
+      stopCamera();
+      showPage('home');
+    }
+
+    function stopCamera() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop());
+        currentStream = null;
+      }
+      const video = document.getElementById('video-preview');
+      video.srcObject = null;
+    }
+
+    /* ========== 相机 ========== */
+    async function openCamera() {
+      showPage('camera');
+      try {
+        const constraints = {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        currentStream = stream;
+        const video = document.getElementById('video-preview');
+        video.srcObject = stream;
+      } catch (err) {
+        alert('无法打开相机，请使用「相册选图」功能');
+        backToHome();
+      }
+    }
+
+    function takePhoto() {
+      const video = document.getElementById('video-preview');
+      const canvas = document.getElementById('capture-canvas');
+      if (!video.videoWidth) {
+        alert('相机尚未准备好，请稍候再试');
+        return;
+      }
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      stopCamera();
+      processImage(dataUrl);
+    }
+
+    /* ========== 相册选图 ========== */
+    function handleFileSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      blobUrl = URL.createObjectURL(file);
+      processImage(blobUrl);
+      e.target.value = '';
+    }
+
+    /* ========== OCR 识别 ========== */
+    async function processImage(imageUrl) {
+      showPage('loading');
+      const titleEl = document.getElementById('loading-title');
+      const detailEl = document.getElementById('loading-detail');
+      const fillEl = document.getElementById('progress-fill');
+      fillEl.style.width = '0%';
+
+      try {
+        // 首次加载 worker
+        if (!worker) {
+          titleEl.textContent = '正在准备识别引擎...';
+          worker = await Tesseract.createWorker('chi_sim', 1, {
+            logger: m => {
+              if (m.status && m.progress !== undefined) {
+                detailEl.textContent = m.status;
+                fillEl.style.width = Math.min(m.progress * 100, 100) + '%';
+              }
+            }
+          });
+        }
+
+        titleEl.textContent = '正在识别文字...';
+        const { data: { text } } = await worker.recognize(imageUrl);
+        currentText = text.trim();
+        if (!currentText) {
+          currentText = '未能识别出文字，建议重新拍照或选择更清晰的图片。\n\n小提示：对准文字、光线充足、避免手抖，识别效果更好。';
+        }
+        showResult();
+      } catch (err) {
+        console.error(err);
+        currentText = '识别过程出现错误，请重试。\n\n如果问题持续，请检查网络连接后重新加载页面。';
+        showResult();
+      }
+    }
+
+    /* ========== 结果展示 ========== */
+    function showResult() {
+      showPage('result');
+      const box = document.getElementById('result-box');
+      box.textContent = currentText;
+      box.style.fontSize = currentFontSize + 'px';
+    }
+
+    function changeFontSize(delta) {
+      currentFontSize += delta;
+      if (currentFontSize < 20) currentFontSize = 20;
+      if (currentFontSize > 80) currentFontSize = 80;
+      document.getElementById('result-box').style.fontSize = currentFontSize + 'px';
+    }
+
+    function toggleContrast() {
+      document.body.classList.toggle('high-contrast');
+    }
+
+    /* ========== 语音朗读 ========== */
+    function speakText() {
+      if (!currentText) return;
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const utter = new SpeechSynthesisUtterance(currentText);
+      utter.lang = 'zh-CN';
+      utter.rate = 0.8;
+      utter.pitch = 1.0;
+      synth.speak(utter);
+    }
+
+    /* ========== 防止页面关闭时占用麦克风 ========== */
+    window.addEventListener('beforeunload', () => {
+      stopCamera();
+      window.speechSynthesis.cancel();
+    });
+  </script>
+</body>
+</html>
