@@ -476,6 +476,7 @@ def render_demos_min_js():
             'external_url': d.get('external_url'),
             'has_demo': d.get('has_demo', False),
             'approved': d.get('approved', False),
+            'screenshot': d.get('screenshot'),
         })
     
     demos_min_js_path = DATA_DIR / 'demos.min.js'
