@@ -496,6 +496,11 @@ git push origin main
 - Update failed: No module named 'jinja2'
 
 
+### 自动记录问题（2026-07-06）
+
+- Failed to fetch batch '7月6日（截至7.6 08:00）': No bitable found in section P59vdA8iOoG9PkxOioxchzYjnfg
+
+
 ## 注意事项
 
 1. **增量更新原则**：只处理新增或变更的数据，已有数据不要重复爬取。判断依据是 `topic_id` 是否已在 `demos.json` 中存在。
