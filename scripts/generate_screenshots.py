@@ -4,8 +4,8 @@
 Uses Playwright to load each demo's HTML file, capture the first screen,
 and save as WebP format in assets/screenshots/{topic_id}.webp.
 
-Supports incremental processing (skips existing screenshots) and
-checkpoint resume (saves progress every 100 items).
+Supports incremental processing (skips existing screenshots),
+checkpoint resume, and concurrent processing via multiprocessing.
 """
 
 import json
@@ -14,11 +14,11 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
+from multiprocessing import Pool, cpu_count
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DATA_DIR = PROJECT_ROOT / 'data'
 SCREENSHOTS_DIR = PROJECT_ROOT / 'assets' / 'screenshots'
-DEMOS_DIR = PROJECT_ROOT / 'demos'
 PROGRESS_FILE = DATA_DIR / 'screenshot_progress.json'
 ERROR_LOG = DATA_DIR / 'screenshot_errors.log'
 
@@ -28,6 +28,7 @@ VIEWPORT_HEIGHT = 800
 PAGE_TIMEOUT_MS = 15000
 RENDER_WAIT_MS = 1500
 CHECKPOINT_INTERVAL = 100
+WORKERS = min(6, cpu_count())  # Use up to 6 workers
 
 
 def load_demos_data():
@@ -37,31 +38,25 @@ def load_demos_data():
 
 
 def get_screenshot_target(demo):
-    """Determine the URL to load for screenshotting.
-
-    Returns:
-        (url, source_type) tuple where source_type is 'file' or 'http'.
-        Returns (None, None) if no screenshotable content exists.
-    """
+    """Determine the URL to load for screenshotting."""
     if not demo.get('has_demo'):
-        return None, None
+        return None
 
     demo_url = demo.get('demo_url')
     if demo_url:
-        # Local file - convert relative path to file:// URL
         local_path = PROJECT_ROOT / demo_url
         if local_path.exists():
-            return local_path.resolve().as_uri(), 'file'
-        return None, None
+            return local_path.resolve().as_uri()
+        return None
 
     external_url = demo.get('external_url')
     if external_url:
         parsed = urlparse(external_url)
         if parsed.scheme in ('http', 'https'):
-            return external_url, 'http'
-        return None, None
+            return external_url
+        return None
 
-    return None, None
+    return None
 
 
 def screenshot_exists(topic_id):
@@ -69,48 +64,66 @@ def screenshot_exists(topic_id):
     return (SCREENSHOTS_DIR / f'{topic_id}.webp').exists()
 
 
-def generate_single_screenshot(page, demo):
-    """Generate screenshot for a single demo using an existing page.
+def process_chunk(chunk_data):
+    """Process a chunk of demos in a separate process.
 
-    Args:
-        page: Playwright Page object (already created).
-        demo: Demo record dict from demos.json.
-
-    Returns:
-        'success' if screenshot saved, 'skipped' if already exists,
-        'no_target' if no screenshotable content, 'error' if failed.
+    Each worker gets its own Playwright browser instance.
+    Returns list of (topic_id, status, screenshot_path) tuples.
     """
-    topic_id = demo['topic_id']
+    from playwright.sync_api import sync_playwright
 
-    if screenshot_exists(topic_id):
-        return 'skipped'
+    chunk, worker_id = chunk_data
+    results = []
 
-    url, source_type = get_screenshot_target(demo)
-    if not url:
-        return 'no_target'
-
-    try:
-        page.goto(url, wait_until='networkidle', timeout=PAGE_TIMEOUT_MS)
-        page.wait_for_timeout(RENDER_WAIT_MS)
-        jpeg_path = SCREENSHOTS_DIR / f'{topic_id}.jpg'
-        webp_path = SCREENSHOTS_DIR / f'{topic_id}.webp'
-        page.screenshot(
-            path=str(jpeg_path),
-            type='jpeg',
-            quality=75,
-            clip={'x': 0, 'y': 0, 'width': VIEWPORT_WIDTH, 'height': VIEWPORT_HEIGHT}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={'width': VIEWPORT_WIDTH, 'height': VIEWPORT_HEIGHT}
         )
-        # Convert jpeg to webp using PIL
-        from PIL import Image
-        img = Image.open(jpeg_path)
-        img.save(webp_path, 'webp', quality=75, method=6)
-        img.close()
-        jpeg_path.unlink()  # Remove temporary jpeg
-        return 'success'
-    except Exception as e:
-        with open(ERROR_LOG, 'a', encoding='utf-8') as f:
-            f.write(f'{topic_id}: {str(e)}\n')
-        return 'error'
+
+        for demo in chunk:
+            topic_id = demo['topic_id']
+
+            if screenshot_exists(topic_id):
+                results.append((topic_id, 'skipped', f'assets/screenshots/{topic_id}.webp'))
+                continue
+
+            url = get_screenshot_target(demo)
+            if not url:
+                results.append((topic_id, 'no_target', None))
+                continue
+
+            try:
+                page = context.new_page()
+                page.goto(url, wait_until='networkidle', timeout=PAGE_TIMEOUT_MS)
+                page.wait_for_timeout(RENDER_WAIT_MS)
+                jpeg_path = SCREENSHOTS_DIR / f'{topic_id}.jpg'
+                webp_path = SCREENSHOTS_DIR / f'{topic_id}.webp'
+                page.screenshot(
+                    path=str(jpeg_path),
+                    type='jpeg',
+                    quality=75,
+                    clip={'x': 0, 'y': 0, 'width': VIEWPORT_WIDTH, 'height': VIEWPORT_HEIGHT}
+                )
+                page.close()
+
+                # Convert jpeg to webp using PIL
+                from PIL import Image
+                img = Image.open(jpeg_path)
+                img.save(webp_path, 'webp', quality=75, method=6)
+                img.close()
+                jpeg_path.unlink()
+
+                results.append((topic_id, 'success', f'assets/screenshots/{topic_id}.webp'))
+            except Exception as e:
+                with open(ERROR_LOG, 'a', encoding='utf-8') as f:
+                    f.write(f'{topic_id}: {str(e)}\n')
+                results.append((topic_id, 'error', None))
+
+        context.close()
+        browser.close()
+
+    return results
 
 
 def save_demos_json(demos_data):
@@ -132,22 +145,12 @@ def save_progress(processed, errors, current, total):
         json.dump(progress, f, indent=2)
 
 
-def run_batch(demos_data, limit=None, topic_ids=None):
-    """Run screenshot generation for all demos needing screenshots.
-
-    Args:
-        demos_data: Loaded demos.json data.
-        limit: Optional max number of screenshots to generate.
-        topic_ids: Optional set of specific topic_ids to process.
-    """
-    from playwright.sync_api import sync_playwright
-
-    # Build work list
+def build_work_list(demos_data, limit=None, topic_ids=None):
+    """Build the list of demos that need screenshotting."""
     work_items = []
     for demo in demos_data.get('demos', []):
         tid = demo['topic_id']
         if topic_ids and tid not in topic_ids:
-            # Still mark screenshot field if exists
             if screenshot_exists(tid):
                 demo['screenshot'] = f'assets/screenshots/{tid}.webp'
             else:
@@ -156,7 +159,7 @@ def run_batch(demos_data, limit=None, topic_ids=None):
         if screenshot_exists(tid):
             demo['screenshot'] = f'assets/screenshots/{tid}.webp'
             continue
-        url, source_type = get_screenshot_target(demo)
+        url = get_screenshot_target(demo)
         if url:
             work_items.append(demo)
         else:
@@ -165,47 +168,53 @@ def run_batch(demos_data, limit=None, topic_ids=None):
     if limit:
         work_items = work_items[:limit]
 
+    return work_items
+
+
+def run_batch(demos_data, limit=None, topic_ids=None):
+    """Run screenshot generation using multiprocessing."""
+    work_items = build_work_list(demos_data, limit, topic_ids)
+
     print(f"Total screenshots to generate: {len(work_items)}")
+    print(f"Using {WORKERS} parallel workers")
     if not work_items:
         print("All screenshots already exist. Nothing to do.")
         return 0
 
+    # Split work into chunks for each worker
+    chunk_size = max(1, len(work_items) // WORKERS)
+    chunks = []
+    for i in range(0, len(work_items), chunk_size):
+        chunk = work_items[i:i + chunk_size]
+        chunks.append((chunk, i // chunk_size))
+
     processed = 0
     errors = 0
+    completed = 0
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            viewport={'width': VIEWPORT_WIDTH, 'height': VIEWPORT_HEIGHT}
-        )
+    # Create demo lookup for fast updates
+    demo_by_id = {d['topic_id']: d for d in demos_data.get('demos', [])}
 
-        for i, demo in enumerate(work_items):
-            tid = demo['topic_id']
-            print(f"  [{i+1}/{len(work_items)}] Screenshotting topic {tid}...", flush=True)
+    with Pool(processes=WORKERS) as pool:
+        for result_list in pool.imap_unordered(process_chunk, chunks):
+            for topic_id, status, screenshot_path in result_list:
+                demo = demo_by_id.get(topic_id)
+                if demo:
+                    demo['screenshot'] = screenshot_path
 
-            page = context.new_page()
-            result = generate_single_screenshot(page, demo)
-            page.close()
+                if status == 'success':
+                    processed += 1
+                elif status == 'error':
+                    errors += 1
 
-            if result == 'success':
-                demo['screenshot'] = f'assets/screenshots/{tid}.webp'
-                processed += 1
-            elif result == 'error':
-                demo['screenshot'] = None
-                errors += 1
-            elif result == 'skipped':
-                demo['screenshot'] = f'assets/screenshots/{tid}.webp'
-            elif result == 'no_target':
-                demo['screenshot'] = None
+                completed += 1
 
-            # Checkpoint save
-            if (i + 1) % CHECKPOINT_INTERVAL == 0:
-                save_demos_json(demos_data)
-                save_progress(processed, errors, i + 1, len(work_items))
-                print(f"  [Checkpoint] Saved. Processed: {processed}, Errors: {errors}")
-
-        context.close()
-        browser.close()
+                # Checkpoint save
+                if completed % CHECKPOINT_INTERVAL == 0:
+                    save_demos_json(demos_data)
+                    save_progress(processed, errors, completed, len(work_items))
+                    print(f"  [Checkpoint {completed}/{len(work_items)}] "
+                          f"Processed: {processed}, Errors: {errors}", flush=True)
 
     # Final save
     save_demos_json(demos_data)
