@@ -196,9 +196,6 @@ function createCardHTML(demo, highlightTokens) {
     : '';
 
   const safeTitle = stripHTML(demo.title);
-  // Prefer insight (one-sentence summary), fallback to excerpt
-  const insightText = (demo.insight || '').trim();
-  const safeExcerpt = insightText || stripHTML(demo.excerpt);
 
   let demoBtn = '';
   if (demo.has_demo) {
@@ -213,21 +210,24 @@ function createCardHTML(demo, highlightTokens) {
 
   const forumUrl = `https://forum.trae.cn/t/topic/${demo.topic_id}`;
 
+  const screenshotHtml = demo.screenshot
+    ? `<div class="card-screenshot"><img src="${escapeAttr(demo.screenshot)}" loading="lazy" onerror="this.parentElement.classList.add('screenshot-error')"></div>`
+    : `<div class="card-screenshot card-screenshot-placeholder">${tagSvg ? `<span class="placeholder-icon">${tagSvg}</span>` : ''}<span class="placeholder-text">暂无预览</span></div>`;
+
   return `<div class="card"
     data-tags="${escapeAttr((demo.tags || []).join(','))}"
     data-title="${escapeAttr(safeTitle)}"
-    data-excerpt="${escapeAttr(safeExcerpt)}"
     data-created="${escapeAttr(demo.created_at)}"
     data-views="${demo.views || 0}"
     data-likes="${demo.like_count || 0}"
     data-approved="${demo.approved ? 'true' : 'false'}">
+    ${screenshotHtml}
     <div class="card-tag-row">
       ${tagSvg ? `<span class="card-tag-icon" title="${escapeAttr(tag)}">${tagSvg}</span>` : ''}
       <span class="card-tag-text">${escapeAttr(tag)}</span>
       ${approvedBadge}
     </div>
     <h3 class="card-title">${highlight(safeTitle, highlightTokens)}</h3>
-    <p class="card-excerpt">${safeExcerpt ? highlight(safeExcerpt, highlightTokens) : '<span class="no-desc">暂无描述</span>'}</p>
     <div class="card-meta">
       <span class="meta-item"><img src="assets/icons/eye.svg" class="meta-icon" alt="views" loading="lazy"> ${demo.views || 0}</span>
       <span class="meta-item"><img src="assets/icons/heart.svg" class="meta-icon" alt="likes" loading="lazy"> ${demo.like_count || 0}</span>
@@ -400,7 +400,7 @@ function createCardHTML(demo, highlightTokens) {
 
   let activeTag = 'all';
   let searchQuery = '';
-  let sortBy = 'views';
+  let sortBy = 'newest';
   let approvedOnly = true;
   let demoOnly = true;
   let tokens = [];
