@@ -31,6 +31,40 @@ CHECKPOINT_INTERVAL = 100
 WORKERS = min(6, cpu_count())  # Use up to 6 workers
 
 
+def load_approved_projects():
+    """Load approved_projects.json and return the records list."""
+    with open(DATA_DIR / 'approved_projects.json', 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def normalize_date(date_str):
+    """Convert ISO date (2026-07-06) or Chinese date (7月6日) to Chinese format."""
+    date_str = date_str.strip()
+    if '月' in date_str:
+        return date_str  # Already in Chinese format
+    # Parse ISO format YYYY-MM-DD
+    try:
+        parts = date_str.split('-')
+        if len(parts) == 3:
+            month = int(parts[1])
+            day = int(parts[2])
+            return f"{month}月{day}日"
+    except (ValueError, IndexError):
+        pass
+    return date_str
+
+
+def get_topic_ids_by_dates(batch_dates):
+    """Return set of topic_ids whose approval date is in batch_dates."""
+    data = load_approved_projects()
+    target_dates = {normalize_date(d) for d in batch_dates}
+    return {
+        int(r['topic_id'])
+        for r in data.get('records', [])
+        if r.get('date') in target_dates
+    }
+
+
 def load_demos_data():
     """Load demos.json and return the demos list."""
     with open(DATA_DIR / 'demos.json', 'r', encoding='utf-8') as f:
@@ -231,6 +265,8 @@ def main():
                         help='Max screenshots to generate')
     parser.add_argument('--topic-id', type=int, default=None,
                         help='Generate screenshot for a single topic')
+    parser.add_argument('--batch-dates', type=str, default=None,
+                        help='Comma-separated approval dates (e.g. 2026-07-06,2026-07-03)')
     args = parser.parse_args()
 
     print("=" * 60)
@@ -240,11 +276,17 @@ def main():
     demos_data = load_demos_data()
     print(f"Loaded {len(demos_data.get('demos', []))} demos")
 
+    topic_ids = None
+    if args.batch_dates:
+        dates = [d.strip() for d in args.batch_dates.split(',')]
+        topic_ids = get_topic_ids_by_dates(dates)
+        print(f"Filtering by dates: {dates} -> {len(topic_ids)} topics")
+
     if args.topic_id:
         topic_ids = {args.topic_id}
         errors = run_batch(demos_data, topic_ids=topic_ids)
     else:
-        errors = run_batch(demos_data, limit=args.limit)
+        errors = run_batch(demos_data, limit=args.limit, topic_ids=topic_ids)
 
     sys.exit(0 if errors == 0 else 1)
 
