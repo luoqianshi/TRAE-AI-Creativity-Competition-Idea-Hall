@@ -28,7 +28,7 @@ VIEWPORT_HEIGHT = 800
 PAGE_TIMEOUT_MS = 15000
 RENDER_WAIT_MS = 1500
 CHECKPOINT_INTERVAL = 100
-WORKERS = min(6, cpu_count())  # Use up to 6 workers
+WORKERS = 1  # Single worker to avoid Playwright EPIPE crashes in this environment
 
 
 def load_approved_projects():
