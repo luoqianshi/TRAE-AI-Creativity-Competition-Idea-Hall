@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#F4EBD3">
+<meta name="description" content="易读世界 Android App - 把看不懂的专业文本变成三年级水平的短句，本地神经网络 TTS 朗读，支持倍速与逐句高亮。">
+<title>易读世界 · Android App 开发过程</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700;9..144,900&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* ============ 主题变量：温暖阅读风 ============ */
+  :root{
+    --paper:#F4EBD3;
+    --paper-deep:#E8DCBE;
+    --paper-fold:#DFCFA8;
+    --ink:#2B1D12;
+    --ink-soft:#5B4A3A;
+    --ink-faint:#8B7355;
+    --accent:#A8482B;
+    --accent-soft:#C57255;
+    --gold:#B8924A;
+    --shadow-sm:0 2px 8px rgba(43,29,18,.06);
+    --shadow-md:0 12px 32px rgba(43,29,18,.10);
+    --shadow-lg:0 24px 60px rgba(43,29,18,.14);
+    --radius:4px;
+    --noise:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.17 0 0 0 0 0.11 0 0 0 0 0.07 0 0 0 0.45 0'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.5'/></svg>");
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;color-scheme:light}
+  body{
+    font-family:'Newsreader',Georgia,'Songti SC','STSong',serif;
+    color:var(--ink);
+    background:var(--paper);
+    line-height:1.65;
+    font-size:17px;
+    overflow-x:hidden;
+    -webkit-tap-highlight-color:rgba(168,72,43,.12);
+    /* 纸张噪声纹理 */
+    background-image:var(--noise);
+    background-size:200px 200px;
+    background-blend-mode:multiply;
+  }
+  /* 锚点跳转留导航空间 */
+  [id]{scroll-margin-top:80px}
+  /* 触摸优化 */
+  button,a{touch-action:manipulation}
+
+  /* ============ 焦点可见 ============ */
+  a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{
+    outline:3px solid var(--accent);
+    outline-offset:3px;
+    border-radius:2px;
+  }
+
+  /* ============ 跳转链接 ============ */
+  .skip-link{
+    position:absolute;
+    top:-100px;left:0;
+    background:var(--ink);
+    color:var(--paper);
+    padding:14px 24px;
+    z-index:2000;
+    text-decoration:none;
+    font-family:'Space Mono',monospace;
+    font-size:13px;
+    letter-spacing:.05em;
+  }
+  .skip-link:focus{top:0}
+
+  /* ============ 顶部导航 ============ */
+  .nav{
+    position:fixed;
+    top:0;left:0;right:0;
+    z-index:1000;
+    background:rgba(244,235,211,.86);
+    backdrop-filter:blur(12px) saturate(1.2);
+    -webkit-backdrop-filter:blur(12px) saturate(1.2);
+    border-bottom:1px solid rgba(43,29,18,.10);
+    padding:18px 32px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .nav-brand{
+    font-family:'Fraunces',serif;
+    font-size:22px;
+    font-weight:600;
+    font-variation-settings:"opsz" 30;
+    color:var(--ink);
+    text-decoration:none;
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+  }
+  .nav-brand::before{
+    content:"";
+    display:inline-block;
+    width:8px;height:8px;
+    background:var(--accent);
+    border-radius:50%;
+    transform:translateY(-2px);
+  }
+  .nav-brand .en{
+    font-family:'Newsreader',serif;
+    font-style:italic;
+    font-size:13px;
+    color:var(--ink-faint);
+    font-weight:400;
+  }
+  .nav-links{display:flex;gap:4px;flex-wrap:wrap}
+  .nav-links a{
+    color:var(--ink-soft);
+    text-decoration:none;
+    font-family:'Space Mono',monospace;
+    font-size:12px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:8px 14px;
+    border-radius:2px;
+    transition:color .25s,background .25s;
+  }
+  .nav-links a:hover{color:var(--accent);background:rgba(168,72,43,.08)}
+
+  /* ============ 通用容器 ============ */
+  .container{max-width:1100px;margin:0 auto;padding:0 28px}
+  .container-narrow{max-width:720px;margin:0 auto;padding:0 28px}
+
+  /* ============ Hero 首屏 ============ */
+  .hero{
+    min-height:calc(100svh - 64px);
+    margin-top:64px;
+    padding:120px 28px 80px;
+    display:flex;
+    align-items:center;
+    justify-content:flex-start;
+    position:relative;
+    overflow:hidden;
+    background:
+      radial-gradient(ellipse at 20% 30%,rgba(184,146,74,.18),transparent 60%),
+      radial-gradient(ellipse at 80% 80%,rgba(168,72,43,.10),transparent 55%);
+  }
+  /* Hero 装饰：垂直墨线 */
+  .hero::before{
+    content:"";
+    position:absolute;
+    top:80px;bottom:80px;
+    left:8%;
+    width:1px;
+    background:linear-gradient(180deg,transparent,var(--ink-faint) 20%,var(--ink-faint) 80%,transparent);
+    opacity:.4;
+  }
+  .hero-content{
+    position:relative;
+    z-index:2;
+    max-width:780px;
+    margin-left:12%;
+  }
+  .hero-eyebrow{
+    font-family:'Space Mono',monospace;
+    font-size:12px;
+    letter-spacing:.25em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin-bottom:32px;
+    opacity:0;
+    animation:fadeUp .8s .2s forwards;
+  }
+  .hero-eyebrow::before{
+    content:"——  ";
+    color:var(--ink-faint);
+  }
+  .hero-title{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-variation-settings:"opsz" 144;
+    font-size:clamp(56px,9vw,108px);
+    line-height:1.02;
+    letter-spacing:-.02em;
+    color:var(--ink);
+    margin-bottom:32px;
+    text-wrap:balance;
+  }
+  .hero-title .char{
+    display:inline-block;
+    opacity:0;
+    transform:translateY(40px) rotate(-2deg);
+    animation:fadeUpChar .9s forwards;
+  }
+  .hero-title .em{
+    font-style:italic;
+    color:var(--accent);
+    font-variation-settings:"opsz" 144;
+  }
+  .hero-tagline{
+    font-family:'Newsreader',serif;
+    font-size:clamp(20px,2vw,24px);
+    line-height:1.55;
+    color:var(--ink-soft);
+    max-width:560px;
+    margin-bottom:48px;
+    opacity:0;
+    animation:fadeUp .8s 1.4s forwards;
+  }
+  .hero-tagline .accent{color:var(--accent);font-style:italic}
+  .hero-cta{
+    display:flex;
+    gap:20px;
+    align-items:center;
+    flex-wrap:wrap;
+    opacity:0;
+    animation:fadeUp .8s 1.7s forwards;
+  }
+  .btn{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    padding:14px 28px;
+    font-family:'Space Mono',monospace;
+    font-size:13px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    text-decoration:none;
+    cursor:pointer;
+    border:none;
+    border-radius:2px;
+    transition:transform .25s,background .25s,color .25s,box-shadow .25s;
+  }
+  .btn-primary{
+    background:var(--ink);
+    color:var(--paper);
+    box-shadow:0 4px 12px rgba(43,29,18,.18);
+  }
+  .btn-primary:hover{
+    background:var(--accent);
+    transform:translateY(-2px);
+    box-shadow:0 8px 20px rgba(168,72,43,.30);
+  }
+  .btn-ghost{
+    background:transparent;
+    color:var(--ink);
+    border-bottom:1px solid var(--ink);
+    border-radius:0;
+    padding:14px 4px;
+  }
+  .btn-ghost:hover{color:var(--accent);border-color:var(--accent)}
+
+  /* Hero 装饰小字 */
+  .hero-meta{
+    position:absolute;
+    bottom:40px;
+    right:32px;
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    letter-spacing:.15em;
+    color:var(--ink-faint);
+    text-align:right;
+    line-height:1.6;
+    opacity:0;
+    animation:fadeUp .8s 2.2s forwards;
+  }
+
+  @keyframes fadeUp{
+    from{opacity:0;transform:translateY(24px)}
+    to{opacity:1;transform:translateY(0)}
+  }
+  @keyframes fadeUpChar{
+    from{opacity:0;transform:translateY(40px) rotate(-2deg)}
+    to{opacity:1;transform:translateY(0) rotate(0)}
+  }
+
+  /* ============ 章节标题 ============ */
+  .section-label{
+    font-family:'Space Mono',monospace;
+    font-size:12px;
+    letter-spacing:.2em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin-bottom:20px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+  }
+  .section-label::before{
+    content:"";
+    display:inline-block;
+    width:32px;height:1px;
+    background:var(--accent);
+  }
+  .section-title{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-variation-settings:"opsz" 96;
+    font-size:clamp(38px,5vw,56px);
+    line-height:1.1;
+    letter-spacing:-.015em;
+    color:var(--ink);
+    margin-bottom:24px;
+    text-wrap:balance;
+  }
+  .section-title .em{font-style:italic;color:var(--accent)}
+  .section-lead{
+    font-family:'Newsreader',serif;
+    font-size:19px;
+    line-height:1.6;
+    color:var(--ink-soft);
+    max-width:640px;
+    margin-bottom:64px;
+  }
+
+  /* ============ Section 2: 开发流程时间轴 ============ */
+  .process{
+    padding:140px 0 120px;
+    background:var(--paper-deep);
+    border-top:1px solid rgba(43,29,18,.08);
+    border-bottom:1px solid rgba(43,29,18,.08);
+    position:relative;
+  }
+  .process .container{position:relative}
+
+  .timeline{
+    margin-top:80px;
+    position:relative;
+  }
+  .timeline-rail{
+    position:absolute;
+    top:32px;left:24px;right:24px;
+    height:1px;
+    background:rgba(43,29,18,.18);
+    overflow:hidden;
+  }
+  .timeline-progress{
+    height:100%;
+    width:0;
+    background:var(--accent);
+    transition:width 2.2s cubic-bezier(.6,.05,.25,1);
+  }
+  .timeline-nodes{
+    display:grid;
+    grid-template-columns:repeat(5,1fr);
+    gap:8px;
+    position:relative;
+  }
+  .tl-node{
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    padding:0 8px;
+    opacity:0;
+    transform:translateY(20px);
+    transition:opacity .7s,transform .7s;
+  }
+  .tl-node.is-visible{opacity:1;transform:translateY(0)}
+  .tl-num{
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.1em;
+    margin-bottom:8px;
+    font-variant-numeric:tabular-nums;
+  }
+  .tl-dot{
+    width:14px;height:14px;
+    border-radius:50%;
+    background:var(--paper);
+    border:2px solid var(--ink-faint);
+    margin-bottom:20px;
+    transition:background .4s,border-color .4s,transform .4s;
+  }
+  .tl-node.is-visible .tl-dot{
+    background:var(--accent);
+    border-color:var(--accent);
+    transform:scale(1.15);
+  }
+  .tl-title{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-variation-settings:"opsz" 30;
+    font-size:22px;
+    color:var(--ink);
+    margin-bottom:8px;
+  }
+  .tl-desc{
+    font-family:'Newsreader',serif;
+    font-size:14px;
+    line-height:1.55;
+    color:var(--ink-soft);
+  }
+  .tl-output{
+    margin-top:16px;
+    padding-top:12px;
+    border-top:1px dashed rgba(43,29,18,.18);
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    line-height:1.6;
+    letter-spacing:.03em;
+  }
+  .tl-output strong{
+    display:block;
+    color:var(--accent);
+    font-size:10px;
+    letter-spacing:.15em;
+    text-transform:uppercase;
+    margin-bottom:4px;
+  }
+
+  /* ============ Section 3: App 原型演示 ============ */
+  .demo{
+    padding:140px 0 120px;
+    position:relative;
+  }
+  .demo-examples{
+    display:flex;
+    gap:8px;
+    margin-bottom:48px;
+    border-bottom:1px solid rgba(43,29,18,.15);
+    padding-bottom:0;
+  }
+  .example-tab{
+    background:transparent;
+    border:none;
+    border-bottom:2px solid transparent;
+    padding:14px 20px;
+    margin-bottom:-1px;
+    font-family:'Newsreader',serif;
+    font-size:16px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    transition:color .25s,border-color .25s;
+    font-style:italic;
+  }
+  .example-tab:hover{color:var(--ink)}
+  .example-tab.active{
+    color:var(--accent);
+    border-color:var(--accent);
+    font-style:normal;
+    font-weight:500;
+  }
+
+  /* 演示舞台：模拟 Android 手机框 */
+  .phone-stage{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:64px;
+    align-items:flex-start;
+    margin-bottom:48px;
+  }
+  /* 左侧：原文 + 输入分析 */
+  .source-pane{
+    padding:32px;
+    background:var(--paper-deep);
+    border-radius:2px;
+    border-left:3px solid var(--gold);
+    position:relative;
+  }
+  .source-pane-label{
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.15em;
+    text-transform:uppercase;
+    margin-bottom:16px;
+  }
+  .source-text{
+    font-family:'Newsreader',serif;
+    font-size:18px;
+    line-height:1.85;
+    color:var(--ink);
+    min-height:160px;
+    letter-spacing:.01em;
+  }
+  .source-text .term{
+    background:rgba(168,72,43,.12);
+    padding:0 4px;
+    border-bottom:1px dashed var(--accent);
+  }
+
+  /* 右侧：降维输出 + 朗读 */
+  .output-pane{
+    position:relative;
+  }
+  .analysis-bar{
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.08em;
+    padding:8px 0;
+    margin-bottom:20px;
+    border-bottom:1px solid rgba(43,29,18,.10);
+    display:flex;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  .analysis-bar .step{
+    opacity:.4;
+    transition:opacity .4s;
+  }
+  .analysis-bar .step.active{opacity:1;color:var(--accent)}
+
+  .simplified-text{
+    font-family:'Newsreader',serif;
+    font-size:24px;
+    line-height:1.85;
+    color:var(--ink);
+    letter-spacing:.005em;
+    min-height:200px;
+    position:relative;
+  }
+  .simplified-text .sentence{
+    display:block;
+    margin-bottom:4px;
+    position:relative;
+    padding:2px 0;
+    cursor:pointer;
+    transition:background .35s,color .35s;
+  }
+  .simplified-text .sentence:hover{
+    background:rgba(168,72,43,.06);
+  }
+  .simplified-text .sentence.active{
+    color:var(--accent);
+  }
+  /* 笔尖下划线 */
+  .simplified-text .sentence::after{
+    content:"";
+    position:absolute;
+    left:0;right:0;
+    bottom:-2px;
+    height:2px;
+    background:var(--accent);
+    transform:scaleX(0);
+    transform-origin:left center;
+    transition:transform .35s ease-out;
+  }
+  .simplified-text .sentence.active::after{
+    transform:scaleX(1);
+  }
+  .typewriter-cursor{
+    display:inline-block;
+    width:2px;
+    height:1em;
+    background:var(--accent);
+    margin-left:2px;
+    vertical-align:-0.15em;
+    animation:blink 1s steps(2) infinite;
+  }
+  @keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+
+  /* 朗读播放器 */
+  .player{
+    margin-top:32px;
+    padding:24px 0 0;
+    border-top:1px solid rgba(43,29,18,.15);
+    display:flex;
+    align-items:center;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  .play-btn{
+    width:52px;height:52px;
+    border-radius:50%;
+    background:var(--ink);
+    color:var(--paper);
+    border:none;
+    cursor:pointer;
+    font-family:'Fraunces',serif;
+    font-size:18px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    transition:transform .25s,background .25s;
+    flex-shrink:0;
+  }
+  .play-btn:hover{background:var(--accent);transform:scale(1.05)}
+  .play-btn[aria-pressed="true"]{background:var(--accent)}
+
+  .progress-track{
+    flex:1;
+    min-width:120px;
+    height:2px;
+    background:rgba(43,29,18,.15);
+    position:relative;
+    cursor:pointer;
+  }
+  .progress-fill{
+    height:100%;
+    width:0;
+    background:var(--accent);
+    transition:width .3s linear;
+  }
+  .progress-fill::after{
+    content:"";
+    position:absolute;
+    right:-4px;top:50%;
+    transform:translateY(-50%);
+    width:8px;height:8px;
+    background:var(--accent);
+    border-radius:50%;
+    opacity:0;
+    transition:opacity .2s;
+  }
+  .player:hover .progress-fill::after{opacity:1}
+
+  .speed-group{
+    display:flex;
+    align-items:center;
+    gap:4px;
+  }
+  .speed-label{
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.1em;
+    margin-right:4px;
+  }
+  .speed-btn{
+    background:transparent;
+    border:1px solid rgba(43,29,18,.20);
+    color:var(--ink-soft);
+    padding:5px 10px;
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    cursor:pointer;
+    border-radius:2px;
+    transition:border-color .2s,color .2s,background .2s;
+    font-variant-numeric:tabular-nums;
+  }
+  .speed-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .speed-btn.active{
+    background:var(--ink);
+    border-color:var(--ink);
+    color:var(--paper);
+  }
+
+  .voice-group{
+    display:flex;
+    gap:4px;
+  }
+  .voice-btn{
+    background:transparent;
+    border:1px solid rgba(43,29,18,.20);
+    color:var(--ink-soft);
+    padding:5px 12px;
+    font-family:'Newsreader',serif;
+    font-size:13px;
+    font-style:italic;
+    cursor:pointer;
+    border-radius:2px;
+    transition:border-color .2s,color .2s,background .2s,font-style .2s;
+  }
+  .voice-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .voice-btn.active{
+    background:var(--paper-deep);
+    border-color:var(--ink);
+    color:var(--ink);
+    font-style:normal;
+  }
+
+  .demo-meta{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding-top:24px;
+    border-top:1px solid rgba(43,29,18,.10);
+    flex-wrap:wrap;
+    gap:16px;
+  }
+  .demo-meta-text{
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.1em;
+  }
+  .replay-btn{
+    background:transparent;
+    border:none;
+    color:var(--ink-soft);
+    font-family:'Space Mono',monospace;
+    font-size:12px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    cursor:pointer;
+    padding:8px 0;
+    border-bottom:1px solid var(--ink-soft);
+    transition:color .2s,border-color .2s;
+  }
+  .replay-btn:hover{color:var(--accent);border-color:var(--accent)}
+
+  /* ============ Section 4: Landing ============ */
+  .landing{
+    padding:140px 0 100px;
+    background:var(--paper-deep);
+    border-top:1px solid rgba(43,29,18,.10);
+  }
+  .landing-grid{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:48px;
+    margin-bottom:80px;
+  }
+  .feat-block{
+    padding-top:24px;
+    border-top:2px solid var(--ink);
+  }
+  .feat-num{
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--accent);
+    letter-spacing:.2em;
+    margin-bottom:16px;
+  }
+  .feat-title{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-variation-settings:"opsz" 60;
+    font-size:30px;
+    line-height:1.15;
+    color:var(--ink);
+    margin-bottom:20px;
+  }
+  .feat-title .em{font-style:italic;color:var(--accent)}
+  .feat-list{
+    list-style:none;
+    padding:0;
+  }
+  .feat-list li{
+    padding:14px 0;
+    font-family:'Newsreader',serif;
+    font-size:16px;
+    color:var(--ink-soft);
+    line-height:1.5;
+    border-bottom:1px solid rgba(43,29,18,.10);
+  }
+  .feat-list li:last-child{border-bottom:none}
+  .feat-list li::before{
+    content:"·";
+    color:var(--accent);
+    font-weight:700;
+    margin-right:8px;
+  }
+
+  .final-cta{
+    text-align:center;
+    padding:80px 28px;
+    border-top:1px solid rgba(43,29,18,.15);
+    border-bottom:1px solid rgba(43,29,18,.15);
+  }
+  .final-cta-title{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-variation-settings:"opsz" 144;
+    font-size:clamp(36px,5vw,56px);
+    line-height:1.1;
+    letter-spacing:-.015em;
+    color:var(--ink);
+    margin-bottom:20px;
+  }
+  .final-cta-title .em{font-style:italic;color:var(--accent)}
+  .final-cta-sub{
+    font-family:'Newsreader',serif;
+    font-size:18px;
+    color:var(--ink-soft);
+    max-width:560px;
+    margin:0 auto 32px;
+    line-height:1.55;
+  }
+  .privacy-note{
+    display:block;
+    margin-top:24px;
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.1em;
+  }
+
+  footer{
+    padding:32px 0;
+    text-align:center;
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    letter-spacing:.1em;
+  }
+  footer a{color:var(--ink-soft);text-decoration:none;margin:0 8px}
+  footer a:hover{color:var(--accent)}
+
+  /* ============ 滚动渐入 ============ */
+  .fade-in{
+    opacity:0;
+    transform:translateY(24px);
+    transition:opacity .9s cubic-bezier(.6,.05,.25,1),transform .9s cubic-bezier(.6,.05,.25,1);
+  }
+  .fade-in.is-visible{opacity:1;transform:translateY(0)}
+
+  /* ============ 响应式 ============ */
+  @media (max-width:900px){
+    .phone-stage{grid-template-columns:1fr;gap:32px}
+    .landing-grid{grid-template-columns:1fr;gap:32px}
+    .timeline-nodes{grid-template-columns:1fr;gap:32px}
+    .timeline-rail{display:none}
+    .tl-dot{margin-bottom:12px}
+    .hero{padding:80px 24px 60px}
+    .hero-content{margin-left:0}
+    .hero::before{display:none}
+    .hero-meta{display:none}
+    .demo,.process,.landing{padding:80px 0}
+  }
+  @media (max-width:560px){
+    body{font-size:16px}
+    .nav{padding:14px 18px}
+    .nav-brand .en{display:none}
+    .nav-links a{padding:6px 8px;font-size:11px}
+    .simplified-text{font-size:20px}
+    .player{gap:12px}
+  }
+
+  /* ============ 减少动效 ============ */
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{
+      animation-duration:.001s !important;
+      animation-delay:0s !important;
+      transition-duration:.001s !important;
+      scroll-behavior:auto !important;
+    }
+    .hero-title .char,.hero-eyebrow,.hero-tagline,.hero-cta,.hero-meta{
+      opacity:1 !important;
+      transform:none !important;
+    }
+    .fade-in,.tl-node{opacity:1 !important;transform:none !important}
+    .timeline-progress{transition:width .001s !important}
+    .typewriter-cursor{display:none}
+    .simplified-text .sentence::after{transform:scaleX(1) !important}
+  }
+</style>
+</head>
+<body>
+<a href="#main" class="skip-link">跳到主内容</a>
+
+<header class="nav" role="banner">
+  <a href="#hero" class="nav-brand" aria-label="易读世界 首页">
+    易读世界<span class="en" aria-hidden="true">EasyRead World</span>
+  </a>
+  <nav class="nav-links" aria-label="主导航">
+    <a href="#process">开发流程</a>
+    <a href="#demo">App 演示</a>
+    <a href="#about">关于</a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <!-- ============ Section 1: Hero ============ -->
+  <section id="hero" class="hero" aria-labelledby="hero-title">
+    <div class="hero-content">
+      <p class="hero-eyebrow">Android App · 2026</p>
+      <h1 id="hero-title" class="hero-title" aria-label="易读世界"></h1>
+      <p class="hero-tagline">
+        把看不懂的专业文本，<br>
+        变成<span class="accent">小学生都读得懂的短句</span>，<br>
+        然后读给你听。
+      </p>
+      <div class="hero-cta">
+        <a href="#demo" class="btn btn-primary" aria-label="跳转到 App 原型演示">查看 App 演示</a>
+        <a href="#process" class="btn btn-ghost" aria-label="跳转到开发流程">开发过程</a>
+      </div>
+    </div>
+    <p class="hero-meta" aria-hidden="true">
+      v1.0 prototype<br>
+      Kotlin · Compose · Sherpa-ONNX
+    </p>
+  </section>
+
+  <!-- ============ Section 2: 开发流程 ============ -->
+  <section id="process" class="process" aria-labelledby="process-title">
+    <div class="container">
+      <p class="section-label fade-in">02 · Process</p>
+      <h2 id="process-title" class="section-title fade-in">从想法到<span class="em">上线</span>，<br>五个阶段。</h2>
+      <p class="section-lead fade-in">围绕"看得懂 + 听得清"两个核心，迭代出真正可用的无障碍阅读产品。每一阶段都有可交付的产出物。</p>
+
+      <div class="timeline fade-in">
+        <div class="timeline-rail" aria-hidden="true">
+          <div class="timeline-progress" id="timelineProgress"></div>
+        </div>
+        <div class="timeline-nodes" role="list">
+          <div class="tl-node" role="listitem">
+            <p class="tl-num">01</p>
+            <div class="tl-dot" aria-hidden="true"></div>
+            <h3 class="tl-title">需求</h3>
+            <p class="tl-desc">深入调研目标人群的真实困境与使用场景</p>
+            <div class="tl-output"><strong>产出</strong>用户画像 · 痛点地图 · 场景剧本</div>
+          </div>
+          <div class="tl-node" role="listitem">
+            <p class="tl-num">02</p>
+            <div class="tl-dot" aria-hidden="true"></div>
+            <h3 class="tl-title">设计</h3>
+            <p class="tl-desc">温暖阅读风视觉系统与无障碍交互稿</p>
+            <div class="tl-output"><strong>产出</strong>原型 · 设计 token · 无障碍规范</div>
+          </div>
+          <div class="tl-node" role="listitem">
+            <p class="tl-num">03</p>
+            <div class="tl-dot" aria-hidden="true"></div>
+            <h3 class="tl-title">开发</h3>
+            <p class="tl-desc">Kotlin + Compose + Sherpa-ONNX 本地 TTS</p>
+            <div class="tl-output"><strong>产出</strong>核心引擎 · LLM 接入 · 朗读播放器</div>
+          </div>
+          <div class="tl-node" role="listitem">
+            <p class="tl-num">04</p>
+            <div class="tl-dot" aria-hidden="true"></div>
+            <h3 class="tl-title">测试</h3>
+            <p class="tl-desc">真实视障与阅读障碍用户可用性测试</p>
+            <div class="tl-output"><strong>产出</strong>测试报告 · 可读性评分 · 修复清单</div>
+          </div>
+          <div class="tl-node" role="listitem">
+            <p class="tl-num">05</p>
+            <div class="tl-dot" aria-hidden="true"></div>
+            <h3 class="tl-title">上线</h3>
+            <p class="tl-desc">面向目标人群发布 APK 与应用市场分发</p>
+            <div class="tl-output"><strong>产出</strong>正式 APK · 用户反馈 · 持续运营</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Section 3: App 原型演示 ============ -->
+  <section id="demo" class="demo" aria-labelledby="demo-title">
+    <div class="container">
+      <p class="section-label fade-in">03 · Live Demo</p>
+      <h2 id="demo-title" class="section-title fade-in">粘贴 · <span class="em">降维</span> · 朗读。</h2>
+      <p class="section-lead fade-in">三种真实场景示例，模拟 App 内一次完整的转换流程。点击播放按钮，看句子如何被"笔尖"逐句划过。</p>
+
+      <div class="demo-examples fade-in" role="group" aria-label="示例切换">
+        <button class="example-tab active" data-example="medical" aria-pressed="true">医嘱</button>
+        <button class="example-tab" data-example="rent" aria-pressed="false">租房合同</button>
+        <button class="example-tab" data-example="law" aria-pressed="false">法律条款</button>
+      </div>
+
+      <div class="phone-stage fade-in">
+        <!-- 左侧：原文 -->
+        <div class="source-pane">
+          <p class="source-pane-label">▸ 原文 · Source</p>
+          <div class="source-text" id="sourceText" aria-live="polite"></div>
+        </div>
+
+        <!-- 右侧：降维输出 + 朗读 -->
+        <div class="output-pane">
+          <div class="analysis-bar" id="analysisBar" aria-hidden="true">
+            <span class="step" data-step="1">▸ 句法分析…</span>
+            <span class="step" data-step="2">▸ 术语识别…</span>
+            <span class="step" data-step="3">▸ 生活化重写…</span>
+          </div>
+          <div class="simplified-text" id="simplifiedText" aria-live="polite" aria-atomic="false"></div>
+
+          <div class="player">
+            <button class="play-btn" id="playBtn" aria-label="播放或暂停朗读" aria-pressed="false">▶</button>
+            <div class="progress-track" id="progressTrack" role="slider" aria-label="朗读进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="speed-group" role="group" aria-label="倍速选择">
+              <span class="speed-label">SPEED</span>
+              <button class="speed-btn" data-speed="0.75" aria-pressed="false">0.75×</button>
+              <button class="speed-btn active" data-speed="1" aria-pressed="true">1×</button>
+              <button class="speed-btn" data-speed="1.25" aria-pressed="false">1.25×</button>
+              <button class="speed-btn" data-speed="1.5" aria-pressed="false">1.5×</button>
+              <button class="speed-btn" data-speed="2" aria-pressed="false">2×</button>
+            </div>
+            <div class="voice-group" role="group" aria-label="音色选择">
+              <button class="voice-btn active" data-voice="female" aria-pressed="true">女声</button>
+              <button class="voice-btn" data-voice="male" aria-pressed="false">男声</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="demo-meta fade-in">
+        <p class="demo-meta-text">本地神经网络 TTS · 离线可用 · 0.75×–2× 五档倍速</p>
+        <button class="replay-btn" id="replayBtn" aria-label="重新演示完整流程">↻ 重新演示</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Section 4: Landing ============ -->
+  <section id="about" class="landing" aria-labelledby="about-title">
+    <div class="container">
+      <p class="section-label fade-in">04 · About</p>
+      <h2 id="about-title" class="section-title fade-in">让<span class="em">每个人</span>，<br>都能读懂世界。</h2>
+      <p class="section-lead fade-in">信息平权，从一次降维开始。我们用本地神经网络 TTS 与云端 LLM，把专业门槛降到最低。</p>
+
+      <div class="landing-grid">
+        <div class="feat-block fade-in">
+          <p class="feat-num">01 / 用户</p>
+          <h3 class="feat-title">为<span class="em">谁</span>而做</h3>
+          <ul class="feat-list">
+            <li>视障人士</li>
+            <li>阅读障碍症患者</li>
+            <li>低学历人群</li>
+            <li>在华外国人</li>
+          </ul>
+        </div>
+        <div class="feat-block fade-in">
+          <p class="feat-num">02 / 痛点</p>
+          <h3 class="feat-title">解决<span class="em">什么</span></h3>
+          <ul class="feat-list">
+            <li>医嘱看不懂，错用药</li>
+            <li>租房合同被坑条款</li>
+            <li>法律维权不知从何入手</li>
+            <li>说明书读不下去</li>
+          </ul>
+        </div>
+        <div class="feat-block fade-in">
+          <p class="feat-num">03 / 能力</p>
+          <h3 class="feat-title">提供<span class="em">什么</span></h3>
+          <ul class="feat-list">
+            <li>三年级水平文本降维</li>
+            <li>本地 TTS 离线朗读</li>
+            <li>五档倍速 / 双音色</li>
+            <li>逐句高亮 + 点击跳转</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="final-cta fade-in">
+        <h3 class="final-cta-title">让阅读<span class="em">不再有门槛</span>。</h3>
+        <p class="final-cta-sub">免登免后端，用户自带 LLM API Key。所有数据本地存储，隐私可控。</p>
+        <a href="#demo" class="btn btn-primary" aria-label="返回 App 演示">立即体验</a>
+        <span class="privacy-note">🔒 您的输入直接发送给您配置的 LLM Provider，不经过我们的服务器</span>
+      </div>
+    </div>
+
+    <footer role="contentinfo">
+      <div class="container">
+        © 2026 易读世界 EasyRead World
+        <a href="#" aria-label="查看隐私政策">隐私</a>
+        <a href="#" aria-label="查看服务条款">服务</a>
+        <a href="#" aria-label="联系我们">联系</a>
+      </div>
+    </footer>
+  </section>
+
+</main>
+
+<script>
+(function(){
+  'use strict';
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ====== 示例数据：无配图，纯文字 ====== */
+  const EXAMPLES = {
+    medical:{
+      source:'患者主诉头痛伴<span class="term">恶心呕吐</span>，CT 示<span class="term">鞍上池占位性病变</span>，建议行 <span class="term">MRI 增强扫描</span>进一步明确诊断，必要时<span class="term">活检</span>。',
+      sentences:[
+        '病人头痛想吐。',
+        '拍片看到脑袋里有东西。',
+        '医生建议做核磁共振看清楚。',
+        '可能需要取一点组织化验。'
+      ]
+    },
+    rent:{
+      source:'<span class="term">承租方</span>应于<span class="term">租赁期届满</span>时返还<span class="term">租赁物</span>，返还时应符合按照约定方法或租赁物性质使用后的状态，如有损坏应负<span class="term">赔偿责任</span>。',
+      sentences:[
+        '租期到了要把房子还回去。',
+        '还的时候房子要和原来差不多。',
+        '弄坏了要赔钱。'
+      ]
+    },
+    law:{
+      source:'<span class="term">甲方违约</span>致使本合同目的不能实现的，<span class="term">乙方有权解除合同</span>并请求甲方承担<span class="term">违约责任</span>，赔偿由此造成的损失。',
+      sentences:[
+        '如果甲方不守约，合同就做不下去了。',
+        '乙方可以解除合同。',
+        '甲方要赔乙方损失。'
+      ]
+    }
+  };
+  let currentExample = 'medical';
+  let currentSpeed = 1;
+  let currentVoice = 'female';
+
+  /* ====== 1. Hero 标题逐字入场 ====== */
+  function initHeroTitle(){
+    const title = document.getElementById('hero-title');
+    if(!title) return;
+    /* 标题分两段："易读" + "世界"（"世界"用斜体强调色） */
+    const parts = [
+      {chars:'易读', cls:''},
+      {chars:'世界', cls:'em'}
+    ];
+    let delay = 0.4;
+    parts.forEach(part=>{
+      part.chars.split('').forEach(ch=>{
+        const span = document.createElement('span');
+        span.className = 'char' + (part.cls ? ' ' + part.cls : '');
+        span.textContent = ch;
+        span.style.animationDelay = delay + 's';
+        title.appendChild(span);
+        delay += 0.12;
+      });
+    });
+  }
+
+  /* ====== 2. IntersectionObserver 渐入 ====== */
+  function initFadeIn(){
+    const els = document.querySelectorAll('.fade-in, .tl-node');
+    if(prefersReduced){
+      els.forEach(el=>el.classList.add('is-visible'));
+      drawTimelineFull();
+      return;
+    }
+    const io = new IntersectionObserver((entries)=>{
+      entries.forEach(entry=>{
+        if(entry.isIntersecting){
+          if(entry.target.classList.contains('tl-node')){
+            const idx = Array.from(entry.target.parentElement.children).indexOf(entry.target);
+            entry.target.style.transitionDelay = (idx*0.18)+'s';
+            entry.target.classList.add('is-visible');
+            const total = entry.target.parentElement.children.length;
+            const progress = ((idx+1)/total)*100;
+            document.getElementById('timelineProgress').style.width = progress+'%';
+          }else{
+            entry.target.classList.add('is-visible');
+          }
+          io.unobserve(entry.target);
+        }
+      });
+    },{threshold:0.15, rootMargin:'0px 0px -60px 0px'});
+    els.forEach(el=>io.observe(el));
+  }
+  function drawTimelineFull(){
+    const bar = document.getElementById('timelineProgress');
+    if(bar) bar.style.width = '100%';
+  }
+
+  /* ====== 3. AI 降维打字机 + 句子包装 ====== */
+  let typewriterTimer = null;
+  let analysisTimer = null;
+  function runTypewriter(){
+    const box = document.getElementById('simplifiedText');
+    if(!box) return;
+    if(typewriterTimer){ clearInterval(typewriterTimer); typewriterTimer=null; }
+    if(analysisTimer){ clearTimeout(analysisTimer); analysisTimer=null; }
+
+    box.innerHTML = '';
+    const sentences = EXAMPLES[currentExample].sentences;
+
+    // 步骤分析动画
+    runAnalysis();
+
+    // 构造完整文本（含句子分隔标记）
+    let fullText = '';
+    const sentenceMap = []; // 每个字符对应句子索引
+    sentences.forEach((s, idx)=>{
+      s.split('').forEach(ch=>{
+        fullText += ch;
+        sentenceMap.push(idx);
+      });
+      fullText += '\n';
+      sentenceMap.push(-1); // 换行符
+    });
+
+    let i = 0;
+    let currentSentenceSpan = null;
+    let currentSentenceIdx = -1;
+
+    if(prefersReduced){
+      sentences.forEach(s=>{
+        const span = document.createElement('span');
+        span.className = 'sentence';
+        span.textContent = s;
+        box.appendChild(span);
+      });
+      return;
+    }
+
+    typewriterTimer = setInterval(()=>{
+      if(i >= fullText.length){
+        clearInterval(typewriterTimer);
+        typewriterTimer = null;
+        return;
+      }
+      const ch = fullText.charAt(i);
+      const sIdx = sentenceMap[i];
+      if(sIdx !== currentSentenceIdx){
+        // 新句子开始
+        currentSentenceSpan = document.createElement('span');
+        currentSentenceSpan.className = 'sentence';
+        currentSentenceSpan.setAttribute('data-idx', sIdx);
+        currentSentenceSpan.setAttribute('tabindex', '0');
+        currentSentenceSpan.setAttribute('role', 'button');
+        currentSentenceSpan.setAttribute('aria-label', '从第 ' + (sIdx+1) + ' 句开始朗读');
+        // 键盘可达：Enter / Space 触发跳转
+        currentSentenceSpan.addEventListener('click', ()=>jumpToSentence(sIdx));
+        currentSentenceSpan.addEventListener('keydown', (e)=>{
+          if(e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){
+            e.preventDefault();
+            jumpToSentence(sIdx);
+          }
+        });
+        box.appendChild(currentSentenceSpan);
+        currentSentenceIdx = sIdx;
+      }
+      if(ch === '\n'){
+        currentSentenceSpan.appendChild(document.createElement('br'));
+      }else{
+        currentSentenceSpan.appendChild(document.createTextNode(ch));
+      }
+      i++;
+    }, 90);
+
+    // 打字机结束后追加光标
+    setTimeout(()=>{
+      if(typewriterTimer){ // 仍在播放
+        const cursor = document.createElement('span');
+        cursor.className = 'typewriter-cursor';
+        cursor.setAttribute('aria-hidden', 'true');
+        box.appendChild(cursor);
+      }
+    }, 200);
+  }
+
+  function runAnalysis(){
+    const steps = document.querySelectorAll('#analysisBar .step');
+    steps.forEach(s=>s.classList.remove('active'));
+    if(prefersReduced){
+      steps.forEach(s=>s.classList.add('active'));
+      return;
+    }
+    let i = 0;
+    function next(){
+      if(i >= steps.length) return;
+      steps.forEach(s=>s.classList.remove('active'));
+      steps[i].classList.add('active');
+      i++;
+      analysisTimer = setTimeout(next, 600);
+    }
+    next();
+  }
+
+  /* ====== 4. 朗读播放器（模拟） ====== */
+  let playerTimer = null;
+  let playerIdx = 0;
+  let isPlaying = false;
+
+  function buildSentences(){
+    return EXAMPLES[currentExample].sentences;
+  }
+  function highlightSentence(idx){
+    document.querySelectorAll('.simplified-text .sentence').forEach(el=>{
+      el.classList.remove('active');
+    });
+    const target = document.querySelector('.simplified-text .sentence[data-idx="'+idx+'"]');
+    if(target){
+      target.classList.add('active');
+      target.scrollIntoView({behavior:prefersReduced?'auto':'smooth', block:'nearest'});
+    }
+  }
+  function updateProgress(idx, total){
+    const pct = total > 0 ? ((idx+1)/total)*100 : 0;
+    document.getElementById('progressFill').style.width = pct+'%';
+    document.getElementById('progressTrack').setAttribute('aria-valuenow', Math.round(pct));
+  }
+  function resetPlayer(){
+    if(playerTimer){ clearInterval(playerTimer); playerTimer=null; }
+    isPlaying = false;
+    playerIdx = 0;
+    document.querySelectorAll('.simplified-text .sentence').forEach(el=>el.classList.remove('active'));
+    document.getElementById('progressFill').style.width = '0%';
+    document.getElementById('progressTrack').setAttribute('aria-valuenow', 0);
+    const btn = document.getElementById('playBtn');
+    btn.textContent = '▶';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.setAttribute('aria-label', '播放朗读');
+  }
+  function togglePlay(){
+    if(isPlaying){ pausePlay(); }
+    else{ startPlay(); }
+  }
+  function startPlay(){
+    const sents = buildSentences();
+    if(sents.length === 0) return;
+    isPlaying = true;
+    const btn = document.getElementById('playBtn');
+    btn.textContent = '⏸';
+    btn.setAttribute('aria-pressed', 'true');
+    btn.setAttribute('aria-label', '暂停朗读');
+    // 从当前句开始（如已播完则从头开始）
+    if(playerIdx >= sents.length){ playerIdx = 0; }
+    const interval = 2200 / currentSpeed;
+    function tick(){
+      if(playerIdx >= sents.length){
+        resetPlayer();
+        return;
+      }
+      highlightSentence(playerIdx);
+      updateProgress(playerIdx, sents.length);
+      playerIdx++;
+    }
+    tick();
+    playerTimer = setInterval(tick, interval);
+  }
+  function pausePlay(){
+    isPlaying = false;
+    if(playerTimer){ clearInterval(playerTimer); playerTimer=null; }
+    const btn = document.getElementById('playBtn');
+    btn.textContent = '▶';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.setAttribute('aria-label', '继续朗读');
+  }
+  function jumpToSentence(idx){
+    playerIdx = idx;
+    if(!isPlaying){
+      // 仅高亮，不自动播放
+      highlightSentence(idx);
+      const sents = buildSentences();
+      updateProgress(idx, sents.length);
+    }else{
+      // 重启播放
+      if(playerTimer){ clearInterval(playerTimer); }
+      const sents = buildSentences();
+      const interval = 2200 / currentSpeed;
+      function tick(){
+        if(playerIdx >= sents.length){
+          resetPlayer();
+          return;
+        }
+        highlightSentence(playerIdx);
+        updateProgress(playerIdx, sents.length);
+        playerIdx++;
+      }
+      tick();
+      playerTimer = setInterval(tick, interval);
+    }
+  }
+
+  /* ====== 5. 示例切换 ====== */
+  function switchExample(key){
+    if(!EXAMPLES[key]) return;
+    currentExample = key;
+    document.getElementById('sourceText').innerHTML = EXAMPLES[key].source;
+    if(typewriterTimer){ clearInterval(typewriterTimer); typewriterTimer=null; }
+    if(analysisTimer){ clearTimeout(analysisTimer); analysisTimer=null; }
+    document.getElementById('simplifiedText').innerHTML = '';
+    resetPlayer();
+    document.querySelectorAll('.example-tab').forEach(b=>{
+      const active = b.dataset.example === key;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    setTimeout(runTypewriter, 500);
+  }
+
+  /* ====== 6. 倍速/音色切换 ====== */
+  function setSpeed(speed, btn){
+    currentSpeed = parseFloat(speed);
+    document.querySelectorAll('.speed-btn').forEach(b=>{
+      const active = b === btn;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    if(isPlaying){
+      pausePlay();
+      startPlay();
+    }
+  }
+  function setVoice(voice, btn){
+    currentVoice = voice;
+    document.querySelectorAll('.voice-btn').forEach(b=>{
+      const active = b === btn;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    // Mock：仅视觉切换，无实际音频变化
+  }
+
+  /* ====== 7. 重新演示 ====== */
+  function replayAll(){
+    switchExample(currentExample);
+    const demo = document.getElementById('demo');
+    if(demo){
+      demo.scrollIntoView({behavior:prefersReduced?'auto':'smooth', block:'start'});
+    }
+  }
+
+  /* ====== 8. 进度条点击跳转 ====== */
+  function initProgressClick(){
+    const track = document.getElementById('progressTrack');
+    if(!track) return;
+    track.addEventListener('click', (e)=>{
+      const rect = track.getBoundingClientRect();
+      const pct = (e.clientX - rect.left) / rect.width;
+      const sents = buildSentences();
+      const idx = Math.min(Math.floor(pct * sents.length), sents.length - 1);
+      jumpToSentence(idx);
+    });
+    track.addEventListener('keydown', (e)=>{
+      const sents = buildSentences();
+      if(e.key === 'ArrowLeft' || e.key === 'ArrowDown'){
+        e.preventDefault();
+        if(playerIdx > 0) jumpToSentence(playerIdx - 1);
+      }else if(e.key === 'ArrowRight' || e.key === 'ArrowUp'){
+        e.preventDefault();
+        if(playerIdx < sents.length - 1) jumpToSentence(playerIdx + 1);
+      }else if(e.key === 'Home'){
+        e.preventDefault();
+        jumpToSentence(0);
+      }else if(e.key === 'End'){
+        e.preventDefault();
+        jumpToSentence(sents.length - 1);
+      }
+    });
+  }
+
+  /* ====== 9. 事件绑定 ====== */
+  function bindEvents(){
+    document.getElementById('playBtn').addEventListener('click', togglePlay);
+    document.getElementById('replayBtn').addEventListener('click', replayAll);
+    document.querySelectorAll('.example-tab').forEach(btn=>{
+      btn.addEventListener('click', ()=>switchExample(btn.dataset.example));
+    });
+    document.querySelectorAll('.speed-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>setSpeed(btn.dataset.speed, btn));
+    });
+    document.querySelectorAll('.voice-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>setVoice(btn.dataset.voice, btn));
+    });
+    initProgressClick();
+  }
+
+  /* ====== 10. 初始化 ====== */
+  function init(){
+    initHeroTitle();
+    initFadeIn();
+    switchExample('medical');
+    bindEvents();
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  }else{
+    init();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,379 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: omnilog-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+        reservations:
+          memory: 128m
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: omnilog-elasticsearch
+    environment:
+      - discovery.type=single-node  # 单节点模式
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      # 集群模式（取消注释启用，需移除 discovery.type=single-node）:
+      # - cluster.name=omnilog-es-cluster
+      # - node.name=es-node-1
+      # - discovery.seed_hosts=es-node-1
+      # - cluster.initial_master_nodes=es-node-1
+    ports:
+      - "${ES_PORT:-9200}:9200"
+      - "${ES_TRANSPORT_PORT:-9300}:9300"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+        reservations:
+          memory: 1g
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: omnilog-neo4j
+    environment:
+      - NEO4J_AUTH=${NEO4J_AUTH:-neo4j/password}
+      - NEO4J_dbms_backup_enabled=true
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j-data:/data
+      - ./backups/neo4j:/backups  # 备份目录（宿主机挂载）
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+        reservations:
+          memory: 1g
+
+  minio:
+    image: minio/minio:latest
+    container_name: omnilog-minio
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+        reservations:
+          memory: 256m
+
+  postgres:
+    # 存储精简升级：使用 pgvector 官方镜像以支持向量检索（替代 ChromaDB）
+    image: pgvector/pgvector:pg15
+    container_name: omnilog-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-omnilog}
+      - POSTGRES_USER=${POSTGRES_USER:-omnilog}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-omnilog123}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omnilog}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
+        reservations:
+          memory: 128m
+
+  # [DEPRECATED] 存储精简升级：报告存储已迁移到 PostgreSQL JSONB。
+  # 保留此服务用于兼容期和数据迁移兜底，确认无依赖后可下线。
+  mongodb:
+    image: mongo:6
+    container_name: omnilog-mongodb
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-admin}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+        reservations:
+          memory: 256m
+
+  # [DEPRECATED] 存储精简升级：向量存储已迁移到 PostgreSQL + pgvector。
+  # 保留此服务用于兼容期和数据迁移兜底，确认无依赖后可下线。
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: omnilog-chromadb
+    environment:
+      - ANONYMIZED_TELEMETRY=False
+    ports:
+      - "${CHROMA_PORT:-8001}:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    networks:
+      - omnilog-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '1.0'
+        reservations:
+          memory: 512m
+
+  omnilog-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omnilog-api
+    environment:
+      # [修复#55] 认证配置: 移除硬编码默认密钥, 必须通过 .env 提供.
+      # 应用启动时会检测空值并拒绝启动 (见 utils/auth.py AuthConfig.load_from_env).
+      - "JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in .env}"
+      - "API_KEYS=${API_KEYS:?API_KEYS must be set in .env}"
+      - REDIS_URL=redis://redis:6379/0
+      - ES_HOSTS=http://elasticsearch:9200
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - POSTGRES_DSN=postgresql://omnilog:omnilog123@postgres:5432/omnilog
+      - MONGO_URI=mongodb://admin:admin@mongodb:27017
+      - MONGO_DB=omnilog
+      - MONGO_COLLECTION=daily_reports
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - LOCAL_LLM_ENDPOINT=${LOCAL_LLM_ENDPOINT:-http://localhost:8000/v1}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-local}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-Qwen2.5-72B-Instruct}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-omnilog-api}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318/v1/traces}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      # [修复#54] mongodb/chromadb 已标记 DEPRECATED, 代码已具备降级路径,
+      # 不再阻塞 API 启动. 如需启用兼容期服务, 手动启动即可.
+    networks:
+      - omnilog-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+        reservations:
+          memory: 512m
+
+  omnilog-pipeline:
+    build: .
+    container_name: omnilog-pipeline
+    command: python -m bytewax.run pipelines.standardization:flow
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - omnilog-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+
+  omnilog-es-writer:
+    build: .
+    container_name: omnilog-es-writer
+    command: python -m pipelines.write_consumers es_writer
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - omnilog-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+
+  omnilog-chroma-writer:
+    # [DEPRECATED] 存储精简升级：已由 omnilog-pgvector-writer 替代。
+    # 保留此服务用于兼容期，确认无依赖后可下线。
+    build: .
+    container_name: omnilog-chroma-writer
+    command: python -m pipelines.write_consumers chroma_writer
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    networks:
+      - omnilog-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '1.0'
+
+  omnilog-pgvector-writer:
+    # 存储精简升级：向量写入主路径（替代 omnilog-chroma-writer）
+    build: .
+    container_name: omnilog-pgvector-writer
+    command: python -m pipelines.write_consumers pgvector_writer
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - omnilog-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+
+  omnilog-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: omnilog-dashboard
+    environment:
+      - API_BASE_URL=http://omnilog-api:8000
+      # [修复#55] Dashboard API Key: 开发环境保留默认值, 生产环境必须在 .env 中覆盖.
+      - "DASHBOARD_API_KEY=${DASHBOARD_API_KEY:?DASHBOARD_API_KEY must be set in .env}"
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    depends_on:
+      - omnilog-api
+    networks:
+      - omnilog-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+        reservations:
+          memory: 128m
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: omnilog-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "${OTEL_PORT:-4318}:4318"
+    networks:
+      - omnilog-net
+
+networks:
+  omnilog-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  es-data:
+  neo4j-data:
+  minio-data:
+  postgres-data:
+  mongo-data:
+  chroma-data:

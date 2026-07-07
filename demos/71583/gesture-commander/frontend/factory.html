@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智慧工厂 · 数字孪生</title>
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#080c14;font-family:'PingFang SC','Microsoft YaHei',monospace;color:#c8d6e5}
+
+  .dashboard{
+    display:grid;width:100%;height:100%;
+    grid-template-columns:250px 1fr 260px;
+    grid-template-rows:56px 1fr 130px;
+    grid-template-areas:"hdr hdr hdr" "left main right" "bot bot bot";
+    gap:6px;padding:6px;
+  }
+
+  /* 顶栏 */
+  .header{
+    grid-area:hdr;display:flex;align-items:center;justify-content:space-between;
+    padding:0 20px;background:linear-gradient(180deg,rgba(13,19,32,0.95),rgba(10,15,25,0.9));
+    border:1px solid #1a2540;border-radius:6px;
+  }
+  .header .logo{font-size:18px;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00b4d8,#48cae4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  .header .info{display:flex;gap:24px;font-size:11px;color:#6b7d99}
+  .header .info span{color:#a0b4cc}
+  .header .status-dot{width:7px;height:7px;border-radius:50%;background:#00e676;box-shadow:0 0 8px #00e676;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+
+  /* 通用面板 */
+  .panel{
+    background:rgba(13,19,32,0.9);border:1px solid #1a2540;border-radius:6px;
+    overflow:hidden;display:flex;flex-direction:column;
+  }
+  .panel-title{
+    font-size:12px;font-weight:600;letter-spacing:2px;color:#00b4d8;
+    padding:10px 14px;border-bottom:1px solid #1a2540;
+    display:flex;align-items:center;gap:8px;
+  }
+  .panel-title::before{content:'';width:3px;height:14px;background:#00b4d8;border-radius:2px}
+  .panel-body{flex:1;padding:10px 14px;overflow-y:auto;font-size:11px}
+
+  /* 左侧面板 - 设备状态 */
+  .left{grid-area:left}
+  .equip-item{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 10px;margin-bottom:3px;border-radius:4px;
+    border:1px solid transparent;cursor:default;transition:all .3s;
+  }
+  .equip-item .name{color:#a0b4cc;letter-spacing:1px}
+  .equip-item .val{font-size:10px;color:#6b7d99}
+  .equip-item.normal{border-left:3px solid #00e676}
+  .equip-item.warning{border-left:3px solid #ffd600}
+  .equip-item.alarm{border-left:3px solid #ff1744}
+  .equip-item.hovered{border-color:#00b4d8!important;background:rgba(0,180,216,0.08);box-shadow:0 0 10px rgba(0,180,216,0.15)}
+  .equip-item.selected{border-color:#ffd700!important;background:rgba(255,215,0,0.08);box-shadow:0 0 12px rgba(255,215,0,0.2)}
+  .status-badge{font-size:9px;padding:2px 8px;border-radius:10px;letter-spacing:1px}
+  .status-badge.normal{background:rgba(0,230,118,0.15);color:#00e676}
+  .status-badge.warning{background:rgba(255,214,0,0.15);color:#ffd600}
+  .status-badge.alarm{background:rgba(255,23,68,0.15);color:#ff1744}
+
+  /* 中间 - 产线可视化 */
+  .main{grid-area:main}
+  .main .panel-body{padding:0;position:relative}
+  #prodCanvas{width:100%;height:100%;display:block}
+
+  /* 右侧面板 - KPI */
+  .right{grid-area:right}
+  .kpi-card{
+    background:rgba(10,15,25,0.6);border:1px solid #1a2540;border-radius:6px;
+    padding:12px;margin-bottom:8px;text-align:center;
+  }
+  .kpi-card .kpi-val{font-size:28px;font-weight:700;color:#00b4d8;letter-spacing:2px}
+  .kpi-card .kpi-label{font-size:10px;color:#6b7d99;letter-spacing:2px;margin-top:4px}
+  .kpi-card .kpi-trend{font-size:10px;margin-top:4px}
+  .kpi-card .kpi-trend.up{color:#00e676}
+  .kpi-card .kpi-trend.down{color:#ff1744}
+  .kpi-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+
+  /* 底部 - 告警 */
+  .bottom{grid-area:bot}
+  .alert-item{
+    display:flex;align-items:center;gap:10px;padding:5px 10px;
+    border-bottom:1px solid rgba(26,37,64,0.5);font-size:10px;
+  }
+  .alert-item .level{font-weight:700;min-width:40px}
+  .alert-item .level.warn{color:#ffd600}
+  .alert-item .level.err{color:#ff1744}
+  .alert-item .msg{color:#a0b4cc;flex:1}
+  .alert-item .time{color:#6b7d99}
+
+  /* 浮动详情面板 */
+  .detail-panel{
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    z-index:50;pointer-events:none;opacity:0;transition:opacity .4s;
+  }
+  .detail-panel.show{opacity:1}
+  .detail-panel .card{
+    background:rgba(8,14,22,0.97);border:1px solid #ffd700;border-radius:12px;
+    padding:24px 28px;min-width:300px;box-shadow:0 0 40px rgba(255,215,0,0.15);
+    backdrop-filter:blur(20px);
+  }
+  .detail-panel .dname{font-size:18px;font-weight:700;color:#ffd700;letter-spacing:2px;margin-bottom:16px}
+  .detail-panel .drow{display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:#a0b4cc;border-bottom:1px solid rgba(26,37,64,0.5)}
+  .detail-panel .drow .dv{color:#00b4d8}
+
+  /* 光标 */
+  .cursor-dot{
+    position:fixed;z-index:100;pointer-events:none;
+    width:16px;height:16px;border-radius:50%;
+    border:2px solid #00b4d8;transform:translate(-50%,-50%);
+    box-shadow:0 0 15px rgba(0,180,216,0.5),0 0 30px rgba(0,180,216,0.2);
+    transition:border-color .3s,box-shadow .3s;opacity:0;
+  }
+  .cursor-dot.active{opacity:1}
+  .cursor-dot.fist{border-color:#ffd700;box-shadow:0 0 20px rgba(255,215,0,0.6),0 0 40px rgba(255,215,0,0.3)}
+  .cursor-dot.palm{border-color:#ff1744;box-shadow:0 0 20px rgba(255,23,68,0.5)}
+
+  /* 连接 */
+  .conn-dot{position:fixed;top:14px;right:20px;z-index:10;width:7px;height:7px;border-radius:50%;background:#ef4444;transition:background .5s;pointer-events:none}
+  .conn-dot.online{background:#10b981}
+
+  .hint-bar{position:fixed;bottom:142px;left:50%;z-index:10;transform:translateX(-50%);font-size:12px;letter-spacing:2px;color:rgba(255,255,255,0.25);pointer-events:none}
+
+  /* 摄像头调试画面 */
+  .cam-debug {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 240px;
+    height: 180px;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    object-fit: cover;
+    pointer-events: none;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+
+<div class="dashboard">
+  <!-- 顶栏 -->
+  <div class="header">
+    <div class="logo">智慧工厂 · 数字孪生</div>
+    <div class="info">
+      <span>产线-A</span> | <span id="clock">--</span> |
+      <span class="status-dot"></span> 系统在线
+    </div>
+  </div>
+
+  <!-- 左侧 - 设备状态 -->
+  <div class="panel left">
+    <div class="panel-title">设备状态</div>
+    <div class="panel-body" id="equipList"></div>
+  </div>
+
+  <!-- 中间 - 产线 -->
+  <div class="panel main">
+    <div class="panel-title">产线可视化 · 俯视图</div>
+    <div class="panel-body"><canvas id="prodCanvas"></canvas></div>
+  </div>
+
+  <!-- 右侧 - KPI -->
+  <div class="panel right">
+    <div class="panel-title">生产指标</div>
+    <div class="panel-body">
+      <div class="kpi-card"><div class="kpi-val" id="kpiOutput">1,247</div><div class="kpi-label">当日产量 (件)</div><div class="kpi-trend up">+12.3%</div></div>
+      <div class="kpi-row">
+        <div class="kpi-card"><div class="kpi-val" id="kpiOEE">87.3</div><div class="kpi-label">OEE (%)</div><div class="kpi-trend up">+2.1%</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="kpiRate">98.2</div><div class="kpi-label">良品率 (%)</div><div class="kpi-trend down">-0.3%</div></div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-card"><div class="kpi-val" id="kpiPower">342</div><div class="kpi-label">能耗 (kWh)</div><div class="kpi-trend down">-5.1%</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="kpiRuntime">22.5</div><div class="kpi-label">运行时长 (h)</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部 - 告警 -->
+  <div class="panel bottom">
+    <div class="panel-title">告警日志</div>
+    <div class="panel-body" id="alertList" style="display:flex;flex-direction:column"></div>
+  </div>
+</div>
+
+<!-- 浮动详情 -->
+<div class="detail-panel" id="detailPanel">
+  <div class="card">
+    <div class="dname" id="dName">--</div>
+    <div class="drow"><span>状态</span><span class="dv" id="dStatus">--</span></div>
+    <div class="drow"><span>运行温度</span><span class="dv" id="dTemp">--</span></div>
+    <div class="drow"><span>振动频率</span><span class="dv" id="dVib">--</span></div>
+    <div class="drow"><span>今日加工</span><span class="dv" id="dCount">--</span></div>
+    <div class="drow"><span>上次维护</span><span class="dv" id="dMaint">--</span></div>
+  </div>
+</div>
+
+<div class="cursor-dot" id="cursor"></div>
+<div class="conn-dot" id="connDot"></div>
+<div class="hint-bar" id="hint">食指指向 · 浏览 | 握拳 · 选中设备 | 张开手掌 · 复位</div>
+
+<script>
+// ============================================================
+// 时钟
+// ============================================================
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleDateString('zh-CN') + ' ' + now.toTimeString().slice(0,8);
+}
+updateClock(); setInterval(updateClock, 1000);
+
+// ============================================================
+// 设备数据
+// ============================================================
+const EQUIPMENTS = [
+  { id:'raw', name:'原料仓', type:'storage', status:'normal', temp:25, vib:0.2, count:3412, maint:'2026-06-28' },
+  { id:'cnc1', name:'数控机床 1#', type:'machine', status:'normal', temp:62, vib:1.8, count:1204, maint:'2026-06-25' },
+  { id:'cnc2', name:'数控机床 2#', type:'machine', status:'normal', temp:58, vib:1.5, count:1187, maint:'2026-06-20' },
+  { id:'robot', name:'机械臂 A', type:'robot', status:'warning', temp:71, vib:3.2, count:1102, maint:'2026-06-15' },
+  { id:'qc', name:'质检站', type:'qc', status:'normal', temp:30, vib:0.4, count:1247, maint:'2026-06-30' },
+  { id:'pack', name:'包装线', type:'packaging', status:'normal', temp:28, vib:0.6, count:1230, maint:'2026-06-29' },
+];
+
+const ALERTS = [
+  { level:'err', msg:'机械臂A 振动超阈值', time:'14:28:15' },
+  { level:'warn', msg:'质检站 检测速度下降', time:'14:25:03' },
+  { level:'warn', msg:'数控机床2# 刀具寿命预警', time:'13:52:40' },
+  { level:'err', msg:'包装线 传感器通信中断', time:'12:10:22' },
+  { level:'warn', msg:'原料仓 库存低于安全线', time:'11:45:08' },
+];
+
+// ============================================================
+// 渲染设备列表
+// ============================================================
+function renderEquipList() {
+  const container = document.getElementById('equipList');
+  container.innerHTML = EQUIPMENTS.map((e, i) => {
+    const cls = e.status === 'alarm' ? 'alarm' : e.status === 'warning' ? 'warning' : 'normal';
+    const badge = e.status === 'alarm' ? '故障' : e.status === 'warning' ? '预警' : '正常';
+    const badgeCls = e.status === 'alarm' ? 'alarm' : e.status === 'warning' ? 'warning' : 'normal';
+    return `<div class="equip-item ${cls}" data-idx="${i}" id="eq${i}">
+      <span class="name">${e.name}</span>
+      <span class="status-badge ${badgeCls}">${badge}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderAlerts() {
+  const container = document.getElementById('alertList');
+  container.innerHTML = ALERTS.map(a =>
+    `<div class="alert-item">
+      <span class="level ${a.level==='err'?'err':'warn'}">${a.level==='err'?'● 严重':'● 预警'}</span>
+      <span class="msg">${a.msg}</span>
+      <span class="time">${a.time}</span>
+    </div>`
+  ).join('');
+}
+
+renderEquipList();
+renderAlerts();
+
+// ============================================================
+// 产线画布
+// ============================================================
+const canvas = document.getElementById('prodCanvas');
+const ctx = canvas.getContext('2d');
+let cw, ch;
+
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  cw = canvas.width = rect.width;
+  ch = canvas.height = rect.height;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// 产线布局
+const STATIONS = [
+  { id:'raw', name:'原料仓', icon:'▣', x:0.08, y:0.45, w:0.12, h:0.28, status:'normal' },
+  { id:'cnc1', name:'数控1#', icon:'◈', x:0.24, y:0.45, w:0.12, h:0.28, status:'normal' },
+  { id:'cnc2', name:'数控2#', icon:'◈', x:0.40, y:0.45, w:0.12, h:0.28, status:'normal' },
+  { id:'robot', name:'机械臂', icon:'⚙', x:0.56, y:0.45, w:0.12, h:0.28, status:'warning' },
+  { id:'qc', name:'质检站', icon:'◎', x:0.72, y:0.45, w:0.12, h:0.28, status:'normal' },
+  { id:'pack', name:'包装线', icon:'▤', x:0.88, y:0.45, w:0.10, h:0.28, status:'normal' },
+];
+
+// 产品粒子
+const products = [];
+for (let i = 0; i < 40; i++) {
+  products.push({
+    x: Math.random(),
+    y: 0.45 + (Math.random() - 0.5) * 0.24,
+    speed: 0.0003 + Math.random() * 0.0008,
+    size: 2 + Math.random() * 3,
+    color: Math.random() > 0.5 ? '#00b4d8' : '#48cae4',
+    alpha: 0.4 + Math.random() * 0.6,
+  });
+}
+
+// 数据流粒子
+const dataParticles = [];
+for (let i = 0; i < 30; i++) {
+  dataParticles.push({
+    fromIdx: Math.floor(Math.random() * (STATIONS.length - 1)),
+    t: Math.random(),
+    speed: 0.003 + Math.random() * 0.008,
+    size: 1 + Math.random() * 2,
+  });
+}
+
+function drawStation(s, t, hoveredId, selectedId) {
+  const x = s.x * cw, y = s.y * ch;
+  const w = s.w * cw, h = s.h * ch;
+
+  const statClr = s.status === 'alarm' ? '#ff1744' : s.status === 'warning' ? '#ffd600' : '#00e676';
+  const isHovered = s.id === hoveredId;
+  const isSelected = s.id === selectedId;
+
+  // 发光底座
+  const glow = isSelected ? '#ffd700' : isHovered ? '#00b4d8' : statClr;
+  const glowAlpha = isSelected ? 0.5 : isHovered ? 0.35 : 0.15;
+  ctx.save();
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = isSelected ? 30 : isHovered ? 20 : 10 + Math.sin(t*3)*5;
+
+  // 主体
+  const grad = ctx.createLinearGradient(x, y, x, y + h);
+  grad.addColorStop(0, 'rgba(13,25,45,0.9)');
+  grad.addColorStop(1, 'rgba(8,15,28,0.95)');
+  ctx.fillStyle = grad;
+  roundRect(ctx, x, y, w, h, 6);
+  ctx.fill();
+
+  // 顶部状态条
+  const barH = 4;
+  ctx.fillStyle = statClr;
+  ctx.globalAlpha = 0.8;
+  roundRect(ctx, x + 2, y + 2, w - 4, barH, 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // 脉冲环
+  if (isHovered || isSelected) {
+    ctx.save();
+    ctx.strokeStyle = glow;
+    ctx.globalAlpha = 0.3 + Math.sin(t * 4) * 0.2;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -t * 40;
+    roundRect(ctx, x - 4, y - 4, w + 8, h + 8, 8);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // 图标 + 名称
+  ctx.fillStyle = isSelected ? '#ffd700' : '#a0b4cc';
+  ctx.font = `${Math.min(22, w*0.4)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(s.icon, x + w/2, y + h*0.45);
+
+  ctx.font = `${Math.min(10, w*0.18)}px "Microsoft YaHei",sans-serif`;
+  ctx.fillStyle = isSelected ? '#ffd700' : '#8899aa';
+  ctx.fillText(s.name, x + w/2, y + h*0.75);
+
+  // 状态小点
+  ctx.fillStyle = statClr;
+  ctx.beginPath();
+  ctx.arc(x + w - 10, y + 10, 4, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function drawConveyor(t) {
+  const beltY = 0.59 * ch;
+  const beltH = 6;
+
+  // 传送带主线
+  ctx.strokeStyle = '#1a3050';
+  ctx.lineWidth = beltH;
+  ctx.beginPath();
+  ctx.moveTo(0.04 * cw, beltY);
+  ctx.lineTo(0.96 * cw, beltY);
+  ctx.stroke();
+
+  // 传送带刻度线
+  ctx.strokeStyle = '#1a4060';
+  ctx.lineWidth = 1;
+  const offset = (t * 60) % 20;
+  for (let x = -offset; x < cw; x += 20) {
+    ctx.beginPath();
+    ctx.moveTo(x, beltY - 5);
+    ctx.lineTo(x + 8, beltY + 5);
+    ctx.stroke();
+  }
+}
+
+function drawProducts(t) {
+  for (const p of products) {
+    p.x += p.speed;
+    if (p.x > 0.98) p.x = 0.02;
+    const px = p.x * cw, py = (0.59 + (p.y - 0.45) * 0.2) * ch;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.alpha;
+    ctx.fillRect(px - p.size/2, py - p.size/2, p.size, p.size * 0.6);
+    // 拖尾
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.alpha * 0.3;
+    ctx.fillRect(px - p.size/2 - 8, py - 1, 8, 2);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawDataFlow(t) {
+  for (const dp of dataParticles) {
+    dp.t += dp.speed;
+    if (dp.t > 1) { dp.t = 0; dp.fromIdx = Math.floor(Math.random() * (STATIONS.length - 1)); }
+    const from = STATIONS[dp.fromIdx], to = STATIONS[dp.fromIdx + 1];
+    const fx = (from.x + from.w) * cw, fy = from.y * ch + from.h * ch * 0.3;
+    const tx = to.x * cw, ty = to.y * ch + to.h * ch * 0.3;
+
+    // 贝塞尔弧线
+    const mt = 1 - dp.t;
+    const midY = fy - 20 - Math.sin(dp.t * Math.PI) * 30;
+    const px = mt * fx + dp.t * tx;
+    const py = mt * mt * fy + 2 * mt * dp.t * midY + dp.t * dp.t * ty;
+
+    ctx.fillStyle = '#00b4d8';
+    ctx.globalAlpha = 0.3 + Math.sin(dp.t * Math.PI) * 0.5;
+    ctx.beginPath();
+    ctx.arc(px, py, dp.size, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawGrid() {
+  ctx.strokeStyle = 'rgba(26,37,64,0.3)';
+  ctx.lineWidth = 0.5;
+  const step = 40;
+  for (let x = step; x < cw; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
+  }
+  for (let y = step; y < ch; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke();
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// ============================================================
+// 产线渲染
+// ============================================================
+let hoveredStation = null;
+let selectedStation = null;
+
+function renderProductionLine(t) {
+  resizeCanvas();
+  ctx.clearRect(0, 0, cw, ch);
+
+  // 背景网格
+  drawGrid();
+
+  // 传送带
+  drawConveyor(t);
+
+  // 产品
+  drawProducts(t);
+
+  // 数据流
+  drawDataFlow(t);
+
+  // 设备站
+  for (const s of STATIONS) {
+    drawStation(s, t, hoveredStation, selectedStation);
+  }
+
+  // 产线方向箭头
+  ctx.fillStyle = '#1a4060';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('→ 生产流向 →', cw * 0.5, ch * 0.75);
+}
+
+// ============================================================
+// 模拟数据更新
+// ============================================================
+function updateMockData() {
+  // 产量 +1
+  const outEl = document.getElementById('kpiOutput');
+  const val = parseInt(outEl.textContent.replace(',','')) + Math.random() > 0.7 ? 1 : 0;
+  outEl.textContent = val.toLocaleString();
+
+  // OEE 波动
+  const oee = 87.3 + (Math.random() - 0.5) * 0.4;
+  document.getElementById('kpiOEE').textContent = oee.toFixed(1);
+
+  // 能耗
+  const pwr = 342 + (Math.random() - 0.5) * 5;
+  document.getElementById('kpiPower').textContent = Math.round(pwr);
+
+  // 运行时长
+  const rt = 22.5 + Math.random() * 0.02;
+  document.getElementById('kpiRuntime').textContent = rt.toFixed(1);
+
+  // 设备状态随机变化
+  EQUIPMENTS.forEach(e => {
+    e.temp += (Math.random() - 0.5) * 0.8;
+    e.vib += (Math.random() - 0.5) * 0.1;
+    e.count += Math.random() > 0.7 ? 1 : 0;
+    if (Math.random() < 0.002) {
+      e.status = e.status === 'normal' ? 'warning' : e.status === 'warning' ? 'normal' : 'normal';
+      STATIONS.find(s => s.id === e.id).status = e.status;
+    }
+  });
+}
+
+// ============================================================
+// 选中设备交互
+// ============================================================
+function selectDevice(id) {
+  selectedStation = id;
+  const eq = EQUIPMENTS.find(e => e.id === id);
+  if (!eq) { hideDetail(); return; }
+  document.getElementById('dName').textContent = eq.name;
+  document.getElementById('dStatus').textContent = eq.status === 'normal' ? '正常' : eq.status === 'warning' ? '预警' : '故障';
+  document.getElementById('dTemp').textContent = eq.temp.toFixed(1) + '°C';
+  document.getElementById('dVib').textContent = eq.vib.toFixed(2) + ' mm/s';
+  document.getElementById('dCount').textContent = eq.count + ' 件';
+  document.getElementById('dMaint').textContent = eq.maint;
+  document.getElementById('detailPanel').classList.add('show');
+}
+
+function hideDetail() {
+  selectedStation = null;
+  document.getElementById('detailPanel').classList.remove('show');
+}
+
+// ============================================================
+// WebSocket 手势
+// ============================================================
+let ws, reconnectTimer;
+let handDetected = false, gesture = 'none';
+let cursorX = 0.5, cursorY = 0.5;
+let targetX = 0.5, targetY = 0.5;
+let prevGesture = 'none';
+
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try { ws = new WebSocket(`${protocol}//${location.host}/ws`); }
+  catch(e) { scheduleReconnect(); return; }
+  ws.onopen = () => document.getElementById('connDot').classList.add('online');
+  ws.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      handDetected = d.hand_detected;
+      gesture = d.gesture;
+      targetX = d.cursor_x;
+      targetY = d.cursor_y;
+      updateCursorUI();
+    } catch(_) {}
+  };
+  ws.onclose = () => { document.getElementById('connDot').classList.remove('online'); handDetected = false; scheduleReconnect(); };
+  ws.onerror = () => ws.close();
+}
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000);
+}
+
+function updateCursorUI() {
+  const el = document.getElementById('cursor');
+  if (!handDetected) { el.classList.remove('active','fist','palm'); return; }
+  el.classList.add('active');
+  el.classList.toggle('fist', gesture === 'fist');
+  el.classList.toggle('palm', gesture === 'open_palm');
+}
+
+// ============================================================
+// 光标命中检测
+// ============================================================
+function hitTest() {
+  if (!handDetected) {
+    if (hoveredStation) {
+      updateEquipItemHighlight(hoveredStation, false);
+      hoveredStation = null;
+    }
+    return;
+  }
+
+  // 检测产线设备
+  let newHovered = null;
+  for (const s of STATIONS) {
+    const sx = s.x * cw, sy = s.y * ch;
+    const sw = s.w * cw, sh = s.h * ch;
+    if (cursorX * cw >= sx && cursorX * cw <= sx + sw &&
+        cursorY * ch >= sy && cursorY * ch <= sy + sh) {
+      newHovered = s.id;
+      break;
+    }
+  }
+
+  // 检测左侧设备列表
+  if (!newHovered) {
+    const equipEls = document.querySelectorAll('.equip-item');
+    for (const el of equipEls) {
+      const rect = el.getBoundingClientRect();
+      if (cursorX * window.innerWidth >= rect.left &&
+          cursorX * window.innerWidth <= rect.right &&
+          cursorY * window.innerHeight >= rect.top &&
+          cursorY * window.innerHeight <= rect.bottom) {
+        newHovered = el.dataset.idx !== undefined ? EQUIPMENTS[parseInt(el.dataset.idx)].id : null;
+        break;
+      }
+    }
+  }
+
+  if (hoveredStation !== newHovered) {
+    if (hoveredStation) updateEquipItemHighlight(hoveredStation, false);
+    hoveredStation = newHovered;
+    if (hoveredStation) updateEquipItemHighlight(hoveredStation, true);
+  }
+}
+
+function updateEquipItemHighlight(id, on) {
+  const eq = EQUIPMENTS.find(e => e.id === id);
+  if (!eq) return;
+  const idx = EQUIPMENTS.indexOf(eq);
+  const el = document.getElementById('eq' + idx);
+  if (el) {
+    el.classList.toggle('hovered', on && id !== selectedStation);
+    el.classList.toggle('selected', id === selectedStation);
+  }
+}
+
+// ============================================================
+// 动画循环
+// ============================================================
+let prevTime = performance.now();
+let frameCount = 0, lastFpsTime = performance.now();
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = (now - prevTime) / 1000;
+  prevTime = now;
+  const t = now * 0.001;
+
+  // 平滑光标
+  cursorX += (targetX - cursorX) * 0.12;
+  cursorY += (targetY - cursorY) * 0.12;
+
+  // 光标位置
+  const cursorEl = document.getElementById('cursor');
+  cursorEl.style.left = (cursorX * 100) + '%';
+  cursorEl.style.top = (cursorY * 100) + '%';
+
+  // 命中检测
+  hitTest();
+
+  // 手势动作
+  if (gesture === 'fist' && prevGesture !== 'fist' && hoveredStation) {
+    selectDevice(hoveredStation);
+  }
+  if (gesture === 'open_palm' && prevGesture !== 'open_palm') {
+    hideDetail();
+  }
+  prevGesture = gesture;
+
+  // 渲染产线
+  renderProductionLine(t);
+
+  // 更新模拟数据 (每 500ms)
+  if (Math.floor(now / 500) !== Math.floor((now - dt*1000) / 500)) {
+    updateMockData();
+    renderEquipList();
+    updateEquipItemHighlight(selectedStation, true);
+    if (hoveredStation && hoveredStation !== selectedStation) updateEquipItemHighlight(hoveredStation, true);
+  }
+
+  // FPS
+  frameCount++;
+  if (now - lastFpsTime >= 1000) {
+    lastFpsTime = now;
+    frameCount = 0;
+  }
+}
+
+// ============================================================
+// 启动
+// ============================================================
+connect();
+requestAnimationFrame(animate);
+</script>
+<img class="cam-debug" src="/video_feed" alt="Camera Debug" />
+</body>
+</html>

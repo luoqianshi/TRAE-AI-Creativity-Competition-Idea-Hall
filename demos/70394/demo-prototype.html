@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>城市投诉自动回复系统 - 演示原型</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.6.3/dist/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/element-plus@2.6.3/dist/index.full.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+    .el-dialog__body { padding: 15px 20px; }
+    .complaint-card { transition: all 0.3s; }
+    .complaint-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+    .status-pending { background-color: #fef3c7; color: #d97706; }
+    .status-processing { background-color: #dbeafe; color: #2563eb; }
+    .status-resolved { background-color: #dcfce7; color: #16a34a; }
+    .status-closed { background-color: #f3f4f6; color: #6b7280; }
+    .nav-item { cursor: pointer; padding: 10px 20px; border-radius: 8px; transition: all 0.2s; }
+    .nav-item.active { background-color: #667eea; color: white; }
+    .nav-item:hover:not(.active) { background-color: #f3f4f6; }
+    .category-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #e0e7ff; color: #4338ca; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="min-h-screen bg-gray-50">
+      <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="text-2xl">🏙️</span>
+            <div>
+              <h1 class="text-lg font-bold text-gray-800">城市投诉自动回复系统</h1>
+              <p class="text-xs text-gray-500">智能分类 · 自动响应 · 高效处理</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 text-sm">
+              <span class="status-badge status-resolved">{{ stats.totalResolved }} 已处理</span>
+              <span class="status-badge status-pending">{{ stats.totalPending }} 待处理</span>
+            </div>
+            <el-button type="primary" @click="showSubmitDialog = true">提交投诉</el-button>
+            <el-button @click="toggleLogin">
+              {{ currentUser ? currentUser.username : '登录' }}
+            </el-button>
+          </div>
+        </div>
+      </header>
+
+      <main class="max-w-6xl mx-auto px-4 py-6">
+        <div class="flex gap-6">
+          <aside class="w-64 flex-shrink-0">
+            <div class="bg-white rounded-xl shadow-sm p-4">
+              <div class="text-sm font-semibold text-gray-700 mb-3">功能导航</div>
+              <div class="space-y-1">
+                <div class="nav-item" :class="{ active: currentTab === 'home' }" @click="currentTab = 'home'">
+                  📊 数据概览
+                </div>
+                <div class="nav-item" :class="{ active: currentTab === 'complaints' }" @click="currentTab = 'complaints'">
+                  📋 投诉列表
+                </div>
+                <div class="nav-item" :class="{ active: currentTab === 'my' }" @click="currentTab = 'my'">
+                  👤 我的投诉
+                </div>
+                <div v-if="currentUser?.role === 'ADMIN'" class="nav-item" :class="{ active: currentTab === 'admin' }" @click="currentTab = 'admin'">
+                  🔧 管理后台
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <div class="flex-1">
+            <div v-if="currentTab === 'home'" class="space-y-6">
+              <div class="grid grid-cols-4 gap-4">
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-3xl font-bold text-gray-800">{{ stats.total }}</div>
+                  <div class="text-sm text-gray-500 mt-1">总投诉数</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-3xl font-bold text-yellow-600">{{ stats.totalPending }}</div>
+                  <div class="text-sm text-gray-500 mt-1">待处理</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-3xl font-bold text-blue-600">{{ stats.totalProcessing }}</div>
+                  <div class="text-sm text-gray-500 mt-1">处理中</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-3xl font-bold text-green-600">{{ stats.totalResolved }}</div>
+                  <div class="text-sm text-gray-500 mt-1">已解决</div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-6">
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <h3 class="text-sm font-semibold text-gray-700 mb-4">投诉类型分布</h3>
+                  <div ref="typeChart" class="h-64"></div>
+                </div>
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <h3 class="text-sm font-semibold text-gray-700 mb-4">处理效率趋势</h3>
+                  <div ref="trendChart" class="h-64"></div>
+                </div>
+              </div>
+
+              <div class="bg-white rounded-xl shadow-sm p-5">
+                <h3 class="text-sm font-semibold text-gray-700 mb-4">最新投诉</h3>
+                <div class="space-y-3">
+                  <div v-for="complaint in latestComplaints" :key="complaint.id" class="complaint-card bg-gray-50 rounded-lg p-4">
+                    <div class="flex items-start justify-between">
+                      <div class="flex-1">
+                        <div class="flex items-center gap-2 mb-2">
+                          <span class="category-tag">{{ complaint.category }}</span>
+                          <span :class="['status-badge', 'status-' + complaint.status]">{{ complaint.statusText }}</span>
+                        </div>
+                        <p class="text-gray-800 font-medium">{{ complaint.title }}</p>
+                        <p class="text-sm text-gray-500 mt-1 line-clamp-2">{{ complaint.content }}</p>
+                      </div>
+                      <div class="text-right">
+                        <p class="text-xs text-gray-400">{{ complaint.createdAt }}</p>
+                        <p class="text-xs text-gray-500">{{ complaint.userName }}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="currentTab === 'complaints'">
+              <div class="bg-white rounded-xl shadow-sm p-5">
+                <div class="flex items-center justify-between mb-4">
+                  <h3 class="text-sm font-semibold text-gray-700">投诉列表</h3>
+                  <div class="flex items-center gap-3">
+                    <el-select v-model="filterStatus" placeholder="状态筛选" class="w-32">
+                      <el-option label="全部" value="" />
+                      <el-option label="待处理" value="pending" />
+                      <el-option label="处理中" value="processing" />
+                      <el-option label="已解决" value="resolved" />
+                      <el-option label="已关闭" value="closed" />
+                    </el-select>
+                    <el-input v-model="searchKeyword" placeholder="搜索投诉内容" class="w-64" />
+                  </div>
+                </div>
+                <div class="space-y-3">
+                  <div v-for="complaint in filteredComplaints" :key="complaint.id" class="complaint-card bg-gray-50 rounded-lg p-4">
+                    <div class="flex items-start justify-between">
+                      <div class="flex-1">
+                        <div class="flex items-center gap-2 mb-2">
+                          <span class="category-tag">{{ complaint.category }}</span>
+                          <span :class="['status-badge', 'status-' + complaint.status]">{{ complaint.statusText }}</span>
+                        </div>
+                        <p class="text-gray-800 font-medium">{{ complaint.title }}</p>
+                        <p class="text-sm text-gray-500 mt-1">{{ complaint.content }}</p>
+                      </div>
+                      <div class="text-right">
+                        <p class="text-xs text-gray-400">{{ complaint.createdAt }}</p>
+                        <p class="text-xs text-gray-500">{{ complaint.userName }}</p>
+                      </div>
+                    </div>
+                    <div v-if="complaint.reply" class="mt-3 pt-3 border-t border-gray-200">
+                      <div class="flex items-start gap-2">
+                        <span class="text-xs text-blue-600 font-medium">自动回复:</span>
+                        <p class="text-sm text-gray-600">{{ complaint.reply }}</p>
+                      </div>
+                    </div>
+                    <div class="mt-3 flex items-center gap-2">
+                      <el-button size="small" @click="viewComplaint(complaint)">查看详情</el-button>
+                      <el-button size="small" type="primary" v-if="complaint.status === 'pending'" @click="processComplaint(complaint)">开始处理</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="currentTab === 'my'">
+              <div class="bg-white rounded-xl shadow-sm p-5">
+                <h3 class="text-sm font-semibold text-gray-700 mb-4">我的投诉</h3>
+                <div v-if="!currentUser" class="text-center py-12">
+                  <p class="text-gray-500">请先登录查看我的投诉</p>
+                  <el-button type="primary" @click="toggleLogin" class="mt-4">立即登录</el-button>
+                </div>
+                <div v-else class="space-y-3">
+                  <div v-for="complaint in myComplaints" :key="complaint.id" class="complaint-card bg-gray-50 rounded-lg p-4">
+                    <div class="flex items-start justify-between">
+                      <div class="flex-1">
+                        <div class="flex items-center gap-2 mb-2">
+                          <span class="category-tag">{{ complaint.category }}</span>
+                          <span :class="['status-badge', 'status-' + complaint.status]">{{ complaint.statusText }}</span>
+                        </div>
+                        <p class="text-gray-800 font-medium">{{ complaint.title }}</p>
+                        <p class="text-sm text-gray-500 mt-1">{{ complaint.content }}</p>
+                      </div>
+                      <p class="text-xs text-gray-400">{{ complaint.createdAt }}</p>
+                    </div>
+                    <div v-if="complaint.reply" class="mt-3 pt-3 border-t border-gray-200">
+                      <div class="flex items-start gap-2">
+                        <span class="text-xs text-blue-600 font-medium">回复:</span>
+                        <p class="text-sm text-gray-600">{{ complaint.reply }}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="myComplaints.length === 0" class="text-center py-8 text-gray-500">暂无投诉记录</div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="currentTab === 'admin'">
+              <div class="grid grid-cols-3 gap-4 mb-6">
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-2xl font-bold text-gray-800">{{ userStats.total }}</div>
+                  <div class="text-sm text-gray-500 mt-1">总用户数</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-2xl font-bold text-purple-600">{{ userStats.admin }}</div>
+                  <div class="text-sm text-gray-500 mt-1">管理员</div>
+                </div>
+                <div class="bg-white rounded-xl shadow-sm p-5">
+                  <div class="text-2xl font-bold text-green-600">{{ userStats.citizen }}</div>
+                  <div class="text-sm text-gray-500 mt-1">市民用户</div>
+                </div>
+              </div>
+
+              <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
+                <h3 class="text-sm font-semibold text-gray-700 mb-4">回复模板管理</h3>
+                <div class="space-y-3">
+                  <div v-for="template in replyTemplates" :key="template.id" class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <span class="text-sm font-medium text-gray-800">{{ template.category }}</span>
+                      <p class="text-xs text-gray-500 mt-1 line-clamp-1">{{ template.content }}</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <el-button size="small" @click="editTemplate(template)">编辑</el-button>
+                      <el-button size="small" type="danger">删除</el-button>
+                    </div>
+                  </div>
+                </div>
+                <el-button type="primary" size="small" class="mt-4" @click="addTemplate">添加模板</el-button>
+              </div>
+
+              <div class="bg-white rounded-xl shadow-sm p-5">
+                <h3 class="text-sm font-semibold text-gray-700 mb-4">用户管理</h3>
+                <div class="space-y-3">
+                  <div v-for="user in users" :key="user.id" class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-center gap-3">
+                      <div class="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-600">
+                        {{ user.username.charAt(0) }}
+                      </div>
+                      <div>
+                        <p class="text-sm font-medium text-gray-800">{{ user.username }}</p>
+                        <p class="text-xs text-gray-500">{{ user.email }}</p>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <span class="text-xs px-2 py-1 rounded bg-gray-200">
+                        {{ user.role === 'ADMIN' ? '管理员' : '市民' }}
+                      </span>
+                      <el-button size="small" type="danger" v-if="user.role !== 'ADMIN'">禁用</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <el-dialog v-model="showSubmitDialog" title="提交投诉" width="500px">
+      <div class="space-y-4">
+        <el-form-item label="投诉标题">
+          <el-input v-model="submitForm.title" placeholder="请输入投诉标题" />
+        </el-form-item>
+        <el-form-item label="投诉内容">
+          <el-input v-model="submitForm.content" type="textarea" rows="4" placeholder="请详细描述您的投诉内容..." />
+        </el-form-item>
+        <el-form-item label="投诉类型">
+          <el-select v-model="submitForm.category" placeholder="请选择投诉类型">
+            <el-option v-for="cat in categories" :key="cat" :label="cat" :value="cat" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="联系方式">
+          <el-input v-model="submitForm.contact" placeholder="请输入您的联系方式" />
+        </el-form-item>
+      </div>
+      <template #footer>
+        <el-button @click="showSubmitDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitComplaint" :loading="submitting">提交投诉</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showDetailDialog" title="投诉详情" width="600px">
+      <div v-if="selectedComplaint" class="space-y-4">
+        <div class="flex items-center gap-3">
+          <span class="category-tag">{{ selectedComplaint.category }}</span>
+          <span :class="['status-badge', 'status-' + selectedComplaint.status]">{{ selectedComplaint.statusText }}</span>
+        </div>
+        <h3 class="text-lg font-semibold text-gray-800">{{ selectedComplaint.title }}</h3>
+        <p class="text-gray-600">{{ selectedComplaint.content }}</p>
+        <div class="flex items-center gap-6 text-sm text-gray-500">
+          <span>提交人: {{ selectedComplaint.userName }}</span>
+          <span>提交时间: {{ selectedComplaint.createdAt }}</span>
+        </div>
+        <div v-if="selectedComplaint.reply" class="p-4 bg-blue-50 rounded-lg">
+          <h4 class="text-sm font-semibold text-blue-600 mb-2">系统自动回复</h4>
+          <p class="text-gray-700">{{ selectedComplaint.reply }}</p>
+        </div>
+        <div v-else class="p-4 bg-gray-50 rounded-lg text-gray-400">
+          暂无回复
+        </div>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="showLoginDialog" title="用户登录" width="400px">
+      <div class="space-y-4">
+        <el-form-item label="用户名">
+          <el-input v-model="loginForm.username" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="loginForm.password" type="password" placeholder="请输入密码" />
+        </el-form-item>
+        <div class="flex items-center justify-between">
+          <label class="el-checkbox">
+            <input type="checkbox" v-model="loginForm.rememberMe" /> 记住我
+          </label>
+          <a href="#" class="text-sm text-blue-600">忘记密码？</a>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showLoginDialog = false">取消</el-button>
+        <el-button type="primary" @click="handleLogin" :loading="loggingIn">登录</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted, nextTick } = Vue;
+
+    createApp({
+      setup() {
+        const currentTab = ref('home');
+        const currentUser = ref(null);
+        const showSubmitDialog = ref(false);
+        const showDetailDialog = ref(false);
+        const showLoginDialog = ref(false);
+        const selectedComplaint = ref(null);
+        const submitting = ref(false);
+        const loggingIn = ref(false);
+        const filterStatus = ref('');
+        const searchKeyword = ref('');
+
+        const categories = ['环境卫生', '噪音扰民', '交通拥堵', '公共设施', '物业管理', '食品安全', '医疗服务', '教育问题', '消费维权', '其他'];
+
+        const submitForm = ref({
+          title: '',
+          content: '',
+          category: '',
+          contact: ''
+        });
+
+        const loginForm = ref({
+          username: '',
+          password: '',
+          rememberMe: false
+        });
+
+        const complaints = ref([
+          { id: 1, title: '小区垃圾桶长期未清理', content: '我们小区3号楼楼下的垃圾桶已经一个星期没有清理了，夏天天气炎热，气味非常难闻，严重影响居民生活。希望相关部门能尽快处理。', category: '环境卫生', status: 'resolved', statusText: '已解决', createdAt: '2024-01-15 10:30', userName: '张女士', reply: '您好！您反映的问题已收到。我们已安排环卫工人前往清理，并会加强该区域的垃圾清运频次。感谢您的反馈！' },
+          { id: 2, title: '夜间施工噪音严重影响休息', content: '近期小区对面的建筑工地经常夜间施工，噪音非常大，严重影响我们的正常休息。希望能督促施工方遵守规定，禁止夜间施工。', category: '噪音扰民', status: 'processing', statusText: '处理中', createdAt: '2024-01-14 22:15', userName: '李先生', reply: '您好！已收到您的投诉。我们会立即联系施工单位，要求其停止夜间施工，并加强监督检查。' },
+          { id: 3, title: '主干道交通信号灯故障', content: '市中心主干道与解放路交叉口的交通信号灯已经坏了两天，导致交通秩序混乱，存在很大安全隐患。', category: '公共设施', status: 'pending', statusText: '待处理', createdAt: '2024-01-14 08:45', userName: '王师傅', reply: '' },
+          { id: 4, title: '物业公司不作为', content: '我们小区物业长期不作为，电梯经常故障无人维修，绿化也无人打理，物业费却照常收取。', category: '物业管理', status: 'pending', statusText: '待处理', createdAt: '2024-01-13 14:20', userName: '赵女士', reply: '' },
+          { id: 5, title: '学校周边小吃摊食品安全问题', content: '学校门口的小吃摊卫生状况堪忧，孩子们经常在那里买零食吃，很担心食品安全问题。', category: '食品安全', status: 'processing', statusText: '处理中', createdAt: '2024-01-13 09:00', userName: '陈家长', reply: '您好！我们已组织执法人员对学校周边小吃摊进行检查，对不符合卫生标准的摊位进行了整改。' },
+          { id: 6, title: '医院挂号排队时间过长', content: '去市人民医院看病，光挂号就排了两个小时的队，希望能优化挂号流程，方便患者就医。', category: '医疗服务', status: 'resolved', statusText: '已解决', createdAt: '2024-01-12 11:30', userName: '刘先生', reply: '您好！感谢您的建议。我们已增加挂号窗口，并开通了网上预约挂号服务，您可以提前在网上预约。' },
+          { id: 7, title: '道路积水严重', content: '每次下雨，幸福路都会严重积水，车辆难以通行，行人更是寸步难行。希望能改善排水系统。', category: '公共设施', status: 'pending', statusText: '待处理', createdAt: '2024-01-12 07:20', userName: '孙女士', reply: '' },
+          { id: 8, title: '广场舞噪音扰民', content: '每天早上6点和晚上8点，小区广场上都有广场舞，声音开得很大，严重影响孩子学习和老人休息。', category: '噪音扰民', status: 'resolved', statusText: '已解决', createdAt: '2024-01-11 20:00', userName: '周先生', reply: '您好！已协调广场舞团队调整活动时间和音量，避免影响居民正常生活。' }
+        ]);
+
+        const users = ref([
+          { id: 1, username: 'admin', email: 'admin@city.gov.cn', role: 'ADMIN' },
+          { id: 2, username: '张女士', email: 'zhang@example.com', role: 'CITIZEN' },
+          { id: 3, username: '李先生', email: 'li@example.com', role: 'CITIZEN' }
+        ]);
+
+        const replyTemplates = ref([
+          { id: 1, category: '环境卫生', content: '您好！您反映的环境卫生问题已收到，我们会尽快安排工作人员前往处理。' },
+          { id: 2, category: '噪音扰民', content: '您好！噪音问题已记录，我们会立即调查并督促相关方整改。' },
+          { id: 3, category: '公共设施', content: '您好！公共设施故障已上报，维修人员会尽快到场修复。' },
+          { id: 4, category: '物业管理', content: '您好！已联系物业督促整改，请耐心等待处理结果。' }
+        ]);
+
+        const stats = computed(() => ({
+          total: complaints.value.length,
+          totalPending: complaints.value.filter(c => c.status === 'pending').length,
+          totalProcessing: complaints.value.filter(c => c.status === 'processing').length,
+          totalResolved: complaints.value.filter(c => c.status === 'resolved').length
+        }));
+
+        const userStats = computed(() => ({
+          total: users.value.length,
+          admin: users.value.filter(u => u.role === 'ADMIN').length,
+          citizen: users.value.filter(u => u.role === 'CITIZEN').length
+        }));
+
+        const latestComplaints = computed(() => {
+          return [...complaints.value].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
+        });
+
+        const filteredComplaints = computed(() => {
+          return complaints.value.filter(c => {
+            const statusMatch = !filterStatus.value || c.status === filterStatus.value;
+            const keywordMatch = !searchKeyword.value || 
+              c.title.includes(searchKeyword.value) || 
+              c.content.includes(searchKeyword.value);
+            return statusMatch && keywordMatch;
+          });
+        });
+
+        const myComplaints = computed(() => {
+          if (!currentUser.value) return [];
+          return complaints.value.filter(c => c.userName === currentUser.value.username);
+        });
+
+        const submitComplaint = async () => {
+          if (!submitForm.value.title || !submitForm.value.content) {
+            ElementPlus.ElMessage.warning('请填写标题和内容');
+            return;
+          }
+          submitting.value = true;
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          
+          const template = replyTemplates.value.find(t => t.category === submitForm.value.category);
+          const autoReply = template ? template.content : '您好！您的投诉已收到，我们会尽快处理。';
+
+          complaints.value.unshift({
+            id: Date.now(),
+            title: submitForm.value.title,
+            content: submitForm.value.content,
+            category: submitForm.value.category || '其他',
+            status: 'pending',
+            statusText: '待处理',
+            createdAt: new Date().toLocaleString('zh-CN'),
+            userName: currentUser.value ? currentUser.value.username : '匿名用户',
+            reply: autoReply
+          });
+
+          ElementPlus.ElMessage.success('投诉提交成功！系统已自动生成回复');
+          showSubmitDialog.value = false;
+          submitForm.value = { title: '', content: '', category: '', contact: '' };
+          submitting.value = false;
+        };
+
+        const viewComplaint = (complaint) => {
+          selectedComplaint.value = complaint;
+          showDetailDialog.value = true;
+        };
+
+        const processComplaint = (complaint) => {
+          complaint.status = 'processing';
+          complaint.statusText = '处理中';
+          ElementPlus.ElMessage.success('已开始处理该投诉');
+        };
+
+        const toggleLogin = () => {
+          if (currentUser.value) {
+            currentUser.value = null;
+            ElementPlus.ElMessage.info('已退出登录');
+          } else {
+            showLoginDialog.value = true;
+          }
+        };
+
+        const handleLogin = async () => {
+          if (!loginForm.value.username) {
+            ElementPlus.ElMessage.warning('请输入用户名');
+            return;
+          }
+          loggingIn.value = true;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          currentUser.value = { 
+            username: loginForm.value.username,
+            role: loginForm.value.username === 'admin' ? 'ADMIN' : 'CITIZEN'
+          };
+          showLoginDialog.value = false;
+          ElementPlus.ElMessage.success('登录成功');
+          loggingIn.value = false;
+        };
+
+        const editTemplate = (template) => {
+          ElementPlus.ElMessage.info(`编辑模板: ${template.category}`);
+        };
+
+        const addTemplate = () => {
+          ElementPlus.ElMessage.info('添加新模板');
+        };
+
+        let typeChart = null;
+        let trendChart = null;
+
+        const initCharts = () => {
+          nextTick(() => {
+            const typeChartEl = document.querySelector('.h-64');
+            if (typeChartEl) {
+              typeChart = echarts.init(typeChartEl);
+              typeChart.setOption({
+                tooltip: { trigger: 'item' },
+                legend: { bottom: 0 },
+                series: [{
+                  type: 'pie',
+                  radius: ['40%', '70%'],
+                  avoidLabelOverlap: false,
+                  itemStyle: { borderRadius: 10 },
+                  label: { show: false },
+                  emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
+                  data: [
+                    { value: 3, name: '环境卫生', itemStyle: { color: '#f59e0b' } },
+                    { value: 2, name: '噪音扰民', itemStyle: { color: '#3b82f6' } },
+                    { value: 2, name: '公共设施', itemStyle: { color: '#10b981' } },
+                    { value: 1, name: '物业管理', itemStyle: { color: '#8b5cf6' } },
+                    { value: 1, name: '食品安全', itemStyle: { color: '#ef4444' } },
+                    { value: 1, name: '医疗服务', itemStyle: { color: '#ec4899' } }
+                  ]
+                }]
+              });
+            }
+
+            const trendChartEl = document.querySelectorAll('.h-64')[1];
+            if (trendChartEl) {
+              trendChart = echarts.init(trendChartEl);
+              trendChart.setOption({
+                tooltip: { trigger: 'axis' },
+                grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+                xAxis: { type: 'category', data: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] },
+                yAxis: { type: 'value' },
+                series: [
+                  { name: '收到投诉', type: 'line', data: [12, 15, 8, 20, 18, 10, 14], smooth: true },
+                  { name: '已处理', type: 'line', data: [10, 12, 8, 15, 16, 8, 12], smooth: true }
+                ]
+              });
+            }
+          });
+        };
+
+        onMounted(() => {
+          initCharts();
+          window.addEventListener('resize', () => {
+            typeChart && typeChart.resize();
+            trendChart && trendChart.resize();
+          });
+        });
+
+        return {
+          currentTab,
+          currentUser,
+          showSubmitDialog,
+          showDetailDialog,
+          showLoginDialog,
+          selectedComplaint,
+          submitting,
+          loggingIn,
+          filterStatus,
+          searchKeyword,
+          categories,
+          submitForm,
+          loginForm,
+          complaints,
+          users,
+          replyTemplates,
+          stats,
+          userStats,
+          latestComplaints,
+          filteredComplaints,
+          myComplaints,
+          submitComplaint,
+          viewComplaint,
+          processComplaint,
+          toggleLogin,
+          handleLogin,
+          editTemplate,
+          addTemplate
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

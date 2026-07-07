@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>番茄任务助手</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+  }
+  .container {
+    background: white;
+    border-radius: 24px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    padding: 40px;
+    max-width: 500px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h2 {
+    margin-bottom: 20px;
+    color: #2d3748;
+  }
+  .stats {
+    background: #edf2f7;
+    border-radius: 12px;
+    padding: 8px 20px;
+    margin-bottom: 24px;
+    font-size: 14px;
+    color: #4a5568;
+  }
+  .stats span { font-weight: bold; color: #e53e3e; }
+  .timer-circle {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    margin-bottom: 20px;
+  }
+  svg {
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+  }
+  .bg-circle {
+    fill: none;
+    stroke: #e2e8f0;
+    stroke-width: 12;
+  }
+  .progress-circle {
+    fill: none;
+    stroke: #e53e3e;
+    stroke-width: 12;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.3s linear;
+  }
+  .time-display {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 42px;
+    font-weight: bold;
+    color: #2d3748;
+  }
+  .phase-label {
+    font-size: 14px;
+    color: #718096;
+    margin-bottom: 20px;
+    min-height: 20px;
+  }
+  .buttons {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 30px;
+  }
+  button {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  button:active { transform: scale(0.96); }
+  .btn-start { background: #e53e3e; color: white; }
+  .btn-pause { background: #ed8936; color: white; }
+  .btn-reset { background: #e2e8f0; color: #4a5568; }
+  .task-section {
+    width: 100%;
+    margin-top: 10px;
+  }
+  .task-input {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .task-input input {
+    flex: 1;
+    padding: 10px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .task-input input:focus { border-color: #e53e3e; }
+  .task-input button {
+    background: #e53e3e;
+    color: white;
+    padding: 10px 20px;
+  }
+  ul {
+    list-style: none;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .task-text {
+    flex: 1;
+    margin-left: 10px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .task-text.done {
+    text-decoration: line-through;
+    color: #a0aec0;
+  }
+  .delete-btn {
+    background: none;
+    border: none;
+    color: #fc8181;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h2>🍅 番茄任务助手</h2>
+  <div class="stats">今日已完成：<span id="todayCount">0</span> 个番茄</div>
+  
+  <div class="timer-circle">
+    <svg viewBox="0 0 200 200">
+      <circle class="bg-circle" cx="100" cy="100" r="90"/>
+      <circle class="progress-circle" id="progress" cx="100" cy="100" r="90"
+              stroke-dasharray="565.48" stroke-dashoffset="0"/>
+    </svg>
+    <div class="time-display" id="timeDisplay">25:00</div>
+  </div>
+  <div class="phase-label" id="phaseLabel">专注时间</div>
+  
+  <div class="buttons">
+    <button class="btn-start" id="startBtn">开始</button>
+    <button class="btn-pause" id="pauseBtn" style="display:none;">暂停</button>
+    <button class="btn-reset" id="resetBtn">重置</button>
+  </div>
+  
+  <div class="task-section">
+    <div class="task-input">
+      <input type="text" id="taskInput" placeholder="添加新任务..." autocomplete="off">
+      <button id="addTaskBtn">添加</button>
+    </div>
+    <ul id="taskList"></ul>
+  </div>
+</div>
+
+<script>
+  const WORK_TIME = 25 * 60;
+  const BREAK_TIME = 5 * 60;
+
+  let timerInterval = null;
+  let timeLeft = WORK_TIME;
+  let isWorkPhase = true;
+  let isRunning = false;
+  let todayTomatoes = 0;
+
+  const progressCircle = document.getElementById('progress');
+  const circumference = 2 * Math.PI * 90;
+  progressCircle.style.strokeDasharray = circumference;
+  progressCircle.style.strokeDashoffset = '0';
+
+  const timeDisplay = document.getElementById('timeDisplay');
+  const phaseLabel = document.getElementById('phaseLabel');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const todaySpan = document.getElementById('todayCount');
+  const taskInput = document.getElementById('taskInput');
+  const addTaskBtn = document.getElementById('addTaskBtn');
+  const taskList = document.getElementById('taskList');
+
+  function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  function updateProgress() {
+    const total = isWorkPhase ? WORK_TIME : BREAK_TIME;
+    const offset = circumference - (timeLeft / total) * circumference;
+    progressCircle.style.strokeDashoffset = offset;
+    timeDisplay.textContent = formatTime(timeLeft);
+  }
+
+  function switchPhase() {
+    isWorkPhase = !isWorkPhase;
+    if (isWorkPhase) {
+      timeLeft = WORK_TIME;
+      phaseLabel.textContent = '专注时间';
+      progressCircle.style.stroke = '#e53e3e';
+    } else {
+      timeLeft = BREAK_TIME;
+      phaseLabel.textContent = '休息时间';
+      progressCircle.style.stroke = '#38a169';
+      todayTomatoes++;
+      todaySpan.textContent = todayTomatoes;
+    }
+    updateProgress();
+  }
+
+  function tick() {
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+      isRunning = false;
+      startBtn.style.display = 'inline-block';
+      pauseBtn.style.display = 'none';
+      try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACAf39/f4B/f3+AgH9/f3+Af39/gIB/f3+Af39/gIB/f3+Af39/gIB/f39/gH9/f4B/f3+Af39/gIA=').play(); } catch(e){}
+      switchPhase();
+      startTimer();
+      return;
+    }
+    timeLeft--;
+    updateProgress();
+  }
+
+  function startTimer() {
+    if (isRunning) return;
+    isRunning = true;
+    startBtn.style.display = 'none';
+    pauseBtn.style.display = 'inline-block';
+    timerInterval = setInterval(tick, 1000);
+  }
+
+  function pauseTimer() {
+    if (!isRunning) return;
+    clearInterval(timerInterval);
+    timerInterval = null;
+    isRunning = false;
+    startBtn.style.display = 'inline-block';
+    pauseBtn.style.display = 'none';
+  }
+
+  function resetTimer() {
+    pauseTimer();
+    timeLeft = isWorkPhase ? WORK_TIME : BREAK_TIME;
+    updateProgress();
+  }
+
+  startBtn.addEventListener('click', startTimer);
+  pauseBtn.addEventListener('click', pauseTimer);
+  resetBtn.addEventListener('click', resetTimer);
+
+  function renderTasks() {
+    const tasks = JSON.parse(localStorage.getItem('tomato_tasks') || '[]');
+    taskList.innerHTML = '';
+    tasks.forEach((task, index) => {
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <input type="checkbox" ${task.done ? 'checked' : ''} data-index="${index}">
+        <span class="task-text ${task.done ? 'done' : ''}">${escapeHtml(task.text)}</span>
+        <button class="delete-btn" data-index="${index}">✕</button>
+      `;
+      taskList.appendChild(li);
+    });
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function getTasks() {
+    return JSON.parse(localStorage.getItem('tomato_tasks') || '[]');
+  }
+
+  function saveTasks(tasks) {
+    localStorage.setItem('tomato_tasks', JSON.stringify(tasks));
+    renderTasks();
+  }
+
+  addTaskBtn.addEventListener('click', () => {
+    const text = taskInput.value.trim();
+    if (!text) return;
+    const tasks = getTasks();
+    tasks.push({ text, done: false });
+    saveTasks(tasks);
+    taskInput.value = '';
+  });
+
+  taskInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') addTaskBtn.click();
+  });
+
+  taskList.addEventListener('click', (e) => {
+    if (e.target.matches('input[type="checkbox"]')) {
+      const index = e.target.dataset.index;
+      const tasks = getTasks();
+      tasks[index].done = e.target.checked;
+      saveTasks(tasks);
+    }
+    if (e.target.matches('.delete-btn')) {
+      const index = e.target.dataset.index;
+      const tasks = getTasks();
+      tasks.splice(index, 1);
+      saveTasks(tasks);
+    }
+  });
+
+  const today = new Date().toDateString();
+  const storedDate = localStorage.getItem('tomato_date');
+  if (storedDate === today) {
+    todayTomatoes = parseInt(localStorage.getItem('tomato_count') || '0');
+  } else {
+    localStorage.setItem('tomato_date', today);
+    localStorage.setItem('tomato_count', '0');
+    todayTomatoes = 0;
+  }
+  todaySpan.textContent = todayTomatoes;
+  window.addEventListener('beforeunload', () => {
+    localStorage.setItem('tomato_count', todayTomatoes);
+  });
+
+  renderTasks();
+  updateProgress();
+</script>
+</body>
+</html>

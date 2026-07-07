@@ -1,0 +1,3906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹珠堂打弹珠 v0.2.1 - Pachinko</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        body {
+            background: #050010;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            overflow: hidden
+        }
+
+        canvas {
+            width: 480px;
+            height: 720px;
+            border: 2px solid #ff006e;
+            border-radius: 4px;
+            box-shadow: 0 0 40px rgba(255, 0, 110, 0.6), 0 0 80px rgba(255, 0, 110, 0.3);
+            image-rendering: -webkit-optimize-contrast
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="game"></canvas>
+    <script>
+        /**
+         * config.js - 游戏全局配置与数值体系（三层炮塔版 v0.2.1）
+ * 所有可调参数集中于此，便于平衡调试
+         *
+         * 坐标系：Canvas 左上角(0,0)，X右为正，Y下为正
+         * 游戏区域：三层三明治结构
+         *   - 顶部炮塔区（自动旋转 -60°~+60°）
+         *   - 中部钉子区（长条状）
+         *   - 底部得分区（三级阶梯：300/200/100）
+         * 关卡结构：8轮×3小关卡（小型/大型/Boss盲注），参考小丑牌
+         *
+         * 版本号: 0.2.0 (大版本.功能增减.数值变化或功能修改)
+         */
+
+        const GAME_VERSION = '0.2.1';
+
+        class ConfigLoader {
+            static async _parseCsvFile(path) {
+                try {
+                    const response = await fetch(path);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const text = await response.text();
+                    const lines = text.split(/\r?\n/).filter(l => l.trim());
+                    if (lines.length < 2) return [];
+                    const headers = lines[0].split(',');
+                    const results = [];
+                    for (let i = 1; i < lines.length; i++) {
+                        const values = lines[i].split(',');
+                        const item = {};
+                        for (let j = 0; j < headers.length; j++) {
+                            item[headers[j]] = values[j] || '';
+                        }
+                        results.push(item);
+                    }
+                    return results;
+                } catch (e) {
+                    console.error(`[ConfigLoader] Failed to load ${path}:`, e);
+                    return null;
+                }
+            }
+
+            static parseVersion(versionStr) {
+                const parts = versionStr.split('.').map(p => parseInt(p) || 0);
+                return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
+            }
+
+            static compareVersions(v1, v2) {
+                if (v1.major !== v2.major) return v1.major - v2.major;
+                if (v1.minor !== v2.minor) return v1.minor - v2.minor;
+                return v1.patch - v2.patch;
+            }
+
+            // 代码期望的版本号（每个条目在代码实现时的版本）
+            static get expectedVersions() {
+                return {
+                    chips: {
+                        fission: '1.0.0', bounce: '1.0.1', focus: '1.0.0',
+                        pegPink: '1.0.0', pegCyan: '1.0.0', pegYellow: '1.0.0',
+                        lastStand: '1.0.1', longer: '1.0.0', piggyBank: '1.0.1',
+                        bank: '1.0.1', goldTouch: '1.0.0', edgeMaster: '1.0.1',
+                        streak: '1.0.0', pegMaster: '1.0.1', glassCannon: '1.0.0',
+                        magnet: '1.0.0', luckySeven: '1.1.0', insurance: '1.0.0',
+                        doubleOrNothing: '1.0.1', longpegs: '1.0.0',
+                    },
+                    balls: {
+                        bigBall: '1.0.0', bouncy: '1.0.0', heavy: '1.0.1',
+                        multiSplit: '1.0.0', lucky: '1.1.0', mulBall: '1.0.1',
+                    },
+                    pegs: {
+                        scorePeg: '1.0.0', multPeg: '1.0.0', goldPeg: '1.0.0',
+                        superBounce: '1.0.0', fissionPeg: '1.0.0',
+                    },
+                    connectors: {
+                        normal: '1.0.0', strong: '1.0.0', buffLink: '1.0.0',
+                        bounce: '1.0.0', slow: '1.0.0', coin: '1.0.0',
+                        fission: '1.0.0', attract: '1.0.0', multScore: '1.0.0',
+                        Teleportation: '1.0.0',
+                    },
+                    bosses: {
+                        glassPegs: '1.0.0', slotShuffle: '1.0.0', edgeSeal: '1.0.0',
+                        monochrome: '1.0.0', lowGravity: '1.0.0', mirror: '1.0.0',
+                        lowBounce: '1.0.0', concentrate: '1.0.0',
+                    },
+                };
+            }
+
+            // 每种 CSV 对应的类型标签（用于错误信息）
+            static typeLabel = {
+                chips: '筹码',
+                balls: '珠子',
+                pegs: '钉子',
+                connectors: '连接块',
+                bosses: 'Boss',
+            };
+
+            static async verifyVersions() {
+                const errors = [];
+                const validStatuses = ['active', 'deprecated', 'removed', 'beta'];
+                const fileNames = ['chips', 'balls', 'pegs', 'connectors', 'bosses'];
+                const ev = this.expectedVersions;
+
+                for (const name of fileNames) {
+                    const items = await this._parseCsvFile(`data/${name}.csv`);
+                    if (items === null) {
+                        errors.push(`无法加载文件: data/${name}.csv`);
+                        continue;
+                    }
+
+                    const type = this.typeLabel[name];
+
+                    for (const item of items) {
+                        const id = item['ID'];
+                        const csvVersion = item['版本'] || '0.0.0';
+                        const status = item['状态'] || '';
+
+                        if (!validStatuses.includes(status)) {
+                            errors.push(`无效状态: ${type} - ${id} (状态: ${status})`);
+                        }
+
+                        const expectedVersion = ev[name][id];
+
+                        if (expectedVersion === undefined) {
+                            errors.push(`未知条目: ${type} - ${id}`);
+                        } else if (expectedVersion !== csvVersion) {
+                            const parsedExpected = this.parseVersion(expectedVersion);
+                            const parsedCsv = this.parseVersion(csvVersion);
+                            const cmp = this.compareVersions(parsedCsv, parsedExpected);
+                            if (cmp > 0) {
+                                errors.push(`版本超前: ${type} - ${id} (代码期望 ${expectedVersion}, CSV为 ${csvVersion})`);
+                            } else if (cmp < 0) {
+                                errors.push(`版本过期: ${type} - ${id} (代码期望 ${expectedVersion}, CSV为 ${csvVersion})`);
+                            }
+                        }
+                    }
+                }
+
+                return errors;
+            }
+        }
+
+        const Config = {
+            view: { w: 480, h: 720 },
+
+            // UI区域高度
+            ui: { barH: 50, bottomBarH: 22 },
+
+            // 外框边界
+            frame: {
+                l: 4,
+                r: 476,
+                t: 50,
+                b: 700,
+                wallT: 4,
+            },
+
+            // ===== 炮塔系统配置 =====
+            turret: {
+                x: 240,              // 炮塔中心 X（画布水平中央）
+                y: 56,               // 炮塔中心 Y（紧贴游戏区域顶端）
+                barrelLen: 24,       // 炮管长度（短炮管）
+                minAngle: -70,       // 最小旋转角度（度）
+                maxAngle: 70,        // 最大旋转角度（度）
+                rotationPeriod: 3.0, // 旋转周期（秒）
+                radius: 14,          // 炮塔底座半径
+            },
+
+            // ===== 蓄力系统配置（往返循环）=====
+            charge: {
+                period: 4.0,         // 循环周期（秒，轻→中→高→中→轻）
+                levels: 3,           // 力度等级数
+                levelLabels: ['轻', '中', '高'],
+                levelColors: ['#06ffa5', '#fee440', '#ff006e'],  // 绿/黄/红
+            },
+
+            // 钉子阵列配置（长条状布局，1.5 倍高度）
+            peg: {
+                y0: 114,             // 顶部 Y（炮管末端下方，增大间隔）
+                dy: 27,              // 行间距
+                rows: 18,            // 行数（12×1.5≈18）
+                radius: 5,
+                bounce: 0.5,
+                friction: 0.08,
+            },
+            // 特殊钉子（最上面排，弹力更强，橙色霓虹）
+            specialPeg: {
+                bounce: 0.98,
+                friction: 0.02,
+                radius: 6,
+                color: '#ff6b35',
+            },
+            get pegL() { return this.slotL; },
+            get pegR() { return this.slotR; },
+            get pegCols() { return this.slot.count + 1; },
+            get pegDx() { return (this.pegR - this.pegL) / (this.pegCols - 1); },
+            get pegX0() { return this.pegL; },
+
+            // 得分槽配置（三级阶梯分数）
+            slot: {
+                count: 10,           // 得分槽数量
+                h: 70,               // 每个得分槽高度
+            },
+            // 得分槽顶部Y坐标：钉子区域底部 + 4px 间隙
+            get slotTop() { return this.peg.y0 + this.peg.rows * this.peg.dy + 4; },
+            // 得分槽左边界X坐标：外框左边界
+            get slotL() { return this.frame.l; },
+            // 得分槽右边界X坐标：外框右边界（移除右侧通道后扩展到全宽）
+            get slotR() { return this.frame.r; },
+            // 单个得分槽宽度
+            get slotW() { return (this.slotR - this.slotL) / this.slot.count; },
+
+            // 球物理参数
+            ball: {
+                radius: 7,
+                bounce: 0.5,
+                friction: 0.04,
+                trailLen: 12,
+                gravity: 800,
+            },
+
+            // 发射配置（炮塔模式，速度范围调整）
+            launch: { vMin: 400, vMax: 1400 },
+
+            get floorY() { return this.frame.b - 2; },
+
+            // 各槽位得分（三级阶梯：边缘300 / 次外200 / 中间100）
+            slotScores: [300, 200, 100, 100, 100, 100, 100, 100, 200, 300],
+
+            // ===== 游戏规则定义 =====
+            // 总结构：8轮 × 3关/轮 × 5回合/关 = 120次发射机会
+            //   - 8轮：roundTargets 表的8行，每轮分数递增（见下方）
+            //   - 3关/轮：每轮3个小关卡 [小型盲注, 大型盲注, Boss盲注]
+            //   - 5回合/关：每关玩家有5次发射机会，5回合内累计达标即通关
+            //   - glassCannon 筹码可将每关回合数 -1（最少3）
+            game: { rounds: 5 },
+
+            // ===== 配色方案（复古赛博霓虹，禁止蓝紫渐变）=====
+            colors: {
+                bg: { top: '#0a0014', bot: '#1a0510' },  // 深黑→暗红
+                wall: 'rgba(255,0,110,0.55)',             // 霓虹粉墙体
+                wallGlow: 'rgba(255,0,110,0.15)',         // 粉色光晕
+                frameBorder: '#ff006e',                   // 霓虹粉边框
+                // 钉子4色：霓虹粉/青/黄/绿
+                pegColors: ['#ff006e', '#00f5d4', '#fee440', '#06ffa5'],
+                pegColorTypes: ['pink', 'cyan', 'yellow', 'green'],
+                ball: '#f0f0f0',                          // 霓虹白球
+                ballGlow: 'rgba(0,245,212,0.4)',          // 青色光晕
+                ballTrail: 'rgba(0,245,212,0.6)',         // 青色拖尾
+                blackHoleRing: '#ff006e',                 // 粉色光环
+                pipe: 'rgba(255,0,110,0.4)',              // 粉色管道
+                pipeGlow: 'rgba(255,0,110,0.15)',
+                spring: '#00f5d4',                        // 青色弹簧
+                springDark: '#005a4d',
+                scanline: 'rgba(0,0,0,0.1)',
+                // 稀有度配色（霓虹色系）
+                rarity: {
+                    common: '#888888',
+                    rare: '#00f5d4',       // 霓虹青
+                    epic: '#ff006e',       // 霓虹粉
+                    legendary: '#fee440',  // 霓虹黄
+                },
+                // 霓虹辅助色
+                neon: {
+                    pink: '#ff006e',
+                    cyan: '#00f5d4',
+                    orange: '#ff6b35',
+                },
+            },
+
+            // ===== 关卡系统（8轮×3小关卡，参考小丑牌 Balatro）=====
+            // 每轮3个小关卡：小型盲注 / 大型盲注 / Boss盲注
+            //
+            // 分数阈值表 —— v0.2.0 适配三级得分（300/200/100），整体降低约 40%
+            // 每行 = 一轮，三列 = [小型, 大型, Boss]
+            roundTargets: [
+                //  小型    大型    Boss
+                [180, 270, 360],        // Round 1
+                [600, 900, 1200],       // Round 2
+                [1800, 2700, 3600],       // Round 3
+                [4800, 7200, 9600],       // Round 4
+                [10800, 15600, 21000],      // Round 5
+                [24000, 33000, 45000],      // Round 6
+                [48000, 66000, 90000],      // Round 7
+                [96000, 132000, 180000],    // Round 8
+            ],
+            // 金币奖励表 —— v0.2.1：固定奖励已取消，统一为每关3金币+剩余次数*1金币+其余buff金币
+            // 保留此表仅用于 rounds getter 兼容，reward 字段不再使用
+            roundRewards: [
+                //  小型  大型  Boss
+                [3, 4, 6],   // Round 1
+                [4, 5, 7],   // Round 2
+                [5, 6, 8],   // Round 3
+                [6, 7, 10],   // Round 4
+                [7, 8, 12],   // Round 5
+                [8, 10, 14],   // Round 6
+                [10, 12, 16],   // Round 7
+                [12, 15, 20],   // Round 8
+            ],
+            // 由上面两张表自动生成 rounds 结构（请勿手动修改）
+            get rounds() {
+                if (!this._roundsCache) {
+                    this._roundsCache = this.roundTargets.map((targets, r) => ({
+                        stages: targets.map((target, s) => ({
+                            target,
+                            reward: this.roundRewards[r][s],
+                        })),
+                    }));
+                }
+                return this._roundsCache;
+            },
+            stageNames: ['小型盲注', '大型盲注', 'Boss盲注'],
+            startCoins: 10,
+
+            // ===== 商店 =====
+            shop: {
+                slots: 5,           // 展示位5个（混合三类商品）
+                refreshCost: 1,     // 刷新费用1金
+            },
+
+            // ===== Buff槽位 =====
+            buffSlots: 5,          // 顶部可放置的筹码数量
+
+            // ===== 特效筹码定义（常驻buff，放顶部槽位）=====
+            chips: [
+                {
+                    id: 'fission', name: '裂变', rarity: 'legendary', price: 7,
+                    desc: '珠子首次碰钉触发1次分裂，分裂球得半分，最多4次',
+                },
+                {
+                    id: 'bounce', name: '弹力', rarity: 'rare', price: 4,
+                    desc: '珠子碰1次钉子+3最终分值，落槽时统一结算',
+                },
+                {
+                    id: 'focus', name: '集中', rarity: 'epic', price: 5,
+                    desc: '珠子碰钉后受向中间推力，最终得分×1.5',
+                },
+                {
+                    id: 'pegPink', name: '粉钉', rarity: 'common', price: 2,
+                    desc: '碰到粉色钉子+5分',
+                },
+                {
+                    id: 'pegCyan', name: '青钉', rarity: 'common', price: 2,
+                    desc: '碰到青色钉子+5分',
+                },
+                {
+                    id: 'pegYellow', name: '黄钉', rarity: 'common', price: 2,
+                    desc: '碰到黄色钉子+5分',
+                },
+                {
+                    id: 'lastStand', name: '背水一战', rarity: 'rare', price: 4,
+                    desc: '最后一回合本回合得分×3',
+                },
+                {
+                    id: 'longer', name: '越久越好', rarity: 'epic', price: 5,
+                    desc: '珠子进入钉子区后每停留1s，最终得分+100',
+                },
+                {
+                    id: 'piggyBank', name: '存钱罐', rarity: 'rare', price: 4,
+                    desc: '每回合结束，该筹码的售卖价格+1',
+                },
+                {
+                    id: 'bank', name: '利息银行', rarity: 'epic', price: 5,
+                    desc: '回合结束时，每有10金币获得1金币（最多5）',
+                },
+                {
+                    id: 'goldTouch', name: '点金术', rarity: 'legendary', price: 7,
+                    desc: '珠子碰钉+0.01金币，存够1金币给玩家',
+                },
+                // ===== 新增筹码（roguelike 设计：条件/成长/风险/赌博）=====
+                {
+                    id: 'edgeMaster', name: '边缘大师', rarity: 'epic', price: 5,
+                    desc: '落入边缘槽(槽1/10)得分×3',
+                },
+                {
+                    id: 'streak', name: '连击', rarity: 'rare', price: 4,
+                    desc: '连续落同一槽，每次额外+50%得分', deprecated: true,
+                },
+                {
+                    id: 'pegMaster', name: '钉王', rarity: 'epic', price: 5,
+                    desc: '每击中5钉，落槽时+100分',
+                },
+                {
+                    id: 'glassCannon', name: '玻璃炮', rarity: 'legendary', price: 7,
+                    desc: '得分×3，但每关回合数-1（最少3）',
+                },
+                {
+                    id: 'magnet', name: '磁力', rarity: 'rare', price: 4,
+                    desc: '落槽前向最近槽中心微调轨迹', deprecated: true,
+                },
+                {
+                    id: 'luckySeven', name: '幸运七', rarity: 'rare', price: 3,
+                    desc: '落入奇数槽(1/3/5/7/9)得分×3',
+                },
+                {
+                    id: 'insurance', name: '保险', rarity: 'common', price: 2,
+                    desc: 'MISS时按已碰钉数×20返还分数', deprecated: true,
+                },
+                {
+                    id: 'doubleOrNothing', name: '孤注一掷', rarity: 'legendary', price: 7,
+                    desc: '落槽得分50%三倍/50%归零',
+                },
+                {
+                    id: 'longpegs', name: '板块加强', rarity: 'legendary', price: 7,
+                    desc: '板块碰撞次数翻倍',
+                },
+            ],
+
+            // ===== 特效珠子定义（球属性强化，购买后永久生效）=====
+            ballUpgrades: [
+                {
+                    id: 'bigBall', name: '巨球', rarity: 'rare', price: 4, maxStack: 3,
+                    desc: '球半径+2px', effect: { radiusAdd: 2 }
+                },
+                {
+                    id: 'bouncy', name: '弹球', rarity: 'rare', price: 4, maxStack: 3,
+                    desc: '球弹力+0.15', effect: { bounceAdd: 0.15 }
+                },
+                {
+                    id: 'heavy', name: '重力球', rarity: 'common', price: 2, maxStack: 3,
+                    desc: '球重力减少10%，下落更慢', effect: { gravityMul: 0.9 }
+                },
+                {
+                    id: 'multiSplit', name: '多裂变', rarity: 'legendary', price: 9, maxStack: 2,
+                    desc: '裂变时多生1球（需配合裂变筹码）', effect: { fissionAdd: 1 }
+                },
+                {
+                    id: 'lucky', name: '幸运球', rarity: 'epic', price: 6, maxStack: 1,
+                    desc: '碰钉10%概率+50分，1%概率得分*3',
+                    effect: { luckyChance: 0.1, luckyScore: 50, luckyJackpot: 0.01, luckyJackpotMul: 3 }
+                },
+                {
+                    id: 'mulBall', name: '倍率球', rarity: 'legendary', price: 6, maxStack: 2,
+                    desc: '球出生带×1.5倍率', effect: { scoreMulMul: 1.5 }
+                },
+            ],
+
+            // ===== 特效钉子定义（永久标记场上钉子）=====
+            pegUpgrades: [
+                {
+                    id: 'scorePeg', name: '加分钉', rarity: 'rare', price: 3, color: '#ff006e',
+                    desc: '碰到该钉子+50分', effect: { addScore: 50 }
+                },
+                {
+                    id: 'multPeg', name: '倍率钉', rarity: 'epic', price: 5, color: '#00f5d4',
+                    desc: '碰到该钉子本球分数×1.5', effect: { multScore: 1.5 }
+                },
+                {
+                    id: 'goldPeg', name: '金币钉', rarity: 'rare', price: 4, color: '#fee440',
+                    desc: '碰到该钉子积累0.01金币', effect: { addCoinFrac: 0.01 }
+                },
+                {
+                    id: 'superBounce', name: '弹射钉', rarity: 'rare', price: 3, color: '#ff6b35',
+                    desc: '碰到该钉子弹力变为1.0', effect: { bounce: 1.0 }
+                },
+                {
+                    id: 'fissionPeg', name: '裂变钉', rarity: 'legendary', price: 7, color: '#06ffa5',
+                    desc: '碰到该钉子立即分裂（不消耗裂变次数）', effect: { fission: true }
+                },
+            ],
+
+            // ===== 连接块定义（购买后在相邻钉子间创建板子，回合结束重置）=====
+            pegConnectors: [
+                {
+                    id: 'normal', name: '连接块', rarity: 'common', price: 2,
+                    desc: '在相邻钉子间创建板子，被碰10次后断开',
+                    maxHits: 10, color: '#00f5d4',
+                },
+                {
+                    id: 'strong', name: '加强块', rarity: 'rare', price: 4,
+                    desc: '在相邻钉子间创建板子，被碰20次后断开',
+                    maxHits: 20, color: '#ff006e',
+                },
+                {
+                    id: 'buffLink', name: '共鸣块', rarity: 'rare', price: 5,
+                    desc: '碰到连接块时同时触发旁边两个钉子的buff效果',
+                    maxHits: 10, color: '#fee440',
+                },
+                {
+                    id: 'bounce', name: '弹力板', rarity: 'common', price: 2,
+                    desc: '球碰到时弹力×2',
+                    maxHits: 10, color: '#ff6b35',
+                },
+                {
+                    id: 'slow', name: '减速板', rarity: 'common', price: 2,
+                    desc: '球碰到时重力减少10%',
+                    maxHits: 10, color: '#9d4edd',
+                },
+                {
+                    id: 'coin', name: '金币板', rarity: 'rare', price: 4,
+                    desc: '球碰到时+0.05金币',
+                    maxHits: 10, color: '#d4af37',
+                },
+                {
+                    id: 'fission', name: '裂变板', rarity: 'legendary', price: 9,
+                    desc: '球碰到时触发裂变（只有2次耐久）',
+                    maxHits: 2, color: '#06ffa5',
+                },
+                {
+                    id: 'attract', name: '吸引板', rarity: 'epic', price: 6,
+                    desc: '附近球被轻微吸引向板子',
+                    maxHits: 10, color: '#c77dff',
+                },
+                {
+                    id: 'multScore', name: '倍率板', rarity: 'legendary', price: 9,
+                    desc: '球碰到时本球分数×1.5',
+                    maxHits: 10, color: '#e03131',
+                },
+                {
+                    id: 'Teleportation', name: '传送块', rarity: 'epic', price: 6,
+                    desc: '将触碰到的球传送至钉子区顶部，耐久5次',
+                    maxHits: 5, color: '#00b4d8',
+                },
+            ],
+
+            // ===== Boss 修饰符（规则改写型，仅 Boss 关 stage===2 生效）=====
+            bossMods: [
+                { id: 'glassPegs', name: '透明钉', desc: '30%钉子变透明，球穿过不计分' },
+                { id: 'slotShuffle', name: '槽位混乱', desc: '每次发射后槽位分值重新洗牌' },
+                { id: 'edgeSeal', name: '边缘封印', desc: '边缘槽(1/10)得分强制为0' },
+                { id: 'monochrome', name: '单色限制', desc: '仅一种颜色钉子计分' },
+                { id: 'lowGravity', name: '低重力', desc: '重力减半，球飘忽不定' },
+                { id: 'mirror', name: '镜像', desc: '槽位分值左右翻转', deprecated: true },
+                { id: 'lowBounce', name: '低弹力', desc: '球的弹力-50%' },
+                { id: 'concentrate', name: '集中', desc: '球始终受到向中间聚集的力' },
+            ],
+        };
+
+        /**
+         * sfx.js - Web Audio API 程序化音效合成器（霓虹赛博风格）
+         * 全部音效通过代码生成，无需外部音频文件
+         * 
+         * 音效映射：
+         * - pegHit: 碰钉（正弦波 ping，按颜色变调）
+         * - slotScore: 落槽得分（按分数分层，高分解锁和弦）
+         * - miss: MISS（锯齿波嗡嗡声）
+         * - launch: 发射（滤波噪音呼啸）
+         * - fission: 裂变（爆裂声）
+         * - doubleWin: 双倍成功（上扬和弦）
+         * - doubleLose: 双倍失败（低沉嗡嗡）
+         * - bossIntro: Boss 介绍（警报声）
+         * - coin: 金币获得（叮咚声）
+         * - purchase: 购买（点击声）
+         * - click: UI点击（轻音）
+         * - gameOver: 游戏结束（下行音阶）
+         * - victory: 胜利（上行和弦）
+         * - shopRefresh: 商店刷新（刷新音效）
+         */
+        const SFX = {
+            ctx: null,
+            volume: 0.4,
+            _init() {
+                if (this.ctx) return;
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                this.ctx = new AudioContext();
+            },
+            _gain(val) {
+                return val * this.volume;
+            },
+            play(id, opts = {}) {
+                if (!this.ctx) this._init();
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                switch (id) {
+                    case 'pegHit': this._pegHit(opts.color); break;
+                    case 'slotScore': this._slotScore(opts.score); break;
+                    case 'miss': this._miss(); break;
+                    case 'launch': this._launch(); break;
+                    case 'fission': this._fission(); break;
+                    case 'doubleWin': this._doubleWin(); break;
+                    case 'doubleLose': this._doubleLose(); break;
+                    case 'bossIntro': this._bossIntro(); break;
+                    case 'purchase': this._purchase(); break;
+                    case 'gameOver': this._gameOver(); break;
+                    case 'victory': this._victory(); break;
+                    case 'shopRefresh': this._shopRefresh(); break;
+                    case 'goldExchange': this._goldExchange(); break;
+                    case 'burning': this._burning(); break;
+                }
+            },
+            _osc(type, freq, dur, opts = {}) {
+                const o = this.ctx.createOscillator();
+                const g = this.ctx.createGain();
+                o.type = type;
+                o.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                if (opts.freqEnd) o.frequency.exponentialRampToValueAtTime(opts.freqEnd, this.ctx.currentTime + dur);
+                g.gain.setValueAtTime(this._gain(opts.startGain || 0.2), this.ctx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
+                o.connect(g);
+                g.connect(this.ctx.destination);
+                o.start();
+                o.stop(this.ctx.currentTime + dur);
+            },
+            _noise(dur, opts = {}) {
+                const bufferSize = this.ctx.sampleRate * dur;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = (Math.random() * 2 - 1) * (opts.amp || 0.3);
+                }
+                const s = this.ctx.createBufferSource();
+                s.buffer = buffer;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(this._gain(opts.startGain || 0.15), this.ctx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
+                if (opts.filter) {
+                    const f = this.ctx.createBiquadFilter();
+                    f.type = 'lowpass';
+                    f.frequency.setValueAtTime(opts.filter.start, this.ctx.currentTime);
+                    f.frequency.exponentialRampToValueAtTime(opts.filter.end, this.ctx.currentTime + dur);
+                    s.connect(f);
+                    f.connect(g);
+                } else {
+                    s.connect(g);
+                }
+                g.connect(this.ctx.destination);
+                s.start();
+            },
+            _pegHit(color) {
+                let freq = 800;
+                if (color === '#ff006e') freq = 700;
+                else if (color === '#00f5d4') freq = 900;
+                else if (color === '#fee440') freq = 850;
+                else if (color === '#06ffa5') freq = 950;
+                else if (color === '#ff6b35') freq = 650;
+                this._osc('sine', freq, 0.08, { startGain: 0.12 });
+            },
+            _slotScore(score) {
+                if (score >= 800) {
+                    this._osc('sine', 523, 0.3, { startGain: 0.25 });
+                    setTimeout(() => this._osc('sine', 659, 0.3, { startGain: 0.25 }), 100);
+                    setTimeout(() => this._osc('sine', 784, 0.4, { startGain: 0.3 }), 200);
+                } else if (score >= 500) {
+                    this._osc('sine', 523, 0.25, { startGain: 0.2 });
+                    setTimeout(() => this._osc('sine', 659, 0.3, { startGain: 0.2 }), 80);
+                } else if (score >= 200) {
+                    this._osc('sine', 440, 0.2, { startGain: 0.15 });
+                } else {
+                    this._osc('sine', 220, 0.15, { startGain: 0.1 });
+                }
+            },
+            _miss() {
+                this._osc('sawtooth', 150, 0.3, { startGain: 0.12, freqEnd: 80 });
+            },
+            _launch() {
+                this._noise(0.4, {
+                    startGain: 0.2,
+                    filter: { start: 200, end: 800 }
+                });
+            },
+            _fission() {
+                this._noise(0.25, { startGain: 0.2 });
+                this._osc('square', 200, 0.2, { startGain: 0.15, freqEnd: 80 });
+            },
+            _doubleWin() {
+                this._osc('sine', 659, 0.15, { startGain: 0.2 });
+                setTimeout(() => this._osc('sine', 880, 0.2, { startGain: 0.25 }), 80);
+                setTimeout(() => this._osc('sine', 1047, 0.3, { startGain: 0.3 }), 160);
+            },
+            _doubleLose() {
+                this._osc('sawtooth', 100, 0.4, { startGain: 0.15, freqEnd: 50 });
+            },
+            _bossIntro() {
+                const t = this.ctx.currentTime;
+                const o = this.ctx.createOscillator();
+                const g = this.ctx.createGain();
+                o.type = 'sawtooth';
+                o.frequency.setValueAtTime(440, t);
+                o.frequency.setValueAtTime(660, t + 0.15);
+                o.frequency.setValueAtTime(440, t + 0.3);
+                o.frequency.setValueAtTime(660, t + 0.45);
+                g.gain.setValueAtTime(this._gain(0.1), t);
+                g.gain.exponentialRampToValueAtTime(this._gain(0.15), t + 0.1);
+                g.gain.exponentialRampToValueAtTime(this._gain(0.001), t + 0.6);
+                o.connect(g);
+                g.connect(this.ctx.destination);
+                o.start(t);
+                o.stop(t + 0.6);
+            },
+            _purchase() {
+                this._osc('sine', 600, 0.1, { startGain: 0.15 });
+                setTimeout(() => this._osc('sine', 800, 0.12, { startGain: 0.12 }), 50);
+            },
+            _gameOver() {
+                this._osc('sine', 440, 0.3, { startGain: 0.2, freqEnd: 220 });
+                setTimeout(() => this._osc('sine', 330, 0.3, { startGain: 0.15, freqEnd: 165 }), 200);
+            },
+            _victory() {
+                const notes = [523, 659, 784, 1047];
+                notes.forEach((n, i) => {
+                    setTimeout(() => this._osc('sine', n, 0.4, { startGain: 0.2 }), i * 120);
+                });
+            },
+            _shopRefresh() {
+                this._noise(0.15, { startGain: 0.08 });
+                this._osc('sine', 400, 0.1, { startGain: 0.08, freqEnd: 600 });
+            },
+            _goldExchange() {
+                this._osc('sine', 880, 0.1, { startGain: 0.2 });
+                setTimeout(() => this._osc('sine', 1100, 0.12, { startGain: 0.25 }), 60);
+                setTimeout(() => this._osc('sine', 1320, 0.15, { startGain: 0.3 }), 120);
+                setTimeout(() => this._osc('sine', 1650, 0.2, { startGain: 0.35 }), 180);
+            },
+            // 燃烧效果音：火焰呼啸 + 上扬和弦
+            _burning() {
+                const t = this.ctx.currentTime;
+                // 火焰噪音
+                const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.6, this.ctx.sampleRate);
+                const data = buf.getChannelData(0);
+                for (let i = 0; i < data.length; i++) {
+                    data[i] = (Math.random() * 2 - 1) * (1 - i / data.length) * 0.3;
+                }
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buf;
+                const ng = this.ctx.createGain();
+                ng.gain.setValueAtTime(0.15, t);
+                ng.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+                noise.connect(ng).connect(this.ctx.destination);
+                noise.start(t);
+                // 上扬和弦
+                this._osc('sawtooth', 440, 0.4, { startGain: 0.15, freqEnd: 880 });
+                setTimeout(() => this._osc('square', 660, 0.3, { startGain: 0.12, freqEnd: 990 }), 100);
+                setTimeout(() => this._osc('sine', 880, 0.5, { startGain: 0.2 }), 200);
+            },
+        };
+
+        /**
+         * physics.js - 轻量级2D物理引擎
+         * 圆形-圆形、圆形-线段、圆形-矩形碰撞检测与响应
+         * 支持重力、阻尼、反弹
+         */
+        const Physics = {
+            balls: [],
+            pegs: [],
+            walls: [],       // {type:'seg'|'rect', ...}
+            gravity: 980,
+            substeps: 3,
+
+            reset() {
+                this.balls = [];
+                this.pegs = [];
+                this.walls = [];
+            },
+
+            addBall(x, y, r, opts = {}) {
+                const b = {
+                    x, y, vx: 0, vy: 0, r,
+                    bounce: opts.bounce ?? 0.5,
+                    friction: opts.friction ?? 0.1,
+                    alive: true,
+                    trail: [],
+                    trailLen: opts.trailLen ?? 0,
+                    data: opts.data ?? null
+                };
+                this.balls.push(b);
+                return b;
+            },
+
+            addPeg(x, y, r, opts = {}) {
+                const p = { x, y, r, bounce: opts.bounce ?? 0.55, friction: opts.friction ?? 0.1 };
+                this.pegs.push(p);
+                return p;
+            },
+
+            addSegWall(ax, ay, bx, by, opts = {}) {
+                const wall = {
+                    type: 'seg', ax, ay, bx, by,
+                    maxHits: opts.maxHits || 0,
+                    hits: 0,
+                    broken: false,
+                    onHit: opts.onHit || null,
+                    color: opts.color || '#00f5d4',
+                };
+                this.walls.push(wall);
+                return wall;
+            },
+
+            addRectWall(x, y, w, h) {
+                const wall = { type: 'rect', x, y, w, h };
+                this.walls.push(wall);
+                return wall;
+            },
+
+            // 圆弧墙：mode 'inner' 球在圆弧内侧滑行；mode 'outer' 球在圆弧外侧滑行
+            addArcWall(cx, cy, r, a1, a2, mode = 'inner') {
+                this.walls.push({ type: 'arc', cx, cy, r, a1, a2, mode });
+            },
+
+            step(dt) {
+                const sub = this.substeps;
+                const sdt = dt / sub;
+                this._stepCounter = (this._stepCounter || 0) + 1;
+                for (let s = 0; s < sub; s++) {
+                    for (const ball of this.balls) {
+                        if (!ball.alive) continue;
+                        // 球级别重力倍率（slow 连接块用），默认1
+                        const gMul = (ball.data && ball.data.gravityMul) || 1;
+                        ball.vy += this.gravity * gMul * sdt;
+                        ball.vx *= (1 - 0.02 * sdt);
+                        ball.vy *= (1 - 0.02 * sdt);
+                        ball.x += ball.vx * sdt;
+                        ball.y += ball.vy * sdt;
+
+                        // trail
+                        if (ball.trailLen > 0) {
+                            ball.trail.push({ x: ball.x, y: ball.y });
+                            if (ball.trail.length > ball.trailLen) ball.trail.shift();
+                        }
+
+                        this._collidePegs(ball);
+                        this._collideWalls(ball);
+                    }
+                }
+            },
+
+            _collidePegs(ball) {
+                for (const p of this.pegs) {
+                    if (p.glass) continue;  // 透明钉：球穿过不碰撞
+                    const dx = ball.x - p.x;
+                    const dy = ball.y - p.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const minD = ball.r + p.r;
+                    if (dist < minD && dist > 0.001) {
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        const overlap = minD - dist;
+                        ball.x += nx * overlap;
+                        ball.y += ny * overlap;
+                        const dvx = ball.vx;
+                        const dvy = ball.vy;
+                        const dot = dvx * nx + dvy * ny;
+                        if (dot < 0) {
+                            const b = Math.min(1, p.bounce + (ball.bounce - 0.5));
+                            ball.vx = dvx - (1 + b) * dot * nx;
+                            ball.vy = dvy - (1 + b) * dot * ny;
+                            ball.vx *= (1 - p.friction * 0.3);
+                            // dot<0 已防止 substep 内重复计数（反弹后球远离钉子）
+                            // 不同球可独立触发同一钉子（修复多球同帧碰撞漏计分）
+                            if (ball.onPegHit) ball.onPegHit(p);
+                        }
+                    }
+                }
+            },
+
+            _collideWalls(ball) {
+                for (const w of this.walls) {
+                    if (w.type === 'rect') {
+                        this._collideRect(ball, w);
+                    } else if (w.type === 'arc') {
+                        this._collideArc(ball, w);
+                    } else {
+                        this._collideSeg(ball, w);
+                    }
+                }
+            },
+
+            _collideRect(ball, w) {
+                const cx = Math.max(w.x, Math.min(ball.x, w.x + w.w));
+                const cy = Math.max(w.y, Math.min(ball.y, w.y + w.h));
+                const dx = ball.x - cx;
+                const dy = ball.y - cy;
+                const dist2 = dx * dx + dy * dy;
+                if (dist2 < ball.r * ball.r) {
+                    let nx, ny, dist;
+                    if (dist2 < 0.0001) {
+                        const lx = ball.x - w.x;
+                        const rx = w.x + w.w - ball.x;
+                        const ty = ball.y - w.y;
+                        const by = w.y + w.h - ball.y;
+                        const m = Math.min(lx, rx, ty, by);
+                        if (m === lx) { nx = -1; ny = 0; dist = lx; }
+                        else if (m === rx) { nx = 1; ny = 0; dist = rx; }
+                        else if (m === ty) { nx = 0; ny = -1; dist = ty; }
+                        else { nx = 0; ny = 1; dist = by; }
+                    } else {
+                        dist = Math.sqrt(dist2);
+                        nx = dx / dist;
+                        ny = dy / dist;
+                    }
+                    const overlap = ball.r - dist;
+                    ball.x += nx * overlap;
+                    ball.y += ny * overlap;
+                    const dot = ball.vx * nx + ball.vy * ny;
+                    if (dot < 0) {
+                        ball.vx -= (1 + ball.bounce) * dot * nx;
+                        ball.vy -= (1 + ball.bounce) * dot * ny;
+                    }
+                }
+            },
+
+            _collideSeg(ball, w) {
+                if (w.broken) return;
+                const ax = w.ax, ay = w.ay, bx = w.bx, by = w.by;
+                const abx = bx - ax, aby = by - ay;
+                const apx = ball.x - ax, apy = ball.y - ay;
+                const ab2 = abx * abx + aby * aby;
+                let t = ab2 > 0 ? (apx * abx + apy * aby) / ab2 : 0;
+                t = Math.max(0, Math.min(1, t));
+                const cx = ax + t * abx;
+                const cy = ay + t * aby;
+                const dx = ball.x - cx;
+                const dy = ball.y - cy;
+                const dist2 = dx * dx + dy * dy;
+                if (dist2 < ball.r * ball.r && dist2 > 0.0001) {
+                    const dist = Math.sqrt(dist2);
+                    const nx = dx / dist;
+                    const ny = dy / dist;
+                    const overlap = ball.r - dist;
+                    ball.x += nx * overlap;
+                    ball.y += ny * overlap;
+                    const dot = ball.vx * nx + ball.vy * ny;
+                    if (dot < 0) {
+                        ball.vx -= (1 + ball.bounce) * dot * nx;
+                        ball.vy -= (1 + ball.bounce) * dot * ny;
+
+                        if (w.maxHits > 0) {
+                            // 同一 step() 调用内只计一次碰撞（防止 substeps 多次计数）
+                            if (w._lastHitStep !== this._stepCounter) {
+                                w._lastHitStep = this._stepCounter;
+                                w.hits++;
+                                if (w.onHit) w.onHit(ball, w);
+                                if (w.hits >= w.maxHits) {
+                                    w.broken = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+
+            _collideArc(ball, w) {
+                const dx = ball.x - w.cx;
+                const dy = ball.y - w.cy;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 0.001) return;
+                const angle = Math.atan2(dy, dx);
+                const minA = Math.min(w.a1, w.a2);
+                const maxA = Math.max(w.a1, w.a2);
+                if (angle < minA || angle > maxA) return;
+                if (w.mode === 'outer') {
+                    // 外侧碰撞：球在圆外，法线从圆心指向球，把球推离圆心
+                    const outerLimit = w.r + ball.r;
+                    if (dist < outerLimit) {
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        const overlap = outerLimit - dist;
+                        ball.x += nx * overlap;
+                        ball.y += ny * overlap;
+                        const dot = ball.vx * nx + ball.vy * ny;
+                        if (dot < 0) {
+                            ball.vx -= (1 + ball.bounce) * dot * nx;
+                            ball.vy -= (1 + ball.bounce) * dot * ny;
+                        }
+                    }
+                } else {
+                    // 内侧碰撞：球在圆内，法线从球指向圆心，把球推向圆心
+                    // 只在圆弧附近生效，避免远处球被错误吸引
+                    const innerLimit = w.r - ball.r;
+                    if (dist > innerLimit && dist < w.r + ball.r) {
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        const overlap = dist - innerLimit;
+                        ball.x -= nx * overlap;
+                        ball.y -= ny * overlap;
+                        // 法向速度完全吸收，只保留切向速度，球会沿圆弧内侧滑行
+                        const dot = ball.vx * nx + ball.vy * ny;
+                        if (dot > 0) {
+                            ball.vx -= dot * nx;
+                            ball.vy -= dot * ny;
+                        }
+                    }
+                }
+            }
+        };
+
+        /**
+         * renderer.js - Canvas 2D 渲染器（复古赛博霓虹风格）
+         *
+         * 视觉特色：
+         * - 深黑→暗红渐变背景 + 透视网格（赛博朋克标志性元素）
+         * - 霓虹粉墙体 + 粉色发光边框
+         * - 钉子粉/青/黄/绿四色霓虹发光（shadowBlur bloom）
+         * - 球白色 + 青色光晕；分身球粉色 + 粉色光晕
+         * - 黑洞粉色旋转光环
+         * - 得分槽按分数霓虹色（粉/橙/黄/青/绿）
+         * - 商店三类商品（筹码=方形/珠子=圆形/钉子=菱形）
+         * - 全局禁止蓝紫渐变色
+         */
+
+        class Renderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.w = Config.view.w;
+                this.h = Config.view.h;
+                this.effects = [];      // 粒子特效列表
+                this.floats = [];       // 浮动文字列表
+                this.shake = 0;         // 屏幕震动强度
+                this.flash = 0;         // 屏幕闪光强度
+                this.scanPhase = 0;     // 扫描线动画相位
+                this.particlePool = []; // 粒子对象池
+                this.maxParticles = 200;// 粒子总数封顶
+            }
+
+            // 添加粒子特效（爆炸/消失等）
+            addEffect(x, y, color, count, speed, life) {
+                // 封顶：超出则减少生成数
+                if (this.effects.length >= this.maxParticles) count = Math.min(count, 4);
+                for (let i = 0; i < count; i++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const s = speed * (0.5 + Math.random() * 0.5);
+                    // 从池中取或新建
+                    let e = this.particlePool.pop();
+                    if (e) {
+                        e.x = x; e.y = y;
+                        e.vx = Math.cos(a) * s; e.vy = Math.sin(a) * s;
+                        e.color = color;
+                        e.life = life * (0.5 + Math.random()); e.maxLife = life;
+                        e.size = 2 + Math.random() * 2;
+                    } else {
+                        e = {
+                            x, y,
+                            vx: Math.cos(a) * s,
+                            vy: Math.sin(a) * s,
+                            color,
+                            life: life * (0.5 + Math.random()),
+                            maxLife: life,
+                            size: 2 + Math.random() * 2
+                        };
+                    }
+                    this.effects.push(e);
+                }
+            }
+
+            // 添加浮动文字（得分提示等）
+            addFloat(x, y, text, color, size) {
+                this.floats.push({ x, y, text, color, size, life: 0.8, maxLife: 0.8 });
+            }
+
+            // 更新特效与动画状态
+            update(dt) {
+                this.scanPhase += dt;
+                if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 30);
+                if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 2.5);
+                // 粒子更新（死亡粒子回收到池）
+                for (let i = this.effects.length - 1; i >= 0; i--) {
+                    const e = this.effects[i];
+                    e.life -= dt;
+                    if (e.life <= 0) {
+                        this.effects.splice(i, 1);
+                        if (this.particlePool.length < this.maxParticles) this.particlePool.push(e);
+                        continue;
+                    }
+                    e.x += e.vx * dt;
+                    e.y += e.vy * dt;
+                    e.vx *= (1 - dt * 2.5);
+                    e.vy *= (1 - dt * 2.5);
+                }
+                // 浮动文字更新（向上飘移）
+                for (let i = this.floats.length - 1; i >= 0; i--) {
+                    const f = this.floats[i];
+                    f.life -= dt;
+                    f.y -= dt * 50;
+                    if (f.life <= 0) this.floats.splice(i, 1);
+                }
+            }
+
+            // 主渲染入口
+            render(state) {
+                const C = Config;
+                const ctx = this.ctx;
+                ctx.save();
+                // 屏幕震动
+                if (this.shake > 0) {
+                    ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+                }
+                this._drawBG(ctx, C);
+                this._drawField(ctx, state, C);
+                this._drawTurret(ctx, state, C);
+                this._drawPegs(ctx, state);
+                this._drawConnectors(ctx, state);
+                this._drawSlots(ctx, state, C);
+                // 商店/pegSelect 阶段不绘制球（聚焦商店/钉子选择）
+                if (state.phase === 'play') {
+                    this._drawBall(ctx, state);
+                }
+                this._drawEffects(ctx);
+                this._drawFloats(ctx);
+                this._drawTopBar(ctx, state, C);
+                if (state.phase === 'play') this._drawPlayUI(ctx, state, C);
+                if (state.phase === 'shop') this._drawShop(ctx, state, C);
+                if (state.phase === 'pegSelect') this._drawPegSelectOverlay(ctx, state, C);
+                if (state.phase === 'connectorSelect') this._drawConnectorSelectOverlay(ctx, state, C);
+                if (state.bossIntro > 0) this._drawBossIntro(ctx, state, C);
+                if (state.hoverHit && (state.phase === 'shop' || state.phase === 'play' || state.phase === 'connectorSelect')) this._drawTooltip(ctx, state, C);
+                this._drawScanlines(ctx);
+                this._drawVignette(ctx);
+                // 屏幕闪光（高倍率命中时）
+                if (this.flash > 0) {
+                    ctx.fillStyle = `rgba(255,0,110,${this.flash * 0.35})`;
+                    ctx.fillRect(0, 0, this.w, this.h);
+                }
+                ctx.restore();
+            }
+
+            // ===== 顶栏：金币、轮次/小关卡、5个buff槽、分数/回合 =====
+            _drawTopBar(ctx, state, C) {
+                // 顶栏背景渐变（粉色微光）
+                const g = ctx.createLinearGradient(0, 0, 0, C.ui.barH);
+                g.addColorStop(0, 'rgba(255,0,110,0.22)');
+                g.addColorStop(1, 'rgba(255,0,110,0.05)');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, this.w, C.ui.barH);
+                // 底部霓虹分割线
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = C.colors.frameBorder;
+                ctx.fillStyle = C.colors.frameBorder;
+                ctx.fillRect(0, C.ui.barH - 1, this.w, 1);
+                ctx.shadowBlur = 0;
+
+                // 左：金币（霓虹黄）+ 轮次/小关卡（霓虹青）
+                ctx.fillStyle = '#fee440';
+                ctx.font = 'bold 13px monospace';
+                ctx.textAlign = 'left';
+                ctx.fillText(`💰${state.coins}`, 6, 18);
+                ctx.fillStyle = '#00f5d4';
+                ctx.font = '10px monospace';
+                const stageName = C.stageNames[state.stage] || '';
+                const stageDef = C.rounds[state.round]?.stages[state.stage];
+                const target = stageDef ? stageDef.target : '--';
+                ctx.fillText(`R${state.round + 1}/8 ${stageName}/${target}`, 6, 35);
+
+                // Boss 关显示修饰符名（粉色闪烁）
+                if (state.bossMod) {
+                    const modDef = C.bossMods.find(m => m.id === state.bossMod);
+                    if (modDef) {
+                        const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 200);
+                        ctx.fillStyle = `rgba(255,0,110,${pulse})`;
+                        ctx.font = 'bold 9px monospace';
+                        ctx.fillText(`⚠ ${modDef.name}`, 6, 46);
+                    }
+                }
+
+                // 中：5个buff槽（霓虹边框）
+                const slotW = 34, slotH = 34, gap = 3;
+                const totalW = C.buffSlots * slotW + (C.buffSlots - 1) * gap;
+                const startX = (this.w - totalW) / 2;
+                for (let i = 0; i < C.buffSlots; i++) {
+                    const sx = startX + i * (slotW + gap);
+                    const sy = 8;
+                    const slot = state.buffSlots[i];
+                    // 槽位背景
+                    ctx.fillStyle = 'rgba(20,0,30,0.9)';
+                    ctx.fillRect(sx, sy, slotW, slotH);
+                    const rarity = slot ? this._chipRarity(slot.id) : 'common';
+                    const borderCol = slot ? C.colors.rarity[rarity] : '#442233';
+                    if (slot) {
+                        ctx.shadowBlur = 4;
+                        ctx.shadowColor = borderCol;
+                    }
+                    ctx.strokeStyle = borderCol;
+                    ctx.lineWidth = slot ? 2 : 1;
+                    ctx.strokeRect(sx, sy, slotW, slotH);
+                    ctx.shadowBlur = 0;
+                    if (slot) {
+                        this._drawChipIcon(ctx, slot.id, sx + slotW / 2, sy + slotH / 2, 12);
+                    } else {
+                        ctx.fillStyle = '#553344';
+                        ctx.font = '9px monospace';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`${i + 1}`, sx + slotW / 2, sy + slotH / 2 + 3);
+                    }
+                }
+
+                // 右：分数/回合（play）或商店提示
+                ctx.textAlign = 'right';
+                if (state.phase === 'play') {
+                    const burning = state.burning > 0;
+                    const shakeX = burning ? (Math.random() - 0.5) * 4 : 0;
+                    const shakeY = burning ? (Math.random() - 0.5) * 3 : 0;
+                    ctx.shadowBlur = burning ? 16 : 8;
+                    ctx.shadowColor = burning ? '#ff6b35' : '#fee440';
+                    ctx.fillStyle = burning ? '#ff6b35' : '#fee440';
+                    ctx.font = burning ? 'bold 16px monospace' : 'bold 14px monospace';
+                    ctx.fillText(`${state.score}/${target}`, this.w - 6 + shakeX, 18 + shakeY);
+                    ctx.shadowBlur = 0;
+                    // 燃烧火焰粒子
+                    if (burning) {
+                        const fx = this.w - 50, fy = 10;
+                        for (let i = 0; i < 8; i++) {
+                            const px = fx + (Math.random() - 0.5) * 80;
+                            const py = fy + Math.random() * 25;
+                            const pr = 3 + Math.random() * 5;
+                            const hue = 10 + Math.random() * 40;
+                            ctx.fillStyle = `hsla(${hue}, 100%, 55%, 0.7)`;
+                            ctx.beginPath();
+                            ctx.arc(px, py, pr, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                    const effR = this._effRounds(state);
+                    const left = effR - state.turn;
+                    ctx.fillStyle = left <= 2 ? '#ff006e' : '#06ffa5';
+                    ctx.font = '10px monospace';
+                    ctx.fillText(`回合${state.turn}/${effR}`, this.w - 6, 35);
+                } else if (state.phase === 'shop') {
+                    ctx.fillStyle = '#00f5d4';
+                    ctx.font = '10px monospace';
+                    ctx.fillText('霓虹商店', this.w - 6, 18);
+                    ctx.fillStyle = '#888';
+                    ctx.fillText('配置后开始', this.w - 6, 35);
+                } else if (state.phase === 'pegSelect') {
+                    ctx.fillStyle = '#ff006e';
+                    ctx.font = '10px monospace';
+                    ctx.fillText('选择钉子...', this.w - 6, 18);
+                }
+            }
+
+            // 获取筹码稀有度
+            _chipRarity(id) {
+                const c = Config.chips.find(c => c.id === id);
+                return c ? c.rarity : 'common';
+            }
+
+            // 有效回合数（与 game._effectiveRounds 同步，glassCannon -1 最少3）
+            _effRounds(state) {
+                const hasGlassCannon = state.buffSlots.some(s => s && s.id === 'glassCannon');
+                return Math.max(3, Config.game.rounds - (hasGlassCannon ? 1 : 0));
+            }
+
+            // 辅助：按类型+id 获取商品定义（与 game.js 同步）
+            _getItemDef(type, id) {
+                const C = Config;
+                if (type === 'chip') return C.chips.find(c => c.id === id);
+                if (type === 'ball') return C.ballUpgrades.find(b => b.id === id);
+                if (type === 'peg') return C.pegUpgrades.find(p => p.id === id);
+                if (type === 'connector') return C.pegConnectors.find(c => c.id === id);
+                return null;
+            }
+
+            // 绘制筹码图标（方形 + 名字首字）
+            _drawChipIcon(ctx, id, cx, cy, r) {
+                const C = Config;
+                const chip = C.chips.find(c => c.id === id);
+                if (!chip) return;
+                const col = C.colors.rarity[chip.rarity] || '#888';
+                ctx.shadowBlur = 6;
+                ctx.shadowColor = col;
+                ctx.fillStyle = col;
+                ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+                ctx.shadowBlur = 0;
+                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(cx - r, cy - r, r * 2, r * 2);
+                // 名字首字
+                ctx.fillStyle = '#000';
+                ctx.font = `bold ${r}px monospace`;
+                ctx.textAlign = 'center';
+                ctx.fillText(chip.name[0], cx, cy + r * 0.35);
+            }
+
+            // 绘制商店商品图标（筹码=方形, 珠子=圆形, 钉子=菱形）
+            _drawShopItemIcon(ctx, item, cx, cy, r, col) {
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = col;
+                ctx.fillStyle = col;
+                if (item.type === 'chip') {
+                    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+                } else if (item.type === 'ball') {
+                    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+                } else if (item.type === 'peg') {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cy - r);
+                    ctx.lineTo(cx + r, cy);
+                    ctx.lineTo(cx, cy + r);
+                    ctx.lineTo(cx - r, cy);
+                    ctx.closePath(); ctx.fill();
+                } else if (item.type === 'connector') {
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(cx - r * 0.8, cy - r * 0.6);
+                    ctx.lineTo(cx + r * 0.8, cy + r * 0.6);
+                    ctx.moveTo(cx + r * 0.8, cy - r * 0.6);
+                    ctx.lineTo(cx - r * 0.8, cy + r * 0.6);
+                    ctx.stroke();
+                }
+                ctx.shadowBlur = 0;
+                const def = this._getItemDef(item.type, item.id);
+                if (def) {
+                    ctx.fillStyle = '#000';
+                    ctx.font = `bold ${r}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(def.name[0], cx, cy + r * 0.35);
+                }
+            }
+
+            // play阶段底部UI：力度等级文字+提示
+            _drawPlayUI(ctx, state, C) {
+                // 力度等级文字（炮塔旁已有分段条，此处显示文字标签避免重复）
+                if (state.charging || state.ballReady) {
+                    const level = state.power < 0.33 ? 0 : state.power < 0.67 ? 1 : 2;
+                    const col = C.charge.levelColors[level];
+                    ctx.shadowBlur = 4;
+                    ctx.shadowColor = col;
+                    ctx.fillStyle = col;
+                    ctx.font = 'bold 11px monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`力度:${C.charge.levelLabels[level]}`, 8, this.h - 9);
+                    ctx.shadowBlur = 0;
+                }
+                // 提示
+                ctx.fillStyle = '#00f5d4';
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'left';
+                let hint;
+                if (state.ballReady) hint = '空格蓄力发射';
+                else if (state.recycling) hint = '球回收中...';
+                else if (state.flying) hint = '球飞行中...';
+                else hint = '';
+                if (hint) ctx.fillText(hint, 104, this.h - 9);
+                // 上次得分
+                if (state.lastSlotScore > 0) {
+                    ctx.fillStyle = '#fee440';
+                    ctx.font = '10px monospace';
+                    ctx.textAlign = 'right';
+                    ctx.fillText(`上次:+${state.lastSlotScore}`, this.w - 8, this.h - 9);
+                }
+                // 点金术/金币钉进度（goldFrag > 0 时显示）
+                if (state.goldFrag > 0) {
+                    const pct = Math.floor(state.goldFrag * 100);
+                    ctx.fillStyle = '#fee440';
+                    ctx.font = 'bold 10px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`金${pct}%`, this.w / 2, this.h - 9);
+                    // 进度条
+                    const gbW = 60, gbX = this.w / 2 - gbW / 2, gbY = this.h - 20;
+                    ctx.fillStyle = 'rgba(40,30,0,0.8)';
+                    ctx.fillRect(gbX, gbY, gbW, 4);
+                    ctx.shadowBlur = 3;
+                    ctx.shadowColor = '#fee440';
+                    ctx.fillStyle = '#fee440';
+                    ctx.fillRect(gbX, gbY, gbW * state.goldFrag, 4);
+                    ctx.shadowBlur = 0;
+                }
+                // ===== 目标进度条（顶部细条）=====
+                const stageDef = C.rounds[state.round]?.stages[state.stage];
+                if (stageDef) {
+                    const pbW = this.w - 16, pbX = 8, pbY = C.ui.barH + 2;
+                    ctx.fillStyle = 'rgba(20,0,30,0.8)';
+                    ctx.fillRect(pbX, pbY, pbW, 3);
+                    const pct = Math.min(1, state.score / stageDef.target);
+                    ctx.shadowBlur = 4;
+                    ctx.shadowColor = '#06ffa5';
+                    ctx.fillStyle = '#06ffa5';
+                    ctx.fillRect(pbX, pbY, pbW * pct, 3);
+                    ctx.shadowBlur = 0;
+                }
+                // ===== 连击显示（streak 筹码生效时）=====
+                if (state.streakCount > 0 && state.lastSlotIdx >= 0) {
+                    ctx.shadowBlur = 6;
+                    ctx.shadowColor = '#fee440';
+                    ctx.fillStyle = '#fee440';
+                    ctx.font = 'bold 11px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`连击×${state.streakCount + 1}`, this.w / 2, 60);
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            // ===== Boss 介绍动画（进入 Boss 关时播放 2.5s）=====
+            _drawBossIntro(ctx, state, C) {
+                const modDef = C.bossMods.find(m => m.id === state.bossMod);
+                if (!modDef) return;
+                const t = state.bossIntro;
+                const total = 2.5;
+                const phase = 1 - t / total;  // 0→1
+                // 入场：0-0.3s 淡入+放大；停留：0.3-2.0s；退场：2.0-2.5s 淡出
+                let alpha = 1, scale = 1;
+                if (phase < 0.12) { alpha = phase / 0.12; scale = 0.5 + 0.5 * (phase / 0.12); }
+                else if (phase > 0.8) { alpha = 1 - (phase - 0.8) / 0.2; }
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                // 半透明遮罩
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(0, this.h / 2 - 60, this.w, 120);
+                // 主标题
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = '#ff006e';
+                ctx.fillStyle = '#ff006e';
+                ctx.font = `bold ${Math.round(28 * scale)}px monospace`;
+                ctx.textAlign = 'center';
+                ctx.fillText('BOSS盲注', this.w / 2, this.h / 2 - 15);
+                // 修饰符名
+                ctx.shadowColor = '#fee440';
+                ctx.fillStyle = '#fee440';
+                ctx.font = 'bold 16px monospace';
+                ctx.fillText(modDef.name, this.w / 2, this.h / 2 + 12);
+                // 描述
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#00f5d4';
+                ctx.font = '10px monospace';
+                ctx.fillText(modDef.desc, this.w / 2, this.h / 2 + 32);
+                ctx.restore();
+            }
+
+            // ===== 商店界面（三类商品混合）=====
+            _drawShop(ctx, state, C) {
+                // 半透明遮罩
+                ctx.fillStyle = 'rgba(5,0,10,0.92)';
+                ctx.fillRect(0, C.ui.barH, this.w, this.h - C.ui.barH);
+
+                // 标题（霓虹粉发光）
+                const stageName = C.stageNames[state.stage] || '';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ff006e';
+                ctx.fillStyle = '#ff006e';
+                ctx.font = 'bold 20px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`霓虹商店 · R${state.round + 1}/8 ${stageName}`, this.w / 2, 78);
+                ctx.shadowBlur = 0;
+
+                const itemW = 80, itemH = 82, itemGap = 5;
+                const catGap = 6;
+                const catTitleH = 14;
+                const categories = [
+                    { type: 'chip', label: '筹码', count: 3, color: '#ff006e', startIdx: 0 },
+                    { type: 'peg', label: '钉子', count: 2, color: '#00f5d4', startIdx: 3 },
+                    { type: 'connector', label: '连接块', count: 2, color: '#fee440', startIdx: 5 },
+                    { type: 'ball', label: '珠子', count: 2, color: '#06ffa5', startIdx: 7 },
+                ];
+
+                let startY = 88;
+                for (const cat of categories) {
+                    ctx.shadowBlur = 8;
+                    ctx.shadowColor = cat.color;
+                    ctx.fillStyle = cat.color;
+                    ctx.font = 'bold 11px monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`◆ ${cat.label}`, 30, startY);
+                    ctx.shadowBlur = 0;
+
+                    const catTotalW = cat.count * itemW + (cat.count - 1) * itemGap;
+                    const catX0 = (this.w - catTotalW) / 2;
+                    const itemsY = startY + 4;
+
+                    for (let i = 0; i < cat.count; i++) {
+                        const idx = cat.startIdx + i;
+                        const ix = catX0 + i * (itemW + itemGap);
+                        const item = state.shopOfferings[idx];
+                        if (!item) {
+                            ctx.fillStyle = 'rgba(30,30,40,0.5)';
+                            ctx.fillRect(ix, itemsY, itemW, itemH);
+                            ctx.strokeStyle = '#333';
+                            ctx.lineWidth = 1;
+                            ctx.strokeRect(ix, itemsY, itemW, itemH);
+                            ctx.fillStyle = '#555';
+                            ctx.font = '11px monospace';
+                            ctx.textAlign = 'center';
+                            ctx.fillText('已售', ix + itemW / 2, itemsY + itemH / 2);
+                            continue;
+                        }
+                        const def = this._getItemDef(item.type, item.id);
+                        if (!def) continue;
+                        const rarityCol = C.colors.rarity[def.rarity];
+                        ctx.fillStyle = 'rgba(10,0,20,0.95)';
+                        ctx.fillRect(ix, itemsY, itemW, itemH);
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = rarityCol;
+                        ctx.strokeStyle = rarityCol;
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(ix, itemsY, itemW, itemH);
+                        ctx.shadowBlur = 0;
+                        this._drawShopItemIcon(ctx, item, ix + itemW / 2, itemsY + 16, 10, rarityCol);
+                        ctx.fillStyle = '#fff';
+                        ctx.font = 'bold 10px monospace';
+                        ctx.fillText(def.name, ix + itemW / 2, itemsY + 36);
+                        const typeLabel = { chip: '筹码', ball: '珠子', peg: '钉子', connector: '连接' }[item.type];
+                        ctx.fillStyle = rarityCol;
+                        ctx.font = '8px monospace';
+                        ctx.fillText(typeLabel, ix + itemW / 2, itemsY + 46);
+                        this._drawWrappedText(ctx, def.desc, ix + itemW / 2, itemsY + 55, itemW - 6, 8);
+                        ctx.fillStyle = state.coins >= item.price ? '#06ffa5' : '#ff006e';
+                        ctx.font = 'bold 11px monospace';
+                        ctx.fillText(`${item.price}金`, ix + itemW / 2, itemsY + itemH - 3);
+                    }
+                    startY += itemH + catGap + catTitleH;
+                }
+
+                // 库存区（仅筹码）
+                const invY = startY + 4;
+                ctx.fillStyle = '#00f5d4';
+                ctx.font = 'bold 12px monospace';
+                ctx.textAlign = 'left';
+                ctx.fillText('📦 库存 (点击选中→点击顶部槽位放置)', 20, invY);
+                const invItemW = 100, invItemH = 40, invGap = 8;
+                for (let i = 0; i < state.inventory.length; i++) {
+                    const ix = 20 + i * (invItemW + invGap);
+                    const iy = invY + 6;
+                    const item = state.inventory[i];
+                    const selected = state.selectedInv === i;
+                    const rarityCol = C.colors.rarity[this._chipRarity(item.id)];
+                    ctx.fillStyle = selected ? 'rgba(254,228,64,0.25)' : 'rgba(10,0,20,0.9)';
+                    ctx.fillRect(ix, iy, invItemW, invItemH);
+                    ctx.shadowBlur = selected ? 8 : 4;
+                    ctx.shadowColor = selected ? '#fee440' : rarityCol;
+                    ctx.strokeStyle = selected ? '#fee440' : rarityCol;
+                    ctx.lineWidth = selected ? 3 : 2;
+                    ctx.strokeRect(ix, iy, invItemW, invItemH);
+                    ctx.shadowBlur = 0;
+                    this._drawChipIcon(ctx, item.id, ix + 14, iy + invItemH / 2, 10);
+                    const chip = C.chips.find(c => c.id === item.id);
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 10px monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(chip.name, ix + 28, iy + 17);
+                    ctx.fillStyle = '#06ffa5';
+                    ctx.font = '9px monospace';
+                    ctx.fillText(`卖${item.sellPrice}金`, ix + 28, iy + 31);
+                    // 卖出按钮
+                    ctx.fillStyle = 'rgba(255,0,110,0.6)';
+                    ctx.fillRect(ix + invItemW - 20, iy + 3, 16, 12);
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 8px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('卖', ix + invItemW - 12, iy + 12);
+                    ctx.textAlign = 'left';
+                }
+                if (state.inventory.length === 0) {
+                    ctx.fillStyle = '#666';
+                    ctx.font = '11px monospace';
+                    ctx.fillText('（空）', 20, invY + 26);
+                }
+
+                // 底部按钮：刷新、开始
+                const btnY = invY + 50;
+                // 刷新按钮（霓虹青）
+                const refreshAfford = state.coins >= C.shop.refreshCost;
+                ctx.fillStyle = refreshAfford ? 'rgba(0,245,212,0.85)' : 'rgba(60,60,80,0.6)';
+                ctx.fillRect(40, btnY, 140, 40);
+                ctx.shadowBlur = refreshAfford ? 8 : 0;
+                ctx.shadowColor = '#00f5d4';
+                ctx.strokeStyle = refreshAfford ? '#00f5d4' : '#555';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(40, btnY, 140, 40);
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = refreshAfford ? '#000' : '#888';
+                ctx.font = 'bold 14px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`🔄 刷新 (${C.shop.refreshCost}金)`, 110, btnY + 25);
+
+                // 开始按钮（霓虹绿）
+                ctx.fillStyle = 'rgba(6,255,165,0.9)';
+                ctx.fillRect(this.w - 180, btnY, 140, 40);
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = '#06ffa5';
+                ctx.strokeStyle = '#06ffa5';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(this.w - 180, btnY, 140, 40);
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 16px monospace';
+                ctx.fillText(`▶ 开始游戏`, this.w - 110, btnY + 26);
+
+                // 球强化状态（显示已购珠子叠加数）+ 已标记钉子数：放在按钮中间区域
+                const bu = state.ballUpgrades;
+                const buKeys = Object.keys(bu).filter(k => k.endsWith('Count'));
+                const markedCount = state.pegs.filter(p => p.upgraded).length;
+                if (buKeys.length > 0 || markedCount > 0) {
+                    const infoX = 190, infoW = 100;
+                    const infoY = btnY + 4;
+                    ctx.fillStyle = 'rgba(10,0,20,0.85)';
+                    ctx.fillRect(infoX, infoY, infoW, 32);
+                    ctx.strokeStyle = '#444';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(infoX, infoY, infoW, 32);
+                    ctx.textAlign = 'left';
+                    ctx.font = '9px monospace';
+                    let lineY = infoY + 12;
+                    if (buKeys.length > 0) {
+                        ctx.fillStyle = '#06ffa5';
+                        ctx.fillText('球强化:', infoX + 4, lineY);
+                        let bx = infoX + 40;
+                        ctx.font = '8px monospace';
+                        for (const k of buKeys) {
+                            const id = k.replace('Count', '');
+                            const def = C.ballUpgrades.find(b => b.id === id);
+                            if (!def) continue;
+                            ctx.fillStyle = C.colors.rarity[def.rarity];
+                            ctx.fillText(`${def.name[0]}×${bu[k]}`, bx, lineY);
+                            bx += 28;
+                        }
+                        lineY += 14;
+                    }
+                    if (markedCount > 0) {
+                        ctx.fillStyle = '#ff006e';
+                        ctx.font = '9px monospace';
+                        ctx.fillText(`钉子标记:${markedCount}`, infoX + 4, lineY);
+                    }
+                }
+            }
+
+            // ===== 悬停提示窗口 =====
+            _drawTooltip(ctx, state, C) {
+                const hit = state.hoverHit;
+                if (!hit) return;
+                let def = null, typeLabel = '', priceText = '', rarity = 'common';
+                if (hit.type === 'shopItem') {
+                    const item = state.shopOfferings[hit.index];
+                    if (!item) return;
+                    def = this._getItemDef(item.type, item.id);
+                    if (!def) return;
+                    typeLabel = { chip: '筹码', ball: '珠子', peg: '钉子', connector: '连接块' }[item.type];
+                    priceText = `${item.price}金`;
+                    rarity = def.rarity;
+                } else if (hit.type === 'invItem') {
+                    const item = state.inventory[hit.index];
+                    if (!item) return;
+                    def = this._getItemDef('chip', item.id);
+                    typeLabel = '筹码·库存';
+                    priceText = `卖出${item.sellPrice}金`;
+                    rarity = this._chipRarity(item.id);
+                } else if (hit.type === 'buffSlot') {
+                    const item = state.buffSlots[hit.index];
+                    if (!item) return;
+                    def = this._getItemDef('chip', item.id);
+                    typeLabel = '筹码·已装备';
+                    priceText = `卖出${item.sellPrice}金`;
+                    rarity = this._chipRarity(item.id);
+                } else {
+                    return;
+                }
+                if (!def) return;
+
+                const rarityCol = C.colors.rarity[rarity] || '#888';
+                const tw = 180, th = 80;
+                let ax = 0, ay = 0;
+                if (hit.type === 'shopItem') {
+                    const itemW = 80, itemGap = 5;
+                    const catGap = 6, catTitleH = 14, catItemH = 82;
+                    const cats = [
+                        { count: 3, startIdx: 0 },
+                        { count: 2, startIdx: 3 },
+                        { count: 2, startIdx: 5 },
+                        { count: 2, startIdx: 7 },
+                    ];
+                    const localIdx = hit.index;
+                    for (const cat of cats) {
+                        const catTotalW = cat.count * itemW + (cat.count - 1) * itemGap;
+                        const catX0 = (this.w - catTotalW) / 2;
+                        const itemsY = 88 + 4;
+                        if (localIdx >= cat.startIdx && localIdx < cat.startIdx + cat.count) {
+                            const i = localIdx - cat.startIdx;
+                            ax = catX0 + i * (itemW + itemGap) + itemW / 2;
+                            const catIndex = cats.indexOf(cat);
+                            ay = itemsY + catIndex * (catItemH + catGap + catTitleH) + catItemH;
+                            break;
+                        }
+                    }
+                } else if (hit.type === 'invItem') {
+                    const invItemW = 100, invGap = 8;
+                    ax = 20 + hit.index * (invItemW + invGap) + invItemW / 2;
+                    const invY = 88 + 4 * (82 + 6 + 14) + 4;  // 500
+                    ay = invY + 6 + 40;  // 库存物品底部
+                } else if (hit.type === 'buffSlot') {
+                    const slotW = 34, gap = 3;
+                    const totalW = C.buffSlots * slotW + (C.buffSlots - 1) * gap;
+                    const startX = (this.w - totalW) / 2;
+                    ax = startX + hit.index * (slotW + gap) + slotW / 2;
+                    ay = 8 + 34;
+                }
+                // 窗口位置：锚点下方，避免超出边界
+                let tx = ax - tw / 2;
+                let ty = ay + 6;
+                tx = Math.max(4, Math.min(this.w - tw - 4, tx));
+                if (ty + th > this.h - 4) ty = ay - th - 6;
+
+                // 背景
+                ctx.fillStyle = 'rgba(5,0,15,0.96)';
+                ctx.fillRect(tx, ty, tw, th);
+                // 稀有度边框 + 发光
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = rarityCol;
+                ctx.strokeStyle = rarityCol;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(tx, ty, tw, th);
+                ctx.shadowBlur = 0;
+
+                // 名称
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 13px monospace';
+                ctx.textAlign = 'left';
+                ctx.fillText(def.name, tx + 8, ty + 16);
+                // 类型 + 稀有度
+                ctx.fillStyle = rarityCol;
+                ctx.font = '9px monospace';
+                ctx.fillText(`${typeLabel} · ${rarity}`, tx + 8, ty + 30);
+                // 描述（自动换行）
+                ctx.fillStyle = '#ccc';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                this._drawWrappedText(ctx, def.desc, tx + tw / 2, ty + 44, tw - 12, 10);
+                // 点金术额外显示累积进度
+                if (def.id === 'goldTouch' && state.goldFrag > 0) {
+                    ctx.fillStyle = '#fee440';
+                    ctx.font = 'bold 10px monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`累积: ${Math.floor(state.goldFrag * 100)}%`, tx + 8, ty + th - 6);
+                }
+                // 价格
+                ctx.fillStyle = '#06ffa5';
+                ctx.font = 'bold 11px monospace';
+                ctx.textAlign = 'right';
+                ctx.fillText(priceText, tx + tw - 8, ty + th - 6);
+                ctx.textAlign = 'left';
+            }
+
+            // ===== pegSelect 模式 UI =====
+            _drawPegSelectOverlay(ctx, state, C) {
+                // 半透明遮罩
+                ctx.fillStyle = 'rgba(0,0,0,0.55)';
+                ctx.fillRect(0, 0, this.w, this.h);
+                // 顶部提示
+                const def = C.pegUpgrades.find(u => u.id === state.pendingPegUpgrade);
+                if (!def) return;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = def.color;
+                ctx.fillStyle = def.color;
+                ctx.font = 'bold 18px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`选择一个钉子放置「${def.name}」`, this.w / 2, 100);
+                ctx.font = '11px monospace';
+                ctx.fillStyle = '#aaa';
+                ctx.fillText(`${def.desc}（右键取消）`, this.w / 2, 120);
+                ctx.shadowBlur = 0;
+                // 所有未标记钉子绘制高亮呼吸圈
+                const t = performance.now() / 1000;
+                const pulse = 0.4 + 0.3 * Math.sin(t * 4);
+                for (const peg of state.pegs) {
+                    if (peg.upgraded) continue;
+                    const baseR = peg.special ? 6 : 5;
+                    ctx.strokeStyle = hexA(def.color, pulse * 0.6);
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(peg.x, peg.y, baseR + 6 + pulse * 2, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+
+            // ===== 连接块渲染 =====
+            _drawConnectors(ctx, state) {
+                const C = Config;
+                const t = performance.now() / 1000;
+                for (const conn of state.connectors) {
+                    if (conn.wall.broken) continue;
+                    const def = conn.def;
+                    const hits = conn.wall.hits;
+                    const maxHits = def.maxHits;
+                    const alpha = hits < maxHits ? 1 : 0.3;
+                    const pulse = 0.8 + 0.2 * Math.sin(t * 3);
+
+                    ctx.strokeStyle = hexA(def.color, alpha * pulse);
+                    ctx.lineWidth = 3;
+                    ctx.shadowBlur = 6;
+                    ctx.shadowColor = def.color;
+                    ctx.beginPath();
+                    ctx.moveTo(conn.pegA.x, conn.pegA.y);
+                    ctx.lineTo(conn.pegB.x, conn.pegB.y);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+
+                    if (maxHits > 0) {
+                        const cx = (conn.pegA.x + conn.pegB.x) / 2;
+                        const cy = (conn.pegA.y + conn.pegB.y) / 2;
+                        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.fillStyle = def.color;
+                        ctx.font = 'bold 8px monospace';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`${maxHits - hits}`, cx, cy + 3);
+                    }
+                }
+            }
+
+            // ===== connectorSelect 模式 UI =====
+            _drawConnectorSelectOverlay(ctx, state, C) {
+                ctx.fillStyle = 'rgba(0,0,0,0.55)';
+                ctx.fillRect(0, 0, this.w, this.h);
+                const def = C.pegConnectors.find(c => c.id === state.pendingConnector);
+                if (!def) return;
+
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = def.color;
+                ctx.fillStyle = def.color;
+                ctx.font = 'bold 18px monospace';
+                ctx.textAlign = 'center';
+                if (!state.selectedPeg) {
+                    ctx.fillText(`选择第一个钉子`, this.w / 2, 100);
+                } else {
+                    ctx.fillText(`选择相邻钉子创建「${def.name}」`, this.w / 2, 100);
+                }
+                ctx.font = '11px monospace';
+                ctx.fillStyle = '#aaa';
+                ctx.fillText(`${def.desc}（右键取消 / 再次点击取消选中）`, this.w / 2, 120);
+                ctx.shadowBlur = 0;
+
+                const t = performance.now() / 1000;
+                const pulse = 0.4 + 0.3 * Math.sin(t * 4);
+
+                if (state.selectedPeg) {
+                    const baseR = state.selectedPeg.special ? 6 : 5;
+                    ctx.strokeStyle = hexA(def.color, 1);
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(state.selectedPeg.x, state.selectedPeg.y, baseR + 8, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.fillStyle = def.color;
+                    ctx.beginPath();
+                    ctx.arc(state.selectedPeg.x, state.selectedPeg.y, baseR + 12 + pulse * 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                for (const peg of state.pegs) {
+                    if (peg === state.selectedPeg) continue;
+                    const baseR = peg.special ? 6 : 5;
+                    ctx.strokeStyle = hexA(def.color, pulse * 0.4);
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(peg.x, peg.y, baseR + 4 + pulse * 2, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+
+            // 文本换行绘制（简单按字符截断）
+            _drawWrappedText(ctx, text, cx, y, maxW, lineH) {
+                const chars = text.split('');
+                let line = '';
+                let lineIdx = 0;
+                for (const ch of chars) {
+                    const test = line + ch;
+                    if (ctx.measureText(test).width > maxW && line) {
+                        ctx.fillText(line, cx, y + lineIdx * lineH);
+                        line = ch;
+                        lineIdx++;
+                        if (lineIdx > 1) break;  // 最多2行
+                    } else {
+                        line = test;
+                    }
+                }
+                if (line) ctx.fillText(line, cx, y + lineIdx * lineH);
+            }
+
+            // ===== 点击检测 =====
+            hitTest(x, y, state) {
+                const C = Config;
+                // 顶部buff槽（shop 和 play 阶段都可检测）
+                const slotW = 34, slotH = 34, gap = 3;
+                const totalW = C.buffSlots * slotW + (C.buffSlots - 1) * gap;
+                const startX = (this.w - totalW) / 2;
+                for (let i = 0; i < C.buffSlots; i++) {
+                    const sx = startX + i * (slotW + gap);
+                    if (x >= sx && x <= sx + slotW && y >= 8 && y <= 8 + slotH) {
+                        return { type: 'buffSlot', index: i };
+                    }
+                }
+                if (state.phase !== 'shop') return null;
+                const itemW = 80, itemH = 82, itemGap = 5;
+                const catGap = 6, catTitleH = 14;
+                const categories = [
+                    { count: 3, startIdx: 0 },
+                    { count: 2, startIdx: 3 },
+                    { count: 2, startIdx: 5 },
+                    { count: 2, startIdx: 7 },
+                ];
+                let startY = 88 + 4;  // 对应绘制中 itemsY = startY + 4
+                for (const cat of categories) {
+                    const catTotalW = cat.count * itemW + (cat.count - 1) * itemGap;
+                    const catX0 = (this.w - catTotalW) / 2;
+                    for (let i = 0; i < cat.count; i++) {
+                        const idx = cat.startIdx + i;
+                        const ix = catX0 + i * (itemW + itemGap);
+                        if (x >= ix && x <= ix + itemW && y >= startY && y <= startY + itemH) {
+                            if (state.shopOfferings[idx]) return { type: 'shopItem', index: idx };
+                        }
+                    }
+                    startY += itemH + catGap + catTitleH;
+                }
+                const invY = startY;  // 绘制中 invY = (88 + 4*102) + 4 = 500; hitTest循环结束startY = 92+4*102 = 500
+                const invItemW = 100, invItemH = 40, invGap = 8;
+                for (let i = 0; i < state.inventory.length; i++) {
+                    const ix = 20 + i * (invItemW + invGap);
+                    const iy = invY + 6;  // 对应绘制中 iy = invY + 6
+                    if (x >= ix && x <= ix + invItemW && y >= iy && y <= iy + invItemH) {
+                        if (x >= ix + invItemW - 20 && x <= ix + invItemW - 4 && y >= iy + 3 && y <= iy + 15) {
+                            return { type: 'sellInv', index: i };
+                        }
+                        return { type: 'invItem', index: i };
+                    }
+                }
+                const btnY = invY + 50;
+                if (x >= 40 && x <= 180 && y >= btnY && y <= btnY + 40) return { type: 'refresh' };
+                if (x >= this.w - 180 && x <= this.w - 40 && y >= btnY && y <= btnY + 40) return { type: 'startBtn' };
+                return null;
+            }
+
+            // ===== 背景：渐变 + 透视网格 + 顶部光带 + 星空粒子 =====
+            _drawBG(ctx, C) {
+                // 深黑→暗红垂直渐变
+                const g = ctx.createLinearGradient(0, 0, 0, this.h);
+                g.addColorStop(0, C.colors.bg.top);
+                g.addColorStop(0.5, '#0d0018');
+                g.addColorStop(1, C.colors.bg.bot);
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, this.w, this.h);
+
+                // 透视网格（向消失点收敛）
+                const horizonY = this.h * 0.35;
+                const vpX = this.w / 2;
+                ctx.strokeStyle = 'rgba(255,0,110,0.10)';
+                ctx.lineWidth = 1;
+                // 水平线（透视收缩）
+                for (let i = 0; i < 14; i++) {
+                    const t = i / 13;
+                    const y = horizonY + (this.h - horizonY) * t * t;
+                    ctx.globalAlpha = 0.25 - t * 0.18;
+                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.w, y); ctx.stroke();
+                }
+                // 垂直线（向消失点收敛）
+                for (let i = -10; i <= 10; i++) {
+                    ctx.globalAlpha = 0.10;
+                    ctx.beginPath();
+                    ctx.moveTo(vpX + i * (this.w / 6), horizonY);
+                    ctx.lineTo(vpX + i * 50, this.h);
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+
+                // 星空粒子（伪随机静态背景点缀）
+                const seed = 42;
+                const t = performance.now() / 1000;
+                ctx.fillStyle = '#fff';
+                for (let i = 0; i < 60; i++) {
+                    const sx = ((i * 137 + seed) % this.w);
+                    const sy = ((i * 251 + seed * 7) % this.h);
+                    const twinkle = 0.3 + 0.5 * Math.sin(t * 2 + i * 1.7);
+                    const size = 0.5 + (i % 3) * 0.5;
+                    ctx.globalAlpha = twinkle * 0.6;
+                    ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+
+                // 顶部霓虹光带
+                const topG = ctx.createLinearGradient(0, 0, 0, 50);
+                topG.addColorStop(0, 'rgba(255,0,110,0.22)');
+                topG.addColorStop(0.5, 'rgba(0,245,212,0.08)');
+                topG.addColorStop(1, 'rgba(255,0,110,0)');
+                ctx.fillStyle = topG;
+                ctx.fillRect(0, 0, this.w, 50);
+            }
+
+            // ===== 场地：底部UI栏 + 外墙（4面完整框，霓虹粉发光 + 四角装饰）=====
+            _drawField(ctx, state, C) {
+                // 底部UI栏背景
+                ctx.fillStyle = 'rgba(10,0,15,0.95)';
+                ctx.fillRect(0, this.h - C.ui.bottomBarH, this.w, C.ui.bottomBarH);
+                // 外墙（4面完整框，双层发光）
+                ctx.strokeStyle = C.colors.wall;
+                ctx.lineWidth = 2;
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = C.colors.wallGlow;
+                ctx.strokeRect(C.frame.l, C.frame.t, C.frame.r - C.frame.l, C.frame.b - C.frame.t);
+                // 外层柔和光晕
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = 'rgba(255,0,110,0.08)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(C.frame.l - 2, C.frame.t - 2, C.frame.r - C.frame.l + 4, C.frame.b - C.frame.t + 4);
+                ctx.shadowBlur = 0;
+
+                // 四角装饰（霓虹青色 L 形角标）
+                const t = performance.now() / 1000;
+                const corPulse = 0.5 + 0.3 * Math.sin(t * 2);
+                ctx.strokeStyle = hexA('#00f5d4', 0.4 + corPulse * 0.3);
+                ctx.lineWidth = 2;
+                const corners = [
+                    [C.frame.l, C.frame.t, 1, 1],    // 左上
+                    [C.frame.r, C.frame.t, -1, 1],    // 右上
+                    [C.frame.l, C.frame.b, 1, -1],    // 左下
+                    [C.frame.r, C.frame.b, -1, -1],   // 右下
+                ];
+                const len = 10;
+                for (const [cx, cy, dx, dy] of corners) {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cy - dy * len);
+                    ctx.lineTo(cx, cy);
+                    ctx.lineTo(cx + dx * len, cy);
+                    ctx.stroke();
+                }
+            }
+
+            // ===== 炮塔：底座（圆形）+ 旋转炮管 + 蓄力分段力度条 + 脉冲光晕 =====
+            _drawTurret(ctx, state, C) {
+                const { x, y, barrelLen, radius } = C.turret;
+                const rad = state.turretAngle * Math.PI / 180;
+                const t = performance.now() / 1000;
+                const pulse = 0.7 + 0.3 * Math.sin(t * 4);
+
+                // 炮管（旋转矩形 + 发光锥形）
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(rad);
+                // 炮管光晕
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = '#00f5d4';
+                ctx.fillStyle = hexA('#00f5d4', 0.6 * pulse);
+                ctx.fillRect(-6, 0, 12, barrelLen);
+                ctx.shadowBlur = 0;
+                // 炮管主体
+                ctx.fillStyle = '#005a4d';
+                ctx.fillRect(-4, 0, 8, barrelLen);
+                // 炮管尖端高光
+                ctx.fillStyle = hexA('#00f5d4', pulse);
+                ctx.fillRect(-3, barrelLen - 8, 6, 8);
+                ctx.restore();
+
+                // 准星引导线
+                if (state.ballReady && !state.flying && !state.recycling) {
+                    const tipX = x - barrelLen * Math.sin(rad);
+                    const tipY = y + barrelLen * Math.cos(rad);
+                    const aimLen = 40;
+                    ctx.setLineDash([4, 6]);
+                    ctx.strokeStyle = 'rgba(0,245,212,0.5)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(tipX, tipY);
+                    ctx.lineTo(tipX - aimLen * Math.sin(rad), tipY + aimLen * Math.cos(rad));
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    // 准星小点
+                    ctx.fillStyle = hexA('#00f5d4', 0.7 * pulse);
+                    ctx.beginPath();
+                    ctx.arc(tipX - aimLen * Math.sin(rad), tipY + aimLen * Math.cos(rad), 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // 炮塔底座（圆形 + 脉冲光环）
+                ctx.beginPath();
+                ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
+                ctx.fillStyle = hexA('#ff006e', 0.1 * pulse);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#1a0510';
+                ctx.fill();
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = '#ff006e';
+                ctx.strokeStyle = '#ff006e';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+                // 中心点
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, Math.PI * 2);
+                ctx.fillStyle = '#ff006e';
+                ctx.fill();
+                // 中心高亮
+                ctx.beginPath();
+                ctx.arc(x, y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+
+                // 炮塔角度数值
+                if (state.phase === 'play') {
+                    ctx.fillStyle = 'rgba(0,245,212,0.6)';
+                    ctx.font = '9px monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`塔角:${state.turretAngle.toFixed(0)}°`, 8, C.frame.b - 4);
+                }
+                // 蓄力分段力度条
+                if (state.charging) {
+                    const barX = x + 28, barY = y - 12;
+                    const segW = 14, segH = 10, segGap = 3;
+                    for (let i = 0; i < C.charge.levels; i++) {
+                        const active = state.power >= (i + 0.5) / C.charge.levels;
+                        ctx.fillStyle = active ? C.charge.levelColors[i] : 'rgba(40,40,50,0.6)';
+                        ctx.shadowBlur = active ? 8 : 0;
+                        ctx.shadowColor = C.charge.levelColors[i];
+                        ctx.fillRect(barX + i * (segW + segGap), barY, segW, segH);
+                    }
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            // ===== 钉子（霓虹发光 + 呼吸光晕 + 特效钉子彩色外环）=====
+            _drawPegs(ctx, state) {
+                const C = Config;
+                const t = performance.now() / 1000;
+                for (const p of state.pegs) {
+                    const col = p.color;
+                    const baseR = p.special ? 6 : 5;
+                    // 透明钉（Boss glassPegs）：半透明虚影
+                    if (p.glass) {
+                        ctx.globalAlpha = 0.2;
+                        ctx.strokeStyle = '#888888';
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([2, 2]);
+                        ctx.beginPath(); ctx.arc(p.x, p.y, baseR, 0, Math.PI * 2); ctx.stroke();
+                        ctx.setLineDash([]);
+                        ctx.globalAlpha = 1;
+                        continue;
+                    }
+                    // ===== 特效钉子外环（呼吸光晕）=====
+                    if (p.upgraded) {
+                        const def = C.pegUpgrades.find(u => u.id === p.upgraded);
+                        if (def) {
+                            const uPulse = 0.5 + 0.3 * Math.sin(t * 4 + p.x);
+                            ctx.shadowBlur = 14;
+                            ctx.shadowColor = def.color;
+                            ctx.strokeStyle = def.color;
+                            ctx.lineWidth = 2;
+                            ctx.beginPath(); ctx.arc(p.x, p.y, baseR + 5, 0, Math.PI * 2); ctx.stroke();
+                            ctx.fillStyle = hexA(def.color, 0.15 + 0.1 * uPulse);
+                            ctx.beginPath(); ctx.arc(p.x, p.y, baseR + 8, 0, Math.PI * 2); ctx.fill();
+                            ctx.shadowBlur = 0;
+                        }
+                    }
+                    // ===== 主体（带霓虹发光 bloom + 呼吸光晕）=====
+                    const pegPulse = 0.7 + 0.3 * Math.sin(t * 3 + p.x * 0.5 + p.y * 0.3);
+                    ctx.shadowBlur = 8;
+                    ctx.shadowColor = col;
+                    ctx.fillStyle = col;
+                    ctx.beginPath(); ctx.arc(p.x, p.y, baseR, 0, Math.PI * 2); ctx.fill();
+                    ctx.shadowBlur = 0;
+                    // 白色高光
+                    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+                    ctx.beginPath(); ctx.arc(p.x - baseR * 0.3, p.y - baseR * 0.3, baseR * 0.35, 0, Math.PI * 2); ctx.fill();
+                    // 击中闪光（更大范围）
+                    if (p.flash > 0) {
+                        ctx.fillStyle = `rgba(255,255,255,${p.flash * 0.8})`;
+                        ctx.beginPath(); ctx.arc(p.x, p.y, baseR + 5, 0, Math.PI * 2); ctx.fill();
+                    }
+                    // 特殊钉子（顶排橙色）：呼吸星芒 + 旋转光晕
+                    if (p.special) {
+                        const spPulse = 0.4 + Math.sin(t * 3) * 0.25;
+                        ctx.strokeStyle = hexA(C.colors.neon.orange, spPulse);
+                        ctx.lineWidth = 2;
+                        ctx.beginPath(); ctx.arc(p.x, p.y, baseR + 4, 0, Math.PI * 2); ctx.stroke();
+                        // 星芒十字
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(p.x - baseR - 3, p.y); ctx.lineTo(p.x + baseR + 3, p.y);
+                        ctx.moveTo(p.x, p.y - baseR - 3); ctx.lineTo(p.x, p.y + baseR + 3);
+                        ctx.stroke();
+                    }
+                    // 普通钉子微呼吸光晕
+                    if (!p.special && !p.upgraded) {
+                        ctx.strokeStyle = hexA(col, 0.15 * pegPulse);
+                        ctx.lineWidth = 1;
+                        ctx.beginPath(); ctx.arc(p.x, p.y, baseR + 3, 0, Math.PI * 2); ctx.stroke();
+                    }
+                }
+            }
+
+            // ===== 得分槽（按分数霓虹色 + 渐变填充 + 边缘呼吸光晕）=====
+            _drawSlots(ctx, state, C) {
+                const scores = state.activeSlotScores || C.slotScores;
+                const t = performance.now() / 1000;
+                for (let i = 0; i < C.slot.count; i++) {
+                    const sx = C.slotL + i * C.slotW;
+                    const pts = scores[i];
+                    // 颜色映射：300=粉, 200=橙, 100=绿（三级阶梯）
+                    let col;
+                    if (pts >= 300) col = '#ff006e';
+                    else if (pts >= 200) col = '#ff6b35';
+                    else col = '#06ffa5';
+                    // 渐变背景
+                    const slotGrad = ctx.createLinearGradient(sx, C.slotTop, sx, C.slotTop + C.slot.h);
+                    slotGrad.addColorStop(0, 'rgba(0,0,0,0.65)');
+                    slotGrad.addColorStop(0.3, hexA(col, 0.08));
+                    slotGrad.addColorStop(1, 'rgba(0,0,0,0.45)');
+                    ctx.fillStyle = slotGrad;
+                    ctx.fillRect(sx, C.slotTop, C.slotW - 1, C.slot.h);
+                    // 边框发光
+                    const isEdge = (i === 0 || i === 9);
+                    const pulse = isEdge ? 0.6 + 0.4 * Math.sin(t * 3 + i) : 1;
+                    ctx.shadowBlur = isEdge ? 8 : 4;
+                    ctx.shadowColor = col;
+                    ctx.strokeStyle = hexA(col, 0.6 + 0.4 * pulse);
+                    ctx.lineWidth = isEdge ? 2 : 1.5;
+                    ctx.strokeRect(sx, C.slotTop, C.slotW - 1, C.slot.h);
+                    ctx.shadowBlur = 0;
+                    // 分数文字
+                    ctx.fillStyle = col;
+                    ctx.font = 'bold 11px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(pts, sx + C.slotW / 2, C.slotTop + C.slot.h - 8);
+                    // 槽内分割短线装饰
+                    ctx.strokeStyle = hexA(col, 0.15);
+                    ctx.lineWidth = 0.5;
+                    ctx.beginPath();
+                    ctx.moveTo(sx + 2, C.slotTop + C.slot.h / 2);
+                    ctx.lineTo(sx + C.slotW - 3, C.slotTop + C.slot.h / 2);
+                    ctx.stroke();
+                }
+            }
+
+            // ===== 球：拖尾 + bloom 光晕 + 主体 + 高光 + 外发光环（主球+分身球）=====
+            _drawBall(ctx, state) {
+                const C = Config;
+                const t = performance.now() / 1000;
+                for (const b of state.balls) {
+                    if (!b || !b.alive) continue;
+                    const isMain = !b.data || b.data.isMain;
+                    const ballColor = isMain ? C.colors.ball : C.colors.neon.pink;
+                    const trailColor = isMain ? C.colors.ballTrail : 'rgba(255,0,110,0.6)';
+                    const glowColor = isMain ? C.colors.neon.cyan : C.colors.neon.pink;
+                    const r = b.r;
+                    // 拖尾（渐变透明度+宽度+发光）
+                    if (b.trail && b.trail.length > 1) {
+                        ctx.strokeStyle = trailColor;
+                        ctx.lineCap = 'round';
+                        for (let i = 1; i < b.trail.length; i++) {
+                            const a = i / b.trail.length;
+                            ctx.globalAlpha = a * 0.7;
+                            ctx.lineWidth = r * 0.8 * a;
+                            ctx.shadowBlur = 4;
+                            ctx.shadowColor = trailColor;
+                            ctx.beginPath();
+                            ctx.moveTo(b.trail[i - 1].x, b.trail[i - 1].y);
+                            ctx.lineTo(b.trail[i].x, b.trail[i].y);
+                            ctx.stroke();
+                        }
+                        ctx.shadowBlur = 0;
+                        ctx.globalAlpha = 1;
+                    }
+                    // 外发光环（呼吸脉冲）
+                    const ringPulse = 0.6 + 0.4 * Math.sin(t * 5 + b.x * 0.1);
+                    ctx.fillStyle = hexA(glowColor, 0.08 * ringPulse);
+                    ctx.beginPath(); ctx.arc(b.x, b.y, r + 4, 0, Math.PI * 2); ctx.fill();
+                    // 光晕（bloom）
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = glowColor;
+                    ctx.fillStyle = ballColor;
+                    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill();
+                    ctx.shadowBlur = 0;
+                    // 高光
+                    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                    ctx.beginPath(); ctx.arc(b.x - r * 0.3, b.y - r * 0.3, r * 0.4, 0, Math.PI * 2); ctx.fill();
+                    // 微小高亮点
+                    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+                    ctx.beginPath(); ctx.arc(b.x + r * 0.25, b.y - r * 0.2, r * 0.15, 0, Math.PI * 2); ctx.fill();
+                }
+            }
+
+            // 绘制粒子特效
+            _drawEffects(ctx) {
+                for (const e of this.effects) {
+                    const a = e.life / e.maxLife;
+                    ctx.fillStyle = hexA(e.color, a);
+                    ctx.beginPath(); ctx.arc(e.x, e.y, e.size * a, 0, Math.PI * 2); ctx.fill();
+                }
+            }
+
+            // 绘制浮动文字
+            _drawFloats(ctx) {
+                for (const f of this.floats) {
+                    const a = f.life / f.maxLife;
+                    ctx.globalAlpha = a;
+                    ctx.shadowBlur = 4;
+                    ctx.shadowColor = f.color;
+                    ctx.fillStyle = f.color;
+                    ctx.font = `bold ${f.size}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(f.text, f.x, f.y);
+                    ctx.shadowBlur = 0;
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            // 绘制扫描线（CRT效果）
+            _drawScanlines(ctx) {
+                const C = Config;
+                ctx.fillStyle = C.colors.scanline;
+                const sy = Math.floor(this.scanPhase * 30) % 4;
+                for (let y = sy; y < this.h; y += 4) {
+                    ctx.fillRect(0, y, this.w, 1);
+                }
+            }
+
+            // 绘制暗角（边缘渐暗）
+            _drawVignette(ctx) {
+                for (let i = 0; i < 6; i++) {
+                    ctx.strokeStyle = `rgba(0,0,0,${0.05 - i * 0.006})`;
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(i, i, this.w - i * 2, this.h - i * 2);
+                }
+            }
+
+            // 绘制游戏结束界面（霓虹风格）
+            drawGameOver(ctx, state) {
+                const C = Config;
+                ctx.fillStyle = 'rgba(0,0,0,0.82)';
+                ctx.fillRect(0, 0, this.w, this.h);
+                ctx.textAlign = 'center';
+                if (state.allCleared) {
+                    // 全部通关（霓虹黄发光）
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = '#fee440';
+                    ctx.fillStyle = '#fee440';
+                    ctx.font = 'bold 30px monospace';
+                    ctx.fillText('🏆 全部通关！', this.w / 2, this.h / 2 - 50);
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '16px monospace';
+                    ctx.fillText(`完成全部 ${C.rounds.length} 轮 × 3 关`, this.w / 2, this.h / 2 - 18);
+                    ctx.fillStyle = '#06ffa5';
+                    ctx.fillText(`剩余金币: ${state.coins}`, this.w / 2, this.h / 2 + 8);
+                } else {
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = state.won ? '#fee440' : '#ff006e';
+                    ctx.fillStyle = state.won ? '#fee440' : '#ff006e';
+                    ctx.font = 'bold 30px monospace';
+                    ctx.fillText(state.won ? `R${state.round + 1} 通关！` : '游戏结束', this.w / 2, this.h / 2 - 40);
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '16px monospace';
+                    const stage = C.rounds[state.round]?.stages[state.stage];
+                    const target = stage ? stage.target : 0;
+                    ctx.fillText(`本小关得分: ${state.score} / ${target}`, this.w / 2, this.h / 2 - 8);
+                    if (state.won) {
+                        ctx.fillStyle = '#06ffa5';
+                        ctx.fillText(`金币总计: ${state.coins}`, this.w / 2, this.h / 2 + 18);
+                    } else {
+                        ctx.fillStyle = '#ff006e';
+                        ctx.fillText(`未达到本小关目标 ${target} 分`, this.w / 2, this.h / 2 + 18);
+                    }
+                }
+                ctx.fillStyle = '#00f5d4';
+                ctx.font = '14px monospace';
+                ctx.fillText('按 R 重新开始', this.w / 2, this.h / 2 + 80);
+            }
+        }
+
+        // 辅助函数：hex颜色转rgba并指定透明度
+        function hexA(hex, a) {
+            if (hex.startsWith('#')) {
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                return `rgba(${r},${g},${b},${a})`;
+            }
+            return hex;
+        }
+
+        /**
+         * buffs.js - Buff 注册系统（筹码 + Boss 修饰符钩子）
+         *
+         * 设计目标：
+         * - 抽取 game.js 中散落的 _hasBuff 调用为统一钩子注册表
+         * - 每个 Buff 一处定义，包含所有生命周期钩子
+         * - 保留 _hasBuff(id) 兼容接口，旧调用点可逐步迁移
+         *
+         * 钩子类型：
+         * - onPegHit(ctx)      球碰钉子时触发
+         * - onSlotScore(ctx)   落槽得分时触发（顺序敏感）
+         * - onRoundEnd(ctx)    回合结束时触发
+         * - onCreateConnector(ctx)  创建连接块时触发
+         *
+         * 上下文 ctx 字段：
+         * - game    Game 实例
+         * - ball    球对象（onPegHit/onSlotScore）
+         * - peg     物理钉子（onPegHit）
+         * - pegVis  视觉钉子（onPegHit，可能为 null）
+         * - pts     当前得分（onSlotScore，可修改）
+         * - si      槽位索引（onSlotScore）
+         * - effRounds 有效回合数（onSlotScore）
+         * - maxHits 连接块耐久（onCreateConnector，可修改）
+         */
+
+        const BuffRegistry = {
+            // ===== 碰钉钩子 =====
+            bounce: {
+                onPegHit(ctx) {
+                    ctx.ball.data.bounceBonus += 3;
+                    ctx.game.renderer.addFloat(ctx.ball.x, ctx.ball.y - 10, '+3', '#fee440', 10);
+                },
+            },
+            pegPink: {
+                onPegHit(ctx) {
+                    if (ctx.pegVis?.colorType === 'pink') ctx.ball.data.bounceBonus += 5;
+                },
+            },
+            pegCyan: {
+                onPegHit(ctx) {
+                    if (ctx.pegVis?.colorType === 'cyan') ctx.ball.data.bounceBonus += 5;
+                },
+            },
+            pegYellow: {
+                onPegHit(ctx) {
+                    if (ctx.pegVis?.colorType === 'yellow') ctx.ball.data.bounceBonus += 5;
+                },
+            },
+            goldTouch: {
+                onPegHit(ctx) {
+                    ctx.game._addGoldFrag(0.01, ctx.ball.x, ctx.ball.y);
+                },
+            },
+            focus: {
+                onPegHit(ctx) {
+                    const C = Config;
+                    const slot0X = C.slotL + C.slotW / 2;
+                    const slot9X = C.slotL + 9 * C.slotW + C.slotW / 2;
+                    const targetX = (ctx.ball.x < (C.slotL + C.slotR) / 2) ? slot0X : slot9X;
+                    const dir = targetX - ctx.ball.x;
+                    if (Math.abs(dir) > 1) {
+                        ctx.ball.vx += Math.sign(dir) * 25;
+                    }
+                },
+            },
+            fission: {
+                onPegHit(ctx) {
+                    const d = ctx.ball.data;
+                    if (!d._fissionTriggered && d.fissionGen < 4) {
+                        d._fissionTriggered = true;
+                        ctx.game._fissionBall(ctx.ball);
+                        ctx.stopPropagation = true;
+                    }
+                },
+            },
+
+            // ===== 落槽得分钩子（顺序敏感，按注册顺序执行）=====
+            longer: {
+                onSlotScore(ctx) {
+                    ctx.pts += Math.min(Math.floor(ctx.ball.data.rampTime) * 100, 600);
+                },
+            },
+            focus_score: {
+                onSlotScore(ctx) {
+                    ctx.pts = Math.floor(ctx.pts * 1.5);
+                },
+            },
+            lastStand: {
+                onSlotScore(ctx) {
+                    if (ctx.game.state.turn === ctx.effRounds - 1) {
+                        ctx.pts = Math.floor(ctx.pts * 3);
+                    }
+                },
+            },
+            edgeMaster: {
+                onSlotScore(ctx) {
+                    if (ctx.si === 0 || ctx.si === 9) {
+                        ctx.pts = Math.floor(ctx.pts * 3);
+                    }
+                },
+            },
+            luckySeven: {
+                onSlotScore(ctx) {
+                    if (ctx.si % 2 === 0) {
+                        ctx.pts = Math.floor(ctx.pts * 3);
+                    }
+                },
+            },
+            pegMaster: {
+                onSlotScore(ctx) {
+                    ctx.pts += Math.floor(ctx.ball.data.pegHits / 5) * 100;
+                },
+            },
+            glassCannon: {
+                onSlotScore(ctx) {
+                    ctx.pts = Math.floor(ctx.pts * 3);
+                },
+            },
+            doubleOrNothing: {
+                onSlotScore(ctx) {
+                    if (Math.random() < 0.5) {
+                        ctx.pts = Math.floor(ctx.pts * 3);
+                        ctx.game.renderer.addFloat(ctx.ball.x, ctx.ball.y - 30, '三倍!', '#fee440', 14);
+                        SFX.play('doubleWin');
+                    } else {
+                        ctx.pts = 0;
+                        ctx.game.renderer.addFloat(ctx.ball.x, ctx.ball.y - 30, '归零!', '#ff006e', 14);
+                        SFX.play('doubleLose');
+                    }
+                },
+            },
+
+            // ===== 回合结束钩子 =====
+            piggyBank: {
+                onRoundEnd(ctx) {
+                    for (const slot of ctx.game.state.buffSlots) {
+                        if (slot && slot.id === 'piggyBank') slot.sellPrice += 1;
+                    }
+                },
+            },
+            bank: {
+                onRoundEnd(ctx) {
+                    const interest = Math.min(5, Math.floor(ctx.game.state.coins / 10));
+                    if (interest > 0) {
+                        ctx.game.state.coins += interest;
+                        ctx.game.renderer.addFloat(Config.view.w / 2, 60, `利息+${interest}金`, '#fee440', 14);
+                    }
+                },
+            },
+
+            // ===== 连接块创建钩子 =====
+            longpegs: {
+                onCreateConnector(ctx) {
+                    ctx.maxHits *= 2;
+                },
+            },
+        };
+
+        // focus 筹码在 onPegHit 和 onSlotScore 两个阶段都生效
+        // 通过 focus（碰钉推力）+ focus_score（落槽×1.5）实现
+        BuffRegistry.focus.onSlotScore = BuffRegistry.focus_score.onSlotScore;
+
+        // 统一调用入口：按 buffSlots 顺序执行所有 buff 的指定钩子
+        function applyBuffHook(hookName, ctx) {
+            const slots = ctx.game.state.buffSlots;
+            for (const slot of slots) {
+                if (!slot) continue;
+                const buff = BuffRegistry[slot.id];
+                if (buff && buff[hookName]) {
+                    buff[hookName](ctx);
+                    if (ctx.stopPropagation) return;
+                }
+            }
+        }
+
+
+        // ===== Boss 修饰符注册表 =====
+        const BossModRegistry = {
+            glassPegs: {
+                onActivate(ctx) {
+                    const C = Config;
+                    ctx.game.state.glassPegSet = new Set();
+                    for (const p of ctx.game.state.pegs) {
+                        if (Math.random() < 0.3) {
+                            p.glass = true;
+                            ctx.game.state.glassPegSet.add(p);
+                            const physPeg = Physics.pegs.find(pp =>
+                                Math.abs(pp.x - p.x) < 1 && Math.abs(pp.y - p.y) < 1);
+                            if (physPeg) physPeg.glass = true;
+                        }
+                    }
+                },
+                onDeactivate(ctx) {
+                    if (ctx.game.state.glassPegSet) {
+                        for (const p of ctx.game.state.glassPegSet) {
+                            p.glass = false;
+                            const physPeg = Physics.pegs.find(pp =>
+                                Math.abs(pp.x - p.x) < 1 && Math.abs(pp.y - p.y) < 1);
+                            if (physPeg) physPeg.glass = false;
+                        }
+                        ctx.game.state.glassPegSet = null;
+                    }
+                },
+            },
+            slotShuffle: {
+                onActivate(ctx) { ctx.game._shuffleSlotScores(); },
+            },
+            edgeSeal: {
+                onActivate(ctx) { /* 标记，_onSlot 中处理 */ },
+            },
+            monochrome: {
+                onActivate(ctx) {
+                    const C = Config;
+                    const types = C.colors.pegColorTypes;
+                    ctx.game.state.activePegColor = types[Math.floor(Math.random() * types.length)];
+                },
+            },
+            lowGravity: {
+                onActivate(ctx) {
+                    ctx.game.state.origGravity = Physics.gravity;
+                    Physics.gravity *= 0.5;
+                },
+                onDeactivate(ctx) {
+                    if (ctx.game.state.origGravity !== null) {
+                        Physics.gravity = ctx.game.state.origGravity;
+                        ctx.game.state.origGravity = null;
+                    }
+                },
+            },
+            lowBounce: {
+                onActivate(ctx) {
+                    ctx.game.state.origBounceMul = 1;
+                    for (const b of ctx.game.state.balls) {
+                        b._origBounce = b.bounce;
+                        b.bounce *= 0.5;
+                    }
+                },
+                onDeactivate(ctx) {
+                    if (ctx.game.state.origBounceMul !== undefined) {
+                        for (const b of ctx.game.state.balls) {
+                            if (b._origBounce !== undefined) {
+                                b.bounce = b._origBounce;
+                                delete b._origBounce;
+                            }
+                        }
+                        ctx.game.state.origBounceMul = undefined;
+                    }
+                },
+            },
+            concentrate: {
+                onActivate(ctx) { /* 标记，_update 中处理 */ },
+            },
+        };
+
+        function applyBossModHook(hookName, ctx) {
+            const mod = ctx.game.state.bossMod;
+            if (!mod) return;
+            const entry = BossModRegistry[mod];
+            if (entry && entry[hookName]) entry[hookName](ctx);
+        }
+
+        /**
+         * game.js - 游戏主控逻辑（小丑牌式 8轮×3小关卡 + 三类商品 + 霓虹风格）
+         *
+         * 流程：
+         * 1. phase='shop'：玩家用金币购买筹码/珠子/钉子三类商品
+         *    - 筹码：进库存，可放置到顶部5个buff槽
+         *    - 珠子：立即生效，永久强化球属性
+         *    - 钉子：进入 pegSelect 模式，玩家点击场上钉子完成标记
+         * 2. 点击"开始"→phase='play'，5回合游戏
+         * 3. 分数达标→立即通关，进入下一小关卡商店；5回合用完未达标→gameover
+         * 4. 完成8轮×3小关卡→全部通关
+         */
+
+        class Game {
+            static async start(canvas) {
+                // 单文件版：跳过 CSV 版本校验（所有数据已在 config.js 中硬编码）
+                return new Game(canvas);
+            }
+
+            static _showVersionError(msg) {
+                const container = document.createElement('div');
+                container.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.95); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 9999;
+            font-family: monospace; color: #ff006e; text-align: center;
+        `;
+
+                const title = document.createElement('h1');
+                title.textContent = '配置版本错误';
+                title.style.cssText = 'font-size: 28px; margin-bottom: 20px; color: #ff006e;';
+
+                const body = document.createElement('pre');
+                body.textContent = msg;
+                body.style.cssText = `
+            font-size: 14px; color: #f0f0f0; max-width: 80%;
+            max-height: 60vh; overflow-y: auto; text-align: left;
+            background: #1a1a2e; padding: 20px; border-radius: 8px;
+            border: 2px solid #ff006e;
+        `;
+
+                const hint = document.createElement('p');
+                hint.textContent = '请更新 chips.csv 或代码版本以匹配';
+                hint.style.cssText = 'margin-top: 20px; color: #fee440;';
+
+                container.appendChild(title);
+                container.appendChild(body);
+                container.appendChild(hint);
+                document.body.appendChild(container);
+            }
+
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.renderer = new Renderer(canvas);
+                const C = Config;
+                // ===== 游戏状态 =====
+                this.state = {
+                    phase: 'shop',          // 'shop' | 'play' | 'gameover' | 'pegSelect'
+                    round: 0,               // 当前轮次 0-7
+                    stage: 0,               // 当前小关卡 0-2（小型/大型/Boss）
+                    coins: C.startCoins,    // 玩家金币
+                    score: 0,               // 当前小关卡累计得分
+                    turn: 0,                // 当前小关卡已用回合数
+                    // 球与发射
+                    power: 0,
+                    charging: false,
+                    chargeTime: 0,          // 蓄力累计时间（循环用）
+                    flying: false,
+                    ballReady: false,
+                    ball: null,             // 主球
+                    balls: [],              // 所有活动球（含分身）
+                    recycling: false,
+                    recycleTimer: 0,
+                    // 炮塔系统
+                    turretAngle: 0,         // 当前炮塔角度（度）
+                    turretTime: 0,          // 炮塔旋转累计时间
+                    // 场景
+                    pegs: [],
+                    // 商店：三类商品混合
+                    shopOfferings: [],      // [{type:'chip'|'ball'|'peg', id, price}] 或 null
+                    inventory: [],          // 已购买未放置的筹码实例 [{id, sellPrice}]
+                    buffSlots: new Array(C.buffSlots).fill(null),  // 5个buff槽
+                    selectedInv: -1,        // 库存中选中的索引（用于放置）
+                    // 珠子/钉子强化
+                    ballUpgrades: {},       // 累加效果 {radiusAdd, bounceAdd, gravityAdd, fissionAdd, luckyChance, luckyScore, scoreMulMul}
+                    pendingPegUpgrade: null,// 购买钉子道具后待放置的id
+                    // 连接块系统
+                    connectors: [],         // 当前场上连接块 [{pegA, pegB, wall, def, hits}]
+                    pendingConnector: null, // 待放置的连接块id
+                    selectedPeg: null,      // 已选中的第一个钉子（用于放置连接块）
+                    // UI辅助
+                    lastSlotScore: 0,
+                    over: false,
+                    won: false,
+                    allCleared: false,      // 全部关卡通关
+                    launchTime: 0,          // 击发时间戳（用于15s超时）
+                    hoverHit: null,         // 当前悬停目标（用于提示窗口）
+                    goldFrag: 0,            // 金币碎片累积（点金术+金币钉）
+                    fissionCount: 0,        // 全局分裂次数计数（封顶用）
+                    lastSlotIdx: -1,        // 上次落槽索引（连击筹码用）
+                    streakCount: 0,         // 连击数（连续落同槽）
+                    burning: 0,             // 燃烧效果倒计时（>0 时激活）
+                    // Boss 修饰符
+                    bossMod: null,          // 当前 Boss 修饰符 id
+                    activeSlotScores: null, // 当前生效的槽位分数（Boss 可修改）
+                    glassPegSet: null,      // 透明钉集合
+                    origGravity: null,      // 原始重力（lowGravity 恢复用）
+                    origBounceMul: undefined, // lowBounce 恢复用
+                    activePegColor: null,   // 单色限制：仅此色钉计分
+                    bossIntro: 0,           // Boss 介绍动画剩余时间
+                };
+                this._mainLanded = false;   // 主球是否已消失（落槽或分裂）
+                this._roundEnded = false;   // 当前回合是否已结算（防重复调用_endRound）
+                this._setupInput();
+                this._refreshShop(true);    // 初始免费刷新
+                this._buildField();
+                this._spawnBall();
+                this._loop = this._loop.bind(this);
+                this.lastT = performance.now();
+                requestAnimationFrame(this._loop);
+            }
+
+            // ===== 输入 =====
+            _setupInput() {
+                window.addEventListener('keydown', e => {
+                    if (this.state.phase === 'gameover') {
+                        if (e.code === 'KeyR') this._restart();
+                        return;
+                    }
+                    if (this.state.phase === 'play') {
+                        if (e.code === 'Space') {
+                            if (this.state.ballReady && !this.state.flying && !this.state.charging) {
+                                this.state.charging = true;
+                                this.state.chargeTime = 0;
+                                e.preventDefault();
+                            }
+                        }
+                    }
+                });
+                window.addEventListener('keyup', e => {
+                    if (e.code === 'Space' && this.state.charging) {
+                        this.state.charging = false;
+                        this._launch();
+                        e.preventDefault();
+                    }
+                });
+                // 鼠标点击：商店购买/放置/出售/刷新/开始 + pegSelect钉子标记
+                this.canvas.addEventListener('click', (ev) => this._onClick(ev));
+                // 鼠标悬停：检测悬停目标用于显示提示窗口（shop + play + connectorSelect 阶段）
+                this.canvas.addEventListener('mousemove', (ev) => {
+                    if (this.state.phase !== 'shop' && this.state.phase !== 'play' &&
+                        this.state.phase !== 'connectorSelect') {
+                        this.state.hoverHit = null;
+                        return;
+                    }
+                    const p = this._toCanvas(ev);
+                    this.state.hoverHit = this.renderer.hitTest(p.x, p.y, this.state);
+                });
+                this.canvas.addEventListener('mouseleave', () => {
+                    this.state.hoverHit = null;
+                });
+                // 右键取消 pegSelect/connectorSelect 模式（已扣金币不退）
+                this.canvas.addEventListener('contextmenu', (ev) => {
+                    ev.preventDefault();
+                    if (this.state.phase === 'pegSelect') {
+                        this.state.pendingPegUpgrade = null;
+                        this.state.phase = 'shop';
+                    } else if (this.state.phase === 'connectorSelect') {
+                        this.state.pendingConnector = null;
+                        this.state.selectedPeg = null;
+                        this.state.phase = 'shop';
+                    }
+                });
+            }
+
+            // 屏幕坐标→canvas坐标
+            _toCanvas(ev) {
+                const rect = this.canvas.getBoundingClientRect();
+                const sx = (ev.clientX - rect.left) * (Config.view.w / rect.width);
+                const sy = (ev.clientY - rect.top) * (Config.view.h / rect.height);
+                return { x: sx, y: sy };
+            }
+
+            _onClick(ev) {
+                // ===== pegSelect 模式：点击场上钉子完成标记 =====
+                if (this.state.phase === 'pegSelect') {
+                    const p = this._toCanvas(ev);
+                    let nearest = null, minDist = 22;
+                    for (const peg of this.state.pegs) {
+                        if (peg.upgraded) continue;
+                        const d = Math.hypot(peg.x - p.x, peg.y - p.y);
+                        if (d < minDist) { minDist = d; nearest = peg; }
+                    }
+                    if (nearest) {
+                        nearest.upgraded = this.state.pendingPegUpgrade;
+                        const def = Config.pegUpgrades.find(u => u.id === this.state.pendingPegUpgrade);
+                        nearest.upgradeColor = def.color;
+                        nearest.upgradeR = nearest.special ? 6 : 5;
+                        this.renderer.addEffect(nearest.x, nearest.y, def.color, 14, 100, 0.6);
+                        this.renderer.addFloat(nearest.x, nearest.y - 15, def.name, def.color, 12);
+                        this.state.pendingPegUpgrade = null;
+                        this.state.phase = 'shop';
+                    }
+                    return;
+                }
+                // ===== connectorSelect 模式：双点击放置连接块 =====
+                if (this.state.phase === 'connectorSelect') {
+                    const p = this._toCanvas(ev);
+                    let nearest = null, minDist = 22;
+                    for (const peg of this.state.pegs) {
+                        const d = Math.hypot(peg.x - p.x, peg.y - p.y);
+                        if (d < minDist) { minDist = d; nearest = peg; }
+                    }
+                    if (nearest) {
+                        if (!this.state.selectedPeg) {
+                            this.state.selectedPeg = nearest;
+                        } else if (this.state.selectedPeg === nearest) {
+                            this.state.selectedPeg = null;
+                        } else {
+                            if (this._arePegsAdjacent(this.state.selectedPeg, nearest)) {
+                                this._createConnector(this.state.selectedPeg, nearest);
+                                this.state.selectedPeg = null;
+                                this.state.pendingConnector = null;
+                                this.state.phase = 'shop';
+                            } else {
+                                this.renderer.addFloat((this.state.selectedPeg.x + nearest.x) / 2,
+                                    (this.state.selectedPeg.y + nearest.y) / 2, '钉子不相邻!', '#ff006e', 12);
+                                this.state.selectedPeg = nearest;
+                            }
+                        }
+                    }
+                    return;
+                }
+                if (this.state.phase !== 'shop') return;
+                const p = this._toCanvas(ev);
+                const hit = this.renderer.hitTest(p.x, p.y, this.state);
+                if (!hit) return;
+                switch (hit.type) {
+                    case 'shopItem': this._buy(hit.index); break;
+                    case 'invItem': this._selectInv(hit.index); break;
+                    case 'buffSlot': this._toggleBuff(hit.index); break;
+                    case 'refresh': this._refreshShop(false); break;
+                    case 'startBtn': this._startPlay(); break;
+                    case 'sellInv': this._sellInv(hit.index); break;
+                }
+            }
+
+            // ===== 商店逻辑（分类展示）=====
+            _refreshShop(free) {
+                const C = Config;
+                if (!free) {
+                    if (this.state.coins < C.shop.refreshCost) return;
+                    this.state.coins -= C.shop.refreshCost;
+                    SFX.play('shopRefresh');
+                }
+                const ownedChipIds = new Set();
+                for (const inv of this.state.inventory) ownedChipIds.add(inv.id);
+                for (const slot of this.state.buffSlots) if (slot) ownedChipIds.add(slot.id);
+
+                // 分类商店：筹码(3), 钉子(2), 连接块(2), 珠子(2)
+                // 过滤掉已弃用条目（deprecated: true）
+                const notDeprecated = item => !item.deprecated;
+                const shopCategories = [
+                    { type: 'chip', count: 3, pool: C.chips.filter(c => !ownedChipIds.has(c.id) && notDeprecated(c)) },
+                    { type: 'peg', count: 2, pool: C.pegUpgrades.filter(notDeprecated) },
+                    { type: 'connector', count: 2, pool: C.pegConnectors.filter(notDeprecated) },
+                    { type: 'ball', count: 2, pool: C.ballUpgrades.filter(notDeprecated) },
+                ];
+
+                this.state.shopOfferings = [];
+                for (const cat of shopCategories) {
+                    for (let i = 0; i < cat.count; i++) {
+                        if (cat.pool.length === 0) {
+                            this.state.shopOfferings.push(null);
+                            continue;
+                        }
+                        const item = cat.pool[Math.floor(Math.random() * cat.pool.length)];
+                        this.state.shopOfferings.push({
+                            type: cat.type,
+                            id: item.id,
+                            price: item.price,
+                        });
+                    }
+                }
+                this.state.selectedInv = -1;
+            }
+
+            // 辅助：按类型+id 获取商品定义
+            _getItemDef(type, id) {
+                const C = Config;
+                if (type === 'chip') return C.chips.find(c => c.id === id);
+                if (type === 'ball') return C.ballUpgrades.find(b => b.id === id);
+                if (type === 'peg') return C.pegUpgrades.find(p => p.id === id);
+                if (type === 'connector') return C.pegConnectors.find(c => c.id === id);
+                return null;
+            }
+
+            // 应用珠子效果（累加到 ballUpgrades）
+            _applyBallUpgrade(id) {
+                const def = Config.ballUpgrades.find(u => u.id === id);
+                if (!def) return;
+                const bu = this.state.ballUpgrades;
+                const e = def.effect;
+                if (e.radiusAdd) bu.radiusAdd = (bu.radiusAdd || 0) + e.radiusAdd;
+                if (e.bounceAdd) bu.bounceAdd = (bu.bounceAdd || 0) + e.bounceAdd;
+                if (e.gravityAdd) bu.gravityAdd = (bu.gravityAdd || 0) + e.gravityAdd;
+                if (e.gravityMul) bu.gravityMul = (bu.gravityMul || 1) * e.gravityMul;
+                if (e.fissionAdd) bu.fissionAdd = (bu.fissionAdd || 0) + e.fissionAdd;
+                if (e.luckyChance) bu.luckyChance = e.luckyChance;
+                if (e.luckyScore) bu.luckyScore = e.luckyScore;
+                if (e.luckyJackpot) bu.luckyJackpot = e.luckyJackpot;
+                if (e.luckyJackpotMul) bu.luckyJackpotMul = e.luckyJackpotMul;
+                if (e.scoreMulMul) bu.scoreMulMul = (bu.scoreMulMul || 1) + (e.scoreMulMul - 1);
+                bu[id + 'Count'] = (bu[id + 'Count'] || 0) + 1;
+            }
+
+            _buy(shopIdx) {
+                const C = Config;
+                const item = this.state.shopOfferings[shopIdx];
+                if (!item || this.state.coins < item.price) return;
+                this.state.coins -= item.price;
+                SFX.play('purchase');
+                if (item.type === 'chip') {
+                    this.state.inventory.push({ id: item.id, sellPrice: Math.max(1, item.price - 2) });
+                } else if (item.type === 'ball') {
+                    const def = this._getItemDef('ball', item.id);
+                    if (!def) { this.state.coins += item.price; return; }
+                    // 校验叠加上限
+                    const cur = this.state.ballUpgrades[item.id + 'Count'] || 0;
+                    if (def.maxStack && cur >= def.maxStack) {
+                        this.state.coins += item.price;  // 退款
+                        this.renderer.addFloat(Config.view.w / 2, 80, `${def.name}已满级`, '#ff006e', 13);
+                        return;
+                    }
+                    this._applyBallUpgrade(item.id);
+                    this.renderer.addFloat(Config.view.w / 2, 80, `已获得：${def.name}`, '#06ffa5', 13);
+                } else if (item.type === 'peg') {
+                    this.state.pendingPegUpgrade = item.id;
+                    this.state.phase = 'pegSelect';
+                } else if (item.type === 'connector') {
+                    this.state.pendingConnector = item.id;
+                    this.state.selectedPeg = null;
+                    this.state.phase = 'connectorSelect';
+                }
+                this.state.shopOfferings[shopIdx] = null;
+            }
+
+            _selectInv(invIdx) {
+                this.state.selectedInv = this.state.selectedInv === invIdx ? -1 : invIdx;
+            }
+
+            _sellInv(invIdx) {
+                const item = this.state.inventory[invIdx];
+                if (!item) return;
+                this.state.coins += item.sellPrice;
+                this.state.inventory.splice(invIdx, 1);
+                if (this.state.selectedInv === invIdx) this.state.selectedInv = -1;
+                else if (this.state.selectedInv > invIdx) this.state.selectedInv--;
+            }
+
+            // 点击buff槽：若选中库存→放置；若槽位有筹码→取下回库存
+            _toggleBuff(slotIdx) {
+                const slot = this.state.buffSlots[slotIdx];
+                if (slot) {
+                    this.state.inventory.push(slot);
+                    this.state.buffSlots[slotIdx] = null;
+                    this.state.selectedInv = -1;
+                } else if (this.state.selectedInv >= 0) {
+                    const item = this.state.inventory[this.state.selectedInv];
+                    if (item) {
+                        this.state.buffSlots[slotIdx] = item;
+                        this.state.inventory.splice(this.state.selectedInv, 1);
+                        this.state.selectedInv = -1;
+                    }
+                }
+            }
+
+            _startPlay() {
+                this.state.phase = 'play';
+                this.state.score = 0;
+                this.state.turn = 0;
+                this.state.launchTime = 0;  // 重置超时计时器
+                this.state.lastSlotScore = 0;
+                this.state.fissionCount = 0;
+                this.state.lastSlotIdx = -1;
+                this.state.streakCount = 0;
+                this.state.burning = 0;
+                this._clearBossMod();
+                this._applyBossMod();
+                this._resetConnectors();
+                // 设置全局重力（基础值 + 珠子强化，Boss lowGravity 在 _applyBossMod 中叠加）
+                Physics.gravity = Config.ball.gravity + (this.state.ballUpgrades.gravityAdd || 0);
+                if (this.state.ballUpgrades.gravityMul) Physics.gravity *= this.state.ballUpgrades.gravityMul;
+                // 重新应用 Boss 修饰符的重力效果（因为上面覆盖了）
+                if (this.state.bossMod === 'lowGravity') Physics.gravity *= 0.5;
+                this._spawnBall();
+            }
+
+            // ===== 场景构建 =====
+            _buildField() {
+                const C = Config;
+                Physics.reset();
+                Physics.gravity = C.ball.gravity;
+
+                // 外框 4 面墙（三层炮塔模型：无弯道/通道缺口）
+                const T = C.frame.wallT;
+                Physics.addRectWall(C.frame.l - T, C.frame.t - T, T, C.frame.b - C.frame.t + T * 2);          // 左壁
+                Physics.addRectWall(C.frame.r, C.frame.t - T, T, C.frame.b - C.frame.t + T * 2);              // 右壁
+                Physics.addRectWall(C.frame.l - T, C.frame.t - T, C.frame.r - C.frame.l + T * 2, T);           // 顶壁
+                Physics.addRectWall(C.frame.l - T, C.frame.b, C.frame.r - C.frame.l + T * 2, T);              // 底壁
+
+                // 钉子阵列（含颜色类型 colorType 用于筹码识别）
+                const pc = C.colors.pegColors;
+                const pt = C.colors.pegColorTypes;
+                for (let row = 0; row < C.peg.rows; row++) {
+                    const off = row % 2 === 1 ? C.pegDx / 2 : 0;
+                    const valid = [];
+                    for (let col = 0; col < C.pegCols; col++) {
+                        const px = C.pegX0 + col * C.pegDx + off;
+                        if (px < C.pegL || px > C.pegR) continue;
+                        valid.push(px);
+                    }
+                    if (valid.length === 0) continue;
+                    const minPx = valid[0], maxPx = valid[valid.length - 1];
+                    for (let vi = 0; vi < valid.length; vi++) {
+                        const px = valid[vi];
+                        const py = C.peg.y0 + row * C.peg.dy;
+                        if (py > C.slotTop - 15) continue;
+                        const isEdge = (px === minPx || px === maxPx);
+                        let gen = true, isSpecial = false;
+                        if (row === 0) { if (isEdge) isSpecial = true; else gen = false; }
+                        else if (row === 1) { isSpecial = !isEdge; }
+                        if (!gen) continue;
+                        const pegBounce = isSpecial ? C.specialPeg.bounce : C.peg.bounce;
+                        const pegFriction = isSpecial ? C.specialPeg.friction : C.peg.friction;
+                        const pegRadius = isSpecial ? C.specialPeg.radius : C.peg.radius;
+                        Physics.addPeg(px, py, pegRadius, { bounce: pegBounce, friction: pegFriction });
+                        const colorIdx = (row * C.pegCols + vi) % pc.length;
+                        this.state.pegs.push({
+                            x: px, y: py,
+                            color: isSpecial ? C.specialPeg.color : pc[colorIdx],
+                            colorType: isSpecial ? 'special' : pt[colorIdx],
+                            flash: 0,
+                            special: isSpecial,
+                            upgraded: null,        // 特效钉子id（购买后标记）
+                            upgradeColor: null,
+                        });
+                    }
+                }
+
+                for (let i = 1; i < C.slot.count; i++) {
+                    Physics.addRectWall(C.slotL + i * C.slotW - 1, C.slotTop, 2, C.slot.h);
+                }
+            }
+
+            // ===== 连接块系统 =====
+            _arePegsAdjacent(pegA, pegB) {
+                const C = Config;
+                const dist = Math.hypot(pegA.x - pegB.x, pegA.y - pegB.y);
+                return dist < C.pegDx * 1.5;
+            }
+
+            _createConnector(pegA, pegB) {
+                const C = Config;
+                const def = C.pegConnectors.find(c => c.id === this.state.pendingConnector);
+                if (!def) return;
+
+                // 连接块创建 Buff 钩子（longpegs 耐久翻倍）
+                let maxHits = def.maxHits;
+                const ctx = { game: this, maxHits };
+                applyBuffHook('onCreateConnector', ctx);
+                maxHits = ctx.maxHits;
+
+                const wall = Physics.addSegWall(pegA.x, pegA.y, pegB.x, pegB.y, {
+                    maxHits,
+                    color: def.color,
+                    onHit: (ball, w) => this._onConnectorHit(ball, w, def, pegA, pegB),
+                });
+
+                this.state.connectors.push({
+                    pegA, pegB, wall, def,
+                });
+
+                this.renderer.addEffect((pegA.x + pegB.x) / 2, (pegA.y + pegB.y) / 2, def.color, 8, 80, 0.5);
+                this.renderer.addFloat((pegA.x + pegB.x) / 2, (pegA.y + pegB.y) / 2 - 15, def.name, def.color, 12);
+            }
+
+            _onConnectorHit(ball, wall, def, pegA, pegB) {
+                const C = Config;
+                const d = ball.data;
+
+                this.renderer.addEffect((pegA.x + pegB.x) / 2, (pegA.y + pegB.y) / 2, def.color, 6, 60, 0.4);
+
+                switch (def.id) {
+                    case 'bounce':
+                        ball.vx *= 2;
+                        ball.vy *= 2;
+                        this.renderer.addFloat(ball.x, ball.y - 10, '弹力×2', '#ff6b35', 11);
+                        break;
+                    case 'slow':
+                        // 球级别重力减少：修改当前球的重力倍率，不影响全局
+                        d.gravityMul = (d.gravityMul || 1) * 0.9;
+                        this.renderer.addFloat(ball.x, ball.y - 10, '重力-10%', '#9d4edd', 11);
+                        break;
+                    case 'coin':
+                        this._addGoldFrag(0.05, ball.x, ball.y);
+                        break;
+                    case 'fission':
+                        if (d.fissionGen < 4 && this.state.fissionCount < 8) {
+                            this._fissionBall(ball);
+                        }
+                        break;
+                    case 'multScore':
+                        d.scoreMul *= 1.5;
+                        this.renderer.addFloat(ball.x, ball.y - 15, '×1.5', '#e03131', 12);
+                        break;
+                    case 'buffLink':
+                        const pegAPhys = Physics.pegs.find(p => Math.abs(p.x - pegA.x) < 1 && Math.abs(p.y - pegA.y) < 1);
+                        const pegBPhys = Physics.pegs.find(p => Math.abs(p.x - pegB.x) < 1 && Math.abs(p.y - pegB.y) < 1);
+                        if (pegAPhys && ball.onPegHit) ball.onPegHit(pegAPhys);
+                        if (pegBPhys && ball.onPegHit) ball.onPegHit(pegBPhys);
+                        break;
+                    case 'Teleportation':
+                        // 传送至钉子区顶部：保留x（钳到钉子区），y置为钉子区顶部
+                        ball.x = Math.max(C.pegL + 4, Math.min(C.pegR - 4, ball.x));
+                        ball.y = C.peg.y0 - 6;
+                        ball.vy = 60;  // 轻微向下，避免立即被弹回
+                        ball.vx *= 0.4;
+                        this.renderer.addEffect(ball.x, ball.y, def.color, 12, 80, 0.6);
+                        this.renderer.addFloat(ball.x, ball.y - 12, '传送!', def.color, 12);
+                        break;
+                }
+            }
+
+            // 每回合重置连接板耐久：连接板永久存在，但 hits 每回合刷新
+            _resetConnectors() {
+                for (const conn of this.state.connectors) {
+                    if (conn.wall) {
+                        conn.wall.hits = 0;
+                        conn.wall.broken = false;
+                    }
+                }
+            }
+
+            _applyAttractConnectors(dt) {
+                const C = Config;
+                for (const conn of this.state.connectors) {
+                    if (conn.wall.broken || conn.def.id !== 'attract') continue;
+                    const cx = (conn.pegA.x + conn.pegB.x) / 2;
+                    const cy = (conn.pegA.y + conn.pegB.y) / 2;
+                    for (const b of this.state.balls) {
+                        if (!b.alive) continue;
+                        const dist = Math.hypot(b.x - cx, b.y - cy);
+                        if (dist < 40 && dist > 0) {
+                            const nx = (cx - b.x) / dist;
+                            const ny = (cy - b.y) / dist;
+                            b.vx += nx * 30 * dt;
+                            b.vy += ny * 30 * dt;
+                        }
+                    }
+                }
+            }
+
+            // ===== 球管理 =====
+            _makeBall(x, y, opts = {}) {
+                const C = Config;
+                const bu = this.state.ballUpgrades;
+                let radius = opts.radius ?? C.ball.radius;
+                let bounce = C.ball.bounce;
+                let scoreMul = opts.scoreMul ?? 1;
+                // 仅主球享受珠子强化（分身球继承父球属性）
+                if (opts.isMain !== false) {
+                    if (bu.radiusAdd) radius += bu.radiusAdd;
+                    if (bu.bounceAdd) bounce += bu.bounceAdd;
+                    if (bu.scoreMulMul) scoreMul *= bu.scoreMulMul;
+                }
+                // 注意：不在此设置 Physics.gravity，避免裂变时覆盖 Boss 的 lowGravity 效果
+                // 全局重力在 _startPlay / _startRecycle 中统一设置
+                const b = Physics.addBall(x, y, radius, {
+                    bounce,
+                    friction: C.ball.friction,
+                    trailLen: C.ball.trailLen,
+                });
+                b.vx = 0; b.vy = 0;
+                b.data = {
+                    isMain: opts.isMain ?? true,
+                    pegHits: 0,         // 碰钉次数（裂变用）
+                    bounceBonus: 0,     // 弹力累计分
+                    rampTime: 0,        // 钉子区停留时间
+                    goldFrag: 0,        // 点金术碎片
+                    fissionGen: opts.fissionGen ?? 0,  // 分裂代数
+                    scoreMul,                                // 分数倍率（应用倍率珠）
+                    luckyChance: bu.luckyChance || 0,        // 幸运珠概率
+                    luckyScore: bu.luckyScore || 0,          // 幸运珠加分
+                    luckyJackpot: bu.luckyJackpot || 0,      // 幸运珠大奖概率
+                    luckyJackpotMul: bu.luckyJackpotMul || 1, // 幸运珠大奖倍率
+                    lastPeg: null,      // 上次碰的钉子（防重复计数）
+                    stuckTime: 0,       // 卡死检测：低速持续时间
+                    gravityMul: 1,      // 球级别重力倍率（slow 连接块用）
+                };
+                b.onPegHit = (peg) => this._onPegHit(b, peg);
+                // Boss lowBounce: 对新球应用弹力减半，便于 _clearBossMod 恢复
+                if (this.state.bossMod === 'lowBounce') {
+                    b._origBounce = b.bounce;
+                    b.bounce *= 0.5;
+                }
+                return b;
+            }
+
+            _spawnBall() {
+                // 清理旧球（物理引擎+ball列表）
+                if (this.state.ball) {
+                    this.state.ball.alive = false;
+                    const idx = Physics.balls.indexOf(this.state.ball);
+                    if (idx >= 0) Physics.balls.splice(idx, 1);
+                }
+                for (const b of this.state.balls) {
+                    if (b !== this.state.ball) {
+                        b.alive = false;
+                        const i = Physics.balls.indexOf(b);
+                        if (i >= 0) Physics.balls.splice(i, 1);
+                    }
+                }
+                this.state.balls = [];
+                this.state.ball = null;       // 不创建待机球——松开空格时在 _launch 中创建
+                this.state.flying = false;
+                this.state.ballReady = true;
+                this.state.recycling = false;
+                this._mainLanded = false;
+                this._roundEnded = false;
+            }
+
+            // 检查buff槽是否包含某筹码
+            _hasBuff(id) {
+                return this.state.buffSlots.some(s => s && s.id === id);
+            }
+
+            // 金币碎片累积（点金术+金币钉共用）：存够1金币时兑换+特效
+            _addGoldFrag(amount, x, y) {
+                this.state.goldFrag += amount;
+                if (this.state.goldFrag >= 1) {
+                    this.state.goldFrag -= 1;
+                    this.state.coins += 1;
+                    // 兑换特效：金色爆发 + 浮动文字 + 闪光
+                    this.renderer.addEffect(x, y, '#fee440', 16, 150, 0.6);
+                    this.renderer.addFloat(x, y - 25, '+1金!', '#fee440', 18);
+                    this.renderer.flash = Math.max(this.renderer.flash, 0.4);
+                    SFX.play('goldExchange');
+                }
+            }
+
+            // 有效回合数（glassCannon -1，最少3）
+            _effectiveRounds() {
+                return Math.max(3, Config.game.rounds - (this._hasBuff('glassCannon') ? 1 : 0));
+            }
+
+            // ===== Boss 修饰符系统 =====
+            _applyBossMod() {
+                const C = Config;
+                // 仅 Boss 关（stage===2）应用修饰符
+                if (this.state.stage !== 2 || !C.bossMods) return;
+                // 随机选一个修饰符（过滤掉已弃用的）
+                const availableMods = C.bossMods.filter(m => !m.deprecated);
+                if (availableMods.length === 0) return;
+                const mod = availableMods[Math.floor(Math.random() * availableMods.length)];
+                this.state.bossMod = mod.id;
+                this.state.activeSlotScores = [...C.slotScores];
+                this.state.bossIntro = 2.5;
+                SFX.play('bossIntro');
+                // 按类型应用（通过 BossModRegistry 钩子）
+                applyBossModHook('onActivate', { game: this });
+            }
+
+            _shuffleSlotScores() {
+                const arr = this.state.activeSlotScores;
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+            }
+
+            _clearBossMod() {
+                // 通过 BossModRegistry 钩子恢复副作用（重力/弹力/透明钉）
+                applyBossModHook('onDeactivate', { game: this });
+                this.state.bossMod = null;
+                this.state.activeSlotScores = null;
+                this.state.activePegColor = null;
+                this.state.bossIntro = 0;
+            }
+
+            // 钉子被击中：应用筹码 + 特效钉子 + 幸运珠
+            _onPegHit(b, peg) {
+                if (!b || !b.data || !peg) return;
+                let pegVis = null;
+                for (const p of this.state.pegs) {
+                    if (Math.abs(p.x - peg.x) < 1 && Math.abs(p.y - peg.y) < 1) { pegVis = p; break; }
+                }
+                if (pegVis) {
+                    pegVis.flash = 1.0;
+                    this.renderer.addEffect(peg.x, peg.y, '#fee440', 4, 80, 0.35);
+                }
+
+                const d = b.data;
+                d.pegHits++;
+
+                // 音效冷却 80ms（ISSUE #002 修复：防止夹角处叠加）
+                const now = performance.now();
+                if (!d._lastPegSound || now - d._lastPegSound > 80) {
+                    if (pegVis) SFX.play('pegHit', { color: pegVis.color });
+                    d._lastPegSound = now;
+                }
+
+                // ===== monochrome Boss：非匹配色钉子跳过 bonus，但裂变仍触发 =====
+                if (this.state.activePegColor && pegVis && pegVis.colorType !== this.state.activePegColor) {
+                    this.renderer.addEffect(peg.x, peg.y, '#444444', 2, 50, 0.2);
+                    const ctx = { game: this, ball: b, peg, pegVis, stopPropagation: false };
+                    if (BuffRegistry.fission) BuffRegistry.fission.onPegHit?.(ctx);
+                    if (ctx.stopPropagation) return;
+                    return;
+                }
+
+                // ===== 特效钉子（购买后永久标记，非 buff 不迁移）=====
+                if (pegVis && pegVis.upgraded) {
+                    const def = Config.pegUpgrades.find(u => u.id === pegVis.upgraded);
+                    if (def) {
+                        if (def.effect.addScore) {
+                            d.bounceBonus += def.effect.addScore;
+                            this.renderer.addFloat(b.x, b.y - 15, `+${def.effect.addScore}`, def.color, 11);
+                        }
+                        if (def.effect.multScore) {
+                            d.scoreMul *= def.effect.multScore;
+                            this.renderer.addFloat(b.x, b.y - 25, `×${def.effect.multScore}`, def.color, 12);
+                        }
+                        if (def.effect.addCoinFrac) {
+                            this._addGoldFrag(def.effect.addCoinFrac, b.x, b.y);
+                        }
+                        if (def.effect.bounce) {
+                            peg.bounce = def.effect.bounce;
+                        }
+                        if (def.effect.fission && d.fissionGen < 4) {
+                            this._fissionBall(b);
+                            return;
+                        }
+                    }
+                }
+
+                // ===== 幸运珠（球属性强化，非 buff 不迁移）=====
+                if (d.luckyChance > 0 && Math.random() < d.luckyChance) {
+                    d.bounceBonus += d.luckyScore;
+                    this.renderer.addFloat(b.x, b.y - 20, `幸运+${d.luckyScore}`, '#fee440', 12);
+                }
+                if (d.luckyJackpot > 0 && Math.random() < d.luckyJackpot) {
+                    d.scoreMul *= d.luckyJackpotMul;
+                    this.renderer.addFloat(b.x, b.y - 30, `大奖×${d.luckyJackpotMul}!`, '#ff006e', 14);
+                }
+
+                // ===== Buff 钩子：bounce/pegPink/pegCyan/pegYellow/goldTouch/focus/fission =====
+                const ctx = { game: this, ball: b, peg, pegVis, stopPropagation: false };
+                applyBuffHook('onPegHit', ctx);
+                if (ctx.stopPropagation) return;
+            }
+
+            // 裂变：原球消失，生成 2 + fissionAdd 个下一代球（半径递减、分数倍率减半）
+            _fissionBall(parent) {
+                const C = Config;
+                // 全局分裂次数封顶 8 次 + 球数上限 24
+                if (this.state.fissionCount >= 8 || this.state.balls.length >= 24) return;
+                this.state.fissionCount++;
+                const bu = this.state.ballUpgrades;
+                const gen = parent.data.fissionGen + 1;
+                const mul = parent.data.scoreMul * 0.5;
+                const radius = Math.max(3, C.ball.radius * Math.pow(0.85, gen));
+                const childCount = Math.min(4, 2 + (bu.fissionAdd || 0));  // 多裂变珠子+1，封顶4
+
+                // 如果是主球分裂，标记主球已消失（等待分身球落槽再结束回合）
+                if (parent.data.isMain) {
+                    this._mainLanded = true;
+                    this.state.flying = false;
+                    this.state.ball = null;  // 主球已分裂消失
+                }
+
+                // 原球消失：从物理引擎和球列表移除
+                parent.alive = false;
+                const pIdx = Physics.balls.indexOf(parent);
+                if (pIdx >= 0) Physics.balls.splice(pIdx, 1);
+                const bIdx = this.state.balls.indexOf(parent);
+                if (bIdx >= 0) this.state.balls.splice(bIdx, 1);
+
+                // 生成 childCount 个下一代球，按角度均匀散开
+                for (let i = 0; i < childCount; i++) {
+                    const child = this._makeBall(parent.x, parent.y, {
+                        isMain: false,
+                        fissionGen: gen,
+                        scoreMul: mul,
+                        radius: radius,
+                    });
+                    // 角度按 i/(childCount-1) 在 [-π/4, +π/4] 均匀分布（childCount=1 时为 0）
+                    const t = childCount === 1 ? 0.5 : i / (childCount - 1);
+                    const ang = (t - 0.5) * (Math.PI / 2) + (Math.random() - 0.5) * 0.3;
+                    const sp = 140 + Math.random() * 80;
+                    child.vx = Math.sin(ang) * sp;
+                    child.vy = -Math.abs(Math.cos(ang) * sp) * 0.4;
+                    this.state.balls.push(child);
+                }
+
+                // 霓虹粉分裂特效
+                this.renderer.addEffect(parent.x, parent.y, '#ff006e', 14, 120, 0.5);
+                this.renderer.addFloat(parent.x, parent.y - 15, `分裂!G${gen}×${childCount}`, '#ff006e', 12);
+                SFX.play('fission');
+            }
+
+            // [DEPRECATED] 磁力筹码：球接近槽位区时向最近槽中心微调
+            // _applyMagnet(dt) {
+            //     if (!this._hasBuff('magnet')) return;
+            //     const C = Config;
+            //     for (const b of this.state.balls) {
+            //         if (!b.alive || !b.data.onRamp) continue;
+            //         if (b.y < C.slotTop - 80 || b.y > C.slotTop + C.slot.h) continue;
+            //         let nearestSlot = Math.floor((b.x - C.slotL) / C.slotW);
+            //         nearestSlot = Math.max(0, Math.min(C.slot.count - 1, nearestSlot));
+            //         const targetX = C.slotL + nearestSlot * C.slotW + C.slotW / 2;
+            //         const dir = targetX - b.x;
+            //         if (Math.abs(dir) > 2) {
+            //             b.vx += Math.sign(dir) * 60 * dt;
+            //         }
+            //     }
+            // }
+
+            _launch() {
+                const C = Config;
+                if (!this.state.ballReady || this.state.flying) return;
+                this.state.ballReady = false;
+                this.state.flying = true;
+                this.state.launchTime = performance.now();
+                const sp = C.launch.vMin + (C.launch.vMax - C.launch.vMin) * this.state.power;
+                const rad = this.state.turretAngle * Math.PI / 180;
+                // 在炮管末端创建球（炮管方向为(-sin(rad), cos(rad))，与ctx.rotate渲染一致）
+                const bx = C.turret.x - C.turret.barrelLen * Math.sin(rad);
+                const by = C.turret.y + C.turret.barrelLen * Math.cos(rad);
+                const b = this._makeBall(bx, by, { isMain: true });
+                b.vx = -sp * Math.sin(rad);
+                b.vy = sp * Math.cos(rad);
+                this.state.ball = b;
+                this.state.balls.push(b);
+                // 调试：在清零前保存并打印发射参数
+                const launchedPower = this.state.power;
+                console.log(`[发射] 塔角=${this.state.turretAngle.toFixed(1)}° | 球@(${bx.toFixed(0)},${by.toFixed(0)}) 速(${b.vx.toFixed(0)},${b.vy.toFixed(0)}) | 力度=${launchedPower.toFixed(2)} 速度=${sp.toFixed(0)}`);
+                this.state.power = 0;
+                this.state.chargeTime = 0;
+                // 炮口闪光：在球出生位置产生粒子特效
+                this.renderer.addEffect(bx, by, '#00f5d4', 8, 80, 0.3);
+                SFX.play('launch');
+                // slotShuffle Boss：每次发射后重洗槽位分
+                if (this.state.bossMod === 'slotShuffle') {
+                    this._shuffleSlotScores();
+                    this.renderer.addFloat(Config.view.w / 2, C.slotTop - 10, '槽位重洗!', '#ff006e', 12);
+                }
+            }
+
+            // ===== 落槽检测（主球+分身球） =====
+            _checkSlots() {
+                const C = Config;
+                const slotR = C.slotL + C.slotW * C.slot.count;
+                // 先收集所有落槽球，避免遍历中修改数组（_onSlot会splice删除球）
+                const landed = [];
+                for (const b of this.state.balls) {
+                    if (!b.alive) continue;
+                    if (b.y > C.slotTop && b.y < C.slotTop + C.slot.h && b.x > C.slotL && b.x < slotR) {
+                        const si = Math.floor((b.x - C.slotL) / C.slotW);
+                        if (si >= 0 && si < C.slot.count) landed.push({ b, si });
+                    }
+                }
+                for (const item of landed) {
+                    if (item.b.alive) this._onSlot(item.b, item.si);
+                }
+            }
+
+            // 球落槽：结算分数
+            _onSlot(b, si) {
+                const C = Config;
+                const d = b.data;
+                const prevScore = this.state.score;
+                // 移除该球
+                b.alive = false;
+                const idx = Physics.balls.indexOf(b);
+                if (idx >= 0) Physics.balls.splice(idx, 1);
+                const bIdx = this.state.balls.indexOf(b);
+                if (bIdx >= 0) this.state.balls.splice(bIdx, 1);
+
+                // 基础分：读 activeSlotScores（Boss 可修改），fallback 到 C.slotScores
+                const scores = this.state.activeSlotScores || C.slotScores;
+                let pts = scores[si];
+
+
+                // 分身球分数倍率（裂变/倍率钉/倍率珠）
+                pts = Math.floor(pts * d.scoreMul);
+                // 弹力/钉子加分（球属性，非 buff）
+                pts += d.bounceBonus;
+                // Buff 钩子链（longer/focus/lastStand/edgeMaster/luckySeven/pegMaster/glassCannon/doubleOrNothing）
+                // 顺序敏感，按 buffSlots 注册顺序执行；pts 通过 ctx 传递，钩子修改后读回
+                const effRounds = this._effectiveRounds();
+                const ctx = { game: this, ball: b, pts, si, effRounds };
+                applyBuffHook('onSlotScore', ctx);
+                pts = ctx.pts;
+
+                // edgeSeal Boss：边缘槽(0/9)最终强制 0 分（覆盖所有加分）
+                if (this.state.bossMod === 'edgeSeal' && (si === 0 || si === 9)) {
+                    pts = 0;
+                }
+
+                this.state.score += pts;
+                // 燃烧效果：单次得分使总分首次超过关卡目标
+                const stage = C.rounds[this.state.round]?.stages[this.state.stage];
+                const target = stage ? stage.target : 0;
+                if (target > 0 && prevScore < target && this.state.score >= target) {
+                    this.state.burning = 2.5;
+                    this.renderer.flash = 1.0;
+                    this.renderer.shake = 14;
+                    this.renderer.addFloat(Config.view.w / 2, 40, '超额达标!', '#ff6b35', 18);
+                    SFX.play('burning');
+                }
+                // 霓虹配色：高分粉/橙，中分黄，低分青/绿
+                const color = pts >= 800 ? '#ff006e' : pts >= 500 ? '#ff6b35' : pts >= 200 ? '#fee440' : '#00f5d4';
+                this.renderer.addFloat(C.slotL + si * C.slotW + C.slotW / 2, C.slotTop + C.slot.h / 2,
+                    `+${pts}`, color, 22);
+                this.renderer.addEffect(C.slotL + si * C.slotW + C.slotW / 2, C.slotTop + C.slot.h / 2,
+                    color, 12, 120, 0.5);
+                if (pts >= 800) { this.renderer.flash = 1; this.renderer.shake = 10; }
+                else if (pts >= 500) { this.renderer.shake = Math.max(this.renderer.shake, 5); }
+                SFX.play('slotScore', { score: pts });
+
+                if (d.isMain) {
+                    this.state.flying = false;
+                    this.state.lastSlotScore = pts;
+                    this._mainLanded = true;
+                }
+                // 主球已落槽/分裂后，等所有分身球也落槽再回收并结束回合
+                this._maybeRecycle();
+            }
+
+            // 当主球已消失（落槽或分裂）且无活动球时：结束回合并启动回收
+            _maybeRecycle() {
+                if (this.state.over) return;
+                if (!this._mainLanded) return;
+                const alive = this.state.balls.filter(b => b.alive).length;
+                if (alive === 0 && !this.state.recycling) {
+                    // 统一在此处结束回合（避免主球分裂时未调用_endRound）
+                    this._endRound();
+                    // 仅在仍处于play阶段且未通关/失败时启动回收
+                    if (this.state.phase === 'play' && !this.state.over) {
+                        this._startRecycle();
+                    }
+                }
+            }
+
+            // 回合结束：结算回合类buff + 胜负判定（防重复调用）
+            _endRound() {
+                if (this._roundEnded) return;
+                this._roundEnded = true;
+                this.state.turn++;  // 累加已用回合数
+                // 回合结束 Buff 钩子（piggyBank/bank）
+                applyBuffHook('onRoundEnd', { game: this });
+                this._checkWinLose();
+            }
+
+            _startRecycle() {
+                const C = Config;
+                const b = this.state.ball;
+                if (b) {
+                    this.renderer.addEffect(b.x, b.y, '#ff006e', 12, 100, 0.5);
+                    b.alive = false;
+                    const idx = Physics.balls.indexOf(b);
+                    if (idx >= 0) Physics.balls.splice(idx, 1);
+                }
+                // 清理剩余分身球
+                for (const sb of this.state.balls) {
+                    if (sb.alive) {
+                        sb.alive = false;
+                        const i = Physics.balls.indexOf(sb);
+                        if (i >= 0) Physics.balls.splice(i, 1);
+                    }
+                }
+                this.state.balls = [];
+                this.state.recycling = true;
+                this.state.recycleTimer = 0;
+                this.state.ball = null;
+                // 重置回合标志，准备下一回合
+                this._mainLanded = false;
+                this._roundEnded = false;
+                // 每回合重置裂变计数（裂变钉/裂变筹码每回合独立计算次数）
+                this.state.fissionCount = 0;
+                // 每回合重置连接板耐久（连接板本身永久存在，但耐久每回合刷新）
+                this._resetConnectors();
+                // 重置超时计时器（防止旧 launchTime 导致新球被误判超时）
+                this.state.launchTime = 0;
+                // 重置重力（防止 slow 连接块的 gravity*=0.9 残留）
+                Physics.gravity = Config.ball.gravity + (this.state.ballUpgrades.gravityAdd || 0);
+                if (this.state.ballUpgrades.gravityMul) Physics.gravity *= this.state.ballUpgrades.gravityMul;
+                // 重新应用 Boss lowGravity 修饰符
+                if (this.state.bossMod === 'lowGravity') Physics.gravity *= 0.5;
+            }
+
+            _updateRecycle(dt) {
+                this.state.recycleTimer += dt;
+                if (this.state.recycleTimer > 0.3) {
+                    this._spawnBall();
+                    this.state.recycling = false;
+                    this.state.ballReady = true;
+                }
+            }
+
+            // 胜负判定：分数达标立即通关（剩余回合转金币）；5回合用完未达标则失败
+            _checkWinLose() {
+                const C = Config;
+                const stage = C.rounds[this.state.round]?.stages[this.state.stage];
+                if (!stage) return;
+                // 分数达标 → 立即通关，剩余击球次数转金币（1次=1金币），基础3金币
+                if (this.state.score >= stage.target) {
+                    const leftTurns = Math.max(0, this._effectiveRounds() - this.state.turn);
+                    const reward = 3 + leftTurns;
+                    this.state.coins += reward;
+                    this.renderer.addFloat(Config.view.w / 2, 60,
+                        `通关!+3金+${leftTurns}剩余`, '#fee440', 14);
+                    this.renderer.flash = 0.8;
+                    // 推进关卡
+                    this.state.stage++;
+                    if (this.state.stage >= 3) {
+                        this.state.stage = 0;
+                        this.state.round++;
+                        if (this.state.round >= C.rounds.length) {
+                            // 全部通关
+                            this.state.allCleared = true;
+                            this.state.phase = 'gameover';
+                            this.state.over = true;
+                            this.state.won = true;
+                            SFX.play('victory');
+                            return;
+                        }
+                    }
+                    this.state.phase = 'shop';
+                    this._clearBossMod();
+                    this._refreshShop(true);
+                    return;
+                }
+                // 未达标：5回合用完则失败
+                if (this.state.turn >= this._effectiveRounds()) {
+                    this._clearBossMod();
+                    this.state.phase = 'gameover';
+                    this.state.over = true;
+                    this.state.won = false;
+                    SFX.play('gameOver');
+                }
+            }
+
+            _restart() {
+                const C = Config;
+                this.state.phase = 'shop';
+                this.state.round = 0;       // 轮次
+                this.state.stage = 0;       // 小关卡
+                this.state.coins = C.startCoins;
+                this.state.score = 0;
+                this.state.turn = 0;        // 回合数
+                this.state.power = 0;
+                this.state.charging = false;
+                this.state.flying = false;
+                this.state.ballReady = false;
+                this.state.over = false;
+                this.state.won = false;
+                this.state.allCleared = false;
+                this.state.pegs = [];
+                this.state.balls = [];
+                this.state.ball = null;
+                this.state.recycling = false;
+                this.state.inventory = [];
+                this.state.buffSlots = new Array(C.buffSlots).fill(null);
+                this.state.selectedInv = -1;
+                this.state.lastSlotScore = 0;
+                // 重置珠子/钉子强化
+                this.state.ballUpgrades = {};
+                this.state.pendingPegUpgrade = null;
+                this.state.connectors = [];
+                this.state.pendingConnector = null;
+                this.state.selectedPeg = null;
+                this.state.goldFrag = 0;
+                this.state.fissionCount = 0;
+                this.state.lastSlotIdx = -1;
+                this.state.streakCount = 0;
+                this._clearBossMod();
+                this._refreshShop(true);
+                this._buildField();
+                this._spawnBall();
+            }
+
+            // 底部消灭区域：球掉到地板以下 → 消灭
+            _checkBottomKill() {
+                const C = Config;
+                const killY = C.floorY;
+                for (const b of this.state.balls) {
+                    if (!b.alive) continue;
+                    if (b.y < killY) continue;
+                    // 球掉到地板以下 → 消灭
+                    this.renderer.addEffect(b.x, b.y, '#ff006e', 10, 100, 0.5);
+                    b.alive = false;
+                    const idx = Physics.balls.indexOf(b);
+                    if (idx >= 0) Physics.balls.splice(idx, 1);
+                    if (b.data && b.data.isMain) {
+                        this.state.flying = false;
+                        this._mainLanded = true;
+                        this.renderer.addFloat(b.x, b.y - 15, '出界', '#ff006e', 12);
+                    }
+                }
+                this.state.balls = this.state.balls.filter(b => b.alive);
+                if (this._mainLanded) this._maybeRecycle();
+            }
+
+            // 15秒超时：将所有存活球强制拖入最近的得分槽
+            _checkTimeout(now) {
+                if (this.state.recycling) return;
+                if (this.state.launchTime === 0) return;
+                // 检查是否有活动球（主球飞行中，或主球已裂变但分身球仍在场）
+                const aliveBalls = this.state.balls.filter(b => b.alive);
+                if (aliveBalls.length === 0) return;
+                const elapsed = (now - this.state.launchTime) / 1000;
+                if (elapsed < 15) return;
+                const C = Config;
+                this.renderer.addFloat(C.view.w / 2, 50, '超时!强制结算', '#ff006e', 16);
+                this.renderer.flash = 0.6;
+                // 对每个存活球，找到最近的得分槽并强制入槽
+                const ballsToSlot = aliveBalls;
+                for (const b of ballsToSlot) {
+                    // 找x坐标最近的槽
+                    let si = Math.floor((b.x - C.slotL) / C.slotW);
+                    si = Math.max(0, Math.min(C.slot.count - 1, si));
+                    this.renderer.addEffect(b.x, b.y, '#fee440', 8, 80, 0.4);
+                    this._onSlot(b, si);
+                }
+                this.state.launchTime = 0;
+            }
+
+            // ===== 主循环 =====
+            _loop(now) {
+                let dt = (now - this.lastT) / 1000;
+                this.lastT = now;
+                dt = Math.min(dt, 0.05);
+                const C = Config;
+
+                try {
+                    // ===== 炮塔旋转（始终更新，shop/play 都旋转）=====
+                    this.state.turretTime += dt;
+                    this.state.turretAngle = C.turret.maxAngle * Math.sin(
+                        2 * Math.PI * this.state.turretTime / C.turret.rotationPeriod);
+
+                    if (this.state.phase === 'play' && !this.state.over) {
+                        // Boss 介绍倒计时
+                        if (this.state.bossIntro > 0) this.state.bossIntro -= dt;
+
+                        // ===== 蓄力循环（三角波：轻→中→高→中→轻）=====
+                        if (this.state.charging && this.state.ballReady && !this.state.flying) {
+                            this.state.chargeTime += dt;
+                            const phase = (this.state.chargeTime % C.charge.period) / C.charge.period;
+                            this.state.power = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+                        }
+
+                        // 球物理：飞行中或主球落槽后分身球仍在飞时step
+                        const simulating = this.state.flying ||
+                            (this.state.balls.length > 0 && !this.state.ballReady && !this.state.recycling);
+                        if (simulating && !this.state.charging) Physics.step(dt);
+
+                        // 卡死检测：球长时间低速（可能卡在钉子和墙之间）→ 施加向下+随机横向推力
+                        for (const b of this.state.balls) {
+                            if (!b.alive || !b.data) continue;
+                            if (b.data.isMain && !this.state.flying) continue;
+                            const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+                            if (speed < 20) {
+                                b.data.stuckTime = (b.data.stuckTime || 0) + dt;
+                                if (b.data.stuckTime > 2.0) {
+                                    b.vx += (Math.random() - 0.5) * 80;
+                                    b.vy += 250;
+                                    b.data.stuckTime = 0;
+                                    this.renderer.addFloat(b.x, b.y - 10, '!', '#ff006e', 10);
+                                }
+                            } else {
+                                b.data.stuckTime = 0;
+                            }
+                        }
+
+                        // 越久越好：rampTime 累加（所有活动球，炮塔模型中球始终在钉子区）
+                        for (const b of this.state.balls) {
+                            if (b.alive && b.data) b.data.rampTime += dt;
+                        }
+
+                        // 集中 Boss：球受到向中间聚集的力
+                        if (this.state.bossMod === 'concentrate') {
+                            const centerX = (C.slotL + C.slotR) / 2;
+                            for (const b of this.state.balls) {
+                                if (!b.alive) continue;
+                                const dir = centerX - b.x;
+                                if (Math.abs(dir) > 1) {
+                                    b.vx += Math.sign(dir) * 40 * dt;
+                                }
+                            }
+                        }
+
+                        // 炮塔模型：球仅存在于飞行中，无待机定位
+
+                        if (this.state.recycling) this._updateRecycle(dt);
+                        if (this.state.balls.length > 0) {
+                            this._applyAttractConnectors(dt);
+                            this._checkSlots();
+                        }
+                        this._checkBottomKill();
+                        this._checkTimeout(now);
+
+                        // 清理死亡的分身球
+                        this.state.balls = this.state.balls.filter(b => b.alive);
+
+                        for (const p of this.state.pegs) {
+                            if (p.flash > 0) p.flash = Math.max(0, p.flash - dt * 4);
+                        }
+                    }
+
+                    // 燃烧效果倒计时
+                    if (this.state.burning > 0) {
+                        this.state.burning = Math.max(0, this.state.burning - dt);
+                    }
+                } catch (e) {
+                    console.error('[Game Logic Error]', e);
+                }
+
+                try {
+                    this.renderer.update(dt);
+                    this.renderer.render(this.state);
+                    if (this.state.phase === 'gameover') {
+                        this.renderer.drawGameOver(this.canvas.getContext('2d'), this.state);
+                    }
+                } catch (e) {
+                    console.error('[Render Error]', e);
+                }
+                requestAnimationFrame(this._loop);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', async () => {
+            const canvas = document.getElementById('game');
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = Config.view.w * dpr;
+            canvas.height = Config.view.h * dpr;
+            const ctx = canvas.getContext('2d');
+            ctx.scale(dpr, dpr);
+            window.game = await Game.start(canvas);
+        });
+
+    </script>
+</body>
+
+</html>

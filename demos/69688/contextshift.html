@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ContextShift - AI 跨工作流上下文恢复</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#8B5CF6',
+                        cyan: '#06B6D4',
+                        dark: {
+                            900: '#0F172A',
+                            800: '#1E293B',
+                            700: '#334155',
+                            600: '#475569',
+                            500: '#64748B'
+                        },
+                        light: {
+                            100: '#F8FAFC',
+                            200: '#E2E8F0',
+                            300: '#CBD5E1'
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'glow': 'glow 2s ease-in-out infinite alternate',
+                        'bounce-subtle': 'bounce-subtle 2s ease-in-out infinite',
+                        'fade-in': 'fadeIn 0.3s ease-in-out',
+                        'slide-up': 'slideUp 0.3s ease-out',
+                        'scale-in': 'scaleIn 0.3s ease-out'
+                    },
+                    keyframes: {
+                        glow: {
+                            '0%': { boxShadow: '0 0 5px rgba(139, 92, 246, 0.5)' },
+                            '100%': { boxShadow: '0 0 20px rgba(139, 92, 246, 0.8)' }
+                        },
+                        'bounce-subtle': {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-5px)' }
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' }
+                        },
+                        slideUp: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        },
+                        scaleIn: {
+                            '0%': { opacity: '0', transform: 'scale(0.95)' },
+                            '100%': { opacity: '1', transform: 'scale(1)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0F172A;
+            color: #F8FAFC;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: #1E293B;
+            border-radius: 3px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: #64748B;
+        }
+
+        .node-connection {
+            stroke-dasharray: 5, 5;
+            animation: dash 20s linear infinite;
+        }
+
+        @keyframes dash {
+            to {
+                stroke-dashoffset: -1000;
+            }
+        }
+
+        .glass-effect {
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(139, 92, 246, 0.1);
+        }
+
+        .gradient-border {
+            position: relative;
+        }
+        
+        .gradient-border::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 0.75rem;
+            padding: 1px;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(6, 182, 212, 0.3));
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+        }
+
+        .typing-indicator span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background-color: #8B5CF6;
+            border-radius: 50%;
+            animation: typing 1.4s infinite ease-in-out both;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden">
+    <aside class="w-72 bg-dark-800 border-r border-dark-700 flex flex-col">
+        <div class="p-5 border-b border-dark-700">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-cyan flex items-center justify-center">
+                    <i class="fa fa-exchange text-white text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-white">ContextShift</h1>
+                    <p class="text-xs text-dark-500">AI Context Recovery</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-4">
+            <h2 class="text-xs font-semibold text-dark-500 uppercase tracking-wider mb-3">工作流列表</h2>
+            <div id="workspace-list" class="space-y-2">
+            </div>
+        </div>
+        
+        <div class="p-4 border-t border-dark-700">
+            <h3 class="text-xs font-semibold text-dark-500 uppercase tracking-wider mb-3">注意力负载指数</h3>
+            <div class="glass-effect rounded-xl p-4">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-sm text-light-200">当前认知负荷</span>
+                    <span class="text-sm font-bold text-cyan">42%</span>
+                </div>
+                <div class="h-2 bg-dark-700 rounded-full overflow-hidden">
+                    <div id="cognitive-load-bar" class="h-full bg-gradient-to-r from-primary to-cyan rounded-full transition-all duration-1000" style="width: 42%"></div>
+                </div>
+                <div class="flex justify-between mt-2 text-xs text-dark-500">
+                    <span>轻松</span>
+                    <span>适中</span>
+                    <span>过载</span>
+                </div>
+                <div class="mt-3 flex items-center gap-2">
+                    <i class="fa fa-brain text-primary text-sm"></i>
+                    <span class="text-xs text-light-200">建议：状态良好，可继续工作</span>
+                </div>
+            </div>
+        </div>
+    </aside>
+    
+    <main class="flex-1 flex flex-col overflow-hidden">
+        <header class="h-16 bg-dark-800 border-b border-dark-700 flex items-center justify-between px-6">
+            <div>
+                <h2 id="current-project-title" class="text-lg font-semibold text-white">React 项目重构</h2>
+                <p id="current-project-subtitle" class="text-xs text-dark-500">上次活跃：2小时前</p>
+            </div>
+            <button id="add-snapshot-btn" class="flex items-center gap-2 px-4 py-2 bg-dark-700 hover:bg-dark-600 rounded-lg text-sm text-light-200 transition-colors">
+                <i class="fa fa-camera"></i>
+                <span>手动保存上下文</span>
+            </button>
+        </header>
+        
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-6">
+            <div class="mb-8">
+                <h3 class="text-sm font-semibold text-dark-500 uppercase tracking-wider mb-4">上下文关联网络</h3>
+                <div class="glass-effect rounded-xl p-6 h-64">
+                    <svg id="context-network" class="w-full h-full" viewBox="0 0 600 200">
+                        <defs>
+                            <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:0.6" />
+                                <stop offset="100%" style="stop-color:#06B6D4;stop-opacity:0.6" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+            </div>
+            
+            <div>
+                <h3 class="text-sm font-semibold text-dark-500 uppercase tracking-wider mb-4">快照时间轴</h3>
+                <div id="snapshot-timeline" class="space-y-4">
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <aside class="w-80 bg-dark-800 border-l border-dark-700 flex flex-col">
+        <div class="p-5 border-b border-dark-700">
+            <h2 class="text-sm font-semibold text-white">AI 思路接轨向导</h2>
+            <p class="text-xs text-dark-500 mt-1">智能恢复工作上下文</p>
+        </div>
+        
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
+            <div id="where-left-off" class="glass-effect rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <i class="fa fa-map-marker text-primary"></i>
+                    <h3 class="text-sm font-semibold text-white">Where I Left Off</h3>
+                </div>
+                <p id="ai-summary" class="text-sm text-light-200 leading-relaxed">
+                    你当时正在编写 <code class="text-cyan bg-dark-700 px-1 rounded text-xs">api.js</code> 的错误捕获逻辑，刚刚查阅了 MDN 关于 Fetch API 的文档，下一步建议测试网络异常情况。
+                </p>
+            </div>
+            
+            <button id="restore-workspace-btn" class="w-full py-3 bg-gradient-to-r from-primary to-cyan hover:opacity-90 rounded-xl text-white font-semibold transition-all duration-300 flex items-center justify-center gap-2">
+                <i class="fa fa-refresh"></i>
+                <span>一键恢复工作流</span>
+            </button>
+            
+            <div class="glass-effect rounded-xl overflow-hidden">
+                <div class="p-4 border-b border-dark-700">
+                    <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                        <i class="fa fa-comments text-cyan"></i>
+                        AI 追问对话框
+                    </h3>
+                </div>
+                <div id="chat-messages" class="p-4 space-y-3 max-h-60 overflow-y-auto scrollbar-thin">
+                    <div class="flex gap-2">
+                        <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                            <i class="fa fa-robot text-xs text-white"></i>
+                        </div>
+                        <div class="bg-dark-700 rounded-lg rounded-tl-none px-3 py-2 text-xs text-light-200">
+                            你好！我是你的上下文助手。有什么关于之前工作的问题吗？
+                        </div>
+                    </div>
+                </div>
+                <div class="p-3 bg-dark-900">
+                    <div class="flex gap-2">
+                        <input id="chat-input" type="text" placeholder="输入你的问题..." class="flex-1 bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white placeholder-dark-500 focus:outline-none focus:border-primary transition-colors">
+                        <button id="send-chat-btn" class="px-3 py-2 bg-primary hover:bg-primary/80 rounded-lg text-white transition-colors">
+                            <i class="fa fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+    
+    <div id="restore-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-dark-800 rounded-2xl p-8 w-96 text-center animate-scale-in">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-primary to-cyan flex items-center justify-center animate-bounce-subtle">
+                <i class="fa fa-check text-white text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">工作流恢复成功</h3>
+            <p class="text-sm text-light-200 mb-6">已成功为您在本地恢复 3 个网页和 2 个代码文件，注意力切换损耗降低 85%</p>
+            <button id="close-modal-btn" class="w-full py-2 bg-dark-700 hover:bg-dark-600 rounded-lg text-white text-sm transition-colors">
+                确定
+            </button>
+        </div>
+    </div>
+    
+    <div id="loading-overlay" class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="text-center">
+            <div class="w-16 h-16 border-4 border-dark-700 border-t-primary rounded-full animate-spin mx-auto mb-4"></div>
+            <p class="text-white text-sm font-medium">正在恢复工作上下文...</p>
+        </div>
+    </div>
+
+    <script>
+        const mockData = {
+            projects: [
+                {
+                    id: 'project-1',
+                    name: 'React 项目重构',
+                    status: 'focused',
+                    lastActive: '2小时前',
+                    snapshots: [
+                        { id: 's1', time: '今天 14:30', type: 'code', title: 'api.js', description: '错误捕获逻辑' },
+                        { id: 's2', time: '今天 14:15', type: 'web', title: 'MDN Fetch API', description: '查阅官方文档' },
+                        { id: 's3', time: '今天 13:45', type: 'code', title: 'auth.ts', description: '用户认证模块' },
+                        { id: 's4', time: '今天 11:20', type: 'web', title: 'React Query Docs', description: '状态管理方案' },
+                        { id: 's5', time: '昨天 16:00', type: 'doc', title: '技术方案文档', description: '架构设计说明' }
+                    ],
+                    contextSummary: '你当时正在编写 <code class="text-cyan bg-dark-700 px-1 rounded text-xs">api.js</code> 的错误捕获逻辑，刚刚查阅了 MDN 关于 Fetch API 的文档，下一步建议测试网络异常情况。',
+                    networkNodes: [
+                        { id: 'core', name: 'React 重构', x: 300, y: 100, type: 'core' },
+                        { id: 'api', name: 'api.js', x: 150, y: 60, type: 'code' },
+                        { id: 'auth', name: 'auth.ts', x: 150, y: 140, type: 'code' },
+                        { id: 'mdn', name: 'MDN Docs', x: 450, y: 60, type: 'web' },
+                        { id: 'reactquery', name: 'React Query', x: 450, y: 140, type: 'web' }
+                    ],
+                    aiResponses: [
+                        '这个网页包含了 Fetch API 的错误处理最佳实践，对你编写 api.js 很有帮助。',
+                        '你之前存储这个页面是为了参考 React Query 的缓存策略实现。',
+                        '根据你的工作历史，这个文档是为了记录项目的技术架构决策。'
+                    ]
+                },
+                {
+                    id: 'project-2',
+                    name: '机器学习论文阅读',
+                    status: 'suspended',
+                    lastActive: '1天前',
+                    snapshots: [
+                        { id: 's6', time: '昨天 10:30', type: 'pdf', title: 'Transformer论文', description: '注意力机制章节' },
+                        { id: 's7', time: '昨天 09:45', type: 'web', title: 'HuggingFace', description: '模型实现参考' },
+                        { id: 's8', time: '昨天 09:00', type: 'note', title: '阅读笔记', description: '关键公式记录' }
+                    ],
+                    contextSummary: '你正在研读 Transformer 论文的注意力机制章节，已经完成了关键公式的记录，建议继续阅读位置编码部分。',
+                    networkNodes: [
+                        { id: 'core', name: 'ML论文', x: 300, y: 100, type: 'core' },
+                        { id: 'paper', name: 'Transformer', x: 150, y: 80, type: 'pdf' },
+                        { id: 'hugging', name: 'HuggingFace', x: 450, y: 80, type: 'web' },
+                        { id: 'notes', name: '阅读笔记', x: 300, y: 160, type: 'note' }
+                    ],
+                    aiResponses: [
+                        '这篇论文是深度学习领域的里程碑，你存储它是为了深入理解注意力机制。',
+                        'HuggingFace 提供了 Transformer 模型的开源实现，对你的研究很有价值。'
+                    ]
+                },
+                {
+                    id: 'project-3',
+                    name: '营销文案策划',
+                    status: 'pending',
+                    lastActive: '3天前',
+                    snapshots: [
+                        { id: 's9', time: '3天前 15:20', type: 'doc', title: '产品定位文档', description: '核心卖点分析' },
+                        { id: 's10', time: '3天前 14:00', type: 'web', title: '竞品分析报告', description: '市场调研' },
+                        { id: 's11', time: '3天前 11:30', type: 'slide', title: 'PPT模板', description: '演示文稿' }
+                    ],
+                    contextSummary: '你正在进行产品定位和卖点分析，已经完成了竞品调研，下一步建议开始撰写核心文案。',
+                    networkNodes: [
+                        { id: 'core', name: '营销策划', x: 300, y: 100, type: 'core' },
+                        { id: 'doc', name: '定位文档', x: 150, y: 80, type: 'doc' },
+                        { id: 'competitor', name: '竞品分析', x: 450, y: 80, type: 'web' },
+                        { id: 'slide', name: 'PPT模板', x: 300, y: 160, type: 'slide' }
+                    ],
+                    aiResponses: [
+                        '这个竞品分析报告帮助你了解市场格局和差异化机会。',
+                        '产品定位文档是营销文案的基础，定义了核心价值主张。'
+                    ]
+                }
+            ]
+        };
+
+        let currentProjectId = 'project-1';
+
+        function getCurrentProject() {
+            return mockData.projects.find(p => p.id === currentProjectId);
+        }
+
+        function renderWorkspaceList() {
+            const container = document.getElementById('workspace-list');
+            container.innerHTML = mockData.projects.map(project => {
+                const statusColors = {
+                    focused: 'bg-green-500/20 text-green-400 border-green-500/30',
+                    suspended: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+                    pending: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+                };
+                const statusLabels = {
+                    focused: '聚焦中',
+                    suspended: '已挂起',
+                    pending: '待恢复'
+                };
+                const isActive = project.id === currentProjectId;
+                
+                return `
+                    <div class="cursor-pointer p-3 rounded-xl transition-all duration-300 ${
+                        isActive 
+                            ? 'bg-primary/10 border border-primary/30' 
+                            : 'bg-dark-700/50 hover:bg-dark-700 border border-transparent'
+                    }" onclick="switchProject('${project.id}')">
+                        <div class="flex items-start justify-between mb-2">
+                            <h4 class="text-sm font-medium ${isActive ? 'text-white' : 'text-light-200'}">${project.name}</h4>
+                            <span class="text-xs px-2 py-0.5 rounded-full border ${statusColors[project.status]}">
+                                ${statusLabels[project.status]}
+                            </span>
+                        </div>
+                        <p class="text-xs text-dark-500">上次活跃：${project.lastActive}</p>
+                        <div class="mt-2 flex items-center gap-1">
+                            <span class="text-xs text-dark-500">${project.snapshots.length} 个快照</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderContextNetwork() {
+            const project = getCurrentProject();
+            const svg = document.getElementById('context-network');
+            
+            const typeColors = {
+                core: '#8B5CF6',
+                code: '#06B6D4',
+                web: '#F59E0B',
+                doc: '#10B981',
+                pdf: '#EF4444',
+                note: '#EC4899',
+                slide: '#8B5CF6'
+            };
+            
+            const connections = [];
+            project.networkNodes.forEach(node => {
+                if (node.type !== 'core') {
+                    connections.push({ from: 'core', to: node.id });
+                }
+            });
+            
+            const lines = connections.map(conn => {
+                const fromNode = project.networkNodes.find(n => n.id === conn.from);
+                const toNode = project.networkNodes.find(n => n.id === conn.to);
+                return `<line x1="${fromNode.x}" y1="${fromNode.y}" x2="${toNode.x}" y2="${toNode.y}" stroke="url(#lineGradient)" stroke-width="2" class="node-connection" />`;
+            }).join('');
+            
+            const nodes = project.networkNodes.map(node => `
+                <g transform="translate(${node.x}, ${node.y})">
+                    <circle r="${node.type === 'core' ? 25 : 18}" fill="${typeColors[node.type]}20" stroke="${typeColors[node.type]}" stroke-width="2" />
+                    <text text-anchor="middle" fill="white" font-size="10" font-weight="500">${node.name}</text>
+                </g>
+            `).join('');
+            
+            svg.innerHTML = `
+                <defs>
+                    <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:0.6" />
+                        <stop offset="100%" style="stop-color:#06B6D4;stop-opacity:0.6" />
+                    </linearGradient>
+                </defs>
+                ${lines}
+                ${nodes}
+            `;
+        }
+
+        function renderSnapshotTimeline() {
+            const project = getCurrentProject();
+            const container = document.getElementById('snapshot-timeline');
+            
+            const typeIcons = {
+                code: 'fa-file-code-o',
+                web: 'fa-globe',
+                doc: 'fa-file-text-o',
+                pdf: 'fa-file-pdf-o',
+                note: 'fa-sticky-note-o',
+                slide: 'fa-file-powerpoint-o'
+            };
+            
+            const typeColors = {
+                code: 'text-cyan',
+                web: 'text-yellow-500',
+                doc: 'text-green-500',
+                pdf: 'text-red-500',
+                note: 'text-pink-500',
+                slide: 'text-purple-500'
+            };
+            
+            container.innerHTML = project.snapshots.map((snapshot, index) => `
+                <div class="flex gap-4 p-4 bg-dark-700/50 rounded-xl hover:bg-dark-700 transition-colors animate-fade-in" style="animation-delay: ${index * 0.1}s">
+                    <div class="flex flex-col items-center">
+                        <div class="w-10 h-10 rounded-lg bg-dark-600 flex items-center justify-center ${typeColors[snapshot.type]}">
+                            <i class="fa ${typeIcons[snapshot.type]}"></i>
+                        </div>
+                        <div class="w-0.5 flex-1 bg-dark-600 mt-2"></div>
+                    </div>
+                    <div class="flex-1 pb-2">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-xs text-dark-500">${snapshot.time}</span>
+                            <span class="text-xs px-2 py-0.5 bg-dark-600 rounded text-dark-400">${snapshot.type}</span>
+                        </div>
+                        <h4 class="text-sm font-medium text-white">${snapshot.title}</h4>
+                        <p class="text-xs text-dark-500 mt-1">${snapshot.description}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderAISummary() {
+            const project = getCurrentProject();
+            document.getElementById('ai-summary').innerHTML = project.contextSummary;
+            document.getElementById('current-project-title').textContent = project.name;
+            document.getElementById('current-project-subtitle').textContent = `上次活跃：${project.lastActive}`;
+        }
+
+        function switchProject(projectId) {
+            currentProjectId = projectId;
+            renderWorkspaceList();
+            renderContextNetwork();
+            renderSnapshotTimeline();
+            renderAISummary();
+            
+            document.getElementById('chat-messages').innerHTML = `
+                <div class="flex gap-2">
+                    <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                        <i class="fa fa-robot text-xs text-white"></i>
+                    </div>
+                    <div class="bg-dark-700 rounded-lg rounded-tl-none px-3 py-2 text-xs text-light-200">
+                        你好！我是你的上下文助手。有什么关于之前工作的问题吗？
+                    </div>
+                </div>
+            `;
+        }
+
+        function addSnapshot() {
+            const project = getCurrentProject();
+            const now = new Date();
+            const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+            
+            const newSnapshot = {
+                id: `s-${Date.now()}`,
+                time: `刚刚 ${timeStr}`,
+                type: 'doc',
+                title: '手动保存的快照',
+                description: '当前工作状态的完整记录'
+            };
+            
+            project.snapshots.unshift(newSnapshot);
+            renderSnapshotTimeline();
+            
+            const cognitiveLoadBar = document.getElementById('cognitive-load-bar');
+            const currentWidth = parseInt(cognitiveLoadBar.style.width);
+            const newWidth = Math.min(100, currentWidth + 5);
+            cognitiveLoadBar.style.width = `${newWidth}%`;
+        }
+
+        function restoreWorkspace() {
+            const loading = document.getElementById('loading-overlay');
+            const modal = document.getElementById('restore-modal');
+            
+            loading.classList.remove('hidden');
+            
+            setTimeout(() => {
+                loading.classList.add('hidden');
+                modal.classList.remove('hidden');
+                
+                const whereLeftOff = document.getElementById('where-left-off');
+                whereLeftOff.classList.add('animate-glow');
+                setTimeout(() => {
+                    whereLeftOff.classList.remove('animate-glow');
+                }, 3000);
+            }, 2000);
+        }
+
+        function sendChat() {
+            const input = document.getElementById('chat-input');
+            const messages = document.getElementById('chat-messages');
+            const text = input.value.trim();
+            
+            if (!text) return;
+            
+            messages.innerHTML += `
+                <div class="flex gap-2 justify-end animate-slide-up">
+                    <div class="bg-primary/20 rounded-lg rounded-tr-none px-3 py-2 text-xs text-light-200">
+                        ${text}
+                    </div>
+                    <div class="w-6 h-6 rounded-full bg-dark-600 flex items-center justify-center flex-shrink-0">
+                        <i class="fa fa-user text-xs text-dark-400"></i>
+                    </div>
+                </div>
+            `;
+            
+            input.value = '';
+            messages.scrollTop = messages.scrollHeight;
+            
+            messages.innerHTML += `
+                <div class="flex gap-2 animate-slide-up">
+                    <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                        <i class="fa fa-robot text-xs text-white"></i>
+                    </div>
+                    <div class="bg-dark-700 rounded-lg rounded-tl-none px-3 py-2 text-xs text-light-200">
+                        <div class="typing-indicator">
+                            <span></span><span></span><span></span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            messages.scrollTop = messages.scrollHeight;
+            
+            setTimeout(() => {
+                const project = getCurrentProject();
+                const response = project.aiResponses[Math.floor(Math.random() * project.aiResponses.length)];
+                
+                const typingDiv = messages.lastElementChild;
+                typingDiv.querySelector('.typing-indicator').innerHTML = response;
+                
+                messages.scrollTop = messages.scrollHeight;
+            }, 1500);
+        }
+
+        document.getElementById('add-snapshot-btn').addEventListener('click', addSnapshot);
+        document.getElementById('restore-workspace-btn').addEventListener('click', restoreWorkspace);
+        document.getElementById('close-modal-btn').addEventListener('click', () => {
+            document.getElementById('restore-modal').classList.add('hidden');
+        });
+        document.getElementById('send-chat-btn').addEventListener('click', sendChat);
+        document.getElementById('chat-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendChat();
+        });
+
+        renderWorkspaceList();
+        renderContextNetwork();
+        renderSnapshotTimeline();
+        renderAISummary();
+    </script>
+</body>
+</html>

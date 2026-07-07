@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>水族管家 · 智能鱼缸监测</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --glass: rgba(255,255,255,0.08);
+    --glass-border: rgba(255,255,255,0.18);
+    --text: #eaf6ff;
+    --muted: #9fc4d8;
+    --accent: #00e5ff;
+    --warn: #ffb74d;
+    --good: #4dd0e1;
+  }
+  html, body {
+    height: 100%;
+    font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    color: var(--text);
+    overflow: hidden;
+    background: #02131c;
+  }
+  #app { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+  /* ===== 鱼缸画布 ===== */
+  #tankCanvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    background: linear-gradient(180deg,#0a3a5c 0%,#062842 45%,#021522 100%);
+  }
+
+  /* 水面光斑覆盖层 */
+  .caustics {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse 60% 30% at 30% 0%, rgba(120,220,255,0.18), transparent 60%),
+      radial-gradient(ellipse 50% 25% at 70% 0%, rgba(80,180,255,0.15), transparent 60%);
+    mix-blend-mode: screen;
+    animation: causticShift 8s ease-in-out infinite alternate;
+  }
+  @keyframes causticShift {
+    0% { transform: translateX(-10px) scale(1.02); opacity:.9;}
+    100% { transform: translateX(10px) scale(1); opacity:1;}
+  }
+  /* 顶部水面波光 */
+  .surface {
+    position:absolute; top:0; left:0; right:0; height:60px;
+    pointer-events:none;
+    background: linear-gradient(180deg, rgba(180,240,255,0.25), transparent);
+    filter: blur(2px);
+  }
+
+  /* ===== 顶栏 ===== */
+  .topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 28px;
+    z-index: 10;
+    background: linear-gradient(180deg, rgba(2,19,28,0.6), transparent);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .logo {
+    width: 38px; height: 38px; border-radius: 11px;
+    background: linear-gradient(135deg, #00e5ff, #2979ff);
+    display: grid; place-items: center;
+    box-shadow: 0 6px 20px rgba(0,229,255,0.45);
+    font-size: 20px;
+  }
+  .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+  .brand p { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border-radius: 999px;
+    background: var(--glass); border: 1px solid var(--glass-border);
+    backdrop-filter: blur(12px);
+    font-size: 13px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 10px #4ade80; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+  /* ===== 左侧水质面板 ===== */
+  .panel {
+    position: absolute; z-index: 9;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(16px);
+    border-radius: 18px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+  }
+  .water-panel {
+    top: 90px; left: 24px; width: 280px; padding: 18px;
+  }
+  .panel-title {
+    display:flex; align-items:center; justify-content:space-between;
+    font-size: 14px; font-weight: 600; margin-bottom: 14px;
+    color: var(--text);
+  }
+  .panel-title span.tag {
+    font-size: 11px; color: var(--accent); font-weight: 500;
+  }
+  .metric {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .metric:last-child { border-bottom: none; }
+  .metric .left { display: flex; align-items: center; gap: 10px; }
+  .metric .ico {
+    width: 32px; height: 32px; border-radius: 9px;
+    display: grid; place-items: center; font-size: 16px;
+    background: rgba(0,229,255,0.12);
+  }
+  .metric .name { font-size: 13px; color: var(--muted); }
+  .metric .val { font-size: 18px; font-weight: 700; }
+  .metric .unit { font-size: 11px; color: var(--muted); margin-left: 2px; }
+  .bar { width: 60px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.1); overflow: hidden; margin-top:4px;}
+  .bar > i { display:block; height:100%; border-radius:3px; background: linear-gradient(90deg, #00e5ff, #2979ff); transition: width .8s ease; }
+
+  /* ===== 右侧控制面板 ===== */
+  .ctrl-panel {
+    top: 90px; right: 24px; width: 300px; padding: 18px;
+  }
+  .field { margin-bottom: 16px; }
+  .field label { display:block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button {
+    flex: 1; min-width: 0;
+    padding: 8px 6px; border-radius: 10px; border: 1px solid var(--glass-border);
+    background: rgba(255,255,255,0.04); color: var(--text);
+    font-size: 12px; cursor: pointer; transition: all .2s;
+  }
+  .seg button:hover { background: rgba(0,229,255,0.12); }
+  .seg button.active {
+    background: linear-gradient(135deg,#00e5ff,#2979ff);
+    border-color: transparent; color: #02131c; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0,229,255,0.4);
+  }
+  .colors { display:flex; gap: 8px; flex-wrap: wrap; }
+  .colors button {
+    width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent;
+    cursor: pointer; transition: transform .15s;
+  }
+  .colors button:hover { transform: scale(1.12); }
+  .colors button.active { border-color: #fff; box-shadow: 0 0 12px rgba(255,255,255,0.5); }
+  .slider-row { display:flex; align-items:center; gap:10px; }
+  .slider-row input[type=range] { flex:1; accent-color: var(--accent); }
+  .slider-row b { font-size: 13px; width: 36px; text-align: right; color: var(--accent); }
+  .add-btn {
+    width: 100%; padding: 12px; border-radius: 12px; border: none;
+    background: linear-gradient(135deg,#00e5ff,#2979ff);
+    color: #02131c; font-weight: 700; font-size: 14px; cursor: pointer;
+    box-shadow: 0 8px 24px rgba(0,229,255,0.35);
+    transition: transform .15s;
+  }
+  .add-btn:hover { transform: translateY(-2px); }
+  .add-btn:active { transform: translateY(0); }
+  .fish-count {
+    margin-top: 12px; text-align:center; font-size: 12px; color: var(--muted);
+  }
+  .fish-count b { color: var(--accent); font-size: 16px; }
+
+  /* 灯光开关 */
+  .light-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-radius: 12px;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border);
+  }
+  .light-row .ll { display:flex; align-items:center; gap:10px; font-size:13px; }
+  .light-row .ll .bulb { font-size: 18px; }
+  .toggle {
+    position: relative; width: 48px; height: 26px; border-radius: 999px;
+    background: rgba(255,255,255,0.15); cursor: pointer; transition: background .3s;
+    border: 1px solid var(--glass-border);
+  }
+  .toggle::after {
+    content:''; position:absolute; top:2px; left:2px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #cfd8dc; transition: all .3s;
+  }
+  .toggle.on { background: linear-gradient(135deg,#ffd54f,#ffb300); box-shadow: 0 0 14px rgba(255,193,7,0.5); }
+  .toggle.on::after { left: 24px; background:#fffde7; box-shadow: 0 0 8px rgba(255,255,255,0.6); }
+
+  /* 提示 toast */
+  .toast {
+    position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: rgba(2,19,28,0.85); border: 1px solid var(--glass-border);
+    color: var(--text); padding: 10px 20px; border-radius: 12px;
+    backdrop-filter: blur(12px); font-size: 13px;
+    opacity: 0; transition: all .3s; z-index: 20; pointer-events:none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* 底部说明 */
+  .hint {
+    position: absolute; bottom: 18px; left: 24px; z-index: 8;
+    font-size: 11px; color: var(--muted); opacity: .7;
+  }
+  .hint kbd {
+    background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border);
+    padding: 1px 6px; border-radius: 4px; font-family: monospace;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="tankCanvas"></canvas>
+  <div class="caustics"></div>
+  <div class="surface"></div>
+
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo">🐠</div>
+      <div>
+        <h1>水族管家</h1>
+        <p>智能鱼缸实时监测系统</p>
+      </div>
+    </div>
+    <div class="status-pill"><span class="dot"></span> 设备在线 · 实时同步</div>
+  </div>
+
+  <!-- 水质参数面板 -->
+  <div class="panel water-panel">
+    <div class="panel-title">水质监测 <span class="tag">● 实时</span></div>
+    <div class="metric">
+      <div class="left"><div class="ico">🌡️</div><div class="name">水温</div></div>
+      <div><span class="val" id="m-temp">26.4</span><span class="unit">°C</span>
+        <div class="bar"><i id="b-temp" style="width:62%"></i></div></div>
+    </div>
+    <div class="metric">
+      <div class="left"><div class="ico">💧</div><div class="name">PH 值</div></div>
+      <div><span class="val" id="m-ph">7.2</span>
+        <div class="bar"><i id="b-ph" style="width:55%"></i></div></div>
+    </div>
+    <div class="metric">
+      <div class="left"><div class="ico">🔵</div><div class="name">溶氧量</div></div>
+      <div><span class="val" id="m-do">7.8</span><span class="unit">mg/L</span>
+        <div class="bar"><i id="b-do" style="width:78%"></i></div></div>
+    </div>
+    <div class="metric">
+      <div class="left"><div class="ico">🧪</div><div class="name">氨氮</div></div>
+      <div><span class="val" id="m-nh">0.05</span><span class="unit">mg/L</span>
+        <div class="bar"><i id="b-nh" style="width:20%"></i></div></div>
+    </div>
+    <div class="metric">
+      <div class="left"><div class="ico">🔆</div><div class="name">浊度</div></div>
+      <div><span class="val" id="m-turb">1.2</span><span class="unit">NTU</span>
+        <div class="bar"><i id="b-turb" style="width:30%"></i></div></div>
+    </div>
+  </div>
+
+  <!-- 鱼类定制面板 -->
+  <div class="panel ctrl-panel">
+    <div class="panel-title">鱼缸定制 <span class="tag">● 自由配置</span></div>
+
+    <div class="field">
+      <label>鱼类品种</label>
+      <div class="seg" id="typeSeg">
+        <button data-type="tropical" class="active">热带鱼</button>
+        <button data-type="gold">金鱼</button>
+        <button data-type="koi">锦鲤</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>鱼的颜色</label>
+      <div class="colors" id="colorPicker">
+        <button class="active" style="background:#ff7a45" data-color="#ff7a45"></button>
+        <button style="background:#ffd93d" data-color="#ffd93d"></button>
+        <button style="background:#4dd0e1" data-color="#4dd0e1"></button>
+        <button style="background:#7e57c2" data-color="#7e57c2"></button>
+        <button style="background:#ec407a" data-color="#ec407a"></button>
+        <button style="background:#66bb6a" data-color="#66bb6a"></button>
+        <button style="background:#ffffff" data-color="#ffffff"></button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>鱼的大小</label>
+      <div class="slider-row">
+        <input type="range" id="sizeRange" min="14" max="60" value="28">
+        <b id="sizeVal">28</b>
+      </div>
+    </div>
+
+    <button class="add-btn" id="addBtn">＋ 放入鱼缸</button>
+    <div class="fish-count">当前鱼缸内：<b id="fishCount">0</b> 条鱼</div>
+
+    <div class="field" style="margin-top:18px;">
+      <label>鱼缸灯光</label>
+      <div class="light-row">
+        <div class="ll"><span class="bulb" id="bulbIcon">💡</span><span id="lightLabel">灯光开启</span></div>
+        <div class="toggle on" id="lightToggle"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint">点击鱼缸任意位置可投喂 · 按 <kbd>R</kbd> 清空鱼缸</div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+/* =========================================================
+   水族管家 - 鱼缸模拟引擎
+   ========================================================= */
+const canvas = document.getElementById('tankCanvas');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  W = canvas.width = window.innerWidth * devicePixelRatio;
+  H = canvas.height = window.innerHeight * devicePixelRatio;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.scale(1,1);
+}
+resize();
+window.addEventListener('resize', resize);
+
+/* ---------- 鱼类 ---------- */
+const TYPE_PROFILES = {
+  tropical: { bodyLen: 1.0,  finRatio: 0.5,  speed: 1.3, name:'热带鱼' },
+  gold:     { bodyLen: 1.15, finRatio: 0.7,  speed: 0.9, name:'金鱼'   },
+  koi:      { bodyLen: 1.4,  finRatio: 0.6,  speed: 1.0, name:'锦鲤'   },
+};
+
+class Fish {
+  constructor(opts) {
+    this.x = opts.x ?? Math.random()*W;
+    this.y = opts.y ?? Math.random()*H*0.6 + H*0.2;
+    this.type = opts.type || 'tropical';
+    this.color = opts.color || '#ff7a45';
+    this.size = opts.size || 28;
+    const p = TYPE_PROFILES[this.type];
+    this.bodyLen = this.size * p.bodyLen * devicePixelRatio;
+    this.baseSpeed = (1 + Math.random()*0.6) * p.speed * devicePixelRatio;
+    this.angle = Math.random()*Math.PI*2;
+    this.targetAngle = this.angle;
+    this.tailPhase = Math.random()*Math.PI*2;
+    this.wanderTimer = 0;
+    this.scared = 0; // 受惊程度
+  }
+
+  update(foods, mouse) {
+    // 漫游转向
+    this.wanderTimer--;
+    if (this.wanderTimer <= 0) {
+      this.targetAngle = this.angle + (Math.random()-0.5)*1.2;
+      this.wanderTimer = 40 + Math.random()*80;
+    }
+
+    // 追逐食物
+    let nearestFood = null, nd = 999999;
+    for (const f of foods) {
+      const d = Math.hypot(f.x-this.x, f.y-this.y);
+      if (d < nd && d < 300*devicePixelRatio) { nd = d; nearestFood = f; }
+    }
+    if (nearestFood) {
+      this.targetAngle = Math.atan2(nearestFood.y-this.y, nearestFood.x-this.x);
+      if (nd < this.bodyLen) {
+        // 吃掉
+        nearestFood.eaten = true;
+      }
+    }
+
+    // 鼠标惊吓
+    if (mouse.active) {
+      const d = Math.hypot(mouse.x-this.x, mouse.y-this.y);
+      if (d < 120*devicePixelRatio) {
+        this.targetAngle = Math.atan2(this.y-mouse.y, this.x-mouse.x);
+        this.scared = 1;
+      }
+    }
+    this.scared *= 0.95;
+
+    // 边界回避
+    const margin = 80*devicePixelRatio;
+    if (this.x < margin) this.targetAngle = 0;
+    else if (this.x > W-margin) this.targetAngle = Math.PI;
+    if (this.y < margin) this.targetAngle = Math.PI/2;
+    else if (this.y > H-margin) this.targetAngle = -Math.PI/2;
+
+    // 平滑转向
+    let diff = this.targetAngle - this.angle;
+    while (diff > Math.PI) diff -= Math.PI*2;
+    while (diff < -Math.PI) diff += Math.PI*2;
+    this.angle += diff * 0.06;
+
+    // 移动
+    const speed = this.baseSpeed * (1 + this.scared*1.5);
+    this.x += Math.cos(this.angle) * speed;
+    this.y += Math.sin(this.angle) * speed;
+
+    // 尾巴摆动
+    this.tailPhase += 0.18 + this.scared*0.3;
+  }
+
+  draw(ctx) {
+    const p = TYPE_PROFILES[this.type];
+    const len = this.bodyLen;
+    const h = len * 0.42;
+    const fin = len * p.finRatio;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+    // 朝向修正：让鱼头始终朝运动方向；若向左则上下翻转保持正面
+    const facingLeft = Math.cos(this.angle) < 0;
+    if (facingLeft) ctx.scale(1,-1);
+
+    const wag = Math.sin(this.tailPhase) * 0.5;
+
+    // 尾巴
+    ctx.fillStyle = this.shade(this.color, -20);
+    ctx.beginPath();
+    ctx.moveTo(-len*0.4, 0);
+    ctx.quadraticCurveTo(-len*0.7, wag*fin, -len*0.5-wag*fin*0.3, -fin*0.6+wag*fin);
+    ctx.quadraticCurveTo(-len*0.55, 0, -len*0.5-wag*fin*0.3, fin*0.6+wag*fin);
+    ctx.quadraticCurveTo(-len*0.7, wag*fin, -len*0.4, 0);
+    ctx.fill();
+
+    // 背鳍
+    ctx.fillStyle = this.shade(this.color, -10);
+    ctx.beginPath();
+    ctx.moveTo(-len*0.1, -h*0.5);
+    ctx.quadraticCurveTo(0, -h*1.1, len*0.15, -h*0.4);
+    ctx.fill();
+    // 腹鳍
+    ctx.beginPath();
+    ctx.moveTo(-len*0.05, h*0.4);
+    ctx.quadraticCurveTo(len*0.05, h*0.9+wag*4, len*0.18, h*0.4);
+    ctx.fill();
+
+    // 身体（渐变）
+    const grad = ctx.createLinearGradient(0, -h, 0, h);
+    grad.addColorStop(0, this.shade(this.color, 35));
+    grad.addColorStop(0.5, this.color);
+    grad.addColorStop(1, this.shade(this.color, -30));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(len*0.5, 0);                       // 头部尖端
+    ctx.bezierCurveTo(len*0.5, -h, -len*0.2, -h, -len*0.4, 0);
+    ctx.bezierCurveTo(-len*0.2, h, len*0.5, h, len*0.5, 0);
+    ctx.fill();
+
+    // 条纹（锦鲤/热带鱼）
+    if (this.type !== 'gold') {
+      ctx.strokeStyle = this.shade(this.color, -45);
+      ctx.lineWidth = Math.max(1, len*0.04);
+      ctx.globalAlpha = 0.5;
+      for (let i=0;i<2;i++){
+        const sx = len*0.15 - i*len*0.2;
+        ctx.beginPath();
+        ctx.moveTo(sx, -h*0.7);
+        ctx.quadraticCurveTo(sx-len*0.05, 0, sx, h*0.7);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // 眼睛
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(len*0.32, -h*0.18, len*0.07, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#02131c';
+    ctx.beginPath(); ctx.arc(len*0.34, -h*0.18, len*0.04, 0, Math.PI*2); ctx.fill();
+
+    ctx.restore();
+  }
+
+  shade(hex, amt) {
+    const c = hex.replace('#','');
+    let r = parseInt(c.substr(0,2),16), g = parseInt(c.substr(2,2),16), b = parseInt(c.substr(4,2),16);
+    r = Math.max(0,Math.min(255,r+amt));
+    g = Math.max(0,Math.min(255,g+amt));
+    b = Math.max(0,Math.min(255,b+amt));
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
+/* ---------- 气泡 ---------- */
+class Bubble {
+  constructor() { this.reset(true); }
+  reset(init=false) {
+    this.x = Math.random()*W;
+    this.y = init ? Math.random()*H : H + 10;
+    this.r = (2 + Math.random()*5) * devicePixelRatio;
+    this.speed = (0.4 + Math.random()*1.2) * devicePixelRatio;
+    this.wobble = Math.random()*Math.PI*2;
+  }
+  update() {
+    this.y -= this.speed;
+    this.wobble += 0.05;
+    this.x += Math.sin(this.wobble)*0.5;
+    if (this.y < -10) this.reset();
+  }
+  draw(ctx) {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(200,240,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(200,240,255,0.08)';
+    ctx.fill();
+    // 高光
+    ctx.beginPath();
+    ctx.arc(this.x-this.r*0.3, this.y-this.r*0.3, this.r*0.3, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fill();
+  }
+}
+
+/* ---------- 食物 ---------- */
+class Food {
+  constructor(x,y) {
+    this.x = x; this.y = y;
+    this.vy = 0.3*devicePixelRatio;
+    this.eaten = false;
+    this.life = 600;
+  }
+  update() {
+    this.y += this.vy;
+    this.vy = Math.min(this.vy + 0.01, 1.2*devicePixelRatio);
+    if (this.y > H-20) this.y = H-20;
+    this.life--;
+  }
+  draw(ctx) {
+    ctx.fillStyle = '#ffb74d';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 3*devicePixelRatio, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+/* ---------- 水草 ---------- */
+// 多种水草类型：细叶草 / 丛生草 / 宽叶带 / 水草花 / 枝状
+const PLANT_TYPES = ['grass','bush','ribbon','flower','branch'];
+const GREENS = ['#1b6b3a','#2e8b57','#0e5a2f','#3a9d5d','#15573a','#4caf50','#8bc34a'];
+
+class Plant {
+  constructor(x, opts={}) {
+    this.x = x;
+    this.type = opts.type || PLANT_TYPES[Math.floor(Math.random()*PLANT_TYPES.length)];
+    this.scale = opts.scale ?? (0.7 + Math.random()*0.8);
+    this.h = (50 + Math.random()*90) * this.scale * devicePixelRatio;
+    this.blades = 4 + Math.floor(Math.random()*4);
+    this.phase = Math.random()*Math.PI*2;
+    this.color = GREENS[Math.floor(Math.random()*GREENS.length)];
+    this.dark = this.shade(this.color, -35);
+    this.flowerColor = ['#ff7eb3','#ffd166','#f78fb3','#c8b6ff'][Math.floor(Math.random()*4)];
+    this.swayAmp = (5 + Math.random()*7) * devicePixelRatio;
+    this.leafW = (this.type==='ribbon' ? 8 : this.type==='bush' ? 5 : 3) * devicePixelRatio * this.scale;
+  }
+
+  shade(hex, amt) {
+    const c = hex.replace('#','');
+    let r = parseInt(c.substr(0,2),16), g = parseInt(c.substr(2,2),16), b = parseInt(c.substr(4,2),16);
+    r = Math.max(0,Math.min(255,r+amt)); g = Math.max(0,Math.min(255,g+amt)); b = Math.max(0,Math.min(255,b+amt));
+    return `rgb(${r},${g},${b})`;
+  }
+
+  draw(ctx, t) {
+    ctx.save();
+    ctx.translate(this.x, H);
+    const sway = (i) => Math.sin(t*0.001 + this.phase + i*0.6) * this.swayAmp;
+
+    if (this.type === 'grass') {
+      // 细叶草：多根细长叶片
+      for (let b=0;b<this.blades;b++){
+        const s = sway(b);
+        const bx = (b-this.blades/2)*5*devicePixelRatio;
+        const grad = ctx.createLinearGradient(bx,0,bx,-this.h);
+        grad.addColorStop(0,this.dark); grad.addColorStop(1,this.color);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = (2.5+Math.random()*0.6)*devicePixelRatio*this.scale;
+        ctx.lineCap='round';
+        ctx.beginPath();
+        ctx.moveTo(bx, 0);
+        ctx.quadraticCurveTo(bx+s*0.5, -this.h*0.5, bx+s, -this.h);
+        ctx.stroke();
+      }
+    }
+    else if (this.type === 'bush') {
+      // 丛生草：宽短叶片簇拥
+      for (let b=0;b<this.blades+2;b++){
+        const s = sway(b);
+        const bx = (b-(this.blades+2)/2)*7*devicePixelRatio;
+        const bh = this.h*(0.5+Math.random()*0.5);
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.moveTo(bx-this.leafW, 0);
+        ctx.quadraticCurveTo(bx+s*0.4, -bh*0.5, bx+s, -bh);
+        ctx.quadraticCurveTo(bx+s*0.4, -bh*0.5, bx+this.leafW, 0);
+        ctx.fill();
+      }
+    }
+    else if (this.type === 'ribbon') {
+      // 宽叶带：宽大飘逸的长叶
+      for (let b=0;b<3;b++){
+        const s = sway(b)*1.4;
+        const bx = (b-1)*10*devicePixelRatio;
+        const grad = ctx.createLinearGradient(bx,0,bx,-this.h);
+        grad.addColorStop(0,this.dark); grad.addColorStop(1,this.color);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(bx-this.leafW, 0);
+        ctx.bezierCurveTo(bx-this.leafW+s*0.3,-this.h*0.5, bx+s*0.6-this.leafW,-this.h*0.8, bx+s-this.leafW*0.3,-this.h);
+        ctx.lineTo(bx+s+this.leafW*0.3,-this.h);
+        ctx.bezierCurveTo(bx+s*0.6+this.leafW,-this.h*0.8, bx+this.leafW+s*0.3,-this.h*0.5, bx+this.leafW,0);
+        ctx.fill();
+      }
+    }
+    else if (this.type === 'flower') {
+      // 水草花：茎+顶端小花
+      const stemN = 3;
+      for (let b=0;b<stemN;b++){
+        const s = sway(b);
+        const bx = (b-stemN/2)*8*devicePixelRatio;
+        const bh = this.h*(0.8+b*0.1);
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 2.5*devicePixelRatio*this.scale;
+        ctx.lineCap='round';
+        ctx.beginPath();
+        ctx.moveTo(bx, 0);
+        ctx.quadraticCurveTo(bx+s*0.5, -bh*0.5, bx+s, -bh);
+        ctx.stroke();
+        // 几片小叶
+        for (let l=0;l<2;l++){
+          const ly = -bh*(0.35+l*0.3);
+          ctx.fillStyle = this.color;
+          ctx.beginPath();
+          ctx.ellipse(bx+s*0.4 + (l?-1:1)*8*devicePixelRatio, ly, 7*devicePixelRatio*this.scale, 3*devicePixelRatio*this.scale, (l?-0.5:0.5), 0, Math.PI*2);
+          ctx.fill();
+        }
+        // 顶端花瓣
+        const fx = bx+s, fy = -bh;
+        ctx.fillStyle = this.flowerColor;
+        for (let p=0;p<5;p++){
+          const a = p/5*Math.PI*2;
+          ctx.beginPath();
+          ctx.ellipse(fx+Math.cos(a)*4*devicePixelRatio, fy+Math.sin(a)*4*devicePixelRatio, 4*devicePixelRatio*this.scale, 2.5*devicePixelRatio*this.scale, a, 0, Math.PI*2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#fff59d';
+        ctx.beginPath(); ctx.arc(fx, fy, 2.5*devicePixelRatio*this.scale, 0, Math.PI*2); ctx.fill();
+      }
+    }
+    else { // branch 枝状：分叉珊瑚感
+      const drawBranch = (x,y,len,ang,depth) => {
+        if (depth<=0 || len<6) return;
+        const ex = x + Math.cos(ang)*len;
+        const ey = y + Math.sin(ang)*len;
+        const s = sway(depth)*0.4;
+        ctx.strokeStyle = depth>2?this.color:this.dark;
+        ctx.lineWidth = depth*1.6*devicePixelRatio*this.scale;
+        ctx.lineCap='round';
+        ctx.beginPath();
+        ctx.moveTo(x,y);
+        ctx.quadraticCurveTo((x+ex)/2+s, (y+ey)/2, ex, ey);
+        ctx.stroke();
+        drawBranch(ex,ey,len*0.7,ang-0.5,depth-1);
+        drawBranch(ex,ey,len*0.7,ang+0.5,depth-1);
+      };
+      drawBranch(0,0,this.h*0.5,-Math.PI/2,3);
+    }
+    ctx.restore();
+  }
+}
+
+/* ---------- 沙底 ---------- */
+function drawSand() {
+  const sandH = 50*devicePixelRatio;
+  const grad = ctx.createLinearGradient(0, H-sandH, 0, H);
+  grad.addColorStop(0, 'rgba(80,70,40,0.0)');
+  grad.addColorStop(0.4, 'rgba(120,100,60,0.5)');
+  grad.addColorStop(1, 'rgba(160,140,90,0.85)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, H-sandH);
+  for (let x=0;x<=W;x+=40*devicePixelRatio){
+    ctx.lineTo(x, H-sandH + Math.sin(x*0.01)*8*devicePixelRatio);
+  }
+  ctx.lineTo(W, H);
+  ctx.fill();
+}
+
+/* ---------- 光柱 ---------- */
+function drawLightRays(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (let i=0;i<4;i++){
+    const x = W*0.2 + i*W*0.2 + Math.sin(t*0.0003+i)*30*devicePixelRatio;
+    const grad = ctx.createLinearGradient(x, 0, x+60*devicePixelRatio, H);
+    grad.addColorStop(0, 'rgba(150,220,255,0.12)');
+    grad.addColorStop(1, 'rgba(150,220,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x-30*devicePixelRatio, 0);
+    ctx.lineTo(x+30*devicePixelRatio, 0);
+    ctx.lineTo(x+100*devicePixelRatio, H);
+    ctx.lineTo(x-80*devicePixelRatio, H);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ---------- 状态 ---------- */
+const fishes = [];
+const bubbles = Array.from({length: 35}, () => new Bubble());
+// 水草：后排高大 + 中排多样 + 前排小丛，营造层次感
+const plants = [];
+const plantCount = 14;
+for (let i=0;i<plantCount;i++){
+  const x = W*(0.04 + i*0.068) + (Math.random()-0.5)*W*0.02;
+  const isBack = i%3===0;       // 每3株一株高大背景草
+  const isFront = i%5===2;      // 部分前排小草
+  plants.push(new Plant(x, {
+    scale: isFront ? (0.45+Math.random()*0.2) : (isBack ? (1.0+Math.random()*0.4) : (0.7+Math.random()*0.3)),
+    type: PLANT_TYPES[i % PLANT_TYPES.length]
+  }));
+}
+const foods = [];
+const mouse = { x:0, y:0, active:false };
+
+let curType = 'tropical';
+let curColor = '#ff7a45';
+let curSize = 28;
+
+// 灯光状态：lightOn 目标值，lightLevel 当前渐变值（用于平滑过渡）
+let lightOn = true;
+let lightLevel = 1;
+
+/* ---------- 鼠标交互 ---------- */
+canvas.addEventListener('mousemove', e => {
+  mouse.x = e.clientX * devicePixelRatio;
+  mouse.y = e.clientY * devicePixelRatio;
+  mouse.active = true;
+  clearTimeout(mouse._t);
+  mouse._t = setTimeout(()=>mouse.active=false, 600);
+});
+canvas.addEventListener('click', e => {
+  foods.push(new Food(e.clientX*devicePixelRatio, e.clientY*devicePixelRatio));
+  toast('🟡 投喂中…');
+});
+window.addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') {
+    fishes.length = 0;
+    updateFishCount();
+    toast('鱼缸已清空');
+  }
+});
+
+/* ---------- 控制面板交互 ---------- */
+document.getElementById('typeSeg').addEventListener('click', e=>{
+  if (e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#typeSeg button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  curType = e.target.dataset.type;
+});
+document.getElementById('colorPicker').addEventListener('click', e=>{
+  if (e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#colorPicker button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  curColor = e.target.dataset.color;
+});
+const sizeRange = document.getElementById('sizeRange');
+const sizeVal = document.getElementById('sizeVal');
+sizeRange.addEventListener('input', ()=>{
+  curSize = +sizeRange.value;
+  sizeVal.textContent = curSize;
+});
+document.getElementById('addBtn').addEventListener('click', ()=>{
+  fishes.push(new Fish({ type:curType, color:curColor, size:curSize }));
+  updateFishCount();
+  toast(`🐠 已放入一条${TYPE_PROFILES[curType].name}`);
+});
+
+/* ---------- 灯光开关 ---------- */
+const lightToggle = document.getElementById('lightToggle');
+const bulbIcon = document.getElementById('bulbIcon');
+const lightLabel = document.getElementById('lightLabel');
+lightToggle.addEventListener('click', ()=>{
+  lightOn = !lightOn;
+  lightToggle.classList.toggle('on', lightOn);
+  bulbIcon.textContent = lightOn ? '💡' : '🌙';
+  lightLabel.textContent = lightOn ? '灯光开启' : '灯光关闭';
+  toast(lightOn ? '💡 鱼缸灯光已开启' : '🌙 鱼缸灯光已关闭');
+});
+
+function updateFishCount() {
+  document.getElementById('fishCount').textContent = fishes.length;
+}
+
+/* ---------- Toast ---------- */
+const toastEl = document.getElementById('toast');
+let toastTimer;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>toastEl.classList.remove('show'), 1800);
+}
+
+/* ---------- 水质参数模拟 ---------- */
+const metrics = {
+  temp: { val:26.4, min:24, max:28, el:'m-temp', bar:'b-temp', range:[24,30] },
+  ph:   { val:7.2,  min:6.8,max:7.6, el:'m-ph',   bar:'b-ph',   range:[6,8.5] },
+  do:   { val:7.8,  min:6.5,max:8.5, el:'m-do',   bar:'b-do',   range:[4,10] },
+  nh:   { val:0.05, min:0.02,max:0.15, el:'m-nh', bar:'b-nh',   range:[0,0.5] },
+  turb: { val:1.2,  min:0.8,max:2.5, el:'m-turb', bar:'b-turb', range:[0,5] },
+};
+setInterval(()=>{
+  for (const k in metrics){
+    const m = metrics[k];
+    m.val += (Math.random()-0.5)*0.1;
+    m.val = Math.max(m.min, Math.min(m.max, m.val));
+    const el = document.getElementById(m.el);
+    el.textContent = k==='ph' ? m.val.toFixed(2) : m.val.toFixed(k==='nh'?2:1);
+    const pct = (m.val - m.range[0])/(m.range[1]-m.range[0])*100;
+    document.getElementById(m.bar).style.width = Math.max(5,Math.min(95,pct))+'%';
+  }
+}, 2500);
+
+/* ---------- 初始放入几条鱼 ---------- */
+function seedFish() {
+  const presets = [
+    {type:'tropical', color:'#ff7a45', size:26},
+    {type:'tropical', color:'#4dd0e1', size:30},
+    {type:'gold',     color:'#ffd93d', size:34},
+    {type:'koi',      color:'#ffffff', size:40},
+    {type:'tropical', color:'#7e57c2', size:24},
+  ];
+  presets.forEach(p => fishes.push(new Fish(p)));
+  updateFishCount();
+}
+seedFish();
+
+/* ---------- 主循环 ---------- */
+function loop(t) {
+  ctx.clearRect(0,0,W,H);
+
+  // 背景渐变（补充，因canvas默认背景会被clear）
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#0a3a5c');
+  bg.addColorStop(0.45,'#062842');
+  bg.addColorStop(1,'#021522');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0,0,W,H);
+
+  drawLightRays(t);
+
+  // 水草
+  plants.forEach(p => p.draw(ctx, t));
+
+  // 沙底
+  drawSand();
+
+  // 食物
+  for (let i=foods.length-1;i>=0;i--){
+    foods[i].update();
+    foods[i].draw(ctx);
+    if (foods[i].eaten || foods[i].life<=0) foods.splice(i,1);
+  }
+
+  // 鱼
+  fishes.forEach(f => { f.update(foods, mouse); f.draw(ctx); });
+
+  // 气泡
+  bubbles.forEach(b => { b.update(); b.draw(ctx); });
+
+  // ===== 灯光效果 =====
+  // 平滑过渡 lightLevel → lightOn ? 1 : 0
+  const target = lightOn ? 1 : 0;
+  lightLevel += (target - lightLevel) * 0.06;
+
+  if (lightLevel < 0.998) {
+    // 关灯暗化：用深色遮罩压暗整个鱼缸，lightLevel 越低越暗
+    const darkness = (1 - lightLevel) * 0.82;
+    ctx.fillStyle = `rgba(2,10,20,${darkness})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // 顶部小夜灯：一束微弱的蓝白月光从水面中央投下
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    const cx = W * 0.5;
+    const moonAlpha = (1 - lightLevel) * 0.5;
+    const mg = ctx.createRadialGradient(cx, 0, 0, cx, H*0.45, H*0.55);
+    mg.addColorStop(0, `rgba(150,190,230,${moonAlpha})`);
+    mg.addColorStop(0.5, `rgba(80,120,170,${moonAlpha*0.4})`);
+    mg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = mg;
+    ctx.fillRect(0, 0, W, H);
+
+    // 月光光柱（细窄）
+    for (let i=0;i<2;i++){
+      const x = cx + (i?1:-1)*W*0.08;
+      const lg = ctx.createLinearGradient(x, 0, x, H);
+      lg.addColorStop(0, `rgba(180,210,255,${moonAlpha*0.5})`);
+      lg.addColorStop(1, 'rgba(180,210,255,0)');
+      ctx.fillStyle = lg;
+      ctx.beginPath();
+      ctx.moveTo(x-20*devicePixelRatio, 0);
+      ctx.lineTo(x+20*devicePixelRatio, 0);
+      ctx.lineTo(x+60*devicePixelRatio, H);
+      ctx.lineTo(x-60*devicePixelRatio, H);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

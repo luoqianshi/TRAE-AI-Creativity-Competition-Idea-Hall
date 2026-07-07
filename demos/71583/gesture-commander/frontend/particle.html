@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>粒子魔法师</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #020210; }
+  canvas { position: fixed; inset: 0; z-index: 1; }
+
+  /* 顶部标题 */
+  .title-bar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    padding: 24px 36px;
+    display: flex; align-items: center; gap: 16px;
+    pointer-events: none;
+  }
+  .title {
+    font-size: 22px; font-weight: 700; letter-spacing: 4px;
+    background: linear-gradient(135deg, #00d4ff, #a78bfa);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .title-sub {
+    font-size: 11px; color: rgba(255,255,255,0.25); letter-spacing: 2px;
+  }
+
+  /* 底部状态栏 */
+  .status-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+    padding: 16px 36px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 24px;
+    pointer-events: none;
+  }
+  .status-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 16px; border-radius: 20px;
+    font-size: 12px; letter-spacing: 1px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.4);
+    transition: all 0.4s;
+  }
+  .status-item .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.2); }
+  .status-item.active { border-color: rgba(0,212,255,0.4); color: #00d4ff; }
+  .status-item.active .dot { background: #00d4ff; box-shadow: 0 0 8px #00d4ff; }
+  .status-item.fist { border-color: rgba(255,68,68,0.5); color: #ff4444; }
+  .status-item.fist .dot { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
+  .status-item.palm { border-color: rgba(255,215,0,0.5); color: #ffd700; }
+  .status-item.palm .dot { background: #ffd700; box-shadow: 0 0 8px #ffd700; }
+
+  /* 能量槽 */
+  .energy-bar-container {
+    position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
+    width: 300px; height: 12px; border-radius: 6px;
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+    z-index: 10; pointer-events: none; overflow: hidden;
+  }
+  .energy-bar-fill {
+    height: 100%; width: 0%; border-radius: 6px;
+    background: linear-gradient(90deg, #ff4444, #ffd700, #ffffff);
+    box-shadow: 0 0 10px #ffd700;
+    transition: width 0.1s ease-out;
+  }
+  .energy-text {
+    position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: #fff; letter-spacing: 2px; text-shadow: 0 0 4px #000;
+  }
+
+  /* 提示 */
+  .hint {
+    position: fixed; bottom: 80px; left: 50%; z-index: 10;
+    transform: translateX(-50%);
+    font-size: 13px; letter-spacing: 2px;
+    color: rgba(255,255,255,0.3);
+    pointer-events: none;
+    transition: opacity 0.5s;
+  }
+
+  /* 连接状态 */
+  .conn-dot {
+    position: fixed; top: 28px; right: 36px; z-index: 10;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #ef4444; transition: background 0.5s;
+    pointer-events: none;
+  }
+  .conn-dot.online { background: #10b981; }
+
+  /* 摄像头调试画面 */
+  .cam-debug {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 240px;
+    height: 180px;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    object-fit: cover;
+    pointer-events: none;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="title-bar">
+  <div class="title">黑洞吞噬</div>
+  <div class="title-sub">BLACK HOLE</div>
+</div>
+<div class="conn-dot" id="connDot"></div>
+<div class="hint" id="hint">将手放入摄像头范围</div>
+
+<div class="energy-bar-container">
+  <div class="energy-text">黑洞能量</div>
+  <div class="energy-bar-fill" id="energyFill"></div>
+</div>
+
+<div class="status-bar">
+  <div class="status-item" id="stPalm"><span class="dot"></span>张开手掌 · 吞噬聚拢</div>
+  <div class="status-item" id="stFist"><span class="dot"></span>握拳 · 能量爆发</div>
+  <div class="status-item" id="stPoint"><span class="dot"></span>食指指向 · 牵引流光</div>
+  <span style="font-size:11px;color:rgba(255,255,255,0.2);letter-spacing:1px" id="fpsDisplay"></span>
+</div>
+
+<script>
+// ============================================================
+// WebSocket
+// ============================================================
+let ws = null;
+let reconnectTimer = null;
+let handDetected = false;
+let gesture = 'none';
+let cursorX = 0.5, cursorY = 0.5;
+let targetX = 0.5, targetY = 0.5; // 平滑插值目标
+
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try { ws = new WebSocket(`${protocol}//${location.host}/ws`); }
+  catch (e) { scheduleReconnect(); return; }
+
+  ws.onopen = () => {
+    document.getElementById('connDot').classList.add('online');
+  };
+  ws.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      handDetected = d.hand_detected;
+      gesture = d.gesture;
+      targetX = d.cursor_x;
+      targetY = d.cursor_y;
+      updateStatusUI();
+    } catch (_) {}
+  };
+  ws.onclose = () => {
+    document.getElementById('connDot').classList.remove('online');
+    handDetected = false;
+    gesture = 'none';
+    scheduleReconnect();
+  };
+  ws.onerror = () => ws.close();
+}
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000);
+}
+function updateStatusUI() {
+  const stPoint = document.getElementById('stPoint');
+  const stFist = document.getElementById('stFist');
+  const stPalm = document.getElementById('stPalm');
+  const hint = document.getElementById('hint');
+  [stPoint, stFist, stPalm].forEach(el => {
+    el.className = 'status-item';
+  });
+  if (!handDetected) {
+    hint.style.opacity = '1';
+    hint.textContent = '将手放入摄像头范围';
+    return;
+  }
+  hint.style.opacity = '0.3';
+  switch (gesture) {
+    case 'point': stPoint.classList.add('active'); hint.textContent = '食指牵引，在太空中画出流光'; break;
+    case 'fist': stFist.classList.add('fist'); hint.textContent = 'BOOM！能量爆发！'; break;
+    case 'open_palm': stPalm.classList.add('palm'); hint.textContent = '微型黑洞已开启，正在吞噬周围物质...'; break;
+    default: hint.textContent = '手势识别中...';
+  }
+}
+
+// ============================================================
+// 画布 & 粒子系统
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+const NUM_PARTICLES = 350;     // 增加粒子数量让黑洞更壮观
+const MAX_DIST = 120;        // 粒子连线最大距离
+const ATTRACT = 0.0008;      // 食指牵引力度
+const GATHER = 0.008;        // 黑洞吞噬力度 (加大)
+const EXPLODE = 0.15;        // 基础炸裂力度
+const EXPLODE_R = 0.4;       // 炸裂范围
+const DAMPING = 0.98;        // 速度衰减
+const MAX_SPD = 0.025;       // 最大速度
+const CURSOR_SMOOTH = 0.12;  // 光标平滑度
+
+let blackHoleEnergy = 0;     // 黑洞能量 0-100
+let screenShake = 0;         // 屏幕震动
+
+// 火花粒子（爆炸特效）
+let sparks = [];
+
+class Particle {
+  constructor() {
+    this.reset(true);
+  }
+  reset(initial) {
+    this.x = initial ? Math.random() : 0.5;
+    this.y = initial ? Math.random() : 0.5;
+    this.vx = (Math.random() - 0.5) * 0.001;
+    this.vy = (Math.random() - 0.5) * 0.001;
+    this.size = Math.random() * 2.2 + 0.8;
+    this.hue = 190 + Math.random() * 50; // 180~240 青蓝色系
+    this.sat = 60 + Math.random() * 40;
+    this.lit = 55 + Math.random() * 30;
+    this.alpha = 0.5 + Math.random() * 0.5;
+    this.phase = Math.random() * Math.PI * 2; // 微动相位
+  }
+  update(cx, cy, g, hasHand) {
+    if (!hasHand) {
+      this.vx += (Math.random() - 0.5) * 0.0001;
+      this.vy += (Math.random() - 0.5) * 0.0001;
+    } else {
+      const dx = cx - this.x;
+      const dy = cy - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) + 0.0001;
+
+      if (g === 'fist') {
+        if (dist < EXPLODE_R) {
+          // 爆炸力度受黑洞能量加成，满能量时威力巨大
+          const powerBonus = 1 + (blackHoleEnergy / 100) * 3;
+          const f = (EXPLODE * powerBonus) / (dist * 8 + 0.01);
+          this.vx -= (dx / dist) * f;
+          this.vy -= (dy / dist) * f;
+        }
+        // 炸裂时根据能量变色，满能量偏白/金，低能量偏红
+        const targetHue = blackHoleEnergy > 80 ? 60 : (blackHoleEnergy > 40 ? 30 : 0);
+        this.hue += (targetHue - this.hue) * 0.1;
+        this.lit += (80 - this.lit) * 0.1;
+      } else if (g === 'open_palm') {
+        // 黑洞吞噬
+        const pull = GATHER * (1 + blackHoleEnergy/100); // 能量越高吸力越大
+        this.vx += dx * pull;
+        this.vy += dy * pull;
+        
+        // 靠近中心时高速旋转
+        if (dist < 0.1) {
+           const tangentX = -dy / dist;
+           const tangentY = dx / dist;
+           const spinSpeed = 0.01 + (blackHoleEnergy/100) * 0.02;
+           this.vx += tangentX * spinSpeed;
+           this.vy += tangentY * spinSpeed;
+        }
+        
+        // 颜色向金色/白色过渡
+        this.hue += (50 - this.hue) * 0.08;
+        this.lit += (Math.min(90, 55 + blackHoleEnergy * 0.4) - this.lit) * 0.05;
+      } else {
+        // 食指牵引流光
+        this.vx += dx * ATTRACT;
+        this.vy += dy * ATTRACT;
+        // 渐变回青蓝色
+        const targetHue = 190 + (this.phase * 10) % 50;
+        this.hue += (targetHue - this.hue) * 0.05;
+        this.lit += (55 - this.lit) * 0.05;
+      }
+    }
+
+    // 限速
+    const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+    if (spd > MAX_SPD) {
+      this.vx = (this.vx / spd) * MAX_SPD;
+      this.vy = (this.vy / spd) * MAX_SPD;
+    }
+
+    this.vx *= DAMPING;
+    this.vy *= DAMPING;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // 循环边界
+    if (this.x < 0) this.x += 1;
+    if (this.x > 1) this.x -= 1;
+    if (this.y < 0) this.y += 1;
+    if (this.y > 1) this.y -= 1;
+  }
+}
+
+// 初始化粒子
+const particles = Array.from({ length: NUM_PARTICLES }, () => new Particle());
+
+// ============================================================
+// 爆炸火花
+// ============================================================
+function spawnSparks(cx, cy, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 0.003 + Math.random() * 0.02;
+    sparks.push({
+      x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1,
+      decay: 0.015 + Math.random() * 0.03,
+      size: 1 + Math.random() * 3,
+      hue: Math.random() * 40, // 红橙黄
+    });
+  }
+}
+
+function updateSparks() {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i];
+    s.x += s.vx;
+    s.y += s.vy;
+    s.vx *= 0.96;
+    s.vy *= 0.96;
+    s.life -= s.decay;
+    if (s.life <= 0) sparks.splice(i, 1);
+  }
+}
+
+// ============================================================
+// 渲染
+// ============================================================
+let prevGesture = 'none';
+let flashAlpha = 0;
+
+function drawBackground() {
+  // 屏幕震动
+  if (screenShake > 0) {
+    const sx = (Math.random() - 0.5) * screenShake;
+    const sy = (Math.random() - 0.5) * screenShake;
+    ctx.setTransform(1, 0, 0, 1, sx, sy);
+    screenShake *= 0.9;
+    if (screenShake < 0.1) {
+       screenShake = 0;
+       ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+  } else {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  // 深空背景
+  ctx.fillStyle = '#020210';
+  ctx.fillRect(0, 0, W, H);
+
+  // 静态星点（只在第一帧绘制到离屏 canvas）
+  if (!drawBackground._starsCanvas) {
+    const sc = document.createElement('canvas');
+    sc.width = W; sc.height = H;
+    const sctx = sc.getContext('2d');
+    for (let i = 0; i < 200; i++) {
+      const sx = Math.random() * W;
+      const sy = Math.random() * H;
+      const sr = Math.random() * 1.2;
+      const sa = Math.random() * 0.5;
+      sctx.fillStyle = `rgba(255,255,255,${sa})`;
+      sctx.beginPath();
+      sctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      sctx.fill();
+    }
+    drawBackground._starsCanvas = sc;
+  }
+  ctx.drawImage(drawBackground._starsCanvas, 0, 0);
+}
+
+function drawConnections() {
+  const maxPx = MAX_DIST;
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const a = particles[i], b = particles[j];
+      const dx = (a.x - b.x) * W;
+      const dy = (a.y - b.y) * H;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < maxPx) {
+        const alpha = (1 - dist / maxPx) * 0.18;
+        ctx.strokeStyle = `rgba(80,180,220,${alpha})`;
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(a.x * W, a.y * H);
+        ctx.lineTo(b.x * W, b.y * H);
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const x = p.x * W, y = p.y * H;
+    const r = p.size;
+    ctx.save();
+    ctx.globalAlpha = p.alpha;
+    ctx.shadowColor = `hsl(${p.hue}, ${p.sat}%, ${p.lit}%)`;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = `hsl(${p.hue}, ${p.sat}%, ${p.lit}%)`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawSparks() {
+  for (const s of sparks) {
+    const x = s.x * W, y = s.y * H;
+    ctx.save();
+    ctx.globalAlpha = s.life;
+    ctx.shadowColor = `hsl(${s.hue}, 100%, 60%)`;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = `hsl(${s.hue}, 100%, 60%)`;
+    ctx.beginPath();
+    ctx.arc(x, y, s.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawCursor() {
+  const x = cursorX * W, y = cursorY * H;
+  if (!handDetected) return;
+
+  let color, glowSize;
+  switch (gesture) {
+    case 'fist': color = '#ff4444'; glowSize = 50; break;
+    case 'open_palm': color = '#ffd700'; glowSize = 60; break;
+    default: color = '#00d4ff'; glowSize = 35;
+  }
+
+  const pulse = 1 + Math.sin(Date.now() * 0.005) * 0.15;
+
+  // 外层光晕
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = glowSize * pulse;
+
+  // 光环
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.5;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 18 * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 中层
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  // 张手时中心变成一个小黑洞
+  if (gesture === 'open_palm') {
+    ctx.arc(x, y, 8 + (blackHoleEnergy/100)*10, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  } else {
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 核心白点
+  if (gesture !== 'open_palm') {
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawFlash() {
+  if (flashAlpha > 0.001) {
+    ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+    flashAlpha *= 0.9;
+  }
+}
+
+// 渲染爆炸文字
+function drawBoomText() {
+  if (flashAlpha > 0.05 && prevGesture === 'fist') {
+     ctx.save();
+     ctx.setTransform(1, 0, 0, 1, 0, 0); // 忽略震动
+     ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha * 2})`;
+     ctx.font = 'bold 80px Arial';
+     ctx.textAlign = 'center';
+     ctx.textBaseline = 'middle';
+     ctx.shadowColor = '#ff4444';
+     ctx.shadowBlur = 20;
+     ctx.fillText('BOOM!', cursorX * W, cursorY * H - 100);
+     ctx.restore();
+  }
+}
+
+// ============================================================
+// FPS 计数器
+// ============================================================
+let frameCount = 0, lastFpsTime = performance.now();
+function updateFPS() {
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    document.getElementById('fpsDisplay').textContent = `FPS: ${frameCount}`;
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ============================================================
+// 主循环
+// ============================================================
+function animate() {
+  requestAnimationFrame(animate);
+
+  // 平滑光标插值
+  cursorX += (targetX - cursorX) * CURSOR_SMOOTH;
+  cursorY += (targetY - cursorY) * CURSOR_SMOOTH;
+
+  // 更新粒子
+  for (const p of particles) {
+    p.update(cursorX, cursorY, gesture, handDetected);
+  }
+
+  // 能量管理
+  if (gesture === 'open_palm') {
+     blackHoleEnergy = Math.min(100, blackHoleEnergy + 0.5);
+  } else if (gesture !== 'fist') {
+     blackHoleEnergy = Math.max(0, blackHoleEnergy - 0.2);
+  }
+  document.getElementById('energyFill').style.width = blackHoleEnergy + '%';
+
+  // 爆炸特效
+  if (gesture === 'fist' && prevGesture !== 'fist') {
+    const powerBonus = 1 + (blackHoleEnergy / 100) * 3;
+    spawnSparks(cursorX, cursorY, 50 * powerBonus);
+    flashAlpha = Math.min(0.8, 0.15 + (blackHoleEnergy / 100) * 0.4);
+    screenShake = blackHoleEnergy * 0.5; // 能量越高震动越大
+    blackHoleEnergy = 0; // 释放能量
+  }
+  updateSparks();
+  prevGesture = gesture;
+
+  // 渲染
+  drawBackground();
+  drawConnections();
+  drawParticles();
+  drawSparks();
+  drawCursor();
+  drawFlash();
+  drawBoomText();
+  updateFPS();
+}
+
+// ============================================================
+// 启动
+// ============================================================
+connect();
+animate();
+</script>
+<img class="cam-debug" src="/video_feed" alt="Camera Debug" />
+</body>
+</html>

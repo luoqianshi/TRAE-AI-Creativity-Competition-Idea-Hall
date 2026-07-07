@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>评价明细列表</title>
+</head>
+<body>
+<div id="app">
+    <div class="page-wrapper">
+        <!-- 搜索筛选 -->
+        <div class="app-card" style="margin-bottom:12px;">
+            <div class="card-body">
+                <el-form :inline="true" :model="search" size="small" class="form-inline">
+                    <el-form-item label="关键词">
+                        <el-input v-model="search.keyword" placeholder="评价内容/订单号" clearable style="width:200px;"></el-input>
+                    </el-form-item>
+                    <el-form-item label="来源">
+                        <el-select v-model="search.source" placeholder="全部" clearable style="width:120px;">
+                            <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.key"></el-option>
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item label="情感倾向">
+                        <el-select v-model="search.sentiment" placeholder="全部" clearable style="width:120px;">
+                            <el-option v-for="r in ratings" :key="r.key" :label="r.name" :value="r.key"></el-option>
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item label="时间范围">
+                        <el-date-picker v-model="search.dateRange" type="daterange" range-separator="-" start-placeholder="开始" end-placeholder="结束" value-format="yyyy-MM-dd" style="width:240px;"></el-date-picker>
+                    </el-form-item>
+                    <el-form-item label="得分">
+                        <el-select v-model="search.scoreRange" placeholder="全部" clearable style="width:120px;">
+                            <el-option label=">0 正向" value="positive"></el-option>
+                            <el-option label="=0 中性" value="zero"></el-option>
+                            <el-option label="<0 负向" value="negative"></el-option>
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item>
+                        <el-button type="primary" icon="el-icon-search" @click="doSearch">查询</el-button>
+                        <el-button icon="el-icon-refresh" @click="resetSearch">重置</el-button>
+                    </el-form-item>
+                </el-form>
+            </div>
+        </div>
+
+        <div class="app-card">
+            <div class="card-header">
+                <span class="title">评价明细（共 {{ filtered.length }} 条）</span>
+                <div>
+                    <el-button size="mini" type="text" icon="el-icon-refresh" @click="reload">刷新</el-button>
+                    <el-button size="mini" type="text" icon="el-icon-download" @click="exportData">导出</el-button>
+                    <el-button size="mini" type="text" icon="el-icon-upload2" @click="triggerImport">导入</el-button>
+                    <input ref="fileInput" type="file" accept=".json" style="display:none;" @change="importData">
+                </div>
+            </div>
+            <div class="card-body no-pad">
+                <el-table :data="paged" border size="mini" style="width:100%;" v-loading="loading">
+                    <el-table-column label="序号" type="index" width="50" align="center" :index="(i) => (currentPage-1)*pageSize + i + 1"></el-table-column>
+                    <el-table-column label="评价内容" min-width="240">
+                        <template slot-scope="s">
+                            <span>{{ Utils.truncate(s.row.content, 80) }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="来源" prop="source" width="70" align="center">
+                        <template slot-scope="s">{{ sourceName(s.row.source) }}</template>
+                    </el-table-column>
+                    <el-table-column label="订单号" prop="order_no" width="140"></el-table-column>
+                    <el-table-column label="评价时间" prop="review_time" width="140"></el-table-column>
+                    <el-table-column label="情感" width="80" align="center">
+                        <template slot-scope="s">
+                            <span class="sentiment-tag" :class="'sentiment-' + s.row.overall_sentiment">{{ sentimentLabel(s.row.overall_sentiment) }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="总分" width="70" align="center">
+                        <template slot-scope="s">
+                            <span class="score-badge" :class="s.row.total_score>0?'positive':(s.row.total_score<0?'negative':'zero')">{{ s.row.total_score > 0 ? '+'+s.row.total_score : s.row.total_score }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="各维度得分" min-width="200">
+                        <template slot-scope="s">
+                            <span v-for="d in (s.row.dimensions || [])" :key="d.dimension" class="dim-score-tag" :class="d.score>0?'positive':(d.score<0?'negative':'zero')">
+                                {{ d.dimension_name }}{{ d.score > 0 ? '+'+d.score : d.score }}
+                            </span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="80" align="center">
+                        <template slot-scope="s">
+                            <el-tag size="mini" :type="s.row.analysis_status === '已完成' ? 'success' : (s.row.analysis_status === '失败' ? 'danger' : 'info')">{{ s.row.analysis_status }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="修正" width="50" align="center">
+                        <template slot-scope="s">
+                            <el-tag v-if="isManuallyAdjusted(s.row)" size="mini" type="warning">修</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="180" align="center" fixed="right">
+                        <template slot-scope="s">
+                            <el-button size="mini" type="text" @click="viewDetail(s.row)">详情</el-button>
+                            <el-button size="mini" type="text" @click="editRecord(s.row)">修正</el-button>
+                            <el-button size="mini" type="text" style="color:#f56c6c" @click="deleteRecord(s.$index)">删除</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+                <div style="padding:10px; text-align:right;">
+                    <el-pagination
+                        background
+                        @size-change="(s) => { pageSize = s; currentPage = 1; }"
+                        @current-change="(p) => currentPage = p"
+                        :current-page="currentPage"
+                        :page-sizes="[20, 50, 100, 200]"
+                        :page-size="pageSize"
+                        :total="filtered.length"
+                        layout="total, sizes, prev, pager, next, jumper">
+                    </el-pagination>
+                </div>
+            </div>
+        </div>
+
+        <!-- 详情弹窗 -->
+        <el-dialog title="评价详情" :visible.sync="detailDialog" width="900px" :close-on-click-modal="false">
+            <div v-if="current">
+                <el-row :gutter="12" style="margin-bottom:12px;">
+                    <el-col :span="6"><div class="stat-card"><div class="label">整体情感</div><div class="value" :style="{color: sentimentColor(current.overall_sentiment)}">{{ sentimentLabel(current.overall_sentiment) }}</div></div></el-col>
+                    <el-col :span="6"><div class="stat-card green"><div class="label">总分</div><div class="value" :style="{color: current.total_score>0?'#67c23a':(current.total_score<0?'#f56c6c':'#909399')}">{{ current.total_score>0?'+':'' }}{{ current.total_score }}</div></div></el-col>
+                    <el-col :span="6"><div class="stat-card orange"><div class="label">来源</div><div class="value" style="font-size:18px;">{{ sourceName(current.source) }}</div></div></el-col>
+                    <el-col :span="6"><div class="stat-card"><div class="label">订单号</div><div class="value" style="font-size:14px; word-break:break-all;">{{ current.order_no || '-' }}</div></div></el-col>
+                </el-row>
+
+                <div class="detail-section">
+                    <div class="section-title">评价原文</div>
+                    <div class="review-content-box">{{ current.content }}</div>
+                </div>
+
+                <div class="detail-section">
+                    <div class="section-title">AI 评价摘要</div>
+                    <div class="review-content-box">{{ current.summary || '-' }}</div>
+                </div>
+
+                <div class="detail-section">
+                    <div class="section-title">维度评分详情</div>
+                    <el-table :data="current.dimensions || []" border size="mini">
+                        <el-table-column label="维度" prop="dimension_name" width="90"></el-table-column>
+                        <el-table-column label="判定等级" width="90" align="center">
+                            <template slot-scope="s">
+                                <span class="sentiment-tag" :class="'sentiment-' + s.row.rating">{{ sentimentLabel(s.row.rating) }}</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="得分" width="70" align="center">
+                            <template slot-scope="s">
+                                <span class="score-badge" :class="s.row.score>0?'positive':(s.row.score<0?'negative':'zero')">{{ s.row.score>0?'+':'' }}{{ s.row.score }}</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="判定理由" prop="reason" show-overflow-tooltip></el-table-column>
+                        <el-table-column label="原文依据" prop="evidence_text" show-overflow-tooltip></el-table-column>
+                        <el-table-column label="修正" width="60" align="center">
+                            <template slot-scope="s">
+                                <el-tag v-if="s.row.is_manually_adjusted" size="mini" type="warning">修</el-tag>
+                                <span v-else style="color:#909399; font-size:12px;">AI</span>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </div>
+
+                <div class="detail-section">
+                    <div class="section-title">AI 原始返回</div>
+                    <div class="json-viewer" style="max-height:240px;">{{ current.ai_raw_response || '-' }}</div>
+                </div>
+            </div>
+            <div slot="footer">
+                <el-button size="small" @click="detailDialog = false">关闭</el-button>
+                <el-button size="small" type="primary" @click="editRecord(current); detailDialog = false;">修正评分</el-button>
+            </div>
+        </el-dialog>
+
+        <!-- 修正弹窗 -->
+        <el-dialog title="修正评分" :visible.sync="editDialog" width="800px" :close-on-click-modal="false">
+            <el-form :model="editForm" label-width="100px" size="small" v-if="editForm">
+                <el-form-item label="整体情感">
+                    <el-select v-model="editForm.overall_sentiment" style="width:200px;">
+                        <el-option v-for="r in ratings" :key="r.key" :label="r.name" :value="r.key"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="评价摘要">
+                    <el-input type="textarea" v-model="editForm.summary" :rows="2"></el-input>
+                </el-form-item>
+                <el-form-item label="维度评分">
+                    <el-table :data="editForm.dimensions" border size="mini">
+                        <el-table-column label="维度" prop="dimension_name" width="90"></el-table-column>
+                        <el-table-column label="等级" width="130">
+                            <template slot-scope="s">
+                                <el-select v-model="s.row.rating" size="mini">
+                                    <el-option v-for="r in ratings" :key="r.key" :label="r.name" :value="r.key"></el-option>
+                                </el-select>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="得分" width="100">
+                            <template slot-scope="s">
+                                <el-input-number v-model="s.row.score" :min="-100" :max="100" size="mini" controls-position="right" @change="(v) => onScoreChange(s.$index, v)"></el-input-number>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="判定理由">
+                            <template slot-scope="s">
+                                <el-input v-model="s.row.reason" size="mini"></el-input>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </el-form-item>
+            </el-form>
+            <div slot="footer">
+                <el-button size="small" @click="editDialog = false">取消</el-button>
+                <el-button size="small" type="primary" @click="saveEdit">保存修正</el-button>
+            </div>
+        </el-dialog>
+    </div>
+</div>
+
+<script src="../js/common.js"></script>
+<script src="../js/config.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/review.js"></script>
+</body>
+</html>

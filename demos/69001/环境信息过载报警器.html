@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>环境信息过载报警器 | ENV OVERLOAD ALERT</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Noto Sans SC', 'sans-serif'],
+        mono: ['Share Tech Mono', 'monospace'],
+      },
+      colors: {
+        void: '#080808',
+        panel: '#0d0d0d',
+        neon: { green: '#39ff14', orange: '#ff6b35', red: '#ff2a2a', dim: '#1a1a1a' }
+      }
+    }
+  }
+}
+</script>
+<style>
+:root {
+  --c-green: #39ff14;
+  --c-orange: #ff6b35;
+  --c-red: #ff2a2a;
+  --c-void: #080808;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: #080808;
+  color: #c8c8c8;
+  font-family: 'Noto Sans SC', sans-serif;
+  overflow-x: hidden;
+}
+
+/* CRT scanlines */
+.crt-overlay {
+  position: fixed; inset:0; pointer-events:none; z-index:9000; opacity:0.06;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(57,255,20,0.06) 2px, rgba(57,255,20,0.06) 4px);
+}
+
+/* Subtle vignette */
+.vignette {
+  position: fixed; inset:0; pointer-events:none; z-index:8999;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.6) 100%);
+}
+
+/* Grid */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(57,255,20,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57,255,20,0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+/* Panel - industrial */
+.ind-panel {
+  background: #0d0d0d;
+  border: 1px solid rgba(57,255,20,0.12);
+  box-shadow: inset 0 0 20px rgba(0,0,0,0.8), 0 0 0 1px rgba(57,255,20,0.05);
+  position: relative;
+}
+.ind-panel::before {
+  content:''; position:absolute; top:0; left:0; right:0; height:2px;
+  background: linear-gradient(90deg, transparent, var(--c-green), transparent);
+  opacity: 0.3;
+}
+.ind-panel-warn {
+  border-color: rgba(255,107,53,0.2);
+  box-shadow: inset 0 0 20px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,107,53,0.05);
+}
+.ind-panel-warn::before {
+  background: linear-gradient(90deg, transparent, var(--c-orange), transparent);
+}
+.ind-panel-alert {
+  border-color: rgba(255,42,42,0.25);
+  animation: panel-pulse 1s infinite;
+}
+.ind-panel-alert::before {
+  background: linear-gradient(90deg, transparent, var(--c-red), transparent);
+}
+
+@keyframes panel-pulse {
+  0%,100% { box-shadow: inset 0 0 20px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,42,42,0.05); }
+  50% { box-shadow: inset 0 0 20px rgba(0,0,0,0.8), 0 0 20px rgba(255,42,42,0.1); }
+}
+
+/* Gauge */
+.gauge-ring {
+  transform: rotate(-90deg);
+}
+.gauge-track { stroke: rgba(57,255,20,0.08); }
+.gauge-fill { transition: stroke-dashoffset 1s ease; }
+
+/* Waveform */
+.wave-bar {
+  display: inline-block;
+  width: 3px;
+  background: var(--c-green);
+  margin: 0 1px;
+  border-radius: 1px;
+  transition: height 0.1s;
+}
+
+/* LED */
+.led {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.led-green { background: var(--c-green); box-shadow: 0 0 8px var(--c-green); }
+.led-orange { background: var(--c-orange); box-shadow: 0 0 8px var(--c-orange); }
+.led-red { background: var(--c-red); box-shadow: 0 0 10px var(--c-red); animation: led-blink 0.5s infinite; }
+
+@keyframes led-blink {
+  0%,100% { opacity:1; }
+  50% { opacity:0.3; }
+}
+
+/* Number display */
+.digits {
+  font-family: 'Share Tech Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Section divider */
+.divider-ind {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(57,255,20,0.2), rgba(255,107,53,0.2), transparent);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #080808; }
+::-webkit-scrollbar-thumb { background: var(--c-green); }
+
+/* Reveal */
+.reveal {
+  opacity: 0; transform: translateY(40px);
+  transition: all 0.8s cubic-bezier(0.16,1,0.3,1);
+}
+.reveal.active { opacity:1; transform:translateY(0); }
+
+/* Glitch text */
+.glitch-ind {
+  position: relative;
+}
+.glitch-ind::before, .glitch-ind::after {
+  content: attr(data-text); position: absolute; top:0; left:0; width:100%; height:100%;
+}
+.glitch-ind::before { color: var(--c-green); clip-path: polygon(0 0, 100% 0, 100% 40%, 0 40%); animation: glitch1 2s infinite; }
+.glitch-ind::after { color: var(--c-orange); clip-path: polygon(0 60%, 100% 60%, 100% 100%, 0 100%); animation: glitch2 2.5s infinite; }
+@keyframes glitch1 {
+  0%,100% { transform:translateX(0); } 20% { transform:translateX(-2px); } 40% { transform:translateX(2px); }
+}
+@keyframes glitch2 {
+  0%,100% { transform:translateX(0); } 20% { transform:translateX(2px); } 40% { transform:translateX(-2px); }
+}
+
+/* Sweep line */
+@keyframes sweep-ind {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(300%); }
+}
+.sweep-ind {
+  position: absolute; left:0; top:0; width:100%; height:30%;
+  background: linear-gradient(180deg, transparent, rgba(57,255,20,0.05), transparent);
+  animation: sweep-ind 5s ease-in-out infinite;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+<div class="crt-overlay"></div>
+<div class="vignette"></div>
+
+<!-- Header -->
+<header class="fixed top-0 left-0 w-full z-50 border-b border-white/5 bg-void/95 backdrop-blur-sm">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
+    <div class="flex items-center gap-3">
+      <span class="led led-green"></span>
+      <span class="font-mono text-sm tracking-widest text-gray-400">ENV<span class="text-neon-green">.OVERLOAD</span> <span class="text-gray-600 text-xs">v2.1.0</span></span>
+    </div>
+    <div class="hidden md:flex items-center gap-8 text-xs font-mono text-gray-500">
+      <a href="#dashboard" class="hover:text-neon-green transition-colors">DASHBOARD</a>
+      <a href="#sensors" class="hover:text-neon-green transition-colors">SENSORS</a>
+      <a href="#algorithm" class="hover:text-neon-green transition-colors">ALGORITHM</a>
+      <a href="#hardware" class="hover:text-neon-green transition-colors">HARDWARE</a>
+      <a href="#tech" class="hover:text-neon-green transition-colors">TECH</a>
+      <div class="flex items-center gap-2">
+        <span class="led led-green"></span>
+        <span>ONLINE</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Hero -->
+<section class="relative min-h-screen flex items-center justify-center pt-20 grid-bg">
+  <div class="max-w-5xl mx-auto px-6 relative z-10">
+    <div class="mb-4">
+      <span class="font-mono text-xs text-gray-500 border border-white/10 px-3 py-1">HARDWARE_INTERACTION_TRACK</span>
+    </div>
+
+    <h1 class="text-4xl md:text-6xl lg:text-7xl font-bold mb-6 tracking-tight">
+      <span class="text-gray-200">环境信息</span><br>
+      <span class="glitch-ind text-neon-green font-mono tracking-tight" data-text="过载报警器">过载报警器</span>
+    </h1>
+
+    <p class="text-gray-400 text-lg max-w-xl mb-10 leading-relaxed">
+      当周围的噪音、光线、社交密度超过你的认知负荷阈值时，<br>
+      <span class="text-neon-orange">硬件会主动报警。</span>不是阻止信息流入，而是让你"看见"信息洪流。
+    </p>
+
+    <div class="flex flex-wrap gap-4 mb-16">
+      <button onclick="simulateOverload()" class="font-mono text-xs border border-neon-green/30 text-neon-green px-6 py-3 hover:bg-neon-green/10 hover:border-neon-green/60 transition-all">
+        [ 模拟过载场景 ]
+      </button>
+      <button onclick="document.getElementById('dashboard').scrollIntoView({behavior:'smooth'})" class="font-mono text-xs border border-white/10 text-gray-400 px-6 py-3 hover:border-white/30 transition-all">
+        [ 查看仪表盘 ]
+      </button>
+    </div>
+
+    <!-- Live metrics strip -->
+    <div class="ind-panel rounded-lg p-4 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl">
+      <div class="text-center">
+        <div class="text-xs text-gray-600 font-mono mb-1">SPL dB</div>
+        <div class="digits text-xl text-neon-green" id="hero-spl">42.3</div>
+      </div>
+      <div class="text-center">
+        <div class="text-xs text-gray-600 font-mono mb-1">LUX</div>
+        <div class="digits text-xl text-neon-green" id="hero-lux">340</div>
+      </div>
+      <div class="text-center">
+        <div class="text-xs text-gray-600 font-mono mb-1">DENSITY</div>
+        <div class="digits text-xl text-neon-orange" id="hero-density">0.62</div>
+      </div>
+      <div class="text-center">
+        <div class="text-xs text-gray-600 font-mono mb-1">EIDI</div>
+        <div class="digits text-xl text-neon-green" id="hero-eidi">34.7</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Decorative corner brackets -->
+  <div class="absolute top-24 left-6 w-12 h-12 border-l-2 border-t-2 border-neon-green/20"></div>
+  <div class="absolute bottom-12 right-6 w-12 h-12 border-r-2 border-b-2 border-neon-orange/20"></div>
+</section>
+
+<div class="divider-ind"></div>
+
+<!-- Dashboard Section -->
+<section id="dashboard" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="font-mono text-xs text-gray-500">DASHBOARD // REALTIME_MONITOR</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-gray-200">环境信息密度<span class="text-neon-green">仪表盘</span></h2>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <!-- Main Gauge -->
+      <div class="lg:col-span-1 reveal">
+        <div class="ind-panel rounded-lg p-6 text-center relative overflow-hidden" id="main-panel">
+          <div class="sweep-ind"></div>
+          <div class="text-xs text-gray-500 font-mono mb-4">ENV_INFO_DENSITY_INDEX</div>
+          <div class="relative inline-block">
+            <svg width="200" height="200" viewBox="0 0 200 200">
+              <circle cx="100" cy="100" r="85" fill="none" class="gauge-track" stroke-width="12"/>
+              <circle id="gauge-circle" cx="100" cy="100" r="85" fill="none" stroke="#39ff14" stroke-width="12"
+                stroke-dasharray="534" stroke-dashoffset="350" stroke-linecap="round" class="gauge-fill gauge-ring"/>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <div class="digits text-4xl font-bold text-neon-green" id="eidi-value">34</div>
+              <div class="text-xs text-gray-500 font-mono mt-1">EIDI</div>
+              <div class="text-xs text-neon-green font-mono mt-1" id="eidi-status">NORMAL</div>
+            </div>
+          </div>
+          <div class="mt-6 flex justify-center gap-4 text-xs font-mono">
+            <div class="flex items-center gap-1"><span class="led led-green"></span><span class="text-gray-500">0-40</span></div>
+            <div class="flex items-center gap-1"><span class="led led-orange"></span><span class="text-gray-500">41-70</span></div>
+            <div class="flex items-center gap-1"><span class="led led-red"></span><span class="text-gray-500">71+</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Waveforms -->
+      <div class="lg:col-span-2 space-y-4 reveal">
+        <div class="ind-panel rounded-lg p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs text-gray-500 font-mono">AUDIO_WAVEFORM // MIC_01</span>
+            <span class="led led-green" id="mic-led"></span>
+          </div>
+          <div class="h-16 flex items-end justify-center gap-0.5" id="audio-wave">
+            <!-- bars by JS -->
+          </div>
+        </div>
+
+        <div class="ind-panel rounded-lg p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs text-gray-500 font-mono">LIGHT_FLICKER // PHOTO_01</span>
+            <span class="led led-green" id="photo-led"></span>
+          </div>
+          <canvas id="light-chart" width="500" height="80" class="w-full h-20"></canvas>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <div class="ind-panel rounded-lg p-4 text-center">
+            <div class="text-xs text-gray-600 font-mono mb-2">SOUND_PRESSURE</div>
+            <div class="digits text-2xl text-neon-green" id="spl-value">42</div>
+            <div class="text-xs text-gray-600 font-mono">dB</div>
+          </div>
+          <div class="ind-panel rounded-lg p-4 text-center">
+            <div class="text-xs text-gray-600 font-mono mb-2">ILLUMINANCE</div>
+            <div class="digits text-2xl text-neon-green" id="lux-value">340</div>
+            <div class="text-xs text-gray-600 font-mono">lux</div>
+          </div>
+          <div class="ind-panel rounded-lg p-4 text-center">
+            <div class="text-xs text-gray-600 font-mono mb-2">PEOPLE_COUNT</div>
+            <div class="digits text-2xl text-neon-orange" id="people-value">8</div>
+            <div class="text-xs text-gray-600 font-mono">persons</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Banner -->
+    <div id="alert-banner" class="mt-6 hidden">
+      <div class="ind-panel-alert rounded-lg p-4 flex items-center gap-4">
+        <span class="led led-red"></span>
+        <div>
+          <div class="text-sm font-bold text-neon-red font-mono">ALERT: ENVIRONMENTAL OVERLOAD DETECTED</div>
+          <div class="text-xs text-gray-400">EIDI 超过阈值 71。建议立即采取降噪措施：佩戴降噪耳机 / 更换座位 / 休息 5 分钟。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider-ind"></div>
+
+<!-- Sensors Section -->
+<section id="sensors" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="font-mono text-xs text-gray-500">SENSOR_ARRAY // HARDWARE_MODULE</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-gray-200">传感器<span class="text-neon-orange">阵列</span></h2>
+      <p class="text-gray-500 mt-3 max-w-lg">多维度环境数据采集，构建完整的信息密度画像。</p>
+    </div>
+
+    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4 stagger-children" id="sensor-grid">
+      <div class="ind-panel rounded-lg p-5 hover:border-neon-green/30 transition-all">
+        <div class="w-10 h-10 rounded border border-neon-green/20 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-1">声音传感器</h3>
+        <p class="text-xs text-gray-500 mb-3">MEMS 麦克风阵列</p>
+        <div class="font-mono text-xs text-gray-600 space-y-1">
+          <div class="flex justify-between"><span>采样率</span><span class="text-neon-green">48kHz</span></div>
+          <div class="flex justify-between"><span>动态范围</span><span class="text-neon-green">94dB</span></div>
+          <div class="flex justify-between"><span>响应时间</span><span class="text-neon-green">&lt;50ms</span></div>
+        </div>
+      </div>
+
+      <div class="ind-panel rounded-lg p-5 hover:border-neon-green/30 transition-all">
+        <div class="w-10 h-10 rounded border border-neon-green/20 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-1">光线传感器</h3>
+        <p class="text-xs text-gray-500 mb-3">ALS + 频闪检测</p>
+        <div class="font-mono text-xs text-gray-600 space-y-1">
+          <div class="flex justify-between"><span>量程</span><span class="text-neon-green">1-100k lux</span></div>
+          <div class="flex justify-between"><span>频闪检测</span><span class="text-neon-green">100Hz</span></div>
+          <div class="flex justify-between"><span>精度</span><span class="text-neon-green">±5%</span></div>
+        </div>
+      </div>
+
+      <div class="ind-panel rounded-lg p-5 hover:border-neon-orange/30 transition-all">
+        <div class="w-10 h-10 rounded border border-neon-orange/20 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-neon-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-1">人员密度传感器</h3>
+        <p class="text-xs text-gray-500 mb-3">毫米波雷达 + CV</p>
+        <div class="font-mono text-xs text-gray-600 space-y-1">
+          <div class="flex justify-between"><span>探测半径</span><span class="text-neon-orange">5m</span></div>
+          <div class="flex justify-between"><span>隐私保护</span><span class="text-neon-orange">无成像</span></div>
+          <div class="flex justify-between"><span>更新率</span><span class="text-neon-orange">10Hz</span></div>
+        </div>
+      </div>
+
+      <div class="ind-panel rounded-lg p-5 hover:border-neon-green/30 transition-all">
+        <div class="w-10 h-10 rounded border border-neon-green/20 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-1">屏幕闪烁检测</h3>
+        <p class="text-xs text-gray-500 mb-3">环境光变化率分析</p>
+        <div class="font-mono text-xs text-gray-600 space-y-1">
+          <div class="flex justify-between"><span>检测范围</span><span class="text-neon-green">360°</span></div>
+          <div class="flex justify-between"><span>灵敏度</span><span class="text-neon-green">0.1 lux/s</span></div>
+          <div class="flex justify-between"><span>延迟</span><span class="text-neon-green">&lt;100ms</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider-ind"></div>
+
+<!-- Algorithm Section -->
+<section id="algorithm" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="font-mono text-xs text-gray-500">ALGORITHM_CORE // EIDI_CALCULATION</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-gray-200">信息密度指数<span class="text-neon-orange">算法</span></h2>
+    </div>
+
+    <div class="grid lg:grid-cols-2 gap-6 items-start">
+      <div class="space-y-4 reveal">
+        <div class="ind-panel rounded-lg p-6">
+          <h3 class="font-bold text-gray-200 mb-4 font-mono text-sm">EIDI = f(S, L, D, F, T)</h3>
+          <div class="space-y-3 font-mono text-xs">
+            <div class="flex items-center gap-3">
+              <span class="text-neon-green w-8">S</span>
+              <span class="text-gray-500 flex-1">声音压力级 (dB)</span>
+              <span class="text-gray-400">权重 0.30</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-neon-green w-8">L</span>
+              <span class="text-gray-500 flex-1">光照强度 (lux)</span>
+              <span class="text-gray-400">权重 0.15</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-neon-orange w-8">D</span>
+              <span class="text-gray-500 flex-1">人员密度 (person/m²)</span>
+              <span class="text-gray-400">权重 0.25</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-neon-green w-8">F</span>
+              <span class="text-gray-500 flex-1">光线频闪指数</span>
+              <span class="text-gray-400">权重 0.15</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-neon-green w-8">T</span>
+              <span class="text-gray-500 flex-1">连续暴露时间 (min)</span>
+              <span class="text-gray-400">权重 0.15</span>
+            </div>
+          </div>
+          <div class="mt-4 pt-4 border-t border-white/5">
+            <div class="text-xs text-gray-600 font-mono">FORMULA:</div>
+            <div class="text-xs text-gray-400 font-mono mt-1">
+              EIDI = Σ(wᵢ × norm(xᵢ)) × decay(t)
+            </div>
+          </div>
+        </div>
+
+        <div class="ind-panel rounded-lg p-6">
+          <h3 class="font-bold text-gray-200 mb-4 font-mono text-sm">THRESHOLD_LEVELS</h3>
+          <div class="space-y-3">
+            <div class="flex items-center gap-3">
+              <span class="led led-green"></span>
+              <span class="text-gray-400 text-sm flex-1">正常 (0-40)</span>
+              <span class="text-neon-green font-mono text-xs">专注效率 90%+</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="led led-orange"></span>
+              <span class="text-gray-400 text-sm flex-1">警告 (41-70)</span>
+              <span class="text-neon-orange font-mono text-xs">效率下降 30%</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="led led-red"></span>
+              <span class="text-gray-400 text-sm flex-1">过载 (71-100)</span>
+              <span class="text-neon-red font-mono text-xs">效率崩溃</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="reveal">
+        <div class="ind-panel rounded-lg p-1 h-[400px] relative">
+          <canvas id="eidi-chart" width="500" height="400" class="w-full h-full"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider-ind"></div>
+
+<!-- Hardware Interaction Section -->
+<section id="hardware" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="font-mono text-xs text-gray-500">HARDWARE_INTERACTION // OUTPUT_MODULE</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-gray-200">硬件<span class="text-neon-green">交互反馈</span></h2>
+      <p class="text-gray-500 mt-3 max-w-lg">从振动到灯光，从桌面提示到可穿戴设备，多通道分级报警。</p>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6 stagger-children" id="hw-grid">
+      <div class="ind-panel rounded-lg p-6 text-center">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-neon-green/20 flex items-center justify-center">
+          <svg class="w-8 h-8 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-2">桌面仪表盘</h3>
+        <p class="text-xs text-gray-500 mb-4">实时 EIDI 可视化，环境数据一目了然</p>
+        <div class="space-y-2 font-mono text-xs text-left">
+          <div class="flex justify-between text-gray-600"><span>屏幕尺寸</span><span class="text-gray-400">2.8" OLED</span></div>
+          <div class="flex justify-between text-gray-600"><span>刷新率</span><span class="text-gray-400">30fps</span></div>
+          <div class="flex justify-between text-gray-600"><span>连接</span><span class="text-gray-400">BLE 5.0</span></div>
+        </div>
+      </div>
+
+      <div class="ind-panel rounded-lg p-6 text-center">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-neon-orange/20 flex items-center justify-center">
+          <svg class="w-8 h-8 text-neon-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-2">可穿戴手环</h3>
+        <p class="text-xs text-gray-500 mb-4">振动反馈 + LED 灯带，随身环境感知</p>
+        <div class="space-y-2 font-mono text-xs text-left">
+          <div class="flex justify-between text-gray-600"><span>振动模式</span><span class="text-gray-400">3级可调</span></div>
+          <div class="flex justify-between text-gray-600"><span>LED</span><span class="text-gray-400">12颗 RGB</span></div>
+          <div class="flex justify-between text-gray-600"><span>续航</span><span class="text-gray-400">7天</span></div>
+        </div>
+      </div>
+
+      <div class="ind-panel rounded-lg p-6 text-center">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-neon-green/20 flex items-center justify-center">
+          <svg class="w-8 h-8 text-neon-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+        </div>
+        <h3 class="font-bold text-gray-200 mb-2">桌面氛围灯</h3>
+        <p class="text-xs text-gray-500 mb-4">环境色温联动，用光线暗示信息密度</p>
+        <div class="space-y-2 font-mono text-xs text-left">
+          <div class="flex justify-between text-gray-600"><span>色温范围</span><span class="text-gray-400">2700-6500K</span></div>
+          <div class="flex justify-between text-gray-600"><span>亮度</span><span class="text-gray-400">0-100%</span></div>
+          <div class="flex justify-between text-gray-600"><span>响应</span><span class="text-gray-400">&lt;200ms</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider-ind"></div>
+
+<!-- Tech Section -->
+<section id="tech" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="font-mono text-xs text-gray-500">SYSTEM_ARCHITECTURE // TECH_PRINCIPLES</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-gray-200">技术原理与<span class="text-neon-green">创新亮点</span></h2>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6 stagger-children" id="tech-grid">
+      <div class="ind-panel rounded-lg p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 rounded border border-neon-green/20 flex items-center justify-center text-neon-green font-mono text-xs">01</div>
+          <h3 class="font-bold text-gray-200">多模态传感器融合</h3>
+        </div>
+        <p class="text-sm text-gray-500 leading-relaxed">
+          不同于单一噪声检测应用，本系统同时采集声、光、人、闪四个维度的环境数据。
+          通过加权融合算法计算"环境信息密度指数"(EIDI)，更全面反映真实认知负荷，
+          避免单一指标的误判（例如：安静的房间但灯光频闪严重，同样会导致疲劳）。
+        </p>
+      </div>
+
+      <div class="ind-panel rounded-lg p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 rounded border border-neon-orange/20 flex items-center justify-center text-neon-orange font-mono text-xs">02</div>
+          <h3 class="font-bold text-gray-200">个性化阈值自适应</h3>
+        </div>
+        <p class="text-sm text-gray-500 leading-relaxed">
+          每个人的信息耐受度不同。系统通过记录用户的效率数据（如番茄钟完成率、
+          自评专注度）与 EIDI 的关联，使用轻量级回归模型动态调整个体阈值。
+          ADHD 用户与普通用户的"过载线"可能相差 30% 以上。
+        </p>
+      </div>
+
+      <div class="ind-panel rounded-lg p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 rounded border border-neon-green/20 flex items-center justify-center text-neon-green font-mono text-xs">03</div>
+          <h3 class="font-bold text-gray-200">隐私优先的感知设计</h3>
+        </div>
+        <p class="text-sm text-gray-500 leading-relaxed">
+          人员密度检测采用毫米波雷达而非摄像头，不采集任何图像信息，
+          仅输出匿名化的点云数据。所有原始音频在本地完成 FFT 分析后即丢弃，
+          不上传任何可识别的声音片段，从源头保障用户隐私。
+        </p>
+      </div>
+
+      <div class="ind-panel rounded-lg p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 rounded border border-neon-orange/20 flex items-center justify-center text-neon-orange font-mono text-xs">04</div>
+          <h3 class="font-bold text-gray-200">空间数据聚合平台</h3>
+        </div>
+        <p class="text-sm text-gray-500 leading-relaxed">
+          聚合匿名化后的 EIDI 时空数据，生成"城市信息负荷热力图"。
+          帮助共享办公空间运营者识别高负荷区域并优化布局，
+          帮助城市规划者设计"认知友好型"公共空间，从个体工具升级为社会基础设施。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="border-t border-white/5 py-8 px-6">
+  <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 font-mono text-xs text-gray-600">
+    <div class="flex items-center gap-3">
+      <span class="led led-green" style="width:6px;height:6px;"></span>
+      <span>ENV.OVERLOAD</span>
+    </div>
+    <div>TRAE AI 创意大赛 · 硬件交互赛道 · 2025</div>
+  </div>
+</footer>
+
+<script>
+// ========== UTILS ==========
+const $ = id => document.getElementById(id);
+
+// ========== REVEAL ==========
+const ro = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('active'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => ro.observe(el));
+
+// Stagger
+const staggerObs = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const children = entry.target.children;
+      for (let i = 0; i < children.length; i++) {
+        children[i].style.opacity = '0';
+        children[i].style.transform = 'translateY(20px)';
+        children[i].style.transition = `all 0.5s ${i * 0.1}s`;
+        setTimeout(() => {
+          children[i].style.opacity = '1';
+          children[i].style.transform = 'translateY(0)';
+        }, 50);
+      }
+      staggerObs.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.1 });
+document.querySelectorAll('.stagger-children').forEach(el => staggerObs.observe(el));
+
+// ========== AUDIO WAVEFORM ==========
+const waveContainer = $('audio-wave');
+const waveBars = [];
+for (let i = 0; i < 60; i++) {
+  const bar = document.createElement('div');
+  bar.className = 'wave-bar';
+  bar.style.height = '4px';
+  waveContainer.appendChild(bar);
+  waveBars.push(bar);
+}
+
+function animateWave() {
+  waveBars.forEach(bar => {
+    const h = 4 + Math.random() * 50;
+    bar.style.height = h + 'px';
+    if (h > 35) bar.style.background = 'var(--c-orange)';
+    else if (h > 20) bar.style.background = 'var(--c-green)';
+    else bar.style.background = 'rgba(57,255,20,0.4)';
+  });
+  setTimeout(() => requestAnimationFrame(animateWave), 120);
+}
+animateWave();
+
+// ========== LIGHT CHART ==========
+const lightC = $('light-chart');
+const lctx = lightC.getContext('2d');
+let lightData = Array(50).fill(340);
+
+function drawLightChart() {
+  const w = lightC.width, h = lightC.height;
+  lctx.fillStyle = '#0d0d0d';
+  lctx.fillRect(0, 0, w, h);
+
+  // Grid
+  lctx.strokeStyle = 'rgba(57,255,20,0.05)';
+  for (let x = 0; x < w; x += 25) { lctx.beginPath(); lctx.moveTo(x,0); lctx.lineTo(x,h); lctx.stroke(); }
+  for (let y = 0; y < h; y += 20) { lctx.beginPath(); lctx.moveTo(0,y); lctx.lineTo(w,y); lctx.stroke(); }
+
+  // Update data
+  lightData.shift();
+  lightData.push(340 + Math.sin(Date.now()/500) * 40 + (Math.random()-0.5) * 30);
+
+  // Draw line
+  lctx.beginPath();
+  lctx.moveTo(0, h - (lightData[0]-200)/400 * h);
+  for (let i = 1; i < lightData.length; i++) {
+    lctx.lineTo((w/lightData.length)*i, h - (lightData[i]-200)/400 * h);
+  }
+  lctx.strokeStyle = '#39ff14';
+  lctx.lineWidth = 1.5;
+  lctx.stroke();
+
+  // Fill area
+  lctx.lineTo(w, h);
+  lctx.lineTo(0, h);
+  lctx.fillStyle = 'rgba(57,255,20,0.05)';
+  lctx.fill();
+
+  requestAnimationFrame(drawLightChart);
+}
+drawLightChart();
+
+// ========== EIDI CHART ==========
+const eidiC = $('eidi-chart');
+const ectx = eidiC.getContext('2d');
+let eidiHistory = Array(100).fill(30);
+let eidiCurrent = 34;
+
+function drawEidiChart() {
+  const w = eidiC.width, h = eidiC.height;
+  ectx.fillStyle = '#0d0d0d';
+  ectx.fillRect(0, 0, w, h);
+
+  // Threshold lines
+  ectx.strokeStyle = 'rgba(57,255,20,0.1)';
+  ectx.setLineDash([4,4]);
+  [0.4, 0.7].forEach(p => {
+    const y = h * (1-p);
+    ectx.beginPath(); ectx.moveTo(0,y); ectx.lineTo(w,y); ectx.stroke();
+  });
+  ectx.setLineDash([]);
+
+  // Update
+  eidiHistory.shift();
+  eidiHistory.push(eidiCurrent);
+
+  // Draw
+  ectx.beginPath();
+  ectx.moveTo(0, h - eidiHistory[0]/100 * h);
+  for (let i = 1; i < eidiHistory.length; i++) {
+    ectx.lineTo((w/eidiHistory.length)*i, h - eidiHistory[i]/100 * h);
+  }
+
+  const grad = ectx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#ff6b35'); grad.addColorStop(0.4, '#39ff14'); grad.addColorStop(1, 'rgba(57,255,20,0.2)');
+  ectx.strokeStyle = grad;
+  ectx.lineWidth = 2;
+  ectx.stroke();
+
+  // Fill
+  ectx.lineTo(w, h); ectx.lineTo(0, h);
+  ectx.fillStyle = 'rgba(57,255,20,0.03)';
+  ectx.fill();
+
+  // Labels
+  ectx.fillStyle = '#525252';
+  ectx.font = '10px Share Tech Mono';
+  ectx.fillText('100', 4, 12);
+  ectx.fillText('70', 4, h * 0.3 + 4);
+  ectx.fillText('40', 4, h * 0.6 + 4);
+  ectx.fillText('0', 4, h - 4);
+
+  requestAnimationFrame(drawEidiChart);
+}
+drawEidiChart();
+
+// ========== LIVE METRICS UPDATE ==========
+let spl = 42, lux = 340, density = 0.62, eidi = 34;
+
+function updateMetrics() {
+  spl = 40 + Math.random() * 15;
+  lux = 320 + Math.random() * 60;
+  density = 0.5 + Math.random() * 0.4;
+
+  $('hero-spl').textContent = spl.toFixed(1);
+  $('hero-lux').textContent = Math.round(lux);
+  $('hero-density').textContent = density.toFixed(2);
+
+  $('spl-value').textContent = Math.round(spl);
+  $('lux-value').textContent = Math.round(lux);
+  $('people-value').textContent = Math.round(density * 12);
+
+  // Calculate EIDI
+  const normS = Math.min(spl / 70, 1);
+  const normL = Math.min(Math.abs(lux - 400) / 400, 1);
+  const normD = density;
+  eidi = Math.round((normS * 0.30 + normL * 0.15 + normD * 0.25 + 0.1 + 0.1) * 100);
+  eidiCurrent = eidi;
+
+  $('hero-eidi').textContent = eidi.toFixed(1);
+  $('eidi-value').textContent = eidi;
+
+  // Gauge
+  const maxOffset = 534;
+  const offset = maxOffset - (eidi / 100) * maxOffset;
+  $('gauge-circle').style.strokeDashoffset = offset;
+
+  // Status & colors
+  const statusEl = $('eidi-status');
+  const circle = $('gauge-circle');
+  const mainPanel = $('main-panel');
+  const micLed = $('mic-led');
+  const photoLed = $('photo-led');
+  const alertBanner = $('alert-banner');
+
+  if (eidi <= 40) {
+    statusEl.textContent = 'NORMAL';
+    statusEl.className = 'text-xs text-neon-green font-mono mt-1';
+    circle.setAttribute('stroke', '#39ff14');
+    mainPanel.classList.remove('ind-panel-warn', 'ind-panel-alert');
+    micLed.className = 'led led-green';
+    photoLed.className = 'led led-green';
+    alertBanner.classList.add('hidden');
+  } else if (eidi <= 70) {
+    statusEl.textContent = 'WARNING';
+    statusEl.className = 'text-xs text-neon-orange font-mono mt-1';
+    circle.setAttribute('stroke', '#ff6b35');
+    mainPanel.classList.add('ind-panel-warn');
+    mainPanel.classList.remove('ind-panel-alert');
+    micLed.className = 'led led-orange';
+    photoLed.className = 'led led-orange';
+    alertBanner.classList.add('hidden');
+  } else {
+    statusEl.textContent = 'OVERLOAD';
+    statusEl.className = 'text-xs text-neon-red font-mono mt-1';
+    circle.setAttribute('stroke', '#ff2a2a');
+    mainPanel.classList.remove('ind-panel-warn');
+    mainPanel.classList.add('ind-panel-alert');
+    micLed.className = 'led led-red';
+    photoLed.className = 'led led-red';
+    alertBanner.classList.remove('hidden');
+  }
+}
+setInterval(updateMetrics, 2000);
+
+// ========== SIMULATE OVERLOAD ==========
+function simulateOverload() {
+  document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth' });
+  setTimeout(() => {
+    let overloadVal = 34;
+    const interval = setInterval(() => {
+      overloadVal += 3;
+      eidiCurrent = overloadVal;
+      if (overloadVal >= 85) {
+        clearInterval(interval);
+        setTimeout(() => {
+          const resetInt = setInterval(() => {
+            overloadVal -= 4;
+            eidiCurrent = overloadVal;
+            if (overloadVal <= 35) clearInterval(resetInt);
+          }, 200);
+        }, 3000);
+      }
+    }, 200);
+  }, 600);
+}
+</script>
+</body>
+</html>

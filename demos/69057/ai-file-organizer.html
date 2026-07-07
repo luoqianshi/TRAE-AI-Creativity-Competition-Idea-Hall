@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 桌面管家 · 智能文件整理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ============ 设计令牌 ============ */
+  :root{
+    --blue:#0071E3;
+    --blue-bright:#0A84FF;
+    --blue-soft:#5AC8FA;
+    --blue-deep:#0040A0;
+    --blue-glow:rgba(10,132,255,.16);
+    --glass:rgba(255,255,255,.55);
+    --glass-strong:rgba(255,255,255,.72);
+    --glass-border:rgba(255,255,255,.85);
+    --hairline:rgba(0,0,0,.06);
+    --text:#1d1d1f;
+    --text-soft:#6e6e73;
+    --text-faint:#a1a1a6;
+    --pdf:#FF5A52;
+    --img:#34C759;
+    --xlsx:#30B0C7;
+    --docx:#007AFF;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.04),0 2px 8px rgba(0,0,0,.05);
+    --shadow-md:0 4px 16px rgba(0,0,0,.08),0 12px 40px rgba(10,132,255,.10);
+    --shadow-lg:0 12px 40px rgba(0,0,0,.12),0 24px 80px rgba(10,132,255,.14);
+    --radius:20px;
+    --radius-sm:12px;
+  }
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:'Manrope','Noto Sans SC',system-ui,sans-serif;
+    color:var(--text);
+    background:#eef3fb;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+
+  /* ============ 背景：流动光斑（毛玻璃需要色彩去模糊） ============ */
+  .bg-decor{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+  .blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:.7;will-change:transform}
+  .blob.b1{width:560px;height:560px;top:-160px;left:-120px;background:radial-gradient(circle at 30% 30%,#7FC4FF,#0A84FF);animation:drift1 18s ease-in-out infinite}
+  .blob.b2{width:480px;height:480px;bottom:-140px;right:-100px;background:radial-gradient(circle at 60% 40%,#AEE4FF,#5AC8FA);animation:drift2 22s ease-in-out infinite}
+  .blob.b3{width:420px;height:420px;top:40%;left:48%;background:radial-gradient(circle at 50% 50%,#D6E4FF,#9DB9FF);opacity:.5;animation:drift3 26s ease-in-out infinite}
+  @keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(60px,40px) scale(1.08)}}
+  @keyframes drift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-50px,-30px) scale(1.1)}}
+  @keyframes drift3{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-40%,-60%) scale(1.15)}}
+  .grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.4;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+
+  /* ============ 应用容器 ============ */
+  .app{
+    position:relative;z-index:2;
+    height:100vh;display:flex;flex-direction:column;
+    padding:20px 28px 18px;
+    gap:16px;
+  }
+
+  /* 顶栏 */
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 24px;
+    background:var(--glass);
+    backdrop-filter:blur(24px) saturate(180%);
+    -webkit-backdrop-filter:blur(24px) saturate(180%);
+    border:1px solid var(--glass-border);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow-sm);
+  }
+  .brand{display:flex;align-items:center;gap:14px}
+  .logo{
+    width:42px;height:42px;border-radius:13px;
+    background:linear-gradient(135deg,#0A84FF,#5AC8FA);
+    display:grid;place-items:center;
+    box-shadow:0 6px 18px var(--blue-glow),inset 0 1px 0 rgba(255,255,255,.5);
+    position:relative;
+  }
+  .logo svg{width:24px;height:24px}
+  .brand-txt h1{font-size:18px;font-weight:700;letter-spacing:-.01em;line-height:1.1}
+  .brand-txt p{font-size:12px;color:var(--text-soft);font-weight:500;margin-top:1px}
+  .status-pill{
+    display:flex;align-items:center;gap:8px;
+    padding:7px 14px;border-radius:999px;
+    background:rgba(255,255,255,.6);border:1px solid var(--hairline);
+    font-size:12px;font-weight:600;color:var(--text-soft);
+    font-family:'JetBrains Mono',monospace;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--blue-bright);box-shadow:0 0 0 0 var(--blue-glow);animation:pulse 2s infinite}
+  .status-pill.run .dot{background:#34C759}
+  .status-pill.done .dot{background:#FF9F0A}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 var(--blue-glow)}70%{box-shadow:0 0 0 8px rgba(10,132,255,0)}100%{box-shadow:0 0 0 0 rgba(10,132,255,0)}}
+
+  /* 工作区 */
+  .workspace{
+    flex:1;display:grid;
+    grid-template-columns:1.05fr .62fr 1.1fr;
+    gap:16px;min-height:0;
+  }
+
+  /* 玻璃面板通用 */
+  .panel{
+    background:var(--glass);
+    backdrop-filter:blur(28px) saturate(180%);
+    -webkit-backdrop-filter:blur(28px) saturate(180%);
+    border:1px solid var(--glass-border);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow-md);
+    display:flex;flex-direction:column;
+    overflow:hidden;
+    min-height:0;
+  }
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px 22px 14px;
+    border-bottom:1px solid var(--hairline);
+  }
+  .panel-head h2{font-size:15px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+  .panel-head h2 .ico{font-size:16px}
+  .meta-chip{
+    font-size:11px;font-weight:600;color:var(--text-soft);
+    padding:4px 10px;border-radius:999px;background:rgba(120,130,150,.1);
+    font-family:'JetBrains Mono',monospace;
+  }
+  .panel-body{flex:1;overflow-y:auto;padding:16px 18px}
+  .panel-body::-webkit-scrollbar{width:6px}
+  .panel-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.12);border-radius:6px}
+
+  /* ============ 文件卡片 ============ */
+  .file-list{display:flex;flex-direction:column;gap:10px}
+  .file-card{
+    display:flex;align-items:center;gap:14px;
+    padding:13px 15px;border-radius:var(--radius-sm);
+    background:rgba(255,255,255,.65);
+    border:1px solid rgba(255,255,255,.9);
+    box-shadow:var(--shadow-sm);
+    transition:transform .35s cubic-bezier(.2,.8,.2,1),opacity .35s ease,box-shadow .35s ease;
+    cursor:default;
+    position:relative;overflow:hidden;
+  }
+  .file-card::before{
+    content:"";position:absolute;left:0;top:0;bottom:0;width:4px;
+    background:var(--fc,var(--blue));opacity:.9;
+  }
+  .file-card.archived{opacity:0;transform:translateX(40px) scale(.9);pointer-events:none}
+  .file-card.processing{animation:wobble .6s ease}
+  @keyframes wobble{0%,100%{transform:translateX(0)}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+  .file-ic{
+    width:38px;height:38px;border-radius:10px;flex-shrink:0;
+    display:grid;place-items:center;color:#fff;font-size:11px;font-weight:800;
+    letter-spacing:.02em;font-family:'JetBrains Mono',monospace;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 4px 10px rgba(0,0,0,.12);
+  }
+  .file-info{flex:1;min-width:0}
+  .file-name{font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .file-sub{font-size:11px;color:var(--text-faint);margin-top:2px;display:flex;gap:10px;font-family:'JetBrains Mono',monospace}
+  .file-tag{
+    font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;
+    background:rgba(10,132,255,.1);color:var(--blue);
+  }
+
+  /* ============ 中间启动区 ============ */
+  .launch-col{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:18px;position:relative;
+  }
+  .flow-line{
+    position:absolute;top:50%;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,rgba(10,132,255,.25),rgba(10,132,255,.25),transparent);
+    transform:translateY(-50%);
+  }
+  .btn-magic{
+    position:relative;z-index:2;
+    width:148px;height:148px;border-radius:50%;
+    border:none;cursor:pointer;
+    background:linear-gradient(150deg,#0A84FF,#0071E3 60%,#0040A0);
+    color:#fff;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+    box-shadow:0 12px 36px rgba(10,132,255,.45),inset 0 2px 0 rgba(255,255,255,.35),inset 0 -8px 20px rgba(0,40,120,.4);
+    transition:transform .3s cubic-bezier(.2,.8,.2,1),box-shadow .3s ease;
+    font-family:inherit;
+  }
+  .btn-magic:hover{transform:translateY(-3px) scale(1.03);box-shadow:0 18px 48px rgba(10,132,255,.55),inset 0 2px 0 rgba(255,255,255,.4),inset 0 -8px 20px rgba(0,40,120,.4)}
+  .btn-magic:active{transform:translateY(-1px) scale(.99)}
+  .btn-magic:disabled{cursor:wait}
+  .btn-magic .wand{font-size:34px;filter:drop-shadow(0 2px 6px rgba(0,0,0,.3));line-height:1}
+  .btn-magic .lbl{font-size:12px;font-weight:700;letter-spacing:.02em}
+  .btn-magic .ring{position:absolute;inset:-6px;border-radius:50%;border:2px dashed rgba(10,132,255,.4);animation:spin 12s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .btn-magic.running{background:linear-gradient(150deg,#5AC8FA,#0A84FF 60%,#0071E3)}
+  .btn-magic.running .ring{animation:spin 2.5s linear infinite;border-color:rgba(255,255,255,.6)}
+
+  .launch-hint{font-size:11.5px;color:var(--text-soft);text-align:center;line-height:1.5;max-width:170px;font-weight:500}
+
+  /* Loading 文案 */
+  .loading-stage{
+    position:relative;z-index:2;
+    background:var(--glass-strong);
+    backdrop-filter:blur(24px) saturate(180%);
+    border:1px solid var(--glass-border);
+    border-radius:16px;padding:14px 18px;
+    box-shadow:var(--shadow-sm);
+    min-width:200px;text-align:center;
+    opacity:0;transform:translateY(8px) scale(.96);
+    transition:opacity .4s ease,transform .4s cubic-bezier(.2,.8,.2,1);
+    pointer-events:none;
+  }
+  .loading-stage.show{opacity:1;transform:translateY(0) scale(1)}
+  .loading-stage .lt{font-size:12.5px;font-weight:600;color:var(--blue);font-family:'JetBrains Mono',monospace;letter-spacing:.01em}
+  .loading-stage .bar{margin-top:9px;height:4px;border-radius:4px;background:rgba(10,132,255,.12);overflow:hidden}
+  .loading-stage .bar i{display:block;height:100%;width:0;border-radius:4px;background:linear-gradient(90deg,#5AC8FA,#0A84FF);transition:width .4s linear}
+  .dots-loader{display:inline-flex;gap:4px;margin-left:4px}
+  .dots-loader span{width:4px;height:4px;border-radius:50%;background:var(--blue);animation:bounce 1s infinite}
+  .dots-loader span:nth-child(2){animation-delay:.15s}
+  .dots-loader span:nth-child(3){animation-delay:.3s}
+  @keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-4px);opacity:1}}
+
+  /* ============ 预览区 ============ */
+  .empty-state{
+    height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:14px;color:var(--text-faint);text-align:center;padding:20px;
+  }
+  .empty-state .es-ic{width:64px;height:64px;border-radius:18px;background:rgba(10,132,255,.08);display:grid;place-items:center;font-size:30px}
+  .empty-state p{font-size:13px;font-weight:500;line-height:1.5}
+  .empty-state .sub{font-size:11.5px;color:var(--text-faint);max-width:200px}
+
+  /* 文件夹卡片 */
+  .folder-list{display:flex;flex-direction:column;gap:14px}
+  .folder-card{
+    background:rgba(255,255,255,.7);
+    border:1px solid rgba(255,255,255,.9);
+    border-radius:var(--radius-sm);
+    box-shadow:var(--shadow-sm);
+    overflow:hidden;
+    opacity:0;transform:translateY(16px) scale(.97);
+    animation:folderIn .55s cubic-bezier(.2,.8,.2,1) forwards;
+  }
+  .folder-card:nth-child(1){animation-delay:.05s}
+  .folder-card:nth-child(2){animation-delay:.22s}
+  .folder-card:nth-child(3){animation-delay:.39s}
+  @keyframes folderIn{to{opacity:1;transform:translateY(0) scale(1)}}
+  .folder-head{
+    display:flex;align-items:center;gap:13px;padding:13px 15px;
+    background:linear-gradient(100deg,var(--fg-tint,rgba(10,132,255,.08)),rgba(255,255,255,0));
+    border-bottom:1px solid var(--hairline);
+  }
+  .folder-ic{
+    width:40px;height:40px;border-radius:11px;flex-shrink:0;
+    display:grid;place-items:center;color:#fff;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 4px 10px var(--fg-shadow,rgba(0,0,0,.12));
+  }
+  .folder-ic svg{width:22px;height:22px}
+  .folder-title{flex:1;min-width:0}
+  .folder-name{font-size:13.5px;font-weight:700;color:var(--text);letter-spacing:-.005em}
+  .folder-meta{font-size:11px;color:var(--text-soft);margin-top:2px;font-family:'JetBrains Mono',monospace}
+  .folder-count{
+    font-size:11px;font-weight:700;color:var(--blue);
+    background:var(--blue-glow);padding:4px 10px;border-radius:999px;
+  }
+  .chips{display:flex;flex-wrap:wrap;gap:6px;padding:11px 14px}
+  .chip{
+    font-size:10.5px;font-weight:600;color:var(--text-soft);
+    padding:4px 9px;border-radius:7px;background:rgba(120,130,150,.1);
+    border:1px solid var(--hairline);
+    font-family:'JetBrains Mono',monospace;
+    display:flex;align-items:center;gap:5px;
+  }
+  .chip .cdot{width:6px;height:6px;border-radius:50%;background:var(--cc,var(--blue))}
+
+  /* ============ 底部操作栏 ============ */
+  .actionbar{
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    padding:14px 22px;
+    background:var(--glass);
+    backdrop-filter:blur(24px) saturate(180%);
+    border:1px solid var(--glass-border);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow-sm);
+  }
+  .ab-info{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-soft);font-weight:500}
+  .ab-info .kbd{font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 7px;border-radius:6px;background:rgba(0,0,0,.05);border:1px solid var(--hairline)}
+  .ab-actions{display:flex;gap:12px}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:11px 22px;border-radius:12px;border:none;cursor:pointer;
+    font-family:inherit;font-size:13.5px;font-weight:700;letter-spacing:.005em;
+    transition:transform .25s cubic-bezier(.2,.8,.2,1),box-shadow .25s ease,opacity .25s ease,background .25s ease;
+  }
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none!important}
+  .btn-confirm{background:linear-gradient(135deg,#0A84FF,#0071E3);color:#fff;box-shadow:0 8px 22px rgba(10,132,255,.35)}
+  .btn-confirm:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(10,132,255,.45)}
+  .btn-undo{background:rgba(255,255,255,.7);color:var(--text);border:1px solid var(--hairline);box-shadow:var(--shadow-sm)}
+  .btn-undo:not(:disabled):hover{transform:translateY(-2px);background:#fff;box-shadow:var(--shadow-md)}
+
+  /* ============ Toast ============ */
+  .toast-wrap{position:fixed;top:24px;left:50%;transform:translateX(-50%);z-index:100;display:flex;flex-direction:column;gap:10px;align-items:center}
+  .toast{
+    display:flex;align-items:center;gap:12px;
+    padding:14px 22px;border-radius:14px;
+    background:var(--glass-strong);
+    backdrop-filter:blur(28px) saturate(180%);
+    border:1px solid var(--glass-border);
+    box-shadow:var(--shadow-lg);
+    opacity:0;transform:translateY(-16px) scale(.95);
+    transition:opacity .4s ease,transform .45s cubic-bezier(.2,.8,.2,1);
+    pointer-events:none;
+  }
+  .toast.show{opacity:1;transform:translateY(0) scale(1)}
+  .toast .tic{
+    width:30px;height:30px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;color:#fff;
+    background:linear-gradient(135deg,#34C759,#30D158);box-shadow:0 4px 12px rgba(52,199,89,.4)
+  }
+  .toast .tic svg{width:18px;height:18px}
+  .toast .tmsg{font-size:13.5px;font-weight:600;color:var(--text)}
+  .toast .tsub{font-size:11.5px;color:var(--text-soft);margin-top:1px;font-family:'JetBrains Mono',monospace}
+
+  /* 响应式 */
+  @media (max-width:1100px){
+    .workspace{grid-template-columns:1fr;grid-auto-rows:auto}
+    .launch-col{order:2;padding:8px 0}
+    .panel-source{order:1}.panel-preview{order:3}
+    .panel-body{max-height:280px}
+    .app{height:auto;min-height:100vh;overflow-y:auto}
+    body{overflow:auto}
+  }
+</style>
+</head>
+<body>
+  <!-- 背景装饰 -->
+  <div class="bg-decor">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+  </div>
+  <div class="grain"></div>
+
+  <div class="app">
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.379a2 2 0 0 1 1.414.586L11.5 6.5h7A2.5 2.5 0 0 1 21 9v8.5A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5v-10Z" fill="#fff" fill-opacity=".95"/><circle cx="12" cy="13" r="2.6" fill="#0A84FF"/><path d="M12 9.2v-1M12 17.8v-1M15.8 13h1M7.2 13h1" stroke="#0A84FF" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </div>
+        <div class="brand-txt">
+          <h1>AI 桌面管家</h1>
+          <p>智能文件语义归档 · 本地沙盒运行</p>
+        </div>
+      </div>
+      <div class="status-pill" id="statusPill">
+        <span class="dot"></span>
+        <span id="statusText">就绪 · 待整理 6 个文件</span>
+      </div>
+    </header>
+
+    <!-- 工作区 -->
+    <main class="workspace">
+      <!-- 左：待整理文件区 -->
+      <section class="panel panel-source">
+        <div class="panel-head">
+          <h2><span class="ico">🗂️</span>待整理文件区</h2>
+          <span class="meta-chip">桌面 / 6 项</span>
+        </div>
+        <div class="panel-body">
+          <div class="file-list" id="fileList">
+            <!-- 文件卡片由 JS 渲染 -->
+          </div>
+        </div>
+      </section>
+
+      <!-- 中：启动区 -->
+      <div class="launch-col">
+        <div class="flow-line"></div>
+        <button class="btn-magic" id="btnMagic">
+          <span class="ring"></span>
+          <span class="wand">🪄</span>
+          <span class="lbl">启动 AI 智能整理</span>
+        </button>
+        <div class="launch-hint" id="launchHint">点击启动，AI 将扫描并理解每个文件的语义，自动生成归档方案</div>
+        <div class="loading-stage" id="loadingStage">
+          <div class="lt" id="loadText">正在分析文件语义<span class="dots-loader"><span></span><span></span><span></span></span></div>
+          <div class="bar"><i id="loadBar"></i></div>
+        </div>
+      </div>
+
+      <!-- 右：AI 整理预览区 -->
+      <section class="panel panel-preview">
+        <div class="panel-head">
+          <h2><span class="ico">✨</span>AI 整理预览区</h2>
+          <span class="meta-chip" id="previewMeta">等待分析</span>
+        </div>
+        <div class="panel-body" id="previewBody">
+          <div class="empty-state" id="emptyState">
+            <div class="es-ic">📦</div>
+            <p>暂无整理方案</p>
+            <span class="sub">启动 AI 后，这里会生成按时间与语义自动归类的文件夹结构</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- 底部操作栏 -->
+    <footer class="actionbar">
+      <div class="ab-info">
+        <span>整理前已生成操作快照</span>
+        <span class="kbd">⌘Z 可撤销</span>
+      </div>
+      <div class="ab-actions">
+        <button class="btn btn-undo" id="btnUndo" disabled>↩ 一键撤销</button>
+        <button class="btn btn-confirm" id="btnConfirm" disabled>✓ 确认归档</button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-wrap">
+    <div class="toast" id="toast">
+      <div class="tic">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div>
+        <div class="tmsg" id="toastMsg">整理完成</div>
+        <div class="tsub" id="toastSub">耗时 1.2 秒 · 6 个文件已归位</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  /* ============ 数据 ============ */
+  const FILES = [
+    { name:'wx_file_01.pdf',     size:'248 KB', date:'07-02', type:'PDF',  color:'var(--pdf)',  tag:'发票',  cat:0 },
+    { name:'IMG_9921.jpg',       size:'3.4 MB', date:'07-01', type:'JPG',  color:'var(--img)',  tag:'截图',  cat:2 },
+    { name:'Q3报表.xlsx',        size:'512 KB', date:'06-28', type:'XLSX', color:'var(--xlsx)', tag:'财务',  cat:0 },
+    { name:'会议记录.docx',      size:'86 KB',  date:'07-02', type:'DOCX', color:'var(--docx)', tag:'工作',  cat:1 },
+    { name:'设计稿_v3.png',      size:'7.1 MB', date:'06-30', type:'PNG',  color:'var(--img)',  tag:'图片',  cat:2 },
+    { name:'报销单_07月.pdf',    size:'192 KB', date:'07-03', type:'PDF',  color:'var(--pdf)',  tag:'报销',  cat:0 },
+  ];
+
+  const FOLDERS = [
+    {
+      name:'2024-07 财务与发票',
+      meta:'语义分类 · 票据 / 报表',
+      count:3,
+      grad:'linear-gradient(135deg,#FF9F0A,#FF5A52)',
+      tint:'rgba(255,159,10,.1)',
+      shadow:'rgba(255,90,82,.25)',
+      files:['Q3报表.xlsx','报销单_07月.pdf','wx_file_01.pdf'],
+      colors:['var(--xlsx)','var(--pdf)','var(--pdf)']
+    },
+    {
+      name:'2024-07 工作文档',
+      meta:'语义分类 · 会议 / 文档',
+      count:1,
+      grad:'linear-gradient(135deg,#0A84FF,#5AC8FA)',
+      tint:'rgba(10,132,255,.1)',
+      shadow:'rgba(10,132,255,.25)',
+      files:['会议记录.docx'],
+      colors:['var(--docx)']
+    },
+    {
+      name:'2024-07 图片与截图',
+      meta:'语义分类 · 影像 / 截图',
+      count:2,
+      grad:'linear-gradient(135deg,#34C759,#30D158)',
+      tint:'rgba(52,199,89,.1)',
+      shadow:'rgba(52,199,89,.25)',
+      files:['IMG_9921.jpg','设计稿_v3.png'],
+      colors:['var(--img)','var(--img)']
+    },
+  ];
+
+  const LOAD_MESSAGES = [
+    '正在分析文件语义',
+    '正在读取文档摘要',
+    '正在按时间线归档',
+    '正在生成智能分类',
+    '正在构建归档方案'
+  ];
+
+  /* ============ DOM ============ */
+  const $ = id => document.getElementById(id);
+  const fileList = $('fileList');
+  const btnMagic = $('btnMagic');
+  const btnConfirm = $('btnConfirm');
+  const btnUndo = $('btnUndo');
+  const loadingStage = $('loadingStage');
+  const loadText = $('loadText');
+  const loadBar = $('loadBar');
+  const previewBody = $('previewBody');
+  const emptyState = $('emptyState');
+  const statusPill = $('statusPill');
+  const statusText = $('statusText');
+  const previewMeta = $('previewMeta');
+  const launchHint = $('launchHint');
+  const toast = $('toast');
+  const toastMsg = $('toastMsg');
+  const toastSub = $('toastSub');
+
+  let state = 'idle'; // idle | running | done | archived
+  let timers = [];
+
+  /* ============ 渲染文件列表 ============ */
+  function renderFiles(){
+    fileList.innerHTML = FILES.map((f,i)=>`
+      <div class="file-card" data-idx="${i}" style="--fc:${f.color}">
+        <div class="file-ic" style="background:${f.color}">${f.type}</div>
+        <div class="file-info">
+          <div class="file-name">${f.name}</div>
+          <div class="file-sub"><span>${f.size}</span><span>${f.date}</span></div>
+        </div>
+        <span class="file-tag">${f.tag}</span>
+      </div>
+    `).join('');
+  }
+
+  /* ============ 渲染文件夹 ============ */
+  function renderFolders(){
+    emptyState.style.display = 'none';
+    previewBody.innerHTML = `<div class="folder-list">` + FOLDERS.map(f=>`
+      <div class="folder-card" style="--fg-tint:${f.tint};--fg-shadow:${f.shadow}">
+        <div class="folder-head">
+          <div class="folder-ic" style="background:${f.grad}">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.379a2 2 0 0 1 1.414.586L11.5 6.5h7A2.5 2.5 0 0 1 21 9v8.5A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5v-10Z" fill="#fff" fill-opacity=".95"/></svg>
+          </div>
+          <div class="folder-title">
+            <div class="folder-name">${f.name}</div>
+            <div class="folder-meta">${f.meta}</div>
+          </div>
+          <span class="folder-count">${f.count} 项</span>
+        </div>
+        <div class="chips">
+          ${f.files.map((fn,fi)=>`<span class="chip" style="--cc:${f.colors[fi]}"><span class="cdot"></span>${fn}</span>`).join('')}
+        </div>
+      </div>
+    `).join('') + `</div>`;
+  }
+
+  /* ============ 清理定时器 ============ */
+  function clearTimers(){
+    timers.forEach(t=>{
+      if(typeof t === 'object' && t.clear) t.clear();
+      else clearTimeout(t);
+    });
+    timers = [];
+  }
+
+  /* ============ 启动 AI 整理 ============ */
+  function runAI(){
+    if(state !== 'idle') return;
+    state = 'running';
+    btnMagic.disabled = true;
+    btnMagic.classList.add('running');
+    btnMagic.querySelector('.lbl').textContent = 'AI 分析中…';
+    launchHint.style.opacity = '0';
+    loadingStage.classList.add('show');
+    previewMeta.textContent = '分析中…';
+
+    // 状态指示
+    statusPill.className = 'status-pill run';
+    statusText.textContent = 'AI 正在分析 6 个文件';
+
+    // 文件卡轻微抖动，模拟扫描
+    document.querySelectorAll('.file-card').forEach((c,i)=>{
+      const t = setTimeout(()=>{ c.classList.add('processing'); setTimeout(()=>c.classList.remove('processing'),600); }, i*180);
+      timers.push(t);
+    });
+
+    // 进度条 + 文案轮播
+    const total = 3000;
+    const step = 600;
+    let progress = 0;
+    let msgIdx = 0;
+    const setMsg = () => {
+      loadText.innerHTML = `${LOAD_MESSAGES[msgIdx]}<span class="dots-loader"><span></span><span></span><span></span></span>`;
+      msgIdx = (msgIdx + 1) % LOAD_MESSAGES.length;
+    };
+    setMsg();
+    const iv = setInterval(()=>{
+      progress += step/total*100;
+      loadBar.style.width = Math.min(progress,100) + '%';
+      if(progress < 100) setMsg();
+    }, step);
+    timers.push({clear:()=>clearInterval(iv)});
+
+    // 3 秒后展示结果
+    const tDone = setTimeout(()=>{
+      clearInterval(iv);
+      loadBar.style.width = '100%';
+      loadText.innerHTML = `整理方案已生成 ✓`;
+      loadingStage.classList.remove('show');
+      btnMagic.classList.remove('running');
+      btnMagic.querySelector('.wand').textContent = '✓';
+      btnMagic.querySelector('.lbl').textContent = '方案已就绪';
+      btnMagic.style.background = 'linear-gradient(150deg,#34C759,#30D158)';
+
+      renderFolders();
+      previewMeta.textContent = '3 个文件夹 · 已就绪';
+      statusPill.className = 'status-pill done';
+      statusText.textContent = '方案已就绪 · 待确认';
+      btnConfirm.disabled = false;
+      btnUndo.disabled = false;
+      state = 'done';
+    }, total);
+    timers.push(tDone);
+  }
+
+  /* ============ 确认归档 ============ */
+  function confirmArchive(){
+    if(state !== 'done') return;
+    state = 'archived';
+    // 文件卡飞走
+    document.querySelectorAll('.file-card').forEach((c,i)=>{
+      setTimeout(()=>c.classList.add('archived'), i*90);
+    });
+    setTimeout(()=>{
+      previewMeta.textContent = '已归档 ✓';
+      statusText.textContent = '归档完成 · 6 个文件已归位';
+      statusPill.className = 'status-pill run';
+    }, 600);
+    showToast('整理完成', '耗时 1.2 秒 · 6 个文件已归位');
+    btnConfirm.disabled = true;
+  }
+
+  /* ============ 一键撤销 ============ */
+  function undo(){
+    clearTimers();
+    state = 'idle';
+    // 重置 UI
+    document.querySelectorAll('.file-card').forEach(c=>c.classList.remove('archived','processing'));
+    loadingStage.classList.remove('show');
+    loadBar.style.width = '0%';
+    btnMagic.disabled = false;
+    btnMagic.classList.remove('running');
+    btnMagic.querySelector('.wand').textContent = '🪄';
+    btnMagic.querySelector('.lbl').textContent = '启动 AI 智能整理';
+    btnMagic.style.background = '';
+    launchHint.style.opacity = '1';
+    previewBody.innerHTML = '';
+    previewBody.appendChild(emptyState);
+    emptyState.style.display = 'flex';
+    previewMeta.textContent = '等待分析';
+    statusPill.className = 'status-pill';
+    statusText.textContent = '就绪 · 待整理 6 个文件';
+    btnConfirm.disabled = true;
+    btnUndo.disabled = true;
+    showToast('已撤销', '所有文件已恢复原位');
+  }
+
+  /* ============ Toast ============ */
+  let toastTimer;
+  function showToast(msg, sub){
+    toastMsg.textContent = msg;
+    toastSub.textContent = sub;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>toast.classList.remove('show'), 2600);
+  }
+
+  /* ============ 绑定事件 ============ */
+  btnMagic.addEventListener('click', runAI);
+  btnConfirm.addEventListener('click', confirmArchive);
+  btnUndo.addEventListener('click', undo);
+
+  /* ============ 初始化 ============ */
+  renderFiles();
+</script>
+</body>
+</html>

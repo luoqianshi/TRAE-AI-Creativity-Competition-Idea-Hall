@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>梦境编织者 / DreamWeaver</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --color-primary: #6366f1;
+      --color-secondary: #06b6d4;
+      --color-accent: #a855f7;
+      --color-dark-bg: #0f172a;
+      --color-dark-surface: #1e293b;
+      --color-morning-light: #fbbf24;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+      font-family: 'Inter', system-ui, sans-serif;
+      overflow: hidden;
+    }
+
+    #app {
+      width: 100%;
+      height: 100vh;
+    }
+
+    .font-display {
+      font-family: 'Orbitron', sans-serif;
+    }
+
+    .glass-card {
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 16px;
+    }
+
+    .glow-purple {
+      box-shadow: 0 0 20px rgba(168, 85, 247, 0.4), 0 0 40px rgba(168, 85, 247, 0.2);
+    }
+
+    .animate-pulse-slow {
+      animation: pulse-slow 3s ease-in-out infinite;
+    }
+
+    .animate-float {
+      animation: float 6s ease-in-out infinite;
+    }
+
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(30, 41, 59, 0.5); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.5); border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const SleepState = { AWAKE: 'awake', LIGHT_SLEEP: 'light_sleep', DEEP_SLEEP: 'deep_sleep', SLEEPING: 'sleeping' };
+    const ScreenState = { ACTIVE: 'active', FADING: 'fading', SLEEP: 'sleep', WAKING: 'waking' };
+
+    const mockDevices = [
+      { id: 'projector-001', name: 'Xiaomi Projector Pro', ip: '192.168.1.105', type: 'projector', status: 'connected' },
+      { id: 'tv-001', name: 'Sony Bravia TV', ip: '192.168.1.108', type: 'tv', status: 'disconnected' },
+      { id: 'speaker-001', name: 'Sonos Arc', ip: '192.168.1.112', type: 'speaker', status: 'connected' },
+    ];
+
+    class AudioManager {
+      constructor() {
+        this.audioContext = null;
+        this.whiteNoiseNode = null;
+        this.gainNode = null;
+        this.isPlaying = false;
+        this.volume = 0.5;
+      }
+
+      initContext() {
+        if (!this.audioContext) {
+          this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+      }
+
+      generateWhiteNoise() {
+        this.initContext();
+        const bufferSize = this.audioContext.sampleRate * 2;
+        const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        return buffer;
+      }
+
+      startWhiteNoise() {
+        this.initContext();
+        if (this.whiteNoiseNode) this.stopWhiteNoise();
+        this.whiteNoiseNode = this.audioContext.createBufferSource();
+        this.whiteNoiseNode.buffer = this.generateWhiteNoise();
+        this.whiteNoiseNode.loop = true;
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.gain.value = this.volume;
+        const filter = this.audioContext.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 400;
+        this.whiteNoiseNode.connect(filter);
+        filter.connect(this.gainNode);
+        this.gainNode.connect(this.audioContext.destination);
+        this.whiteNoiseNode.start();
+        this.isPlaying = true;
+      }
+
+      stopWhiteNoise() {
+        if (this.whiteNoiseNode) {
+          this.whiteNoiseNode.stop();
+          this.whiteNoiseNode.disconnect();
+          this.whiteNoiseNode = null;
+        }
+        if (this.gainNode) {
+          this.gainNode.disconnect();
+          this.gainNode = null;
+        }
+        this.isPlaying = false;
+      }
+
+      setVolume(value) {
+        this.volume = Math.max(0, Math.min(1, value));
+        if (this.gainNode) {
+          this.gainNode.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.1);
+        }
+      }
+
+      fadeOut(duration) {
+        return new Promise((resolve) => {
+          if (!this.gainNode || !this.audioContext) { resolve(); return; }
+          const startTime = this.audioContext.currentTime;
+          const startVolume = this.volume;
+          const fade = () => {
+            const elapsed = this.audioContext.currentTime - startTime;
+            const progress = elapsed / duration;
+            if (progress >= 1) {
+              this.gainNode.gain.value = 0;
+              this.stopWhiteNoise();
+              resolve();
+            } else {
+              this.gainNode.gain.value = startVolume * (1 - progress);
+              requestAnimationFrame(fade);
+            }
+          };
+          fade();
+        });
+      }
+
+      fadeIn(duration, targetVolume = 0.5) {
+        return new Promise((resolve) => {
+          this.startWhiteNoise();
+          if (!this.gainNode || !this.audioContext) { resolve(); return; }
+          const startTime = this.audioContext.currentTime;
+          this.gainNode.gain.value = 0;
+          const fade = () => {
+            const elapsed = this.audioContext.currentTime - startTime;
+            const progress = elapsed / duration;
+            if (progress >= 1) {
+              this.gainNode.gain.value = targetVolume;
+              this.volume = targetVolume;
+              resolve();
+            } else {
+              this.gainNode.gain.value = targetVolume * progress;
+              requestAnimationFrame(fade);
+            }
+          };
+          fade();
+        });
+      }
+
+      playBirdSound() {
+        this.initContext();
+        const now = this.audioContext.currentTime;
+        const createChirp = (startTime, frequency) => {
+          const osc = this.audioContext.createOscillator();
+          const gain = this.audioContext.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(frequency, startTime);
+          osc.frequency.exponentialRampToValueAtTime(frequency * 1.5, startTime + 0.1);
+          osc.frequency.exponentialRampToValueAtTime(frequency * 0.8, startTime + 0.2);
+          gain.gain.setValueAtTime(0, startTime);
+          gain.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.3);
+          osc.connect(gain);
+          gain.connect(this.audioContext.destination);
+          osc.start(startTime);
+          osc.stop(startTime + 0.3);
+        };
+        for (let i = 0; i < 5; i++) {
+          const delay = Math.random() * 2;
+          const freq = 2000 + Math.random() * 1000;
+          createChirp(now + delay, freq);
+        }
+      }
+
+      getAudioLevel() {
+        if (!this.isPlaying) return 0;
+        return 0.3 + Math.sin(Date.now() / 500) * 0.1 + Math.random() * 0.1;
+      }
+
+      getStatus() {
+        return { isPlaying: this.isPlaying, volume: this.volume };
+      }
+    }
+
+    const audioManager = new AudioManager();
+
+    const createElement = (tag, props, ...children) => {
+      const element = document.createElement(tag);
+      if (props) {
+        Object.keys(props).forEach(key => {
+          if (key === 'className') element.className = props[key];
+          else if (key === 'style') Object.assign(element.style, props[key]);
+          else if (key.startsWith('on')) element.addEventListener(key.substring(2).toLowerCase(), props[key]);
+          else element.setAttribute(key, props[key]);
+        });
+      }
+      children.forEach(child => {
+        if (typeof child === 'string') element.appendChild(document.createTextNode(child));
+        else if (child instanceof HTMLElement) element.appendChild(child);
+        else if (Array.isArray(child)) child.forEach(c => {
+          if (typeof c === 'string') element.appendChild(document.createTextNode(c));
+          else if (c instanceof HTMLElement) element.appendChild(c);
+        });
+      });
+      return element;
+    };
+
+    const Icon = {
+      Smartphone: (cls = 'w-5 h-5') => createElement('svg', { className: cls, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('rect', { x: '5', y: '2', width: '14', height: '20', rx: '2', ry: '2' }),
+        createElement('line', { x1: '12', y1: '18', x2: '12.01', y2: '18' })
+      ),
+      Wifi: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('path', { d: 'M5 12.55a11 11 0 0 1 14.08 0' }),
+        createElement('path', { d: 'M1.42 9a16 16 0 0 1 21.16 0' }),
+        createElement('path', { d: 'M8.53 16.11a6 6 0 0 1 6.95 0' }),
+        createElement('line', { x1: '12', y1: '20', x2: '12.01', y2: '20' })
+      ),
+      Moon: (cls = 'w-5 h-5') => createElement('svg', { className: cls, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('path', { d: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' })
+      ),
+      Sun: (cls = 'w-5 h-5') => createElement('svg', { className: cls, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('circle', { cx: '12', cy: '12', r: '5' }),
+        createElement('line', { x1: '12', y1: '1', x2: '12', y2: '3' }),
+        createElement('line', { x1: '12', y1: '21', x2: '12', y2: '23' }),
+        createElement('line', { x1: '4.22', y1: '4.22', x2: '5.64', y2: '5.64' }),
+        createElement('line', { x1: '18.36', y1: '18.36', x2: '19.78', y2: '19.78' }),
+        createElement('line', { x1: '1', y1: '12', x2: '3', y2: '12' }),
+        createElement('line', { x1: '21', y1: '12', x2: '23', y2: '12' }),
+        createElement('line', { x1: '4.22', y1: '19.78', x2: '5.64', y2: '18.36' }),
+        createElement('line', { x1: '18.36', y1: '5.64', x2: '19.78', y2: '4.22' })
+      ),
+      Cloud: () => createElement('svg', { className: 'w-8 h-8', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('path', { d: 'M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z' })
+      ),
+      Volume2: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('polygon', { points: '11 5 6 9 2 9 2 15 6 15 11 19 11 5' }),
+        createElement('path', { d: 'M15.54 8.46a5 5 0 0 1 0 7.07' }),
+        createElement('path', { d: 'M19.07 4.93a10 10 0 0 1 0 14.14' })
+      ),
+      VolumeX: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('polygon', { points: '11 5 6 9 2 9 2 15 6 15 11 19 11 5' }),
+        createElement('line', { x1: '23', y1: '9', x2: '17', y2: '15' }),
+        createElement('line', { x1: '17', y1: '9', x2: '23', y2: '15' })
+      ),
+      Cpu: () => createElement('svg', { className: 'w-5 h-5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('rect', { x: '4', y: '4', width: '16', height: '16', rx: '2', ry: '2' }),
+        createElement('rect', { x: '9', y: '9', width: '6', height: '6' }),
+        createElement('line', { x1: '12', y1: '1', x2: '12', y2: '4' }),
+        createElement('line', { x1: '12', y1: '20', x2: '12', y2: '23' }),
+        createElement('line', { x1: '4', y1: '12', x2: '1', y2: '12' }),
+        createElement('line', { x1: '23', y1: '12', x2: '20', y2: '12' })
+      ),
+      Radio: () => createElement('svg', { className: 'w-5 h-5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('polygon', { points: '12 2 2 7 2 17 12 22 22 17 22 7 12 2' }),
+        createElement('path', { d: 'M12 12v5' }),
+        createElement('circle', { cx: '12', cy: '8', r: '2' })
+      ),
+      Waves: () => createElement('svg', { className: 'w-5 h-5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('path', { d: 'M2 6h20' }),
+        createElement('path', { d: 'M6 12h12' }),
+        createElement('path', { d: 'M10 18h4' })
+      ),
+      WifiOff: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('line', { x1: '1', y1: '1', x2: '23', y2: '23' }),
+        createElement('path', { d: 'M16 11.37A4 4 0 0 0 12 10c-1.66 0-3.14.69-4.22 1.78L8 14' }),
+        createElement('path', { d: 'M16 16.94A8 8 0 0 0 12 15c-3.86 0-7 2.69-8 6l2 2' })
+      ),
+      Clock: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('circle', { cx: '12', cy: '12', r: '10' }),
+        createElement('polyline', { points: '12 6 12 12 16 14' })
+      ),
+      Activity: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('polyline', { points: '22 12 18 12 15 21 9 3 6 12 2 12' })
+      ),
+      FileText: () => createElement('svg', { className: 'w-5 h-5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
+        createElement('polyline', { points: '14 2 14 8 20 8' }),
+        createElement('line', { x1: '16', y1: '13', x2: '8', y2: '13' }),
+        createElement('line', { x1: '16', y1: '17', x2: '8', y2: '17' }),
+        createElement('polyline', { points: '10 9 9 9 8 9' })
+      ),
+      Play: () => createElement('svg', { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('polygon', { points: '5 3 19 12 5 21 5 3' })
+      ),
+      BarChart: () => createElement('svg', { className: 'w-5 h-5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('line', { x1: '18', y1: '20', x2: '18', y2: '10' }),
+        createElement('line', { x1: '12', y1: '20', x2: '12', y2: '4' }),
+        createElement('line', { x1: '6', y1: '20', x2: '6', y2: '14' })
+      ),
+      MessageCircle: () => createElement('svg', { className: 'w-5 h-5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' },
+        createElement('path', { d: 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z' })
+      )
+    };
+
+    const SceneType = { DEFAULT: 'default', CAMPFIRE: 'campfire', OCEAN: 'ocean', FOREST: 'forest' };
+    
+    const mockSleepTalks = [
+      { id: 1, time: '00:23', text: '这...这里是哪里？', confidence: 0.85 },
+      { id: 2, time: '01:15', text: '不要走...等等我', confidence: 0.72 },
+      { id: 3, time: '02:45', text: '太棒了！终于做到了', confidence: 0.91 },
+      { id: 4, time: '04:08', text: '水...我要喝水', confidence: 0.68 },
+      { id: 5, time: '05:30', text: '明天...还要早起', confidence: 0.78 },
+    ];
+    
+    const generateSleepRecord = () => {
+      const startTime = new Date();
+      startTime.setHours(startTime.getHours() - 7 - Math.floor(Math.random() * 3));
+      startTime.setMinutes(Math.floor(Math.random() * 60));
+      
+      const endTime = new Date();
+      endTime.setHours(endTime.getHours() - Math.floor(Math.random() * 2));
+      endTime.setMinutes(Math.floor(Math.random() * 60));
+      
+      const duration = (endTime - startTime) / (1000 * 60 * 60);
+      const deepSleep = duration * (0.25 + Math.random() * 0.15);
+      const lightSleep = duration * (0.4 + Math.random() * 0.2);
+      const remSleep = duration - deepSleep - lightSleep;
+      
+      return {
+        id: Date.now(),
+        date: new Date().toLocaleDateString('zh-CN'),
+        startTime: startTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        endTime: endTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        duration: duration.toFixed(1),
+        deepSleep: deepSleep.toFixed(1),
+        lightSleep: lightSleep.toFixed(1),
+        remSleep: remSleep.toFixed(1),
+        sleepScore: Math.floor(60 + Math.random() * 35),
+        sleepTalks: mockSleepTalks.slice(0, Math.floor(Math.random() * 4) + 1).map(t => ({
+          ...t,
+          id: Date.now() + t.id
+        })),
+        quality: ['极佳', '良好', '一般', '较差'][Math.floor(Math.random() * 4)]
+      };
+    };
+
+    class App {
+      constructor() {
+        this.state = {
+          sleepState: SleepState.AWAKE,
+          screenState: ScreenState.ACTIVE,
+          volume: 0.5,
+          brightness: 1,
+          isMorning: false,
+          logs: [],
+          isPlaying: false,
+          audioLevel: 0,
+          sceneType: SceneType.DEFAULT,
+          showSleepLog: false,
+          sleepRecord: null
+        };
+        this.canvas = null;
+        this.ctx = null;
+        this.animationId = null;
+        this.audioInterval = null;
+        this.timeInterval = null;
+        this.bigScreenEl = null;
+        this.logPanelEl = null;
+        this.sleepStatusEl = null;
+        this.volumeDisplayEl = null;
+        this.screenStatusEl = null;
+        this.particles = [];
+      }
+
+      addLog(message, type = 'info') {
+        const newLog = { id: Date.now(), message, type };
+        this.state.logs = [...this.state.logs.slice(-30), newLog];
+        this.updateLogPanel();
+      }
+
+      setState(newState) {
+        this.state = { ...this.state, ...newState };
+        this.updateUI();
+      }
+
+      handleStartAudio() {
+        audioManager.startWhiteNoise();
+        this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] AUDIO: White noise started`, 'success');
+      }
+
+      handleStopAudio() {
+        audioManager.stopWhiteNoise();
+        this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] AUDIO: Audio stopped`, 'info');
+      }
+
+      handleFallAsleep() {
+        if (this.state.sleepState === SleepState.SLEEPING) return;
+        
+        this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] MOBILE_AGENT: AI detected light_sleep status`, 'info');
+        this.setState({ sleepState: SleepState.LIGHT_SLEEP });
+
+        setTimeout(() => {
+          this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] MOBILE_AGENT: AI confirmed deep_sleep status`, 'info');
+          this.setState({ sleepState: SleepState.DEEP_SLEEP, screenState: ScreenState.FADING });
+
+          let step = 0;
+          const steps = 30;
+          const interval = 100;
+
+          const fade = setInterval(() => {
+            step++;
+            const progress = step / steps;
+            const eased = 1 - Math.pow(1 - progress, 3);
+            const newVolume = 0.5 * (1 - eased);
+            const newBrightness = 1 * (1 - eased);
+            this.setState({ volume: newVolume, brightness: newBrightness });
+            audioManager.setVolume(newVolume);
+
+            if (step >= steps) {
+              clearInterval(fade);
+              this.setState({ volume: 0, brightness: 0 });
+              audioManager.stopWhiteNoise();
+              this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] DLNA_CONTROL: Sending AVTransport:Stop -> Projector OK`, 'success');
+              this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] PROJECTOR: Entering system sleep mode`, 'info');
+              this.setState({ screenState: ScreenState.SLEEP, sleepState: SleepState.SLEEPING, isMorning: false });
+            }
+          }, interval);
+        }, 2000);
+      }
+
+      handleWakeUp() {
+        if (this.state.sleepState !== SleepState.SLEEPING) return;
+        
+        this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] MOBILE_AGENT: Sending wake-up broadcast`, 'info');
+        this.setState({ screenState: ScreenState.WAKING });
+
+        setTimeout(() => {
+          this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] PROJECTOR: Power ON -> Light engine activated`, 'success');
+        }, 500);
+
+        let step = 0;
+        const steps = 20;
+        const interval = 50;
+
+        const wake = setInterval(() => {
+          step++;
+          const progress = step / steps;
+          const eased = Math.pow(progress, 3);
+          const newVolume = eased * 0.4;
+          const newBrightness = eased;
+          this.setState({ volume: newVolume, brightness: newBrightness });
+
+          if (step === Math.floor(steps * 0.5)) {
+            audioManager.fadeIn(1000, 0.4);
+            this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] PROJECTOR: Morning light animation started`, 'info');
+          }
+
+          if (step >= steps) {
+            clearInterval(wake);
+            this.setState({ volume: 0.4, brightness: 1, screenState: ScreenState.ACTIVE, sleepState: SleepState.AWAKE, isMorning: true });
+            setTimeout(() => {
+              audioManager.playBirdSound();
+              this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] AUDIO: Bird chirping sound played`, 'success');
+            }, 1000);
+            this.setState({ sleepRecord: generateSleepRecord() });
+            this.addLog(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] SYSTEM: Sleep record generated for today`, 'info');
+          }
+        }, interval);
+      }
+
+      handleViewSleepLog() {
+        if (!this.state.sleepRecord) {
+          this.setState({ sleepRecord: generateSleepRecord() });
+        }
+        this.setState({ showSleepLog: true });
+      }
+
+      renderSleepLog() {
+        const record = this.state.sleepRecord || generateSleepRecord();
+        
+        return createElement('div', { className: 'fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4' },
+          createElement('div', { className: 'glass-card w-full max-w-lg max-h-[80vh] overflow-hidden flex flex-col' },
+            createElement('div', { className: 'flex items-center justify-between p-4 border-b border-slate-700/50' },
+              createElement('div', { className: 'flex items-center gap-2' },
+                Icon.FileText(),
+                createElement('h2', { className: 'font-display text-lg font-bold text-white' }, '睡眠日志')
+              ),
+              createElement('button', {
+                className: 'text-slate-400 hover:text-white',
+                onClick: () => this.setState({ showSleepLog: false })
+              }, '×')
+            ),
+            
+            createElement('div', { className: 'flex-1 overflow-y-auto p-4 space-y-4' },
+              createElement('div', { className: 'text-center py-4' },
+                createElement('div', { className: 'text-5xl font-display font-bold text-indigo-400' }, record.sleepScore),
+                createElement('div', { className: 'text-sm text-slate-400 mt-1' }, '睡眠评分')
+              ),
+              
+              createElement('div', { className: 'grid grid-cols-2 gap-3' },
+                createElement('div', { className: 'bg-slate-800/50 rounded-lg p-3' },
+                  createElement('div', { className: 'text-xs text-slate-400' }, '睡眠时长'),
+                  createElement('div', { className: 'font-display text-xl font-bold text-white' }, record.duration + 'h')
+                ),
+                createElement('div', { className: 'bg-slate-800/50 rounded-lg p-3' },
+                  createElement('div', { className: 'text-xs text-slate-400' }, '睡眠质量'),
+                  createElement('div', { className: `font-display text-xl font-bold ${
+                    record.quality === '极佳' ? 'text-emerald-400' :
+                    record.quality === '良好' ? 'text-cyan-400' :
+                    record.quality === '一般' ? 'text-amber-400' : 'text-red-400'
+                  }` }, record.quality)
+                ),
+                createElement('div', { className: 'bg-slate-800/50 rounded-lg p-3' },
+                  createElement('div', { className: 'text-xs text-slate-400' }, '入睡时间'),
+                  createElement('div', { className: 'font-display text-lg font-bold text-white' }, record.startTime)
+                ),
+                createElement('div', { className: 'bg-slate-800/50 rounded-lg p-3' },
+                  createElement('div', { className: 'text-xs text-slate-400' }, '醒来时间'),
+                  createElement('div', { className: 'font-display text-lg font-bold text-white' }, record.endTime)
+                )
+              ),
+              
+              createElement('div', { className: 'bg-slate-800/50 rounded-lg p-4' },
+                createElement('div', { className: 'flex items-center gap-2 mb-3' },
+                  Icon.BarChart(),
+                  createElement('span', { className: 'text-sm text-slate-300' }, '睡眠阶段分布')
+                ),
+                createElement('div', { className: 'space-y-2' },
+                  createElement('div', null,
+                    createElement('div', { className: 'flex justify-between text-xs mb-1' },
+                      createElement('span', { className: 'text-slate-400' }, '深睡眠'),
+                      createElement('span', { className: 'text-blue-400' }, record.deepSleep + 'h')
+                    ),
+                    createElement('div', { className: 'h-2 bg-slate-700 rounded-full overflow-hidden' },
+                      createElement('div', { 
+                        className: 'h-full bg-blue-500 rounded-full transition-all duration-500',
+                        style: { width: (record.deepSleep / record.duration * 100) + '%' }
+                      })
+                    )
+                  ),
+                  createElement('div', null,
+                    createElement('div', { className: 'flex justify-between text-xs mb-1' },
+                      createElement('span', { className: 'text-slate-400' }, '浅睡眠'),
+                      createElement('span', { className: 'text-amber-400' }, record.lightSleep + 'h')
+                    ),
+                    createElement('div', { className: 'h-2 bg-slate-700 rounded-full overflow-hidden' },
+                      createElement('div', { 
+                        className: 'h-full bg-amber-500 rounded-full transition-all duration-500',
+                        style: { width: (record.lightSleep / record.duration * 100) + '%' }
+                      })
+                    )
+                  ),
+                  createElement('div', null,
+                    createElement('div', { className: 'flex justify-between text-xs mb-1' },
+                      createElement('span', { className: 'text-slate-400' }, 'REM睡眠'),
+                      createElement('span', { className: 'text-purple-400' }, record.remSleep + 'h')
+                    ),
+                    createElement('div', { className: 'h-2 bg-slate-700 rounded-full overflow-hidden' },
+                      createElement('div', { 
+                        className: 'h-full bg-purple-500 rounded-full transition-all duration-500',
+                        style: { width: (record.remSleep / record.duration * 100) + '%' }
+                      })
+                    )
+                  )
+                )
+              ),
+              
+              createElement('div', { className: 'bg-slate-800/50 rounded-lg p-4' },
+                createElement('div', { className: 'flex items-center gap-2 mb-3' },
+                  Icon.MessageCircle(),
+                  createElement('span', { className: 'text-sm text-slate-300' }, '梦话识别记录')
+                ),
+                createElement('div', { className: 'space-y-2' },
+                  record.sleepTalks.length > 0 ? record.sleepTalks.map(talk => (
+                    createElement('div', { className: 'flex items-start gap-3 p-2 bg-slate-700/30 rounded-lg' },
+                      createElement('div', { className: 'text-xs text-slate-500 font-mono' }, talk.time),
+                      createElement('div', { className: 'flex-1' },
+                        createElement('div', { className: 'text-sm text-white' }, talk.text),
+                        createElement('div', { className: 'flex items-center gap-1 mt-1' },
+                          createElement('div', { className: 'w-16 h-1 bg-slate-600 rounded-full overflow-hidden' },
+                            createElement('div', { 
+                              className: 'h-full bg-emerald-500 rounded-full',
+                              style: { width: (talk.confidence * 100) + '%' }
+                            })
+                          ),
+                          createElement('span', { className: 'text-xs text-slate-400' }, '置信度 ' + Math.round(talk.confidence * 100) + '%')
+                        )
+                      ),
+                      createElement('button', { 
+                        className: 'text-indigo-400 hover:text-indigo-300',
+                        onClick: () => this.addLog(`[SYSTEM] 播放梦话录音: ${talk.text}`, 'info')
+                      }, Icon.Play())
+                    )
+                  )) : createElement('div', { className: 'text-center text-slate-500 text-sm py-4' }, '昨晚没有检测到梦话')
+                )
+              )
+            ),
+            
+            createElement('div', { className: 'p-4 border-t border-slate-700/50' },
+              createElement('button', {
+                className: 'w-full py-3 rounded-xl font-display font-bold bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-500 hover:to-purple-500',
+                onClick: () => this.setState({ showSleepLog: false })
+              }, '关闭')
+            )
+          )
+        );
+      }
+
+      getSleepStatusConfig() {
+        const configs = {
+          [SleepState.AWAKE]: { label: '清醒', color: 'text-emerald-400', bg: 'bg-emerald-500/20', icon: Icon.Sun, desc: '准备入睡' },
+          [SleepState.LIGHT_SLEEP]: { label: '浅睡眠', color: 'text-amber-400', bg: 'bg-amber-500/20', icon: Icon.Moon, desc: 'AI检测浅睡眠阶段' },
+          [SleepState.DEEP_SLEEP]: { label: '深睡眠', color: 'text-blue-400', bg: 'bg-blue-500/20', icon: Icon.Cloud, desc: 'AI确认深度睡眠' },
+          [SleepState.SLEEPING]: { label: '已入睡', color: 'text-purple-400', bg: 'bg-purple-500/20', icon: Icon.Moon, desc: '设备已进入休眠' },
+        };
+        return configs[this.state.sleepState];
+      }
+
+      getScreenStatusConfig() {
+        const configs = {
+          [ScreenState.ACTIVE]: { label: 'ACTIVE', sublabel: '3D环绕白噪音播放中', color: 'text-cyan-400' },
+          [ScreenState.FADING]: { label: 'FADING', sublabel: '光音同步渐隐中...', color: 'text-amber-400' },
+          [ScreenState.SLEEP]: { label: 'SLEEP', sublabel: '系统级休眠模式', color: 'text-purple-400' },
+          [ScreenState.WAKING]: { label: 'WAKING', sublabel: '晨光复苏中...', color: 'text-orange-400' },
+        };
+        return configs[this.state.screenState];
+      }
+
+      renderDeviceList() {
+        return createElement('div', { className: 'space-y-2' },
+          mockDevices.map(device => {
+            const typeIcon = device.type === 'projector' ? Icon.Cpu() : device.type === 'tv' ? Icon.Radio() : Icon.Waves();
+            return createElement('div', { className: `glass-card p-3 flex items-center gap-3 ${device.status === 'connected' ? 'border-emerald-500/30' : 'opacity-50'}` },
+              createElement('div', { className: `w-10 h-10 rounded-lg flex items-center justify-center ${device.status === 'connected' ? 'bg-emerald-500/20' : 'bg-slate-500/20'}` }, typeIcon),
+              createElement('div', { className: 'flex-1' },
+                createElement('div', { className: 'text-sm font-medium text-white' }, device.name),
+                createElement('div', { className: 'text-xs text-slate-400' }, device.ip)
+              ),
+              device.status === 'connected'
+                ? createElement('div', { className: 'flex items-center gap-1' },
+                    createElement('div', { className: 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse-slow' }),
+                    createElement('span', { className: 'text-xs text-emerald-400' }, '已连接')
+                  )
+                : Icon.WifiOff()
+            );
+          })
+        );
+      }
+
+      renderSleepStatus() {
+        const config = this.getSleepStatusConfig();
+        return createElement('div', { className: 'glass-card p-4 text-center' },
+          createElement('div', { className: `w-16 h-16 mx-auto rounded-full ${config.bg} flex items-center justify-center mb-3` }, config.icon()),
+          createElement('div', { className: `font-display text-lg font-bold ${config.color}` }, config.label),
+          createElement('div', { className: 'text-xs text-slate-400 mt-1' }, config.desc)
+        );
+      }
+
+      renderLogPanel() {
+        const logContent = createElement('div', { className: 'flex-1 overflow-y-auto p-3 font-mono text-xs space-y-1' });
+        this.logPanelEl = logContent;
+        return createElement('div', { className: 'bg-slate-900/80 rounded-lg border border-slate-700/50 h-full flex flex-col' },
+          createElement('div', { className: 'px-4 py-2 border-b border-slate-700/50 flex items-center gap-2' },
+            createElement('div', { className: 'w-4 h-4 rounded bg-cyan-500/20 flex items-center justify-center' },
+              createElement('div', { className: 'w-2 h-2 rounded-full bg-cyan-500' })
+            ),
+            createElement('span', { className: 'text-xs font-mono text-cyan-400' }, 'DLNA PROTOCOL LOG')
+          ),
+          logContent
+        );
+      }
+
+      updateLogPanel() {
+        if (!this.logPanelEl) return;
+        const getLogColor = (type) => {
+          switch (type) {
+            case 'success': return 'text-emerald-400';
+            case 'error': return 'text-red-400';
+            case 'warning': return 'text-amber-400';
+            default: return 'text-cyan-400';
+          }
+        };
+
+        this.logPanelEl.innerHTML = '';
+        if (this.state.logs.length === 0) {
+          this.logPanelEl.appendChild(createElement('div', { className: 'text-slate-500' }, '等待设备连接...'));
+        } else {
+          this.state.logs.forEach(log => {
+            const logEl = createElement('div', { className: getLogColor(log.type) }, log.message);
+            this.logPanelEl.appendChild(logEl);
+          });
+        }
+        this.logPanelEl.scrollTop = this.logPanelEl.scrollHeight;
+      }
+
+      renderMobileControl() {
+        this.sleepStatusEl = this.renderSleepStatus();
+        this.volumeDisplayEl = createElement('span', { className: 'text-xs text-slate-400 w-8' }, Math.round(this.state.volume * 100) + '%');
+
+        return createElement('div', { className: 'w-full max-w-xs mx-auto' },
+          createElement('div', { className: 'glass-card p-4 mb-4' },
+            createElement('div', { className: 'flex items-center gap-3 mb-4' },
+              createElement('div', { className: 'w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center' }, Icon.Smartphone()),
+              createElement('div', null,
+                createElement('div', { className: 'text-sm font-medium text-white' }, 'DreamWeaver'),
+                createElement('div', { className: 'text-xs text-slate-400' }, '睡眠控制中心')
+              )
+            ),
+            this.sleepStatusEl
+          ),
+          
+          createElement('div', { className: 'glass-card p-4 mb-4' },
+            createElement('div', { className: 'flex items-center justify-between mb-3' },
+              createElement('span', { className: 'text-xs text-slate-400' }, '局域网设备'),
+              Icon.Wifi()
+            ),
+            this.renderDeviceList()
+          ),
+          
+          createElement('div', { className: 'glass-card p-4 mb-4' },
+            createElement('div', { className: 'flex items-center justify-between mb-3' },
+              createElement('span', { className: 'text-xs text-slate-400' }, '音频状态'),
+              createElement('span', { id: 'audio-status-icon' }, this.state.isPlaying ? Icon.Volume2().outerHTML : Icon.VolumeX().outerHTML)
+            ),
+            createElement('div', { className: 'flex items-center gap-2 mb-3' },
+              createElement('input', { type: 'range', min: '0', max: '100', value: this.state.volume * 100, className: 'flex-1 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer', disabled: true }),
+              this.volumeDisplayEl
+            ),
+            createElement('div', { className: 'flex gap-2' },
+              createElement('button', {
+                className: 'flex-1 py-2 px-3 rounded-lg text-xs font-medium flex items-center justify-center gap-2 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-500/30',
+                onClick: () => this.handleStartAudio()
+              }, Icon.Waves(), '播放白噪音'),
+              createElement('button', {
+                className: 'flex-1 py-2 px-3 rounded-lg text-xs font-medium flex items-center justify-center gap-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30',
+                onClick: () => this.handleStopAudio()
+              }, Icon.VolumeX(), '停止')
+            )
+          ),
+          
+          createElement('div', { className: 'glass-card p-4 mb-4' },
+            createElement('div', { className: 'flex items-center justify-between mb-3' },
+              createElement('span', { className: 'text-xs text-slate-400' }, '场景选择'),
+              createElement('div', { className: 'flex gap-1' },
+                ['DEFAULT', 'CAMPFIRE', 'OCEAN', 'FOREST'].map((type) => {
+                  const sceneNames = { DEFAULT: '默认', CAMPFIRE: '篝火', OCEAN: '海洋', FOREST: '森林' };
+                  return createElement('button', {
+                    className: `px-3 py-1 rounded-full text-xs transition-all ${
+                      this.state.sceneType === SceneType[type]
+                        ? 'bg-indigo-500 text-white'
+                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                    }`,
+                    onClick: () => this.setState({ sceneType: SceneType[type] })
+                  }, sceneNames[type]);
+                })
+              )
+            )
+          ),
+          
+          createElement('button', {
+            className: 'w-full py-3 rounded-xl font-display font-medium text-sm flex items-center justify-center gap-2 bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 border border-slate-600/50',
+            onClick: () => this.handleViewSleepLog()
+          }, Icon.FileText(), '查看睡眠日志'),
+          
+          createElement('div', { className: 'space-y-3' },
+            createElement('button', {
+              className: 'w-full py-4 rounded-xl font-display font-bold text-lg flex items-center justify-center gap-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-500 hover:to-purple-500 glow-purple',
+              onClick: () => this.handleFallAsleep()
+            }, Icon.Moon(), '模拟睡着'),
+            createElement('button', {
+              className: 'w-full py-4 rounded-xl font-display font-bold text-lg flex items-center justify-center gap-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-400 hover:to-orange-400 shadow-lg shadow-orange-500/30',
+              onClick: () => this.handleWakeUp()
+            }, Icon.Sun(), '模拟睡醒')
+          )
+        );
+      }
+
+      initParticleAnimation() {
+        const container = createElement('div', { className: 'absolute inset-0 pointer-events-none' });
+        this.canvas = createElement('canvas', { className: 'absolute inset-0' });
+        this.ctx = this.canvas.getContext('2d');
+        container.appendChild(this.canvas);
+
+        const stars = createElement('div', { className: 'absolute inset-0 pointer-events-none' });
+        for (let i = 0; i < 50; i++) {
+          stars.appendChild(createElement('div', {
+            className: 'absolute w-1 h-1 rounded-full bg-white',
+            style: {
+              left: Math.random() * 100 + '%',
+              top: Math.random() * 100 + '%',
+              opacity: Math.random() * 0.5,
+              animation: `pulse-slow ${2 + Math.random() * 3}s ease-in-out infinite`,
+              animationDelay: Math.random() * 2 + 's'
+            }
+          }));
+        }
+        container.appendChild(stars);
+
+        const resize = () => {
+          if (this.canvas.parentElement) {
+            this.canvas.width = this.canvas.parentElement.clientWidth;
+            this.canvas.height = this.canvas.parentElement.clientHeight;
+          }
+        };
+
+        const initCampfireParticles = () => {
+          this.particles = [];
+          for (let i = 0; i < 60; i++) {
+            this.particles.push({
+              x: Math.random() * 100 - 50,
+              y: 0,
+              vx: (Math.random() - 0.5) * 2,
+              vy: -Math.random() * 3 - 2,
+              size: Math.random() * 8 + 2,
+              life: 1,
+              decay: Math.random() * 0.02 + 0.01,
+              color: Math.random() > 0.7 ? '#ff4500' : Math.random() > 0.5 ? '#ff6b35' : '#ffa500'
+            });
+          }
+        };
+
+        const initOceanParticles = () => {
+          this.particles = [];
+          for (let i = 0; i < 80; i++) {
+            this.particles.push({
+              x: Math.random() * 100,
+              y: Math.random() * 100,
+              vx: Math.random() * 0.5 + 0.2,
+              vy: Math.sin(Math.random() * Math.PI * 2) * 0.3,
+              size: Math.random() * 3 + 1,
+              life: 1,
+              decay: 0,
+              color: '#00bfff'
+            });
+          }
+        };
+
+        const initForestParticles = () => {
+          this.particles = [];
+          for (let i = 0; i < 40; i++) {
+            this.particles.push({
+              x: Math.random() * 100,
+              y: Math.random() * 100,
+              vx: (Math.random() - 0.5) * 0.5,
+              vy: -Math.random() * 0.5 - 0.2,
+              size: Math.random() * 4 + 1,
+              life: 1,
+              decay: Math.random() * 0.005 + 0.002,
+              color: '#32cd32'
+            });
+          }
+        };
+
+        const drawCampfire = (time) => {
+          const centerX = this.canvas.width / 2;
+          const centerY = this.canvas.height * 0.7;
+
+          for (let i = 0; i < 3; i++) {
+            const flameHeight = 80 + Math.sin(time * 3 + i) * 20;
+            const gradient = this.ctx.createLinearGradient(centerX, centerY, centerX, centerY - flameHeight);
+            gradient.addColorStop(0, i === 0 ? '#ff4500' : i === 1 ? '#ff6b35' : '#ffa500');
+            gradient.addColorStop(0.5, i === 0 ? '#ff6b35' : i === 1 ? '#ffa500' : '#ffff00');
+            gradient.addColorStop(1, 'rgba(255, 255, 200, 0)');
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(centerX, centerY);
+            this.ctx.quadraticCurveTo(centerX + 20 + Math.sin(time * 5 + i * 2) * 10, centerY - flameHeight * 0.5, centerX + Math.sin(time * 4 + i) * 15, centerY - flameHeight);
+            this.ctx.quadraticCurveTo(centerX, centerY - flameHeight - 10, centerX - Math.sin(time * 4 + i) * 15, centerY - flameHeight);
+            this.ctx.quadraticCurveTo(centerX - 20 - Math.sin(time * 5 + i * 2) * 10, centerY - flameHeight * 0.5, centerX, centerY);
+            this.ctx.fillStyle = gradient;
+            this.ctx.fill();
+          }
+
+          const logsGradient = this.ctx.createLinearGradient(centerX - 40, centerY + 10, centerX + 40, centerY + 10);
+          logsGradient.addColorStop(0, '#4a3728');
+          logsGradient.addColorStop(0.5, '#654321');
+          logsGradient.addColorStop(1, '#4a3728');
+
+          this.ctx.beginPath();
+          this.ctx.ellipse(centerX - 15, centerY + 15, 25, 8, -0.3, 0, Math.PI * 2);
+          this.ctx.fillStyle = logsGradient;
+          this.ctx.fill();
+
+          this.ctx.beginPath();
+          this.ctx.ellipse(centerX + 15, centerY + 15, 25, 8, 0.3, 0, Math.PI * 2);
+          this.ctx.fillStyle = logsGradient;
+          this.ctx.fill();
+
+          this.particles.forEach((p, i) => {
+            p.x += p.vx + Math.sin(time * 2 + i) * 0.5;
+            p.y += p.vy;
+            p.life -= p.decay;
+            p.size *= 0.99;
+
+            if (p.life <= 0) {
+              this.particles[i] = {
+                x: Math.random() * 60 - 30,
+                y: 0,
+                vx: (Math.random() - 0.5) * 2,
+                vy: -Math.random() * 3 - 2,
+                size: Math.random() * 8 + 2,
+                life: 1,
+                decay: Math.random() * 0.02 + 0.01,
+                color: Math.random() > 0.7 ? '#ff4500' : Math.random() > 0.5 ? '#ff6b35' : '#ffa500'
+              };
+            }
+
+            const px = centerX + p.x;
+            const py = centerY + p.y;
+
+            this.ctx.beginPath();
+            this.ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            this.ctx.fillStyle = p.color;
+            this.ctx.globalAlpha = p.life * this.state.brightness;
+            this.ctx.fill();
+          });
+        };
+
+        const drawOcean = (time) => {
+          const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+          gradient.addColorStop(0, '#001a33');
+          gradient.addColorStop(0.5, '#003366');
+          gradient.addColorStop(1, '#001a33');
+          this.ctx.fillStyle = gradient;
+          this.ctx.globalAlpha = this.state.brightness;
+          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+          for (let wave = 0; wave < 5; wave++) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, this.canvas.height * 0.3 + wave * 30);
+            for (let x = 0; x <= this.canvas.width; x += 10) {
+              const y = this.canvas.height * 0.3 + wave * 30 + Math.sin(x * 0.01 + time * (2 + wave * 0.5)) * 15;
+              this.ctx.lineTo(x, y);
+            }
+            this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.3 + wave * 0.1})`;
+            this.ctx.lineWidth = 2;
+            this.ctx.globalAlpha = this.state.brightness;
+            this.ctx.stroke();
+          }
+
+          this.particles.forEach((p, i) => {
+            p.x += p.vx;
+            p.y += Math.sin(time * 2 + i) * 0.5;
+
+            if (p.x > 100) p.x = 0;
+
+            const px = (p.x / 100) * this.canvas.width;
+            const py = (p.y / 100) * this.canvas.height;
+
+            this.ctx.beginPath();
+            this.ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            this.ctx.fillStyle = '#87ceeb';
+            this.ctx.globalAlpha = (0.3 + Math.sin(time * 3 + i) * 0.2) * this.state.brightness;
+            this.ctx.fill();
+          });
+        };
+
+        const drawForest = (time) => {
+          const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+          gradient.addColorStop(0, '#0d1f1f');
+          gradient.addColorStop(0.5, '#1a3a3a');
+          gradient.addColorStop(1, '#0d1f1f');
+          this.ctx.fillStyle = gradient;
+          this.ctx.globalAlpha = this.state.brightness;
+          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+          for (let tree = 0; tree < 8; tree++) {
+            const treeX = (tree + 0.5) * (this.canvas.width / 8);
+            const treeHeight = 80 + Math.sin(tree) * 30;
+            const treeY = this.canvas.height - 50;
+
+            this.ctx.fillStyle = '#2d5a27';
+            this.ctx.beginPath();
+            this.ctx.moveTo(treeX, treeY);
+            this.ctx.lineTo(treeX - 20, treeY + 40);
+            this.ctx.lineTo(treeX + 20, treeY + 40);
+            this.ctx.closePath();
+            this.ctx.globalAlpha = this.state.brightness;
+            this.ctx.fill();
+
+            for (let level = 0; level < 3; level++) {
+              this.ctx.beginPath();
+              this.ctx.moveTo(treeX, treeY - level * 30);
+              this.ctx.lineTo(treeX - 30 + level * 5, treeY - level * 30 + 30);
+              this.ctx.lineTo(treeX + 30 - level * 5, treeY - level * 30 + 30);
+              this.ctx.closePath();
+              this.ctx.fillStyle = level === 0 ? '#228b22' : level === 1 ? '#32cd32' : '#3cb371';
+              this.ctx.globalAlpha = this.state.brightness;
+              this.ctx.fill();
+            }
+          }
+
+          this.particles.forEach((p, i) => {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= p.decay;
+
+            if (p.life <= 0) {
+              this.particles[i] = {
+                x: Math.random() * 100,
+                y: 100,
+                vx: (Math.random() - 0.5) * 0.5,
+                vy: -Math.random() * 0.5 - 0.2,
+                size: Math.random() * 4 + 1,
+                life: 1,
+                decay: Math.random() * 0.005 + 0.002,
+                color: '#32cd32'
+              };
+            }
+
+            const px = (p.x / 100) * this.canvas.width;
+            const py = (p.y / 100) * this.canvas.height;
+
+            this.ctx.beginPath();
+            this.ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            this.ctx.fillStyle = p.color;
+            this.ctx.globalAlpha = p.life * this.state.brightness * 0.5;
+            this.ctx.fill();
+          });
+        };
+
+        const drawDefault = (time) => {
+          const centerX = this.canvas.width / 2;
+          const centerY = this.canvas.height / 2;
+
+          const rings = [];
+          for (let i = 0; i < 4; i++) {
+            rings.push({
+              radius: 80 + i * 30,
+              color: i % 2 === 0 ? '#06b6d4' : '#6366f1',
+              phase: i * Math.PI / 2,
+              baseScale: 1
+            });
+          }
+
+          rings.forEach((ring, index) => {
+            const breathing = Math.sin(time * (1.5 - index * 0.2) + ring.phase) * 0.1;
+            const audioResponse = this.state.audioLevel * (0.2 + index * 0.05);
+            const scale = ring.baseScale + breathing + audioResponse;
+            const radius = ring.radius * scale;
+            const opacity = this.state.brightness * (0.3 + (1 - index * 0.15));
+
+            this.ctx.beginPath();
+            this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            this.ctx.strokeStyle = ring.color;
+            this.ctx.globalAlpha = opacity;
+            this.ctx.lineWidth = 3;
+            this.ctx.stroke();
+          });
+        };
+
+        const animate = () => {
+          if (!this.ctx || !this.canvas) return;
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          const time = Date.now() / 1000;
+
+          switch (this.state.sceneType) {
+            case SceneType.CAMPFIRE:
+              drawCampfire(time);
+              break;
+            case SceneType.OCEAN:
+              drawOcean(time);
+              break;
+            case SceneType.FOREST:
+              drawForest(time);
+              break;
+            default:
+              drawDefault(time);
+          }
+
+          this.ctx.globalAlpha = 1;
+          this.animationId = requestAnimationFrame(animate);
+        };
+
+        setTimeout(resize, 100);
+        window.addEventListener('resize', resize);
+
+        initCampfireParticles();
+        initOceanParticles();
+        initForestParticles();
+
+        animate();
+
+        return container;
+      }
+
+      renderBigScreen() {
+        const particleContainer = this.initParticleAnimation();
+        this.screenStatusEl = createElement('div', { className: 'glass-card p-4' });
+        
+        const config = this.getScreenStatusConfig();
+        this.screenStatusEl.innerHTML = `
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="font-display text-xl font-bold ${config.color}">${config.label}</div>
+              <div class="text-sm text-slate-300">${config.sublabel}</div>
+            </div>
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse-slow"></div>
+                <span class="text-xs text-slate-400">DLNA连接</span>
+              </div>
+              <div class="flex items-center gap-2">
+                ${Icon.Activity().outerHTML}
+                <span class="text-xs text-slate-400" id="brightness-value">100%</span>
+              </div>
+            </div>
+          </div>
+        `;
+
+        this.bigScreenEl = createElement('div', {
+          className: 'relative w-full h-full rounded-2xl overflow-hidden transition-all duration-1000',
+          style: { opacity: this.state.brightness }
+        });
+
+        const bgGradient = createElement('div', { className: 'absolute inset-0' });
+        bgGradient.style.background = `linear-gradient(180deg, rgba(15, 23, 42, ${this.state.brightness}) 0%, rgba(30, 27, 75, ${this.state.brightness * 0.8}) 50%, rgba(15, 23, 42, ${this.state.brightness}) 100%)`;
+        
+        this.bigScreenEl.appendChild(bgGradient);
+        this.bigScreenEl.appendChild(particleContainer);
+        
+        const overlay = createElement('div', { className: 'absolute bottom-0 left-0 right-0 p-6' });
+        overlay.appendChild(this.screenStatusEl);
+        this.bigScreenEl.appendChild(overlay);
+
+        return this.bigScreenEl;
+      }
+
+      renderHeader() {
+        return createElement('header', { className: 'flex items-center justify-between px-6 py-4' },
+          createElement('div', { className: 'flex items-center gap-3' },
+            createElement('div', { className: 'w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center' }, Icon.Moon()),
+            createElement('div', null,
+              createElement('h1', { className: 'font-display text-xl font-bold text-white' }, 'DreamWeaver'),
+              createElement('p', { className: 'text-xs text-slate-400' }, 'AI 3D空间睡眠全场景Agent')
+            )
+          ),
+          createElement('div', { className: 'flex items-center gap-2 text-xs text-slate-400' },
+            Icon.Clock(),
+            createElement('span', { id: 'current-time' }, '--:--:--')
+          )
+        );
+      }
+
+      updateUI() {
+        if (this.bigScreenEl) {
+          this.bigScreenEl.style.opacity = this.state.brightness;
+          
+          if (this.state.screenState === ScreenState.SLEEP) {
+            this.bigScreenEl.style.background = '#000';
+          } else {
+            let bgGradient;
+            if (this.state.isMorning) {
+              bgGradient = `linear-gradient(180deg, rgba(251, 191, 36, ${this.state.brightness * 0.3}) 0%, rgba(251, 146, 60, ${this.state.brightness * 0.2}) 50%, rgba(15, 23, 42, ${this.state.brightness}) 100%)`;
+            } else {
+              switch (this.state.sceneType) {
+                case SceneType.CAMPFIRE:
+                  bgGradient = `linear-gradient(180deg, rgba(20, 10, 5, ${this.state.brightness}) 0%, rgba(40, 20, 10, ${this.state.brightness * 0.9}) 50%, rgba(20, 10, 5, ${this.state.brightness}) 100%)`;
+                  break;
+                case SceneType.OCEAN:
+                  bgGradient = `linear-gradient(180deg, rgba(0, 26, 51, ${this.state.brightness}) 0%, rgba(0, 51, 102, ${this.state.brightness * 0.9}) 50%, rgba(0, 26, 51, ${this.state.brightness}) 100%)`;
+                  break;
+                case SceneType.FOREST:
+                  bgGradient = `linear-gradient(180deg, rgba(13, 31, 31, ${this.state.brightness}) 0%, rgba(26, 58, 58, ${this.state.brightness * 0.9}) 50%, rgba(13, 31, 31, ${this.state.brightness}) 100%)`;
+                  break;
+                default:
+                  bgGradient = `linear-gradient(180deg, rgba(15, 23, 42, ${this.state.brightness}) 0%, rgba(30, 27, 75, ${this.state.brightness * 0.8}) 50%, rgba(15, 23, 42, ${this.state.brightness}) 100%)`;
+              }
+            }
+            
+            const bgChild = this.bigScreenEl.querySelector('.absolute.inset-0');
+            if (bgChild) bgChild.style.background = bgGradient;
+          }
+
+          const brightnessEl = document.getElementById('brightness-value');
+          if (brightnessEl) brightnessEl.textContent = Math.round(this.state.brightness * 100) + '%';
+
+          if (this.state.isMorning && this.state.screenState === ScreenState.ACTIVE) {
+            let morningText = this.bigScreenEl.querySelector('.morning-text');
+            if (!morningText) {
+              morningText = createElement('div', { className: 'morning-text absolute top-1/4 left-1/2 -translate-x-1/2 text-center' },
+                createElement('div', { className: 'text-6xl font-display font-bold text-amber-300 animate-float opacity-80' }, 'GOOD MORNING'),
+                createElement('div', { className: 'text-lg text-amber-200/60 mt-2' }, '新的一天开始了')
+              );
+              this.bigScreenEl.appendChild(morningText);
+            }
+          } else {
+            const morningText = this.bigScreenEl.querySelector('.morning-text');
+            if (morningText) morningText.remove();
+          }
+        }
+
+        if (this.screenStatusEl) {
+          const config = this.getScreenStatusConfig();
+          this.screenStatusEl.innerHTML = `
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-display text-xl font-bold ${config.color}">${config.label}</div>
+                <div class="text-sm text-slate-300">${config.sublabel}</div>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                  <div class="w-3 h-3 rounded-full ${this.state.screenState === ScreenState.SLEEP ? 'bg-slate-600' : 'bg-emerald-500 animate-pulse-slow'}"></div>
+                  <span class="text-xs text-slate-400">DLNA连接</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  ${Icon.Activity().outerHTML}
+                  <span class="text-xs text-slate-400" id="brightness-value">${Math.round(this.state.brightness * 100)}%</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        if (this.sleepStatusEl) {
+          const config = this.getSleepStatusConfig();
+          this.sleepStatusEl.innerHTML = `
+            <div class="w-16 h-16 mx-auto rounded-full ${config.bg} flex items-center justify-center mb-3">
+              ${config.icon().outerHTML}
+            </div>
+            <div class="font-display text-lg font-bold ${config.color}">${config.label}</div>
+            <div class="text-xs text-slate-400 mt-1">${config.desc}</div>
+          `;
+        }
+
+        if (this.volumeDisplayEl) {
+          this.volumeDisplayEl.textContent = Math.round(this.state.volume * 100) + '%';
+        }
+
+        const audioIcon = document.getElementById('audio-status-icon');
+        if (audioIcon) {
+          audioIcon.innerHTML = this.state.isPlaying ? Icon.Volume2().outerHTML : Icon.VolumeX().outerHTML;
+        }
+      }
+
+      render() {
+        const app = document.getElementById('app');
+        if (!app) return;
+
+        app.innerHTML = '';
+        
+        const main = createElement('div', { className: 'h-screen flex flex-col bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900' },
+          this.renderHeader(),
+          createElement('div', { className: 'flex-1 flex gap-4 px-6 pb-4 overflow-hidden' },
+            createElement('div', { className: 'w-80 flex-shrink-0 overflow-y-auto py-4' },
+              this.renderMobileControl()
+            ),
+            createElement('div', { className: 'flex-1 flex flex-col gap-4 min-w-0' },
+              createElement('div', { className: 'flex-1 min-h-0' },
+                this.renderBigScreen()
+              ),
+              createElement('div', { className: 'h-40' },
+                this.renderLogPanel()
+              )
+            )
+          )
+        );
+
+        app.appendChild(main);
+        this.updateLogPanel();
+        
+        if (this.state.showSleepLog) {
+          app.appendChild(this.renderSleepLog());
+        }
+      }
+
+      init() {
+        const updateTime = () => {
+          const now = new Date();
+          const timeEl = document.getElementById('current-time');
+          if (timeEl) timeEl.textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
+        };
+        updateTime();
+        this.timeInterval = setInterval(updateTime, 1000);
+
+        this.audioInterval = setInterval(() => {
+          this.setState({
+            audioLevel: audioManager.getAudioLevel(),
+            isPlaying: audioManager.getStatus().isPlaying
+          });
+        }, 50);
+
+        this.render();
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const app = new App();
+      app.init();
+    });
+  </script>
+</body>
+</html>

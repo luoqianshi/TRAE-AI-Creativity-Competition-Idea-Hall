@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数字孪生 · 中国</title>
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#020210;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
+  #c{position:fixed;inset:0;z-index:1}
+
+  /* 标题 */
+  .title-bar{position:fixed;top:0;left:0;right:0;z-index:10;padding:24px 36px;display:flex;align-items:center;gap:16px;pointer-events:none}
+  .title{font-size:22px;font-weight:700;letter-spacing:4px;background:linear-gradient(135deg,#00d4ff,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  .title-sub{font-size:11px;color:rgba(255,255,255,0.25);letter-spacing:2px}
+
+  /* 连接点 */
+  .conn-dot{position:fixed;top:28px;right:36px;z-index:10;width:8px;height:8px;border-radius:50%;background:#ef4444;transition:background .5s;pointer-events:none}
+  .conn-dot.online{background:#10b981}
+
+  /* 底部状态栏 */
+  .status-bar{position:fixed;bottom:0;left:0;right:0;z-index:10;padding:16px 36px;display:flex;align-items:center;justify-content:center;gap:20px;pointer-events:none}
+  .st-item{display:flex;align-items:center;gap:8px;padding:6px 16px;border-radius:20px;font-size:12px;letter-spacing:1px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);color:rgba(255,255,255,0.4);transition:all .4s}
+  .st-item .dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.2)}
+  .st-item.active{border-color:rgba(0,212,255,0.4);color:#00d4ff}
+  .st-item.active .dot{background:#00d4ff;box-shadow:0 0 8px #00d4ff}
+  .st-item.fist{border-color:rgba(255,68,68,0.5);color:#ff4444}
+  .st-item.fist .dot{background:#ff4444;box-shadow:0 0 8px #ff4444}
+  .st-item.palm{border-color:rgba(255,215,0,0.5);color:#ffd700}
+  .st-item.palm .dot{background:#ffd700;box-shadow:0 0 8px #ffd700}
+
+  /* 省份数据面板 */
+  .province-panel{
+    position:fixed;top:50%;right:40px;z-index:20;transform:translateY(-50%);
+    pointer-events:none;opacity:0;transition:opacity .5s;
+  }
+  .province-panel.show{opacity:1}
+  .province-panel .card{
+    background:rgba(2,10,30,0.9);border:1px solid rgba(0,212,255,0.3);
+    border-radius:16px;padding:24px 28px;min-width:220px;
+    backdrop-filter:blur(20px);
+    box-shadow:0 0 40px rgba(0,212,255,0.1),inset 0 0 40px rgba(0,212,255,0.03);
+  }
+  .province-panel .name{font-size:20px;font-weight:700;color:#ffd700;letter-spacing:2px;margin-bottom:16px}
+  .province-panel .row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:rgba(255,255,255,0.6);border-bottom:1px solid rgba(255,255,255,0.05)}
+  .province-panel .row .val{color:#00d4ff;font-weight:600}
+
+  /* 提示 */
+  .hint{position:fixed;bottom:80px;left:50%;z-index:10;transform:translateX(-50%);font-size:13px;letter-spacing:2px;color:rgba(255,255,255,0.3);pointer-events:none;transition:opacity .5s}
+
+  .fps{font-size:11px;color:rgba(255,255,255,0.2);letter-spacing:1px}
+
+  /* 摄像头调试画面 */
+  .cam-debug {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 240px;
+    height: 180px;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    object-fit: cover;
+    pointer-events: none;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="title-bar"><div class="title">数字孪生 · 中国</div><div class="title-sub">DIGITAL TWIN · CHINA</div></div>
+<div class="conn-dot" id="connDot"></div>
+<div class="hint" id="hint">将手放入摄像头范围</div>
+
+<div class="status-bar">
+  <div class="st-item" id="stPoint"><span class="dot"></span>食指指向 · 浏览</div>
+  <div class="st-item" id="stFist"><span class="dot"></span>握拳 · 选中</div>
+  <div class="st-item" id="stPalm"><span class="dot"></span>张开手掌 · 复位</div>
+  <span class="fps" id="fpsDisplay"></span>
+</div>
+
+<div class="province-panel" id="panel">
+  <div class="card">
+    <div class="name" id="panelName">--</div>
+    <div class="row"><span>GDP</span><span class="val" id="panelGDP">--</span></div>
+    <div class="row"><span>人口</span><span class="val" id="panelPop">--</span></div>
+    <div class="row"><span>面积</span><span class="val" id="panelArea">--</span></div>
+  </div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.157.0/build/three.module.js"}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ============================================================
+// 省份数据
+// ============================================================
+const PROVINCE_DATA = {
+  '北京市':{gdp:4.16,pop:2189,area:1.64},
+  '天津市':{gdp:1.63,pop:1373,area:1.19},
+  '河北省':{gdp:4.24,pop:7420,area:18.88},
+  '山西省':{gdp:2.56,pop:3480,area:15.67},
+  '内蒙古自治区':{gdp:2.32,pop:2400,area:118.3},
+  '辽宁省':{gdp:2.90,pop:4229,area:14.8},
+  '吉林省':{gdp:1.31,pop:2375,area:18.74},
+  '黑龙江省':{gdp:1.59,pop:3099,area:47.3},
+  '上海市':{gdp:4.47,pop:2487,area:0.63},
+  '江苏省':{gdp:12.29,pop:8515,area:10.72},
+  '浙江省':{gdp:7.77,pop:6577,area:10.55},
+  '安徽省':{gdp:4.50,pop:6127,area:13.94},
+  '福建省':{gdp:5.31,pop:4188,area:12.4},
+  '江西省':{gdp:3.21,pop:4527,area:16.69},
+  '山东省':{gdp:8.74,pop:10170,area:15.79},
+  '河南省':{gdp:6.13,pop:9872,area:16.7},
+  '湖北省':{gdp:5.37,pop:5838,area:18.59},
+  '湖南省':{gdp:4.87,pop:6622,area:21.18},
+  '广东省':{gdp:12.91,pop:12684,area:17.97},
+  '广西壮族自治区':{gdp:2.63,pop:5047,area:23.76},
+  '海南省':{gdp:0.68,pop:1027,area:3.54},
+  '重庆市':{gdp:2.91,pop:3213,area:8.24},
+  '四川省':{gdp:5.67,pop:8372,area:48.6},
+  '贵州省':{gdp:2.02,pop:3856,area:17.6},
+  '云南省':{gdp:2.90,pop:4693,area:39.4},
+  '西藏自治区':{gdp:0.21,pop:366,area:122.8},
+  '陕西省':{gdp:3.28,pop:3956,area:20.56},
+  '甘肃省':{gdp:1.12,pop:2492,area:45.4},
+  '青海省':{gdp:0.36,pop:595,area:72.2},
+  '宁夏回族自治区':{gdp:0.51,pop:728,area:6.64},
+  '新疆维吾尔自治区':{gdp:1.77,pop:2598,area:166.49},
+  '台湾省':{gdp:5.13,pop:2342,area:3.6},
+  '香港特别行政区':{gdp:2.69,pop:734,area:0.11},
+  '澳门特别行政区':{gdp:0.24,pop:70,area:0.0033},
+};
+
+const MAX_GDP = 13;
+
+function getProvince(name) {
+  // 模糊匹配
+  for (const key of Object.keys(PROVINCE_DATA)) {
+    if (key.startsWith(name) || name.startsWith(key) || key.includes(name) || name.includes(key)) {
+      return PROVINCE_DATA[key];
+    }
+  }
+  return { gdp: 1, pop: 1000, area: 10 };
+}
+
+// ============================================================
+// Three.js 场景
+// ============================================================
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#020210');
+scene.fog = new THREE.Fog('#020210', 15, 40);
+
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth/window.innerHeight, 0.5, 60);
+camera.position.set(0, 13, 7.5);
+camera.lookAt(0, 0, 0);
+
+// 光照
+const ambientLight = new THREE.AmbientLight('#334466', 2);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight('#ffffff', 3);
+dirLight.position.set(10, 15, 5);
+scene.add(dirLight);
+const pointLight = new THREE.PointLight('#00d4ff', 30, 20);
+pointLight.position.set(0, 5, 0);
+scene.add(pointLight);
+
+// ============================================================
+// 坐标投影
+// ============================================================
+const LON_MIN = 73.5, LON_MAX = 135.1, LAT_MIN = 18.2, LAT_MAX = 53.6;
+const MAP_W = 22, MAP_H = MAP_W * (LAT_MAX - LAT_MIN) / (LON_MAX - LON_MIN);
+const CENTER_LON = (LON_MIN + LON_MAX) / 2;
+const CENTER_LAT = (LAT_MIN + LAT_MAX) / 2;
+
+function project(lon, lat) {
+  return {
+    x: (lon - CENTER_LON) / (LON_MAX - LON_MIN) * MAP_W,
+    z: -(lat - CENTER_LAT) / (LAT_MAX - LAT_MIN) * MAP_H,
+  };
+}
+
+// ============================================================
+// 网格地面
+// ============================================================
+const gridHelper = new THREE.PolarGridHelper(14, 64, 32, 128, '#1a3050', '#0a1a2a');
+gridHelper.position.y = -0.02;
+scene.add(gridHelper);
+
+// ============================================================
+// 光环
+// ============================================================
+const ringGeo = new THREE.TorusGeometry(11.5, 0.03, 16, 200);
+const ringMat = new THREE.MeshBasicMaterial({ color: '#00d4ff', transparent: true, opacity: 0.35 });
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.rotation.x = Math.PI / 2;
+ring.position.y = 0.5;
+scene.add(ring);
+
+const ring2 = new THREE.Mesh(new THREE.TorusGeometry(11.5, 0.015, 8, 260), ringMat.clone());
+ring2.rotation.x = Math.PI / 2;
+ring2.position.y = 0.45;
+ring2.material.opacity = 0.18;
+scene.add(ring2);
+
+// ============================================================
+// 背景粒子
+// ============================================================
+const bgParticleCount = 400;
+const bgGeo = new THREE.BufferGeometry();
+const bgPositions = new Float32Array(bgParticleCount * 3);
+for (let i = 0; i < bgParticleCount; i++) {
+  bgPositions[i*3] = (Math.random() - 0.5) * 28;
+  bgPositions[i*3+1] = Math.random() * 9;
+  bgPositions[i*3+2] = (Math.random() - 0.5) * 20;
+}
+bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPositions, 3));
+const bgMat = new THREE.PointsMaterial({ color: '#3366aa', size: 0.04, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+const bgParticles = new THREE.Points(bgGeo, bgMat);
+scene.add(bgParticles);
+
+// ============================================================
+// 省份组
+// ============================================================
+const provinceGroup = new THREE.Group();
+scene.add(provinceGroup);
+const provinceMeshes = []; // { mesh, name, data, baseY, targetY, outline, outlineMesh }
+
+// 选中高亮环
+const highlightRingGeo = new THREE.TorusGeometry(1, 0.04, 8, 48);
+const highlightRing = new THREE.Mesh(highlightRingGeo, new THREE.MeshBasicMaterial({ color: '#ffd700', transparent: true, opacity: 0 }));
+highlightRing.visible = false;
+scene.add(highlightRing);
+
+// ============================================================
+// 城市标记 + 数据流
+// ============================================================
+const CITIES = [
+  { name:'北京', lon:116.4, lat:39.9 },
+  { name:'上海', lon:121.5, lat:31.2 },
+  { name:'广州', lon:113.3, lat:23.1 },
+  { name:'深圳', lon:114.1, lat:22.5 },
+  { name:'成都', lon:104.1, lat:30.7 },
+  { name:'武汉', lon:114.3, lat:30.6 },
+  { name:'杭州', lon:120.2, lat:30.3 },
+  { name:'西安', lon:108.9, lat:34.3 },
+  { name:'重庆', lon:106.5, lat:29.5 },
+  { name:'南京', lon:118.8, lat:32.1 },
+];
+
+const ROUTES = [
+  ['北京','上海'],['北京','广州'],['北京','深圳'],['北京','西安'],
+  ['上海','深圳'],['上海','杭州'],['广州','深圳'],
+  ['成都','武汉'],['成都','重庆'],['武汉','南京'],
+];
+
+const cityMarkers = [];
+const cityMarkerGroup = new THREE.Group();
+scene.add(cityMarkerGroup);
+
+// 城市光点
+CITIES.forEach(c => {
+  const p = project(c.lon, c.lat);
+  const geo = new THREE.SphereGeometry(0.08, 16, 16);
+  const mat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+  const dot = new THREE.Mesh(geo, mat);
+  dot.position.set(p.x, 0.5, p.z);
+  dot.userData = { city: c, baseY: 0.5 };
+  cityMarkerGroup.add(dot);
+
+  // 光环
+  const ringG = new THREE.RingGeometry(0.12, 0.15, 32);
+  const ringM = new THREE.MeshBasicMaterial({ color: '#00d4ff', side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+  const r = new THREE.Mesh(ringG, ringM);
+  r.rotation.x = -Math.PI / 2;
+  r.position.copy(dot.position);
+  r.userData = { pulse: Math.random() * Math.PI * 2 };
+  cityMarkerGroup.add(r);
+  cityMarkers.push({ dot, ring: r, city: c });
+});
+
+// 数据流粒子
+const flowCount = 120;
+const flowGroup = new THREE.Group();
+scene.add(flowGroup);
+const flowGeo = new THREE.SphereGeometry(0.04, 8, 8);
+const flowMat = new THREE.MeshBasicMaterial({ color: '#00d4ff', transparent: true, opacity: 0.8 });
+const flowParticles = [];
+
+for (let i = 0; i < flowCount; i++) {
+  const mesh = new THREE.Mesh(flowGeo, flowMat);
+  const route = ROUTES[Math.floor(Math.random() * ROUTES.length)];
+  const start = CITIES.find(c => c.name === route[0]);
+  const end = CITIES.find(c => c.name === route[1]);
+  const sp = project(start.lon, start.lat);
+  const ep = project(end.lon, end.lat);
+  const midX = (sp.x + ep.x) / 2;
+  const midZ = (sp.z + ep.z) / 2;
+  const midY = 1.5 + Math.random() * 2.5;
+  mesh.userData = {
+    start: { x: sp.x, z: sp.z },
+    end: { x: ep.x, z: ep.z },
+    cp: { x: midX, z: midZ, y: midY },
+    t: Math.random(),
+    speed: 0.001 + Math.random() * 0.003,
+  };
+  mesh.visible = false;
+  flowGroup.add(mesh);
+  flowParticles.push(mesh);
+}
+
+// ============================================================
+// 加载 GeoJSON
+// ============================================================
+async function loadGeoJSON() {
+  try {
+    const resp = await fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json');
+    const geo = await resp.json();
+    buildProvinces(geo);
+    console.log(`[INFO] 加载了 ${geo.features.length} 个省级区域`);
+  } catch (e) {
+    console.error('[ERROR] 地图数据加载失败:', e);
+    document.getElementById('hint').textContent = '地图数据加载失败，请检查网络';
+  }
+}
+
+function buildProvinces(geo) {
+  const material = new THREE.MeshPhongMaterial({
+    color: '#1a3a5c',
+    emissive: '#030a14',
+    specular: '#112244',
+    shininess: 30,
+    flatShading: false,
+  });
+
+  const edgeMaterial = new THREE.LineBasicMaterial({ color: '#1a4a7a', transparent: true, opacity: 0.5 });
+
+  geo.features.forEach(feature => {
+    const name = feature.properties.name;
+    const data = getProvince(name);
+    const geom = feature.geometry;
+    const baseH = 0.08 + (data.gdp / MAX_GDP) * 0.6;
+
+    const shapes = geomToShapes(geom);
+    shapes.forEach(shape => {
+      // 挤出几何体
+      const extrudeSettings = { depth: 1, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2 };
+      const extGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+
+      // 旋转使面朝上（XZ 平面）
+      extGeo.rotateX(-Math.PI / 2);
+      extGeo.translate(0, 0, -0.5);
+
+      const mesh = new THREE.Mesh(extGeo, material.clone());
+      mesh.scale.y = baseH;
+      mesh.position.y = 0;
+      mesh.userData = { name, data, baseH };
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      provinceGroup.add(mesh);
+
+      // 边框
+      const edgeGeo = new THREE.EdgesGeometry(extGeo, 15);
+      const edgeLine = new THREE.LineSegments(edgeGeo, edgeMaterial.clone());
+      edgeLine.rotation.x = -Math.PI / 2;
+      edgeLine.position.y = 0;
+      edgeLine.scale.y = baseH;
+      mesh.add(edgeLine);
+
+      provinceMeshes.push({
+        mesh,
+        name,
+        data,
+        baseH,
+        targetH: baseH,
+        edgeLine,
+        edgeMaterial: edgeLine.material,
+        originalColor: mesh.material.color.getHex(),
+        originalEmissive: mesh.material.emissive.getHex(),
+      });
+    });
+  });
+}
+
+function geomToShapes(geom) {
+  const shapes = [];
+  if (geom.type === 'Polygon') {
+    const s = polygonToShape(geom.coordinates);
+    if (s) shapes.push(s);
+  } else if (geom.type === 'MultiPolygon') {
+    geom.coordinates.forEach(coords => {
+      const s = polygonToShape(coords);
+      if (s) shapes.push(s);
+    });
+  }
+  return shapes;
+}
+
+function polygonToShape(coords) {
+  if (!coords[0] || coords[0].length < 3) return null;
+  const outer = coords[0];
+  const points = outer.map(([lon, lat]) => {
+    const p = project(lon, lat);
+    return new THREE.Vector2(p.x, p.z);
+  });
+  if (points.length < 3) return null;
+  const shape = new THREE.Shape(points);
+
+  // 孔洞
+  for (let i = 1; i < coords.length; i++) {
+    if (coords[i].length >= 3) {
+      const holePoints = coords[i].map(([lon, lat]) => {
+        const p = project(lon, lat);
+        return new THREE.Vector2(p.x, p.z);
+      });
+      if (holePoints.length >= 3) {
+        shape.holes.push(new THREE.Path(holePoints));
+      }
+    }
+  }
+  return shape;
+}
+
+// ============================================================
+// WebSocket 手势
+// ============================================================
+let ws, reconnectTimer;
+let handDetected = false, gesture = 'none';
+let cursorX = 0.5, cursorY = 0.5;
+let targetX = 0.5, targetY = 0.5;
+
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try { ws = new WebSocket(`${protocol}//${location.host}/ws`); }
+  catch(e) { scheduleReconnect(); return; }
+  ws.onopen = () => document.getElementById('connDot').classList.add('online');
+  ws.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      handDetected = d.hand_detected;
+      gesture = d.gesture;
+      targetX = d.cursor_x;
+      targetY = d.cursor_y;
+      updateStatusUI();
+    } catch(_) {}
+  };
+  ws.onclose = () => { document.getElementById('connDot').classList.remove('online'); handDetected = false; gesture = 'none'; scheduleReconnect(); };
+  ws.onerror = () => ws.close();
+}
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000);
+}
+
+function updateStatusUI() {
+  const stPoint = document.getElementById('stPoint');
+  const stFist = document.getElementById('stFist');
+  const stPalm = document.getElementById('stPalm');
+  const hint = document.getElementById('hint');
+  [stPoint, stFist, stPalm].forEach(el => el.className = 'st-item');
+  if (!handDetected) { hint.style.opacity = '1'; hint.textContent = '将手放入摄像头范围'; return; }
+  hint.style.opacity = '0.3';
+  switch(gesture) {
+    case 'point': stPoint.classList.add('active'); hint.textContent = '食指指向 — 浏览各省数据'; break;
+    case 'fist': stFist.classList.add('fist'); hint.textContent = '握拳 — 选中省份查看详情'; break;
+    case 'open_palm': stPalm.classList.add('palm'); hint.textContent = '张开手掌 — 复位视图'; break;
+    default: hint.textContent = '手势识别中...';
+  }
+}
+
+// ============================================================
+// 射线检测
+// ============================================================
+const raycaster = new THREE.Raycaster();
+let hoveredProvince = null;
+let selectedProvince = null;
+let prevGesture = 'none';
+
+function updateRaycaster() {
+  if (!handDetected) {
+    if (hoveredProvince) { unhoverProvince(hoveredProvince); hoveredProvince = null; }
+    return;
+  }
+  const ndc = new THREE.Vector2(cursorX * 2 - 1, -(cursorY * 2 - 1));
+  raycaster.setFromCamera(ndc, camera);
+  const targets = provinceMeshes.map(p => p.mesh);
+  const intersects = raycaster.intersectObjects(targets, false);
+  let newHovered = null;
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    const found = provinceMeshes.find(p => p.mesh === obj);
+    if (found) newHovered = found;
+  }
+  if (hoveredProvince !== newHovered) {
+    if (hoveredProvince && hoveredProvince !== selectedProvince) unhoverProvince(hoveredProvince);
+    hoveredProvince = newHovered;
+    if (hoveredProvince && hoveredProvince !== selectedProvince) hoverProvince(hoveredProvince);
+  }
+}
+
+function hoverProvince(p) {
+  p.targetH = p.baseH * 1.5;
+  p.mesh.material.color.set('#00d4ff');
+  p.mesh.material.emissive.set('#003344');
+  p.edgeMaterial.color.set('#00d4ff');
+  p.edgeMaterial.opacity = 0.8;
+}
+
+function unhoverProvince(p) {
+  if (p === selectedProvince) return;
+  p.targetH = p.baseH;
+  p.mesh.material.color.setHex(p.originalColor);
+  p.mesh.material.emissive.setHex(p.originalEmissive);
+  p.edgeMaterial.color.set('#1a4a7a');
+  p.edgeMaterial.opacity = 0.5;
+}
+
+function selectProvince(p) {
+  if (selectedProvince && selectedProvince !== p) deselectProvince();
+  selectedProvince = p;
+  p.targetH = p.baseH * 2.5;
+  p.mesh.material.color.set('#ffd700');
+  p.mesh.material.emissive.set('#332200');
+  p.edgeMaterial.color.set('#ffd700');
+  p.edgeMaterial.opacity = 1;
+
+  // 高亮环
+  const box = new THREE.Box3().setFromObject(p.mesh);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  highlightRing.position.set(center.x, p.baseH * 2.5 + 0.1, center.z);
+  highlightRing.visible = true;
+  highlightRing.material.opacity = 0.8;
+
+  // 面板
+  showPanel(p);
+}
+
+function deselectProvince() {
+  if (!selectedProvince) return;
+  unhoverProvince(selectedProvince);
+  selectedProvince = null;
+  highlightRing.visible = false;
+  hidePanel();
+}
+
+function showPanel(p) {
+  const panel = document.getElementById('panel');
+  document.getElementById('panelName').textContent = p.name;
+  document.getElementById('panelGDP').textContent = p.data.gdp.toFixed(2) + ' 万亿';
+  document.getElementById('panelPop').textContent = (p.data.pop / 10000).toFixed(0) + ' 万';
+  document.getElementById('panelArea').textContent = p.data.area.toFixed(1) + ' 万km²';
+  panel.classList.add('show');
+}
+
+function hidePanel() {
+  document.getElementById('panel').classList.remove('show');
+}
+
+// ============================================================
+// 动画循环
+// ============================================================
+const clock = new THREE.Clock();
+let frameCount = 0, lastFpsTime = performance.now();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const t = performance.now() * 0.001;
+
+  // 平滑光标
+  cursorX += (targetX - cursorX) * 0.12;
+  cursorY += (targetY - cursorY) * 0.12;
+
+  // 射线检测
+  updateRaycaster();
+
+  // 手势动作
+  if (gesture === 'fist' && prevGesture !== 'fist' && hoveredProvince) {
+    selectProvince(hoveredProvince);
+  }
+  if (gesture === 'open_palm' && prevGesture !== 'open_palm') {
+    deselectProvince();
+  }
+  prevGesture = gesture;
+
+  // 省份高度动画
+  provinceMeshes.forEach(p => {
+    const current = p.mesh.scale.y;
+    const target = p.targetH;
+    const newY = current + (target - current) * 0.1;
+    p.mesh.scale.y = newY;
+    if (p.edgeLine) p.edgeLine.scale.y = newY;
+  });
+
+  // 高亮环脉冲
+  if (highlightRing.visible) {
+    const s = 1 + Math.sin(t * 3) * 0.08;
+    highlightRing.scale.setScalar(s);
+    highlightRing.rotation.z += dt * 0.8;
+  }
+
+  // 光环旋转
+  ring.rotation.z += dt * 0.15;
+  ring2.rotation.z -= dt * 0.1;
+
+  // 城市光点脉冲
+  cityMarkers.forEach(m => {
+    const pulse = 1 + Math.sin(t * 2 + m.ring.userData.pulse) * 0.2;
+    m.ring.scale.setScalar(pulse);
+    m.ring.material.opacity = 0.3 + Math.sin(t * 2 + m.ring.userData.pulse) * 0.2;
+    m.dot.position.y = m.dot.userData.baseY + Math.sin(t * 3 + m.ring.userData.pulse) * 0.06;
+    m.ring.position.y = m.dot.position.y;
+  });
+
+  // 数据流粒子
+  flowParticles.forEach(p => {
+    const ud = p.userData;
+    ud.t += ud.speed;
+    if (ud.t > 1) ud.t -= 1;
+    const mt = 1 - ud.t;
+    const x = mt*mt*ud.start.x + 2*mt*ud.t*ud.cp.x + ud.t*ud.t*ud.end.x;
+    const z = mt*mt*ud.start.z + 2*mt*ud.t*ud.cp.z + ud.t*ud.t*ud.end.z;
+    const y = 2*mt*ud.t*ud.cp.y;
+    p.position.set(x, y + 0.3, z);
+    p.visible = true;
+    p.material.opacity = 0.3 + Math.sin(ud.t * Math.PI) * 0.5;
+  });
+
+  // 背景粒子
+  bgParticles.rotation.y += dt * 0.03;
+
+  // 相机微动
+  const camAngle = t * 0.08;
+  camera.position.x = Math.sin(camAngle) * 7.5;
+  camera.position.z = Math.cos(camAngle) * 7.5;
+  camera.lookAt(0, 0.5, 0);
+
+  // 渲染
+  renderer.render(scene, camera);
+
+  // FPS
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    document.getElementById('fpsDisplay').textContent = `FPS: ${frameCount}`;
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ============================================================
+// 窗口 resize
+// ============================================================
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ============================================================
+// 启动
+// ============================================================
+connect();
+loadGeoJSON().then(() => animate());
+</script>
+<img class="cam-debug" src="/video_feed" alt="Camera Debug" />
+</body>
+</html>

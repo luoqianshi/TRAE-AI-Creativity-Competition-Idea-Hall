@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 模型配置</title>
+</head>
+<body>
+<div id="app">
+    <div class="page-wrapper">
+        <div class="toolbar">
+            <div class="left">
+                <el-button type="primary" size="small" icon="el-icon-plus" @click="openDialog(null)">新增模型配置</el-button>
+                <el-button size="small" icon="el-icon-refresh" @click="loadModels">刷新</el-button>
+            </div>
+            <div class="right">
+                <span style="font-size:12px; color:#909399;">提示：API Key 由代理服务本地保存，不会上传前端</span>
+            </div>
+        </div>
+
+        <div class="app-card">
+            <div class="card-header"><span class="title">已接入的大模型</span></div>
+            <div class="card-body no-pad">
+                <el-table :data="models" border size="mini">
+                    <el-table-column label="名称" prop="name" width="120"></el-table-column>
+                    <el-table-column label="模型标识" prop="key" width="100"></el-table-column>
+                    <el-table-column label="模型版本" prop="model" width="140"></el-table-column>
+                    <el-table-column label="API 地址" prop="api_url" show-overflow-tooltip></el-table-column>
+                    <el-table-column label="API Key" width="140" align="center">
+                        <template slot-scope="s">
+                            <el-tag :type="s.row.has_api_key ? 'success' : 'danger'" size="mini">
+                                {{ s.row.has_api_key ? '已配置' : '未配置' }}
+                            </el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="温度" prop="temperature" width="70" align="center"></el-table-column>
+                    <el-table-column label="超时(秒)" prop="timeout" width="80" align="center"></el-table-column>
+                    <el-table-column label="状态" width="80" align="center">
+                        <template slot-scope="s">
+                            <el-tag :type="s.row.enabled ? 'success' : 'info'" size="mini">{{ s.row.enabled ? '启用' : '停用' }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="240" align="center">
+                        <template slot-scope="s">
+                            <el-button size="mini" type="text" @click="testConn(s.row)">测试</el-button>
+                            <el-button size="mini" type="text" @click="setApiKey(s.row)">设置 Key</el-button>
+                            <el-button size="mini" type="text" @click="openDialog(s.row)">编辑</el-button>
+                            <el-button size="mini" type="text" style="color:#f56c6c" @click="deleteModel(s.$index)">删除</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+            </div>
+        </div>
+
+        <!-- 调用策略 -->
+        <div class="app-card">
+            <div class="card-header"><span class="title">调用策略配置</span></div>
+            <div class="card-body">
+                <el-form :inline="true" :model="strategy" size="small" label-width="100px" class="form-inline">
+                    <el-form-item label="主模型">
+                        <el-select v-model="strategy.primary_model" style="width:160px;">
+                            <el-option v-for="m in models" :key="m.key" :label="m.name" :value="m.key"></el-option>
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item label="备用模型">
+                        <el-select v-model="strategy.backup_model" style="width:160px;" clearable>
+                            <el-option v-for="m in models" :key="m.key" :label="m.name" :value="m.key"></el-option>
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item label="重试次数">
+                        <el-input-number v-model="strategy.retry_count" :min="0" :max="10" size="small"></el-input-number>
+                    </el-form-item>
+                    <el-form-item label="重试间隔(ms)">
+                        <el-input-number v-model="strategy.retry_interval" :min="0" :max="30000" :step="500" size="small"></el-input-number>
+                    </el-form-item>
+                    <el-form-item label="并发数">
+                        <el-input-number v-model="strategy.concurrency" :min="1" :max="20" size="small"></el-input-number>
+                    </el-form-item>
+                    <el-form-item label="速率限制/分钟">
+                        <el-input-number v-model="strategy.rate_limit" :min="1" :max="600" size="small"></el-input-number>
+                    </el-form-item>
+                    <el-form-item>
+                        <el-button type="primary" size="small" @click="saveStrategy">保存策略</el-button>
+                    </el-form-item>
+                </el-form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模型编辑弹窗 -->
+    <el-dialog :title="form.id ? '编辑模型配置' : '新增模型配置'" :visible.sync="dialog" width="640px" :close-on-click-modal="false">
+        <el-form :model="form" label-width="110px" size="small">
+            <el-form-item label="名称" required>
+                <el-input v-model="form.name"></el-input>
+            </el-form-item>
+            <el-form-item label="模型标识(key)" required>
+                <el-input v-model="form.key" :disabled="!!form.id" placeholder="如 deepseek"></el-input>
+            </el-form-item>
+            <el-form-item label="API 接口地址" required>
+                <el-input v-model="form.api_url"></el-input>
+            </el-form-item>
+            <el-form-item label="模型版本">
+                <el-input v-model="form.model" placeholder="如 deepseek-chat"></el-input>
+            </el-form-item>
+            <el-form-item label="API Key">
+                <el-input v-model="form.api_key" type="password" show-password placeholder="填写大模型 API Key"></el-input>
+            </el-form-item>
+            <el-form-item label="最大 Token">
+                <el-input-number v-model="form.max_tokens" :min="100" :max="32000" size="small"></el-input-number>
+            </el-form-item>
+            <el-form-item label="温度参数">
+                <el-slider v-model="form.temperature" :min="0" :max="1" :step="0.05" show-input style="max-width:400px;"></el-slider>
+            </el-form-item>
+            <el-form-item label="超时时间(秒)">
+                <el-input-number v-model="form.timeout" :min="5" :max="120" size="small"></el-input-number>
+            </el-form-item>
+            <el-form-item label="备注">
+                <el-input v-model="form.remark"></el-input>
+            </el-form-item>
+            <el-form-item label="状态">
+                <el-switch v-model="form.enabled" active-text="启用" inactive-text="停用"></el-switch>
+            </el-form-item>
+        </el-form>
+        <div slot="footer">
+            <el-button size="small" @click="dialog = false">取消</el-button>
+            <el-button size="small" type="primary" @click="saveModel">保存</el-button>
+        </div>
+    </el-dialog>
+
+    <!-- API Key 设置弹窗 -->
+    <el-dialog title="设置 API Key" :visible.sync="keyDialog" width="500px">
+        <p style="margin-top:0;color:#909399;font-size:12px;">为 <b>{{ keyForm.name }}</b> 设置 API Key，Key 将仅保存在代理服务本地</p>
+        <el-input v-model="keyForm.api_key" type="password" show-password placeholder="粘贴 API Key"></el-input>
+        <div slot="footer">
+            <el-button size="small" @click="keyDialog = false">取消</el-button>
+            <el-button size="small" type="primary" @click="saveApiKey">保存 Key</el-button>
+        </div>
+    </el-dialog>
+</div>
+
+<script src="../js/common.js"></script>
+<script src="../js/config.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/model.js"></script>
+</body>
+</html>

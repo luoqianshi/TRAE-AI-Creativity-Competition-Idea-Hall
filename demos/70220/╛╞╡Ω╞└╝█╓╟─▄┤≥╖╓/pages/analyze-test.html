@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>评价测试分析</title>
+</head>
+<body>
+<div id="app">
+    <div class="page-wrapper">
+        <el-tabs v-model="activeTab" type="card">
+            <!-- 单条测试 -->
+            <el-tab-pane label="单条评价分析" name="single">
+                <el-row :gutter="12">
+                    <!-- 左侧输入 -->
+                    <el-col :span="10">
+                        <div class="app-card">
+                            <div class="card-header"><span class="title">评价输入</span></div>
+                            <div class="card-body">
+                                <el-form :model="form" size="small" label-width="90px">
+                                    <el-form-item label="评价来源">
+                                        <el-select v-model="form.source" placeholder="可选" clearable style="width:100%;">
+                                            <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.key"></el-option>
+                                        </el-select>
+                                    </el-form-item>
+                                    <el-form-item label="订单号">
+                                        <el-input v-model="form.order_no" placeholder="可选"></el-input>
+                                    </el-form-item>
+                                    <el-form-item label="评价时间">
+                                        <el-date-picker v-model="form.review_time" type="datetime" placeholder="选择时间" style="width:100%;" value-format="yyyy-MM-dd HH:mm:ss"></el-date-picker>
+                                    </el-form-item>
+                                    <el-form-item label="评价内容" required>
+                                        <el-input type="textarea" v-model="form.content" :rows="8" :maxlength="2000" show-word-limit placeholder="请输入评价内容（最多2000字）"></el-input>
+                                    </el-form-item>
+                                    <el-form-item label="选择模型">
+                                        <el-select v-model="form.model_key" style="width:100%;">
+                                            <el-option v-for="m in models" :key="m.key" :label="m.name + (m.has_api_key ? '' : ' (未配置Key)')" :value="m.key" :disabled="!m.has_api_key || !m.enabled"></el-option>
+                                        </el-select>
+                                    </el-form-item>
+                                    <el-form-item label="Prompt 模板">
+                                        <el-select v-model="form.prompt_id" style="width:100%;">
+                                            <el-option v-for="p in prompts" :key="p.id" :label="p.name" :value="p.id"></el-option>
+                                        </el-select>
+                                    </el-form-item>
+                                    <el-form-item>
+                                        <el-button type="primary" icon="el-icon-s-promotion" :loading="analyzing" @click="analyze">开始分析</el-button>
+                                        <el-button icon="el-icon-delete" @click="clearForm">清空</el-button>
+                                        <el-button icon="el-icon-document" @click="fillExample">填入示例</el-button>
+                                    </el-form-item>
+                                </el-form>
+                            </div>
+                        </div>
+                    </el-col>
+
+                    <!-- 右侧结果 -->
+                    <el-col :span="14">
+                        <div class="app-card" v-if="result">
+                            <div class="card-header">
+                                <span class="title">分析结果</span>
+                                <div>
+                                    <el-button size="mini" type="success" @click="saveResult" v-if="result.parsed">保存到明细</el-button>
+                                    <el-button size="mini" type="text" @click="showRawDialog = true">查看 AI 原文</el-button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <!-- 整体情感 + 总分 -->
+                                <el-row :gutter="12" style="margin-bottom:12px;">
+                                    <el-col :span="8">
+                                        <div class="stat-card">
+                                            <div class="label">整体情感倾向</div>
+                                            <div class="value" :style="{ color: sentimentColor(result.parsed ? result.parsed.overall_sentiment : 'neutral') }">
+                                                {{ sentimentLabel(result.parsed ? result.parsed.overall_sentiment : 'neutral') }}
+                                            </div>
+                                        </div>
+                                    </el-col>
+                                    <el-col :span="8">
+                                        <div class="stat-card green">
+                                            <div class="label">总分</div>
+                                            <div class="value" :style="{ color: totalScore > 0 ? '#67c23a' : (totalScore < 0 ? '#f56c6c' : '#909399') }">
+                                                {{ totalScore > 0 ? '+' : '' }}{{ totalScore }}
+                                            </div>
+                                        </div>
+                                    </el-col>
+                                    <el-col :span="8">
+                                        <div class="stat-card orange">
+                                            <div class="label">使用模型 / 耗时</div>
+                                            <div class="value" style="font-size:16px;">{{ result.model }}</div>
+                                            <div class="sub">{{ (result.elapsed_ms / 1000).toFixed(2) }} 秒</div>
+                                        </div>
+                                    </el-col>
+                                </el-row>
+
+                                <!-- 摘要 -->
+                                <div class="detail-section" v-if="result.parsed && result.parsed.summary">
+                                    <div class="section-title">评价摘要</div>
+                                    <div class="review-content-box">{{ result.parsed.summary }}</div>
+                                </div>
+
+                                <!-- 维度详情 -->
+                                <div class="detail-section">
+                                    <div class="section-title">维度评分详情</div>
+                                    <el-table :data="result.parsed ? (result.parsed.identified_dimensions || []) : []" border size="mini">
+                                        <el-table-column label="维度" prop="dimension_name" width="80"></el-table-column>
+                                        <el-table-column label="判定等级" width="90" align="center">
+                                            <template slot-scope="s">
+                                                <span class="sentiment-tag" :class="'sentiment-' + s.row.rating">{{ sentimentLabel(s.row.rating) }}</span>
+                                            </template>
+                                        </el-table-column>
+                                        <el-table-column label="得分" width="70" align="center">
+                                            <template slot-scope="s">
+                                                <span class="score-badge" :class="s.row.score>0?'positive':(s.row.score<0?'negative':'zero')">{{ s.row.score > 0 ? '+'+s.row.score : s.row.score }}</span>
+                                            </template>
+                                        </el-table-column>
+                                        <el-table-column label="判定理由" prop="reason" show-overflow-tooltip></el-table-column>
+                                        <el-table-column label="原文依据" prop="evidence_text" show-overflow-tooltip></el-table-column>
+                                        <el-table-column label="操作" width="80" align="center">
+                                            <template slot-scope="s">
+                                                <el-button size="mini" type="text" @click="editDimScore(s.$index)">修正</el-button>
+                                            </template>
+                                        </el-table-column>
+                                    </el-table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 错误信息 -->
+                        <div class="app-card" v-if="result && !result.success && result.message">
+                            <div class="card-body">
+                                <el-alert :title="result.message" type="error" :closable="false" show-icon></el-alert>
+                            </div>
+                        </div>
+
+                        <!-- 空状态 -->
+                        <div class="app-card" v-if="!result">
+                            <div class="card-body">
+                                <div class="empty-tip">
+                                    <i class="el-icon-edit-outline" style="font-size:48px; display:block; margin-bottom:10px;"></i>
+                                    请在左侧输入评价内容并点击「开始分析」
+                                </div>
+                            </div>
+                        </div>
+                    </el-col>
+                </el-row>
+            </el-tab-pane>
+
+            <!-- 批量导入 -->
+            <el-tab-pane label="批量导入分析" name="batch">
+                <div class="toolbar">
+                    <div class="left">
+                        <el-upload :show-file-list="false" :before-upload="importBatchFile" accept=".csv,.json">
+                            <el-button type="primary" size="small" icon="el-icon-upload2">选择 CSV/JSON 文件</el-button>
+                        </el-upload>
+                        <el-button size="small" icon="el-icon-download" @click="downloadTemplate">下载导入模板</el-button>
+                    </div>
+                    <div class="right">
+                        <el-select v-model="batchModelKey" placeholder="选择模型" size="small" style="width:200px;">
+                            <el-option v-for="m in models" :key="m.key" :label="m.name" :value="m.key" :disabled="!m.has_api_key || !m.enabled"></el-option>
+                        </el-select>
+                        <el-select v-model="batchPromptId" placeholder="选择 Prompt" size="small" style="width:200px;">
+                            <el-option v-for="p in prompts" :key="p.id" :label="p.name" :value="p.id"></el-option>
+                        </el-select>
+                        <el-button type="success" size="small" icon="el-icon-s-promotion" :loading="batchRunning" :disabled="batchRunning || batchList.length===0" @click="runBatch">开始批量分析</el-button>
+                        <el-button size="small" @click="stopBatch" :disabled="!batchRunning">停止</el-button>
+                    </div>
+                </div>
+
+                <div class="app-card" style="margin-bottom:12px;">
+                    <div class="card-body">
+                        <el-row :gutter="12">
+                            <el-col :span="6">
+                                <div class="stat-card"><div class="label">总记录数</div><div class="value">{{ batchList.length }}</div></div>
+                            </el-col>
+                            <el-col :span="6">
+                                <div class="stat-card green"><div class="label">已完成</div><div class="value">{{ batchStats.done }}</div></div>
+                            </el-col>
+                            <el-col :span="6">
+                                <div class="stat-card red"><div class="label">失败</div><div class="value">{{ batchStats.fail }}</div></div>
+                            </el-col>
+                            <el-col :span="6">
+                                <div class="stat-card orange"><div class="label">进度</div><div class="value">{{ batchProgress }}%</div></div>
+                            </el-col>
+                        </el-row>
+                        <el-progress :percentage="batchProgress" :status="batchProgress === 100 ? 'success' : ''" style="margin-top:12px;"></el-progress>
+                    </div>
+                </div>
+
+                <div class="app-card">
+                    <div class="card-header">
+                        <span class="title">待分析评价列表</span>
+                        <div>
+                            <el-button size="mini" type="text" @click="retryFailed" :disabled="batchRunning">重试失败项</el-button>
+                            <el-button size="mini" type="text" @click="exportBatch" :disabled="batchList.length===0">导出结果</el-button>
+                            <el-button size="mini" type="text" style="color:#f56c6c" @click="batchList = []" :disabled="batchRunning">清空</el-button>
+                        </div>
+                    </div>
+                    <div class="card-body no-pad">
+                        <el-table :data="batchList" border size="mini" max-height="500">
+                            <el-table-column label="序号" type="index" width="50" align="center"></el-table-column>
+                            <el-table-column label="评价内容" show-overflow-tooltip>
+                                <template slot-scope="s">
+                                    <span>{{ Utils.truncate(s.row.content, 80) }}</span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="来源" prop="source" width="80"></el-table-column>
+                            <el-table-column label="订单号" prop="order_no" width="140"></el-table-column>
+                            <el-table-column label="状态" width="100" align="center">
+                                <template slot-scope="s">
+                                    <el-tag v-if="s.row.status === 'done'" type="success" size="mini">已完成</el-tag>
+                                    <el-tag v-else-if="s.row.status === 'fail'" type="danger" size="mini">失败</el-tag>
+                                    <el-tag v-else-if="s.row.status === 'running'" size="mini">分析中</el-tag>
+                                    <el-tag v-else type="info" size="mini">待分析</el-tag>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="总分" width="70" align="center">
+                                <template slot-scope="s">
+                                    <span v-if="s.row.result && s.row.result.parsed" class="score-badge" :class="calcTotal(s.row.result.parsed)>0?'positive':(calcTotal(s.row.result.parsed)<0?'negative':'zero')">
+                                        {{ calcTotal(s.row.result.parsed) }}
+                                    </span>
+                                    <span v-else>-</span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="失败原因" prop="error" show-overflow-tooltip></el-table-column>
+                        </el-table>
+                    </div>
+                </div>
+            </el-tab-pane>
+        </el-tabs>
+
+        <!-- 维度修正弹窗 -->
+        <el-dialog title="修正维度评分" :visible.sync="editDimDialog" width="500px">
+            <el-form :model="editDimForm" label-width="100px" size="small">
+                <el-form-item label="维度">
+                    <el-input v-model="editDimForm.dimension_name" disabled></el-input>
+                </el-form-item>
+                <el-form-item label="判定等级">
+                    <el-select v-model="editDimForm.rating" style="width:100%;">
+                        <el-option v-for="r in ratings" :key="r.key" :label="r.name + '(' + (r.score>=0?'+':'') + r.score + ')'" :value="r.key"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="得分">
+                    <el-input-number v-model="editDimForm.score" :min="-100" :max="100" size="small"></el-input-number>
+                </el-form-item>
+                <el-form-item label="判定理由">
+                    <el-input type="textarea" v-model="editDimForm.reason" :rows="2"></el-input>
+                </el-form-item>
+            </el-form>
+            <div slot="footer">
+                <el-button size="small" @click="editDimDialog = false">取消</el-button>
+                <el-button size="small" type="primary" @click="saveDimEdit">保存</el-button>
+            </div>
+        </el-dialog>
+
+        <!-- AI 原文弹窗 -->
+        <el-dialog title="AI 原始返回内容" :visible.sync="showRawDialog" width="700px">
+            <div class="json-viewer">{{ result ? result.raw : '' }}</div>
+            <div slot="footer">
+                <el-button size="small" @click="showRawDialog = false">关闭</el-button>
+            </div>
+        </el-dialog>
+    </div>
+</div>
+
+<script src="../js/common.js"></script>
+<script src="../js/config.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/analyze.js"></script>
+</body>
+</html>

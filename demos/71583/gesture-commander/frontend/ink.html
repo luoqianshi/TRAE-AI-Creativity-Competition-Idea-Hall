@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>流体水墨</title>
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#fefcf4}
+  canvas{position:fixed;inset:0;z-index:1}
+
+  /* 标题 */
+  .title-bar{position:fixed;top:0;left:0;right:0;z-index:10;padding:20px 32px;display:flex;align-items:center;justify-content:space-between;pointer-events:none}
+  .title{font-size:24px;letter-spacing:8px;font-weight:700;color:#222222;font-family:"Microsoft YaHei",SimHei}
+  .hint{font-size:13px;letter-spacing:2px;color:rgba(80,60,40,0.45);pointer-events:none}
+
+  /* 连接点 */
+  .conn-dot{position:fixed;top:26px;right:32px;z-index:10;width:8px;height:8px;border-radius:50%;background:#ef4444;transition:background .5s;pointer-events:none}
+  .conn-dot.online{background:#10b981}
+
+  /* 底部状态栏 */
+  .status-bar{position:fixed;bottom:0;left:0;right:0;z-index:10;padding:14px 32px;display:flex;align-items:center;justify-content:center;gap:16px;pointer-events:none}
+  .st-item{display:flex;align-items:center;gap:8px;padding:5px 14px;border-radius:16px;font-size:12px;letter-spacing:1px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);color:rgba(60,40,20,0.5);transition:all .4s}
+  .st-item .dot{width:7px;height:7px;border-radius:50%;background:rgba(60,40,20,0.2)}
+  .st-item.active{border-color:rgba(80,60,40,0.6);color:#2a231a;border-width:2px}
+  .st-item.active .dot{background:#2a231a}
+  .st-item.fist{border-color:rgba(120,70,20,0.7);color:#784614}
+  .st-item.fist .dot{background:#784614}
+  .st-item.palm{border-color:rgba(120,120,120,0.5);color:#7a7a7a}
+  .st-item.palm .dot{background:#7a7a7a}
+
+  /* 底部FPS */
+  .fps{position:fixed;bottom:16px;right:32px;z-index:10;font-size:11px;color:rgba(60,40,20,0.4);letter-spacing:1px;pointer-events:none}
+
+  /* 右下角印章 */
+  .seal{position:fixed;bottom:24px;left:32px;z-index:10;width:80px;height:80px;border:2px solid #b33939;transform:rotate(12deg);border-radius:4px;pointer-events:none;opacity:0.6}
+  .seal::after{
+    content:"";
+    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    width:50px;height:50px;border:2px solid #b33939;border-radius:50%;
+  }
+  .seal-text{
+    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-12deg);
+    font-family:"KaiTi","STKaiti",serif;
+    font-size:14px;font-weight:bold;color:#b33939;letter-spacing:3px;
+  }
+
+  /* 摄像头调试画面 */
+  .cam-debug {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 240px;
+    height: 180px;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    object-fit: cover;
+    pointer-events: none;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="title-bar">
+  <div class="title">流 体 水 墨</div>
+  <div class="hint">FLUID INK</div>
+</div>
+
+<div class="conn-dot" id="connDot"></div>
+
+<div class="status-bar">
+  <div class="st-item" id="stPoint"><span class="dot"></span>食指指向 · 勾线</div>
+  <div class="st-item" id="stFist"><span class="dot"></span>握拳 · 泼墨</div>
+  <div class="st-item" id="stPalm"><span class="dot"></span>张开手掌 · 清屏</div>
+</div>
+
+<div class="fps" id="fpsDisplay"></div>
+
+<div class="seal"><div class="seal-text">指墨</div></div>
+
+<script>
+// ============================================================
+// 流体水墨 - 基于扩散算法的水墨模拟
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, stride;
+
+// 缓冲区：双缓冲做扩散
+let bufferA, bufferB; // [y*stride + x] = 0~1 灰度值，0=白纸，1=墨
+let velocityX, velocityY;
+
+// 参数
+const DIFFUSE_AMOUNT = 0.18;    // 扩散率
+const DAMPING = 0.998;          // 墨色衰减（0.99→0.998，消失慢 5 倍）
+const FLOW_FRICTION = 0.95;
+const INK_ALPHA = 0.18;        // 基础墨迹浓度（0.12→0.18）
+const GRAIN_AMOUNT = 0.04;
+const PAPER_COLOR = [254, 252, 244];
+
+// 画布尺寸
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  stride = W;
+  // 初始化缓冲区
+  bufferA = new Float32Array(W * H);
+  bufferB = new Float32Array(W * H);
+  velocityX = new Float32Array(W * H);
+  velocityY = new Float32Array(W * H);
+  // 清屏到白纸
+  for (let i = 0; i < W * H; i++) bufferA[i] = 0;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// 扩散算法（Jacobian迭代）
+// ============================================================
+function diffuse() {
+  for (let y = 1; y < H-1; y++) {
+    for (let x = 1; x < W-1; x++) {
+      const idx = y * stride + x;
+      const center = bufferA[idx];
+      const left = bufferA[idx - 1];
+      const right = bufferA[idx + 1];
+      const up = bufferA[idx - stride];
+      const down = bufferA[idx + stride];
+      // laplacian: (sum neighbors) - 4*center
+      const lap = left + right + up + down - 4 * center;
+      const newVal = center + DIFFUSE_AMOUNT * lap;
+      // 衰减
+      bufferB[idx] = newVal * DAMPING;
+
+      // 更新速度（流体流动方向：墨从浓到淡）
+      velocityX[idx] = (right - left) * 0.5;
+      velocityY[idx] = (down - up) * 0.5;
+      velocityX[idx] *= FLOW_FRICTION;
+      velocityY[idx] *= FLOW_FRICTION;
+    }
+  }
+  // 交换缓冲区
+  [bufferA, bufferB] = [bufferB, bufferA];
+}
+
+// ============================================================
+// advection 平流输运：墨顺着速度流动
+// ============================================================
+function advect() {
+  // 简单实现：不做完整 advection，靠扩散已经很有味道
+}
+
+// ============================================================
+// 添加墨迹
+// ============================================================
+function addInk(cx, cy, radius, pressure = 1) {
+  // cx, cy 归一化 [0,1]
+  // 高斯扩散
+  const x0 = Math.max(0, Math.floor(cx * W - radius - 2));
+  const x1 = Math.min(W-1, Math.ceil(cx * W + radius + 2));
+  const y0 = Math.max(0, Math.floor(cy * H - radius - 2));
+  const y1 = Math.min(H-1, Math.ceil(cy * H + radius + 2));
+  const r2 = radius * radius;
+
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - cx * W;
+      const dy = y - cy * H;
+      const d2 = dx*dx + dy*dy;
+      if (d2 > r2 * 4) continue;
+      const idx = y * stride + x;
+      const w = Math.exp(-d2 / (r2)) * pressure * INK_ALPHA;
+      bufferA[idx] += w;
+      if (bufferA[idx] > 1) bufferA[idx] = 1;
+      velocityX[idx] += (dx / r2) * pressure * 0.001;
+      velocityY[idx] += (dy / r2) * pressure * 0.001;
+    }
+  }
+}
+
+// 线段（连续勾线）
+function addStroke(x1, y1, x2, y2, baseRadius) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  if (dist < 0.0001) {
+    addInk(x1, y1, baseRadius * W / W, 0.5);
+    return;
+  }
+  const steps = Math.ceil(dist * W / (baseRadius * 0.5));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = x1 + dx * t;
+    const y = y1 + dy * t;
+    // 抖动半径
+    const jitter = 0.8 + Math.random() * 0.4;
+    addInk(x, y, (baseRadius * W / W) * jitter, 0.3);
+  }
+}
+
+// ============================================================
+// 渲染到画布
+// ============================================================
+function render() {
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  for (let i = 0; i < bufferA.length; i++) {
+    const ink = bufferA[i];
+    const grain = (Math.random() * 2 - 1) * GRAIN_AMOUNT;
+    const v = ink * (1 - grain * GRAIN_AMOUNT);
+    // 宣纸混合：(1 - ink) * paper + ink * paper * (1 - ink)
+    const gray = Math.round(
+      PAPER_COLOR[0] * (1 - v) + (PAPER_COLOR[0] * (1 - v*0.9))
+    );
+    const idx = i * 4;
+    d[idx + 0] = gray;
+    d[idx + 1] = Math.round(gray * (PAPER_COLOR[1]/PAPER_COLOR[0]) - 3*v);
+    d[idx + 2] = Math.round(gray * (PAPER_COLOR[2]/PAPER_COLOR[0]) - 5*v);
+    d[idx + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // 画纸纹理叠加（斜向纹理）
+  ctx.save();
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.fillStyle = 'rgba(0,0,0,0.015)';
+  for (let i = -W; i < W+H; i += 8) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + H, H);
+    ctx.strokeStyle = 'rgba(0,0,0,0.025)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // 光标光晕
+  if (handDetected && gesture === 'point') {
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    const x = cursorX * W, y = cursorY * H;
+    const r = 40;
+    const grd = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, 'rgba(120,80,40,0.15)');
+    grd.addColorStop(1, 'rgba(120,80,40,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// WebSocket 手势
+// ============================================================
+let ws, reconnectTimer;
+let handDetected = false, gesture = 'none';
+let cursorX = 0.5, cursorY = 0.5;
+let targetX = 0.5, targetY = 0.5;
+let lastX = null, lastY = null; // 上一帧位置，用于画线段
+let prevGesture = 'none';
+
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try { ws = new WebSocket(`${protocol}//${location.host}/ws`); }
+  catch(e) { scheduleReconnect(); return; }
+  ws.onopen = () => document.getElementById('connDot').classList.add('online');
+  ws.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      handDetected = d.hand_detected;
+      gesture = d.gesture;
+      targetX = d.cursor_x;
+      targetY = d.cursor_y;
+      updateStatusUI();
+    } catch(_) {}
+  };
+  ws.onclose = () => { document.getElementById('connDot').classList.remove('online'); handDetected = false; gesture = 'none'; scheduleReconnect(); };
+  ws.onerror = () => ws.close();
+}
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000);
+}
+
+function updateStatusUI() {
+  const stPoint = document.getElementById('stPoint');
+  const stFist = document.getElementById('stFist');
+  const stPalm = document.getElementById('stPalm');
+  [stPoint, stFist, stPalm].forEach(el => el.className = 'st-item');
+  if (!handDetected) return;
+  switch(gesture) {
+    case 'point': stPoint.classList.add('active'); break;
+    case 'fist': stFist.classList.add('fist'); break;
+    case 'open_palm': stPalm.classList.add('palm'); break;
+  }
+}
+
+// ============================================================
+// 手势交互逻辑
+// ============================================================
+let fistStartTime = null;
+let fistBurstDone = false;  // 首次泼墨是否已触发
+
+function updateGesture() {
+  const now = performance.now();
+
+  if (!handDetected) {
+    lastX = null; lastY = null;
+    fistStartTime = null;
+    fistBurstDone = false;
+    return;
+  }
+
+  if (gesture === 'point') {
+    // 勾线模式：持续画线
+    if (lastX !== null && lastY !== null) {
+      addStroke(lastX, lastY, cursorX, cursorY, 8);
+    }
+    lastX = cursorX; lastY = cursorY;
+    fistStartTime = null;
+    fistBurstDone = false;
+  } else if (gesture === 'fist') {
+    // 泼墨模式：首次立即泼墨，持续握拳墨团逐渐扩大
+    if (fistStartTime === null) fistStartTime = now;
+
+    if (!fistBurstDone) {
+      // 首次泼墨：大墨团 + 溅射
+      addInk(cursorX, cursorY, 0.06, 8);  // 大半径 + 高浓度
+      // 溅射墨滴
+      for (let i = 0; i < 25; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 0.02 + Math.random() * 0.08;
+        const sx = cursorX + Math.cos(angle) * dist;
+        const sy = cursorY + Math.sin(angle) * dist;
+        addInk(sx, sy, 0.015 + Math.random() * 0.02, 3 + Math.random() * 4);
+      }
+      fistBurstDone = true;
+    }
+
+    // 持续握拳：墨团逐渐扩大加深
+    const duration = now - fistStartTime;
+    const rad = 0.04 + Math.min(0.10, duration / 8000);
+    addInk(cursorX, cursorY, rad, 2);
+    lastX = null; lastY = null;
+  } else if (gesture === 'open_palm') {
+    // 清屏：渐变淡出
+    if (prevGesture !== 'open_palm') {
+      for (let i = 0; i < bufferA.length; i++) {
+        bufferA[i] *= 0.3;
+      }
+      lastX = null; lastY = null;
+    }
+    fistStartTime = null;
+    fistBurstDone = false;
+  } else {
+    lastX = null; lastY = null;
+    fistStartTime = null;
+    fistBurstDone = false;
+  }
+
+  prevGesture = gesture;
+}
+
+// ============================================================
+// FPS
+// ============================================================
+let frameCount = 0, lastFpsTime = performance.now();
+function updateFPS() {
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    document.getElementById('fpsDisplay').textContent = `FPS: ${frameCount}`;
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ============================================================
+// 主循环
+// ============================================================
+function animate() {
+  requestAnimationFrame(animate);
+
+  // 光标平滑插值
+  cursorX += (targetX - cursorX) * 0.12;
+  cursorY += (targetY - cursorY) * 0.12;
+
+  // 流体计算
+  diffuse();
+  advect();
+  // 手势添加墨迹
+  updateGesture();
+  // 渲染
+  render();
+  // FPS
+  updateFPS();
+}
+
+// ============================================================
+// 启动
+// ============================================================
+connect();
+animate();
+</script>
+<img class="cam-debug" src="/video_feed" alt="Camera Debug" />
+</body>
+</html>

@@ -1,0 +1,196 @@
+# Intelligence Map Layer Definitions
+# Defines the layer hierarchy for the geo-spatial intelligence dashboard.
+#
+# Reference: WorldMonitor map-layer-definitions.ts (56 map layer types)
+# Each layer maps to a data source (Neo4j, Elasticsearch, PostGIS) and a
+# pydeck/kepler.gl visualization configuration.
+
+layers:
+
+  # ── Entity Layers ────────────────────────────────────────────────────────
+  - id: entities_all
+    name: "All Entities"
+    description: "All geo-tagged entities from the knowledge graph"
+    category: entities
+    icon: "marker"
+    data_source: neo4j
+    cypher_query: |
+      MATCH (e:Entity)
+      WHERE e.latitude IS NOT NULL AND e.longitude IS NOT NULL
+      RETURN e.entity_id as id, e.name as name, e.type as type,
+             e.latitude as lat, e.longitude as lon,
+             e.criticality_score as score, e.tier as tier
+    pydeck_layer:
+      type: ScatterplotLayer
+      get_radius: 200000
+      get_fill_color: [0, 100, 255, 160]
+      pickable: true
+
+  - id: entities_high_value
+    name: "High-Value Entities (Tier 1-2)"
+    description: "Entities with criticality_score >= 60 (Tier 1 or 2)"
+    category: entities
+    icon: "star"
+    data_source: neo4j
+    cypher_query: |
+      MATCH (e:Entity)
+      WHERE e.latitude IS NOT NULL AND e.longitude IS NOT NULL
+        AND e.tier IS NOT NULL AND e.tier <= 2
+      RETURN e.entity_id as id, e.name as name, e.type as type,
+             e.latitude as lat, e.longitude as lon,
+             e.criticality_score as score, e.tier as tier
+    pydeck_layer:
+      type: ScatterplotLayer
+      get_radius: 400000
+      get_fill_color: [255, 50, 50, 200]
+      pickable: true
+
+  - id: entities_by_type
+    name: "Entities by Type"
+    description: "Color-coded by entity type (ORG/PERSON/LOCATION/GPE)"
+    category: entities
+    icon: "layers"
+    data_source: neo4j
+    cypher_query: |
+      MATCH (e:Entity)
+      WHERE e.latitude IS NOT NULL AND e.longitude IS NOT NULL
+      RETURN e.entity_id as id, e.name as name, e.type as type,
+             e.latitude as lat, e.longitude as lon
+    pydeck_layer:
+      type: ScatterplotLayer
+      get_radius: 250000
+      pickable: true
+
+  # ── Event Layers ─────────────────────────────────────────────────────────
+  - id: events_active
+    name: "Active Events (Last 7 Days)"
+    description: "Recently detected events with geographic context"
+    category: events
+    icon: "warning"
+    data_source: neo4j
+    cypher_query: |
+      MATCH (ev:Event)
+      WHERE ev.start_time IS NOT NULL
+        AND ev.start_time > (timestamp() - 7 * 24 * 60 * 60 * 1000)
+      OPTIONAL MATCH (ev)-[:MENTIONS]->(e:Entity)
+      WHERE e.latitude IS NOT NULL
+      RETURN ev.id as event_id, ev.summary as summary,
+             ev.severity as severity, e.latitude as lat,
+             e.longitude as lon, ev.start_time as time
+    pydeck_layer:
+      type: HeatmapLayer
+      get_weight: 1.0
+      radius_pixels: 60
+      intensity: 1.0
+      threshold: 0.05
+
+  - id: events_high_severity
+    name: "Critical Events"
+    description: "Critical-severity events"
+    category: events
+    icon: "error"
+    data_source: neo4j
+    cypher_query: |
+      MATCH (ev:Event {severity: 'critical'})
+      OPTIONAL MATCH (ev)-[:MENTIONS]->(e:Entity)
+      WHERE e.latitude IS NOT NULL
+      RETURN ev.id as event_id, ev.summary as summary,
+             e.latitude as lat, e.longitude as lon
+    pydeck_layer:
+      type: ScatterplotLayer
+      get_radius: 500000
+      get_fill_color: [255, 0, 0, 200]
+      pickable: true
+
+  # ── Infrastructure Layers ────────────────────────────────────────────────
+  - id: infra_chokepoints
+    name: "Maritime Chokepoints"
+    description: "Strategic maritime chokepoints (from WorldMonitor reference data)"
+    category: infrastructure
+    icon: "anchor"
+    data_source: config
+    inline_data:
+      - {name: "Strait of Hormuz", lat: 26.5, lon: 56.0, criticality: 9.5}
+      - {name: "Malacca Strait", lat: 2.0, lon: 102.0, criticality: 9.0}
+      - {name: "Suez Canal", lat: 30.5, lon: 32.5, criticality: 8.5}
+      - {name: "Bab el-Mandeb", lat: 12.6, lon: 43.4, criticality: 8.0}
+      - {name: "Panama Canal", lat: 9.0, lon: -79.5, criticality: 8.0}
+      - {name: "Taiwan Strait", lat: 25.0, lon: 120.0, criticality: 8.5}
+      - {name: "Gibraltar Strait", lat: 36.0, lon: -5.5, criticality: 7.0}
+    pydeck_layer:
+      type: ScatterplotLayer
+      get_radius: 300000
+      get_fill_color: [255, 165, 0, 200]
+      pickable: true
+
+  # ── Document / Source Layers ─────────────────────────────────────────────
+  - id: sources_geo
+    name: "Sources by Region"
+    description: "Geographic distribution of article sources"
+    category: sources
+    icon: "public"
+    data_source: elasticsearch
+    es_query:
+      index: omnilog_docs
+      body:
+        size: 0
+        aggs:
+          sources:
+            terms:
+              field: source
+              size: 50
+    pydeck_layer:
+      type: ColumnLayer
+      get_elevation: 50000
+      get_fill_color: [100, 200, 255, 180]
+      elevation_scale: 1.0
+
+  # ── Trade Route Layers ───────────────────────────────────────────────────
+  - id: trade_routes
+    name: "Major Trade Routes"
+    description: "Global trade route flow map"
+    category: trade
+    icon: "route"
+    data_source: config
+    inline_data: []
+    pydeck_layer:
+      type: ArcLayer
+      get_source_color: [50, 100, 255, 120]
+      get_target_color: [255, 100, 50, 120]
+      get_width: 2
+      pickable: true
+
+  # ── Scoring Layers ───────────────────────────────────────────────────────
+  - id: entity_heatmap
+    name: "Entity Criticality Heatmap"
+    description: "Heatmap of entity criticality scores"
+    category: scoring
+    icon: "whatshot"
+    data_source: neo4j
+    cypher_query: |
+      MATCH (e:Entity)
+      WHERE e.latitude IS NOT NULL AND e.longitude IS NOT NULL
+        AND e.criticality_score IS NOT NULL
+      RETURN e.name, e.latitude as lat, e.longitude as lon,
+             e.criticality_score as weight
+    pydeck_layer:
+      type: HeatmapLayer
+      get_weight: weight
+      radius_pixels: 40
+      intensity: 1.5
+      threshold: 0.1
+
+# Default active layers
+default_layers:
+  - entities_all
+  - events_active
+
+# Map defaults
+map_defaults:
+  initial_view:
+    latitude: 30.0
+    longitude: 20.0
+    zoom: 1.5
+    pitch: 30
+  map_style: light
+  show_tooltip: true
