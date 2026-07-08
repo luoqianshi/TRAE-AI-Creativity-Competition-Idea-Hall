@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>思维跳跃路径追踪器 | Thought Tracer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Noto Sans SC', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      },
+      colors: {
+        void: '#080a0d',
+        panel: '#0d1117',
+        amber: { glow: '#f59e0b', dim: '#92400e' },
+        cyan: { glow: '#06b6d4', dim: '#155e75' },
+        slate: { 850: '#151b23', 950: '#0d1117' }
+      }
+    }
+  }
+}
+</script>
+<style>
+:root {
+  --c-amber: #f59e0b;
+  --c-cyan: #06b6d4;
+  --c-void: #080a0d;
+  --c-panel: #0d1117;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: #080a0d;
+  color: #cbd5e1;
+  font-family: 'Noto Sans SC', sans-serif;
+  overflow-x: hidden;
+}
+
+/* Scanline overlay */
+.scanlines {
+  position: fixed; inset:0; pointer-events:none; z-index:9000; opacity:0.04;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(6,182,212,0.08) 2px, rgba(6,182,212,0.08) 4px);
+}
+
+/* Grid background */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(6,182,212,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(6,182,212,0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* HUD Panel */
+.hud-panel {
+  background: rgba(13,17,23,0.7);
+  border: 1px solid rgba(6,182,212,0.15);
+  box-shadow: inset 0 1px 0 rgba(6,182,212,0.05), 0 0 40px rgba(0,0,0,0.5);
+  position: relative;
+}
+.hud-panel::before, .hud-panel::after {
+  content:''; position:absolute; width:8px; height:8px; border:1px solid rgba(6,182,212,0.3);
+}
+.hud-panel::before { top:-1px; left:-1px; border-right:none; border-bottom:none; }
+.hud-panel::after { bottom:-1px; right:-1px; border-left:none; border-top:none; }
+
+.hud-panel-amber {
+  border-color: rgba(245,158,11,0.15);
+  box-shadow: inset 0 1px 0 rgba(245,158,11,0.05), 0 0 40px rgba(0,0,0,0.5);
+}
+.hud-panel-amber::before, .hud-panel-amber::after { border-color: rgba(245,158,11,0.3); }
+
+/* Glowing text */
+.glow-amber { text-shadow: 0 0 20px rgba(245,158,11,0.4); }
+.glow-cyan { text-shadow: 0 0 20px rgba(6,182,212,0.4); }
+
+/* Terminal text */
+.terminal-line {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: #64748b;
+}
+.terminal-line .ts { color: #06b6d4; }
+.terminal-line .tag { color: #f59e0b; }
+.terminal-line .data { color: #94a3b8; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #080a0d; }
+::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #06b6d4, #f59e0b); }
+
+/* Reveal */
+.reveal {
+  opacity: 0; transform: translateY(40px);
+  transition: all 0.8s cubic-bezier(0.16,1,0.3,1);
+}
+.reveal.active { opacity:1; transform:translateY(0); }
+
+/* Pulse marker */
+@keyframes pulse-marker {
+  0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(245,158,11,0.4); }
+  50% { opacity:0.8; box-shadow: 0 0 0 8px rgba(245,158,11,0); }
+}
+.pulse-marker { animation: pulse-marker 2s infinite; }
+
+/* Sweep line */
+@keyframes sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.sweep-line {
+  position: absolute; top:0; left:0; width:30%; height:100%;
+  background: linear-gradient(90deg, transparent, rgba(6,182,212,0.1), transparent);
+  animation: sweep 4s ease-in-out infinite;
+  pointer-events:none;
+}
+
+/* Button */
+.hud-btn {
+  background: transparent;
+  border: 1px solid rgba(6,182,212,0.3);
+  color: #06b6d4;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s;
+}
+.hud-btn:hover {
+  background: rgba(6,182,212,0.1);
+  border-color: rgba(6,182,212,0.6);
+  box-shadow: 0 0 20px rgba(6,182,212,0.15);
+}
+.hud-btn-amber {
+  border-color: rgba(245,158,11,0.3);
+  color: #f59e0b;
+}
+.hud-btn-amber:hover {
+  background: rgba(245,158,11,0.1);
+  border-color: rgba(245,158,11,0.6);
+  box-shadow: 0 0 20px rgba(245,158,11,0.15);
+}
+
+/* Status dot */
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block;
+}
+.status-active { background: #10b981; box-shadow: 0 0 6px #10b981; }
+.status-warn { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+.status-alert { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+
+/* Node animation */
+@keyframes node-pulse {
+  0%,100% { r: 4; opacity: 1; }
+  50% { r: 6; opacity: 0.7; }
+}
+.node-active { animation: node-pulse 2s infinite; }
+
+/* Section divider */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(6,182,212,0.2), rgba(245,158,11,0.2), transparent);
+}
+
+/* Tag */
+.tag-hud {
+  display: inline-block;
+  padding: 2px 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  border: 1px solid rgba(6,182,212,0.2);
+  color: #06b6d4;
+  background: rgba(6,182,212,0.05);
+}
+.tag-amber {
+  border-color: rgba(245,158,11,0.2);
+  color: #f59e0b;
+  background: rgba(245,158,11,0.05);
+}
+</style>
+</head>
+<body>
+<div class="scanlines"></div>
+
+<!-- Header -->
+<header class="fixed top-0 left-0 w-full z-50 border-b border-cyan-500/10 bg-void/90 backdrop-blur-md">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
+    <div class="flex items-center gap-3">
+      <div class="w-6 h-6 border border-cyan-500/40 flex items-center justify-center">
+        <div class="w-2 h-2 bg-cyan-400"></div>
+      </div>
+      <span class="font-mono text-sm tracking-wider text-slate-300">THOUGHT<span class="text-amber-400">.TRACER</span> <span class="text-slate-600 text-xs">v1.0.4</span></span>
+    </div>
+    <div class="flex items-center gap-6 text-xs font-mono text-slate-500">
+      <a href="#trace" class="hover:text-cyan-400 transition-colors">追踪</a>
+      <a href="#topology" class="hover:text-cyan-400 transition-colors">拓扑</a>
+      <a href="#analysis" class="hover:text-cyan-400 transition-colors">分析</a>
+      <a href="#tech" class="hover:text-cyan-400 transition-colors">原理</a>
+      <div class="flex items-center gap-2">
+        <span class="status-dot status-active"></span>
+        <span>ONLINE</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Hero -->
+<section class="relative min-h-screen flex items-center justify-center pt-20 grid-bg">
+  <div class="max-w-5xl mx-auto px-6 relative z-10">
+    <div class="mb-6">
+      <span class="tag-hud">学习工作赛道</span>
+    </div>
+
+    <h1 class="text-4xl md:text-6xl lg:text-7xl font-bold mb-6 tracking-tight">
+      <span class="text-slate-100">思维跳跃</span><br>
+      <span class="text-amber-400 glow-amber font-mono tracking-tight">路径追踪器</span>
+    </h1>
+
+    <p class="text-slate-400 text-lg max-w-xl mb-10 leading-relaxed">
+      你的思维正在漂移。不是阻止跳跃，而是<span class="text-cyan-400">看清路径</span>。<br>
+      实时记录思维流转，生成可回溯的<span class="text-amber-400">认知拓扑图</span>。
+    </p>
+
+    <div class="flex flex-wrap gap-4 mb-16">
+      <button onclick="startTraceDemo()" class="hud-btn">[ 启动追踪演示 ]</button>
+      <button onclick="document.getElementById('topology').scrollIntoView({behavior:'smooth'})" class="hud-btn hud-btn-amber">[ 查看拓扑图 ]</button>
+    </div>
+
+    <!-- Live terminal -->
+    <div class="hud-panel rounded-lg p-4 max-w-2xl font-mono text-xs">
+      <div class="flex items-center justify-between mb-3 text-slate-500 border-b border-cyan-500/10 pb-2">
+        <span>TERMINAL // thought_stream.log</span>
+        <span class="text-cyan-500/60">LIVE</span>
+      </div>
+      <div id="terminal-output" class="h-40 overflow-hidden space-y-1">
+        <div class="terminal-line"><span class="ts">[08:42:11]</span> <span class="tag">ROOT</span> <span class="data">开始阅读：深度神经网络优化算法</span></div>
+        <div class="terminal-line"><span class="ts">[08:43:05]</span> <span class="tag">JUMP</span> <span class="data">点击链接 → "Adam 优化器原始论文"</span></div>
+        <div class="terminal-line"><span class="ts">[08:44:22]</span> <span class="tag">JUMP</span> <span class="data">搜索 → "Nesterov momentum 与 Adam 对比"</span></div>
+        <div class="terminal-line"><span class="ts">[08:46:18]</span> <span class="tag text-red-400">DRIFT</span> <span class="data">跳转 → Reddit 讨论 "AI 会取代程序员吗"</span></div>
+        <div class="terminal-line"><span class="ts">[08:47:55]</span> <span class="tag text-amber-400">WARN</span> <span class="data">偏离主线 2 层 / 距离 ROOT 5 节点 / 建议回溯</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Decorative corner brackets -->
+  <div class="absolute top-24 left-6 w-16 h-16 border-l border-t border-cyan-500/20"></div>
+  <div class="absolute bottom-12 right-6 w-16 h-16 border-r border-b border-amber-500/20"></div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- Trace Demo Section -->
+<section id="trace" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="tag-hud">TRACE MODULE</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-slate-100">实时思维<span class="text-cyan-400">流追踪</span></h2>
+      <p class="text-slate-500 mt-3 max-w-lg">输入一个学习/工作任务，模拟思维跳转过程，系统将实时标记有效联想与无效漂移。</p>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <!-- Input Panel -->
+      <div class="lg:col-span-1 space-y-4 reveal">
+        <div class="hud-panel rounded-lg p-5">
+          <label class="block text-xs font-mono text-slate-500 mb-2">ROOT_TOPIC</label>
+          <input type="text" id="root-topic" value="深度神经网络优化算法" class="w-full bg-slate-850 border border-cyan-500/20 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 font-mono">
+        </div>
+
+        <div class="hud-panel rounded-lg p-5">
+          <label class="block text-xs font-mono text-slate-500 mb-3">TRACE_MODE</label>
+          <div class="space-y-2">
+            <label class="flex items-center gap-3 cursor-pointer group">
+              <input type="radio" name="mode" value="study" checked class="accent-cyan-500">
+              <span class="text-sm text-slate-400 group-hover:text-cyan-400 transition-colors">学术研究模式</span>
+            </label>
+            <label class="flex items-center gap-3 cursor-pointer group">
+              <input type="radio" name="mode" value="coding" class="accent-cyan-500">
+              <span class="text-sm text-slate-400 group-hover:text-cyan-400 transition-colors">编程 Debug 模式</span>
+            </label>
+            <label class="flex items-center gap-3 cursor-pointer group">
+              <input type="radio" name="mode" value="brainstorm" class="accent-cyan-500">
+              <span class="text-sm text-slate-400 group-hover:text-cyan-400 transition-colors">头脑风暴模式</span>
+            </label>
+          </div>
+        </div>
+
+        <button onclick="runTrace()" class="hud-btn w-full text-center">[ 开始追踪 ]</button>
+      </div>
+
+      <!-- Visualization -->
+      <div class="lg:col-span-2 reveal">
+        <div class="hud-panel rounded-lg p-1 h-[420px] relative overflow-hidden">
+          <div class="sweep-line"></div>
+          <canvas id="trace-canvas" class="w-full h-full"></canvas>
+          <!-- HUD overlay info -->
+          <div class="absolute top-3 left-3 font-mono text-xs space-y-1">
+            <div class="text-slate-500">NODES: <span class="text-cyan-400" id="node-count">0</span></div>
+            <div class="text-slate-500">DEPTH: <span class="text-amber-400" id="depth-count">0</span></div>
+            <div class="text-slate-500">DRIFT: <span class="text-red-400" id="drift-count">0</span></div>
+          </div>
+          <div class="absolute bottom-3 right-3 font-mono text-xs text-slate-600">
+            COORD: <span id="coord-display">0,0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Banner -->
+    <div id="drift-alert" class="mt-6 hidden">
+      <div class="border border-amber-500/30 bg-amber-500/5 rounded-lg p-4 flex items-center gap-4">
+        <div class="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center">
+          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        </div>
+        <div>
+          <div class="text-sm font-medium text-amber-400">漂移检测提醒</div>
+          <div class="text-xs text-slate-400">你已偏离主线 4 层，当前话题与 ROOT 的语义相似度低于 0.3，建议回溯或标记为"待探索"</div>
+        </div>
+        <button onclick="backToRoot()" class="hud-btn hud-btn-amber ml-auto">[ 回溯主线 ]</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- Topology Section -->
+<section id="topology" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="tag-hud tag-amber">TOPOLOGY MAP</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-slate-100">思维<span class="text-amber-400">拓扑图</span></h2>
+      <p class="text-slate-500 mt-3 max-w-lg">将一次完整的思维会话转化为可视化的节点网络。每个节点代表一个思维停留点，连线代表跳转路径，颜色标识跳转质量。</p>
+    </div>
+
+    <div class="grid lg:grid-cols-5 gap-6">
+      <div class="lg:col-span-3 reveal">
+        <div class="hud-panel hud-panel-amber rounded-lg p-1 h-[480px] relative">
+          <canvas id="topology-canvas" class="w-full h-full"></canvas>
+          <div class="absolute top-3 right-3 font-mono text-xs space-y-1 text-right">
+            <div><span class="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1"></span><span class="text-slate-500">有效联想</span></div>
+            <div><span class="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1"></span><span class="text-slate-500">中性跳转</span></div>
+            <div><span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1"></span><span class="text-slate-500">无效漂移</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-2 space-y-4 reveal">
+        <div class="hud-panel rounded-lg p-5">
+          <h3 class="text-sm font-mono text-cyan-400 mb-4">SESSION_SUMMARY</h3>
+          <div class="space-y-3 font-mono text-xs">
+            <div class="flex justify-between"><span class="text-slate-500">Duration</span><span class="text-slate-300">47 min</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">Total Nodes</span><span class="text-slate-300">13</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">Max Depth</span><span class="text-slate-300">6</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">Drifts Detected</span><span class="text-red-400">3</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">Valuable Links</span><span class="text-emerald-400">5</span></div>
+          </div>
+        </div>
+
+        <div class="hud-panel rounded-lg p-5">
+          <h3 class="text-sm font-mono text-amber-400 mb-4">NODE_LIST</h3>
+          <div class="space-y-2 max-h-64 overflow-y-auto pr-1" id="node-list">
+            <!-- populated by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- Analysis Section -->
+<section id="analysis" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="tag-hud">COGNITIVE ANALYSIS</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-slate-100">你的<span class="text-cyan-400">思维模式</span></h2>
+      <p class="text-slate-500 mt-3 max-w-lg">基于多会话数据分析，生成个人思维画像，帮助你理解自己的认知风格。</p>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6 mb-12">
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="text-xs font-mono text-slate-500 mb-2">THINKING_STYLE</div>
+        <div class="text-2xl font-bold text-slate-100 mb-1">广度优先型</div>
+        <div class="text-xs text-slate-400 mb-4">Breadth-First Explorer</div>
+        <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden mb-2">
+          <div class="h-full bg-cyan-400 rounded-full" style="width:72%"></div>
+        </div>
+        <div class="text-xs text-slate-500">广度指数 72% / 平均会话分支 4.2</div>
+      </div>
+
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="text-xs font-mono text-slate-500 mb-2">FOCUS_STABILITY</div>
+        <div class="text-2xl font-bold text-slate-100 mb-1">中等偏下</div>
+        <div class="text-xs text-slate-400 mb-4">Focus Stability Score</div>
+        <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden mb-2">
+          <div class="h-full bg-amber-400 rounded-full" style="width:41%"></div>
+        </div>
+        <div class="text-xs text-slate-500">稳定性 41% / 平均漂移间隔 8.3 min</div>
+      </div>
+
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="text-xs font-mono text-slate-500 mb-2">IDEA_QUALITY</div>
+        <div class="text-2xl font-bold text-slate-100 mb-1">高发散价值</div>
+        <div class="text-xs text-slate-400 mb-4">High Serendipity Value</div>
+        <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden mb-2">
+          <div class="h-full bg-emerald-400 rounded-full" style="width:68%"></div>
+        </div>
+        <div class="text-xs text-slate-500">意外收获率 68% / 标记有价值节点 12</div>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-2 gap-6 reveal">
+      <div class="hud-panel rounded-lg p-6">
+        <h3 class="text-sm font-mono text-cyan-400 mb-4">WEEKLY_DRIFT_PATTERN</h3>
+        <canvas id="drift-chart" class="w-full h-48"></canvas>
+      </div>
+      <div class="hud-panel rounded-lg p-6">
+        <h3 class="text-sm font-mono text-amber-400 mb-4">TOPIC_JUMP_MATRIX</h3>
+        <canvas id="matrix-canvas" class="w-full h-48"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- Tech Section -->
+<section id="tech" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-12 reveal">
+      <span class="tag-hud">SYSTEM ARCHITECTURE</span>
+      <h2 class="text-3xl md:text-4xl font-bold mt-4 text-slate-100">技术原理与<span class="text-cyan-400">系统架构</span></h2>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-mono text-sm">01</div>
+          <h3 class="font-bold text-slate-100">语义嵌入与相似度计算</h3>
+        </div>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          利用预训练语言模型将每个思维节点（当前浏览的页面、输入的关键词、停留的概念）转化为高维语义向量。
+          通过余弦相似度实时计算当前节点与 ROOT 以及上一节点的语义距离，量化"思维跳跃的幅度"。
+        </p>
+      </div>
+
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 border border-amber-500/30 flex items-center justify-center text-amber-400 font-mono text-sm">02</div>
+          <h3 class="font-bold text-slate-100">漂移检测算法</h3>
+        </div>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          基于多层阈值模型：语义相似度低于 0.35 且连续两次跳转均偏离主线时，触发"漂移预警"。
+          同时结合时间衰减因子——在单一节点停留超过注意力阈值（默认 25 min）后，容忍度自动放宽，避免过度敏感。
+        </p>
+      </div>
+
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-mono text-sm">03</div>
+          <h3 class="font-bold text-slate-100">力导向拓扑布局</h3>
+        </div>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          采用 D3-force 物理仿真算法，将思维节点渲染为力导向图。节点间引力与语义相似度成正比，
+          斥力防止重叠。通过 Canvas 2D 实时渲染，支持缩放、拖拽、高亮路径回溯，让"思维地图"直观可交互。
+        </p>
+      </div>
+
+      <div class="hud-panel rounded-lg p-6 reveal">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-8 h-8 border border-amber-500/30 flex items-center justify-center text-amber-400 font-mono text-sm">04</div>
+          <h3 class="font-bold text-slate-100">认知模式画像引擎</h3>
+        </div>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          聚合多会话数据，提取分支因子、回溯频率、停留时长分布、语义跳跃幅度等特征，
+          通过轻量级分类模型将用户划分为"深度型""广度型""发散型""稳定型"等认知画像，
+          并提供个性化的注意力管理建议。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="border-t border-cyan-500/10 py-8 px-6">
+  <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 font-mono text-xs text-slate-600">
+    <div class="flex items-center gap-3">
+      <div class="w-4 h-4 border border-cyan-500/30 flex items-center justify-center">
+        <div class="w-1 h-1 bg-cyan-500"></div>
+      </div>
+      <span>THOUGHT.TRACER</span>
+    </div>
+    <div>TRAE AI 创意大赛 · 学习工作赛道 · 2025</div>
+  </div>
+</footer>
+
+<script>
+// ========== UTILS ==========
+const $ = id => document.getElementById(id);
+
+// ========== REVEAL ON SCROLL ==========
+const ro = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('active'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => ro.observe(el));
+
+// ========== TRACE CANVAS DEMO ==========
+const traceCanvas = $('trace-canvas');
+const tctx = traceCanvas.getContext('2d');
+let traceW, traceH;
+function resizeTrace() {
+  const rect = traceCanvas.parentElement.getBoundingClientRect();
+  traceCanvas.width = rect.width - 2;
+  traceCanvas.height = rect.height - 2;
+  traceW = traceCanvas.width; traceH = traceCanvas.height;
+}
+resizeTrace();
+window.addEventListener('resize', resizeTrace);
+
+let traceNodes = [];
+let traceLinks = [];
+let traceActive = false;
+let traceIndex = 0;
+
+const demoPath = [
+  { x: 0.5, y: 0.1, label: '深度神经网络', type: 'root' },
+  { x: 0.4, y: 0.25, label: 'Adam 优化器', type: 'good' },
+  { x: 0.6, y: 0.3, label: 'Nesterov Momentum', type: 'good' },
+  { x: 0.35, y: 0.45, label: '学习率调度', type: 'good' },
+  { x: 0.65, y: 0.5, label: 'Reddit: AI取代程序员', type: 'drift' },
+  { x: 0.7, y: 0.65, label: 'ChatGPT 影响', type: 'drift' },
+  { x: 0.55, y: 0.75, label: '提示工程技巧', type: 'drift' },
+  { x: 0.45, y: 0.6, label: '返回 → 学习率调度', type: 'back' },
+  { x: 0.3, y: 0.75, label: 'Cosine Annealing', type: 'good' },
+];
+
+function drawTrace() {
+  tctx.fillStyle = '#0d1117';
+  tctx.fillRect(0, 0, traceW, traceH);
+
+  // Grid
+  tctx.strokeStyle = 'rgba(6,182,212,0.04)';
+  tctx.lineWidth = 1;
+  for (let x = 0; x < traceW; x += 30) { tctx.beginPath(); tctx.moveTo(x,0); tctx.lineTo(x,traceH); tctx.stroke(); }
+  for (let y = 0; y < traceH; y += 30) { tctx.beginPath(); tctx.moveTo(0,y); tctx.lineTo(traceW,y); tctx.stroke(); }
+
+  // Draw links
+  for (let i = 0; i < traceLinks.length; i++) {
+    const a = traceNodes[traceLinks[i][0]], b = traceNodes[traceLinks[i][1]];
+    if (!a || !b) continue;
+    tctx.beginPath();
+    tctx.moveTo(a.x, a.y);
+    tctx.lineTo(b.x, b.y);
+    const isDrift = a.type === 'drift' || b.type === 'drift';
+    tctx.strokeStyle = isDrift ? 'rgba(239,68,68,0.3)' : 'rgba(6,182,212,0.2)';
+    tctx.lineWidth = isDrift ? 1.5 : 1;
+    tctx.setLineDash(isDrift ? [4,4] : []);
+    tctx.stroke();
+    tctx.setLineDash([]);
+  }
+
+  // Draw nodes
+  traceNodes.forEach((n, i) => {
+    tctx.beginPath();
+    const r = n.type === 'root' ? 8 : 5;
+    tctx.arc(n.x, n.y, r, 0, Math.PI*2);
+    let color = '#06b6d4';
+    if (n.type === 'root') color = '#f59e0b';
+    if (n.type === 'drift') color = '#ef4444';
+    if (n.type === 'back') color = '#10b981';
+    tctx.fillStyle = color;
+    tctx.fill();
+
+    // Glow
+    tctx.beginPath();
+    tctx.arc(n.x, n.y, r + 4, 0, Math.PI*2);
+    tctx.fillStyle = color + '20';
+    tctx.fill();
+
+    // Label
+    tctx.fillStyle = '#94a3b8';
+    tctx.font = '10px JetBrains Mono';
+    tctx.fillText(n.label, n.x + 12, n.y + 3);
+  });
+
+  // Current position marker
+  if (traceActive && traceNodes.length > 0) {
+    const cur = traceNodes[traceNodes.length-1];
+    tctx.beginPath();
+    tctx.arc(cur.x, cur.y, 12, 0, Math.PI*2);
+    tctx.strokeStyle = 'rgba(6,182,212,0.4)';
+    tctx.lineWidth = 1;
+    tctx.stroke();
+  }
+
+  requestAnimationFrame(drawTrace);
+}
+drawTrace();
+
+function runTrace() {
+  traceNodes = [];
+  traceLinks = [];
+  traceIndex = 0;
+  traceActive = true;
+  $('drift-alert').classList.add('hidden');
+  stepTrace();
+}
+
+function startTraceDemo() {
+  $('trace').scrollIntoView({ behavior: 'smooth' });
+  setTimeout(runTrace, 500);
+}
+
+function stepTrace() {
+  if (traceIndex >= demoPath.length) {
+    traceActive = false;
+    return;
+  }
+  const d = demoPath[traceIndex];
+  const node = { x: d.x * traceW, y: d.y * traceH, label: d.label, type: d.type };
+  traceNodes.push(node);
+  if (traceIndex > 0) traceLinks.push([traceIndex-1, traceIndex]);
+
+  $('node-count').textContent = traceNodes.length;
+  $('depth-count').textContent = Math.max(0, traceIndex - 2);
+  $('drift-count').textContent = traceNodes.filter(n => n.type === 'drift').length;
+  $('coord-display').textContent = `${Math.round(node.x)},${Math.round(node.y)}`;
+
+  if (d.type === 'drift' && traceIndex >= 5) {
+    $('drift-alert').classList.remove('hidden');
+  }
+
+  traceIndex++;
+  setTimeout(stepTrace, 800);
+}
+
+function backToRoot() {
+  $('drift-alert').classList.add('hidden');
+  // Add a back node
+  if (traceIndex < demoPath.length) {
+    const backNode = { x: 0.45 * traceW, y: 0.6 * traceH, label: '← 回溯主线', type: 'back' };
+    traceNodes.push(backNode);
+    traceLinks.push([traceIndex-1, traceIndex]);
+    traceIndex++;
+  }
+}
+
+// ========== TOPOLOGY CANVAS ==========
+const topoCanvas = $('topology-canvas');
+const topoCtx = topoCanvas.getContext('2d');
+let topoW, topoH;
+function resizeTopo() {
+  const rect = topoCanvas.parentElement.getBoundingClientRect();
+  topoCanvas.width = rect.width - 2;
+  topoCanvas.height = rect.height - 2;
+  topoW = topoCanvas.width; topoH = topoCanvas.height;
+}
+resizeTopo();
+window.addEventListener('resize', resizeTopo);
+
+const topoNodes = [
+  { x: 0.5, y: 0.08, r: 18, label: '神经网络优化', type: 'root', fixed: true },
+  { x: 0.3, y: 0.22, r: 12, label: 'Adam', type: 'good' },
+  { x: 0.7, y: 0.2, r: 12, label: 'SGD', type: 'good' },
+  { x: 0.2, y: 0.38, r: 10, label: '学习率', type: 'good' },
+  { x: 0.45, y: 0.35, r: 10, label: '二阶矩', type: 'good' },
+  { x: 0.8, y: 0.38, r: 10, label: '动量', type: 'good' },
+  { x: 0.15, y: 0.55, r: 10, label: 'Cosine', type: 'good' },
+  { x: 0.35, y: 0.52, r: 10, label: 'Warmup', type: 'good' },
+  { x: 0.75, y: 0.55, r: 14, label: 'Reddit讨论', type: 'drift' },
+  { x: 0.85, y: 0.72, r: 12, label: 'AI取代', type: 'drift' },
+  { x: 0.6, y: 0.7, r: 10, label: '提示工程', type: 'drift' },
+  { x: 0.4, y: 0.72, r: 10, label: '返回', type: 'back' },
+  { x: 0.25, y: 0.85, r: 10, label: '实验对比', type: 'good' },
+];
+
+const topoLinks = [
+  [0,1],[0,2],[1,3],[1,4],[2,5],[3,6],[3,7],
+  [0,8],[8,9],[8,10],[10,11],[11,3],[3,12]
+];
+
+topoNodes.forEach(n => { n.px = n.x * topoW; n.py = n.y * topoH; n.vx = 0; n.vy = 0; });
+
+function drawTopo() {
+  topoCtx.fillStyle = '#0d1117';
+  topoCtx.fillRect(0, 0, topoW, topoH);
+
+  // Subtle grid
+  topoCtx.strokeStyle = 'rgba(245,158,11,0.03)';
+  for (let x=0; x<topoW; x+=25) { topoCtx.beginPath(); topoCtx.moveTo(x,0); topoCtx.lineTo(x,topoH); topoCtx.stroke(); }
+  for (let y=0; y<topoH; y+=25) { topoCtx.beginPath(); topoCtx.moveTo(0,y); topoCtx.lineTo(topoW,y); topoCtx.stroke(); }
+
+  // Physics step (simple force)
+  for (let i=0; i<topoNodes.length; i++) {
+    for (let j=i+1; j<topoNodes.length; j++) {
+      const a = topoNodes[i], b = topoNodes[j];
+      const dx = b.px - a.px, dy = b.py - a.py;
+      const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      const f = (dist - 80) * 0.0003;
+      a.vx += dx/dist * f; a.vy += dy/dist * f;
+      b.vx -= dx/dist * f; b.vy -= dy/dist * f;
+    }
+    const n = topoNodes[i];
+    if (!n.fixed) {
+      n.vx *= 0.92; n.vy *= 0.92;
+      n.px += n.vx; n.py += n.vy;
+      n.px = Math.max(30, Math.min(topoW-30, n.px));
+      n.py = Math.max(30, Math.min(topoH-30, n.py));
+    }
+  }
+
+  // Draw links
+  topoLinks.forEach(link => {
+    const a = topoNodes[link[0]], b = topoNodes[link[1]];
+    topoCtx.beginPath(); topoCtx.moveTo(a.px, a.py); topoCtx.lineTo(b.px, b.py);
+    const isDrift = a.type === 'drift' || b.type === 'drift';
+    topoCtx.strokeStyle = isDrift ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.15)';
+    topoCtx.lineWidth = isDrift ? 2 : 1;
+    topoCtx.setLineDash(isDrift ? [5,5] : []);
+    topoCtx.stroke(); topoCtx.setLineDash([]);
+  });
+
+  // Draw nodes
+  topoNodes.forEach(n => {
+    topoCtx.beginPath(); topoCtx.arc(n.px, n.py, n.r, 0, Math.PI*2);
+    let color = '#f59e0b', glow = 'rgba(245,158,11,0.15)';
+    if (n.type === 'root') { color = '#f59e0b'; glow = 'rgba(245,158,11,0.3)'; }
+    if (n.type === 'drift') { color = '#ef4444'; glow = 'rgba(239,68,68,0.2)'; }
+    if (n.type === 'back') { color = '#10b981'; glow = 'rgba(16,185,129,0.2)'; }
+    if (n.type === 'good') { color = '#10b981'; glow = 'rgba(16,185,129,0.15)'; }
+
+    topoCtx.fillStyle = glow;
+    topoCtx.beginPath(); topoCtx.arc(n.px, n.py, n.r+6, 0, Math.PI*2); topoCtx.fill();
+
+    topoCtx.beginPath(); topoCtx.arc(n.px, n.py, n.r, 0, Math.PI*2);
+    topoCtx.fillStyle = '#0d1117';
+    topoCtx.fill();
+    topoCtx.strokeStyle = color; topoCtx.lineWidth = 2; topoCtx.stroke();
+
+    topoCtx.fillStyle = '#cbd5e1';
+    topoCtx.font = n.type==='root' ? 'bold 11px JetBrains Mono' : '10px JetBrains Mono';
+    topoCtx.textAlign = 'center'; topoCtx.textBaseline = 'middle';
+    topoCtx.fillText(n.label, n.px, n.py + n.r + 14);
+  });
+
+  requestAnimationFrame(drawTopo);
+}
+drawTopo();
+
+// Populate node list
+const nodeListEl = $('node-list');
+topoNodes.forEach((n, i) => {
+  const div = document.createElement('div');
+  div.className = 'flex items-center gap-3 py-2 border-b border-white/5';
+  let colorClass = 'bg-emerald-500';
+  if (n.type === 'root') colorClass = 'bg-amber-500';
+  if (n.type === 'drift') colorClass = 'bg-red-500';
+  if (n.type === 'back') colorClass = 'bg-cyan-500';
+  div.innerHTML = `
+    <span class="text-xs text-slate-600 font-mono w-4">${i}</span>
+    <span class="w-2 h-2 rounded-full ${colorClass}"></span>
+    <span class="text-xs text-slate-300 flex-1">${n.label}</span>
+  `;
+  nodeListEl.appendChild(div);
+});
+
+// ========== DRIFT CHART ==========
+const driftC = $('drift-chart');
+const dctx = driftC.getContext('2d');
+let driftW, driftH;
+function resizeDrift() {
+  const rect = driftC.parentElement.getBoundingClientRect();
+  driftC.width = rect.width - 12; driftC.height = rect.height - 12;
+  driftW = driftC.width; driftH = driftC.height;
+}
+resizeDrift(); window.addEventListener('resize', resizeDrift);
+
+const weeklyData = [2, 5, 3, 8, 4, 6, 3];
+const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+function drawDriftChart() {
+  dctx.fillStyle = '#0d1117';
+  dctx.fillRect(0, 0, driftW, driftH);
+
+  const barW = driftW / 7 * 0.5;
+  const max = Math.max(...weeklyData);
+  weeklyData.forEach((v, i) => {
+    const h = (v / max) * (driftH - 30);
+    const x = (driftW / 7) * i + (driftW/7 - barW)/2;
+    const y = driftH - h - 20;
+
+    const grad = dctx.createLinearGradient(0, y, 0, y+h);
+    grad.addColorStop(0, '#06b6d4'); grad.addColorStop(1, 'rgba(6,182,212,0.1)');
+    dctx.fillStyle = grad;
+    dctx.fillRect(x, y, barW, h);
+
+    dctx.fillStyle = '#64748b';
+    dctx.font = '10px JetBrains Mono';
+    dctx.textAlign = 'center';
+    dctx.fillText(days[i], x + barW/2, driftH - 5);
+    dctx.fillStyle = '#94a3b8';
+    dctx.fillText(v, x + barW/2, y - 6);
+  });
+}
+drawDriftChart();
+
+// ========== MATRIX CANVAS ==========
+const matC = $('matrix-canvas');
+const mctx = matC.getContext('2d');
+let matW, matH;
+function resizeMat() {
+  const rect = matC.parentElement.getBoundingClientRect();
+  matC.width = rect.width - 12; matC.height = rect.height - 12;
+  matW = matC.width; matH = matC.height;
+}
+resizeMat(); window.addEventListener('resize', resizeMat);
+
+const topics = ['ML','Coding','News','Social','Design'];
+const matrix = [
+  [1.0,0.7,0.2,0.1,0.4],
+  [0.7,1.0,0.3,0.2,0.5],
+  [0.2,0.3,1.0,0.8,0.3],
+  [0.1,0.2,0.8,1.0,0.2],
+  [0.4,0.5,0.3,0.2,1.0],
+];
+
+function drawMatrix() {
+  mctx.fillStyle = '#0d1117';
+  mctx.fillRect(0, 0, matW, matH);
+
+  const cellW = (matW - 50) / 5;
+  const cellH = (matH - 30) / 5;
+
+  matrix.forEach((row, i) => {
+    row.forEach((val, j) => {
+      const x = 40 + j * cellW;
+      const y = 10 + i * cellH;
+      const intensity = Math.floor(val * 255);
+      mctx.fillStyle = `rgba(245,158,11,${val * 0.6})`;
+      mctx.fillRect(x, y, cellW-2, cellH-2);
+    });
+  });
+
+  mctx.fillStyle = '#64748b';
+  mctx.font = '10px JetBrains Mono';
+  topics.forEach((t, i) => {
+    mctx.textAlign = 'right';
+    mctx.fillText(t, 35, 10 + i*cellH + cellH/2 + 4);
+    mctx.textAlign = 'center';
+    mctx.fillText(t, 40 + i*cellW + cellW/2, matH - 2);
+  });
+}
+drawMatrix();
+
+// ========== TERMINAL LIVE UPDATE ==========
+const terminalLines = [
+  { ts:'[08:48:12]', tag:'ACTION', data:'用户执行 [回溯主线]', cls:'text-cyan-400' },
+  { ts:'[08:48:45]', tag:'JUMP', data:'搜索 → "Cosine Annealing 论文"', cls:'tag' },
+  { ts:'[08:50:03]', tag:'STAY', data:'阅读论文第 3-5 节，停留 12 min', cls:'text-emerald-400' },
+  { ts:'[08:52:30]', tag:'JUMP', data:'点击引用 → "Transformer 架构详解"', cls:'tag' },
+  { ts:'[08:53:15]', tag:'WARN', data:'语义偏离度 0.42，接近漂移阈值', cls:'text-amber-400' },
+  { ts:'[08:54:00]', tag:'ACTION', data:'用户标记当前节点为 [待探索]', cls:'text-cyan-400' },
+];
+let termIdx = 0;
+const termEl = $('terminal-output');
+
+function addTermLine() {
+  if (termIdx >= terminalLines.length) { termIdx = 0; }
+  const line = terminalLines[termIdx++];
+  const div = document.createElement('div');
+  div.className = 'terminal-line';
+  div.innerHTML = `<span class="ts">${line.ts}</span> <span class="${line.cls}">${line.tag}</span> <span class="data">${line.data}</span>`;
+  termEl.appendChild(div);
+  if (termEl.children.length > 6) termEl.removeChild(termEl.firstChild);
+  termEl.scrollTop = termEl.scrollHeight;
+  setTimeout(addTermLine, 2500);
+}
+setTimeout(addTermLine, 3000);
+
+// ========== COORD DISPLAY FOLLOW MOUSE ==========
+traceCanvas.addEventListener('mousemove', e => {
+  const rect = traceCanvas.getBoundingClientRect();
+  $('coord-display').textContent = `${Math.round(e.clientX - rect.left)},${Math.round(e.clientY - rect.top)}`;
+});
+</script>
+</body>
+</html>

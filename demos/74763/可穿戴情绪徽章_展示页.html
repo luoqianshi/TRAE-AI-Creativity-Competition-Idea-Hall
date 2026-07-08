@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoodGlow —— 可穿戴情绪徽章</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+:root {
+  --bg-deep: #0a0a0f;
+  --bg-card: #101018;
+  --bg-card-hover: #16161f;
+  --border: #1e1e2a;
+  --border-glow: #2e2e40;
+  --text-primary: #eae6f0;
+  --text-secondary: #8a86a0;
+  --text-dim: #5a5670;
+  --calm-blue: #4a8eff;
+  --focus-amber: #e0a040;
+  --happy-pink: #e88aaa;
+  --anxious-orange: #e87040;
+  --sad-purple: #7a5adc;
+  --angry-red: #d84040;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: 'Outfit', 'Noto Serif SC', sans-serif;
+  line-height: 1.7;
+  overflow-x: hidden;
+}
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--border-glow); border-radius: 3px; }
+
+#bgCanvas { position:fixed; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none; }
+
+/* Status Bar */
+.status-bar {
+  position:fixed; top:0; left:0; right:0; z-index:100;
+  background:rgba(10,10,15,0.92); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  padding:10px 32px; display:flex; justify-content:space-between; align-items:center;
+  font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim);
+}
+.status-bar .logo {
+  font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:14px;
+  background:linear-gradient(135deg,var(--calm-blue),var(--happy-pink));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}
+.status-bar .dots { display:flex; gap:16px; align-items:center; }
+.status-bar .dot { display:flex; align-items:center; gap:5px; }
+.status-bar .dot::before {
+  content:''; width:6px; height:6px; border-radius:50%;
+  background:var(--happy-pink); box-shadow:0 0 6px var(--happy-pink);
+  animation:pulse 2s infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+/* Layout */
+.container { position:relative; z-index:1; }
+section { max-width:1280px; margin:0 auto; padding:80px 32px; }
+.section-label {
+  font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:3px;
+  text-transform:uppercase; color:var(--happy-pink); margin-bottom:8px;
+  display:flex; align-items:center; gap:8px;
+}
+.section-label::before { content:''; width:20px; height:1px; background:var(--happy-pink); }
+.section-title {
+  font-family:'Noto Serif SC',serif; font-size:32px; font-weight:700; margin-bottom:12px;
+  background:linear-gradient(135deg,var(--text-primary) 40%,var(--happy-pink));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}
+.section-desc { color:var(--text-secondary); font-size:15px; max-width:680px; margin-bottom:40px; }
+
+/* Hero */
+.hero {
+  min-height:100vh; display:flex; flex-direction:column;
+  justify-content:center; align-items:center; text-align:center;
+  padding-top:60px;
+}
+.hero-badge {
+  font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:2px;
+  color:var(--happy-pink); padding:6px 18px; border:1px solid rgba(232,138,170,0.3);
+  border-radius:20px; margin-bottom:32px; background:rgba(232,138,170,0.06);
+}
+.hero h1 {
+  font-family:'Noto Serif SC',serif; font-size:52px; font-weight:700; line-height:1.3; margin-bottom:20px;
+  background:linear-gradient(135deg,#fff 0%,var(--happy-pink) 50%,var(--calm-blue) 100%);
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}
+.hero h1 em {
+  font-style:normal;
+  background:linear-gradient(135deg,var(--focus-amber),var(--anxious-orange));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}
+.hero .subtitle { font-size:18px; color:var(--text-secondary); max-width:640px; margin-bottom:40px; }
+
+/* Badge Preview */
+.badge-preview {
+  width:260px; height:260px; position:relative; margin-bottom:40px;
+}
+#badgeCanvas { width:100%; height:100%; }
+.hero-stats { display:flex; gap:48px; margin-top:20px; }
+.hero-stat { text-align:center; }
+.hero-stat .num {
+  font-family:'JetBrains Mono',monospace; font-size:32px; font-weight:700;
+  background:linear-gradient(135deg,var(--calm-blue),var(--happy-pink));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}
+.hero-stat .label { font-size:13px; color:var(--text-dim); margin-top:4px; }
+
+/* Emotion Simulator */
+.emotion-sim {
+  display:grid; grid-template-columns:1fr 1fr; gap:24px;
+}
+.emotion-picker {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:16px; padding:28px;
+}
+.emotion-grid {
+  display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;
+}
+.emotion-btn {
+  padding:14px 8px; border-radius:12px; border:2px solid transparent;
+  background:rgba(255,255,255,0.03); cursor:pointer; transition:all 0.3s;
+  text-align:center; font-family:'Outfit',sans-serif; color:var(--text-secondary);
+}
+.emotion-btn:hover { background:rgba(255,255,255,0.06); }
+.emotion-btn.active { border-color:var(--ec); background:rgba(255,255,255,0.05); color:var(--text-primary); }
+.emotion-btn .e-icon { font-size:28px; margin-bottom:6px; }
+.emotion-btn .e-name { font-size:13px; font-weight:600; }
+.emotion-btn .e-desc { font-size:10px; color:var(--text-dim); margin-top:2px; }
+
+.badge-display {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:16px; padding:28px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+}
+#simBadgeCanvas { width:220px; height:220px; }
+.emotion-label {
+  font-family:'Noto Serif SC',serif; font-size:18px; font-weight:600;
+  margin-top:16px; transition:color 0.5s;
+}
+.emotion-sub { font-size:13px; color:var(--text-dim); margin-top:4px; }
+
+/* Biosignal Monitor */
+.bio-monitor {
+  display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:24px;
+}
+.bio-panel {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:16px; padding:24px;
+}
+.bio-panel .panel-title {
+  font-family:'Noto Serif SC',serif; font-size:16px; font-weight:600; margin-bottom:16px;
+  display:flex; align-items:center; gap:8px;
+}
+.bio-panel .panel-title .icon {
+  width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px;
+}
+#hrChart { width:100%; height:200px; }
+#edaChart { width:100%; height:200px; }
+.bio-stats { display:flex; gap:16px; margin-top:12px; }
+.bio-stat {
+  flex:1; padding:12px; border-radius:10px; background:rgba(255,255,255,0.02);
+  border:1px solid rgba(255,255,255,0.04); text-align:center;
+}
+.bio-stat .val {
+  font-family:'JetBrains Mono',monospace; font-size:22px; font-weight:700;
+}
+.bio-stat .unit { font-size:11px; color:var(--text-dim); }
+.bio-stat .lbl { font-size:11px; color:var(--text-secondary); margin-top:4px; }
+
+/* Emotion Timeline */
+.timeline-container {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:16px; padding:32px;
+}
+#timelineChart { width:100%; height:320px; }
+.timeline-legend {
+  display:flex; gap:16px; justify-content:center; margin-top:16px; flex-wrap:wrap;
+}
+.timeline-legend span {
+  display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary);
+}
+.timeline-legend span::before {
+  content:''; width:10px; height:10px; border-radius:50%;
+}
+
+/* Hardware Specs */
+.specs-grid {
+  display:grid; grid-template-columns:repeat(4,1fr); gap:16px;
+}
+.spec-card {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:12px; padding:24px; text-align:center; transition:all 0.3s;
+}
+.spec-card:hover {
+  border-color:var(--border-glow); transform:translateY(-3px);
+  box-shadow:0 8px 32px rgba(0,0,0,0.3);
+}
+.spec-card .spec-icon { font-size:32px; margin-bottom:12px; }
+.spec-card .spec-name { font-weight:600; font-size:15px; margin-bottom:6px; }
+.spec-card .spec-val {
+  font-family:'JetBrains Mono',monospace; font-size:13px;
+  color:var(--happy-pink); margin-bottom:4px;
+}
+.spec-card .spec-desc { font-size:12px; color:var(--text-dim); }
+
+/* Hardware Architecture */
+.arch-flow {
+  display:flex; align-items:center; justify-content:center;
+  gap:0; flex-wrap:wrap; margin:32px 0;
+}
+.arch-node {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:14px; padding:20px 24px; text-align:center;
+  min-width:160px; transition:all 0.3s;
+}
+.arch-node:hover { border-color:var(--border-glow); transform:scale(1.03); }
+.arch-node .node-icon { font-size:28px; margin-bottom:8px; }
+.arch-node .node-name { font-weight:600; font-size:14px; margin-bottom:4px; }
+.arch-node .node-detail { font-size:11px; color:var(--text-dim); }
+.arch-arrow-h {
+  font-size:20px; color:var(--text-dim); padding:0 8px;
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+}
+.arch-arrow-h .arrow-label {
+  font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--text-dim);
+}
+
+/* Use Cases */
+.cases-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+.case-card {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:14px; padding:28px; transition:all 0.3s;
+}
+.case-card:hover { border-color:var(--border-glow); transform:translateY(-3px); box-shadow:0 12px 40px rgba(0,0,0,0.3); }
+.case-card .case-icon {
+  width:48px; height:48px; border-radius:12px; display:flex; align-items:center; justify-content:center;
+  font-size:22px; margin-bottom:18px;
+}
+.case-card .case-title { font-family:'Noto Serif SC',serif; font-size:16px; font-weight:600; margin-bottom:10px; }
+.case-card .case-desc { font-size:13px; color:var(--text-secondary); line-height:1.8; }
+
+/* Tech Layers */
+.tech-stack { display:flex; flex-direction:column; gap:3px; max-width:860px; margin:0 auto; }
+.tech-layer {
+  background:var(--bg-card); border:1px solid var(--border); border-radius:12px;
+  padding:20px 28px; display:flex; align-items:center; gap:20px; transition:all 0.3s;
+}
+.tech-layer:hover { border-color:var(--border-glow); transform:translateX(4px); }
+.tech-layer .layer-tag {
+  font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px;
+  padding:4px 10px; border-radius:6px; white-space:nowrap;
+}
+.tech-layer .layer-name { font-weight:600; font-size:15px; min-width:140px; }
+.tech-layer .layer-items { display:flex; flex-wrap:wrap; gap:8px; flex:1; }
+.tech-layer .layer-item {
+  font-size:12px; padding:4px 12px; border-radius:8px;
+  background:rgba(255,255,255,0.03); color:var(--text-secondary);
+  border:1px solid rgba(255,255,255,0.04);
+}
+.arch-arrow-v { text-align:center; color:var(--text-dim); font-size:18px; line-height:1; }
+
+/* Footer */
+.footer {
+  text-align:center; padding:60px 32px; border-top:1px solid var(--border);
+  color:var(--text-dim); font-size:13px;
+}
+.footer .footer-brand {
+  font-family:'Space Grotesk',sans-serif; font-size:18px; font-weight:700;
+  background:linear-gradient(135deg,var(--happy-pink),var(--calm-blue));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:8px;
+}
+
+/* Animations */
+@keyframes fadeInUp { from{opacity:0;transform:translateY(20px);} to{opacity:1;transform:translateY(0);} }
+.anim { animation:fadeInUp 0.6s ease-out forwards; }
+.d1{animation-delay:.1s;opacity:0;} .d2{animation-delay:.2s;opacity:0;}
+.d3{animation-delay:.3s;opacity:0;} .d4{animation-delay:.4s;opacity:0;}
+
+@media(max-width:900px){
+  .hero h1{font-size:34px;} .emotion-sim{grid-template-columns:1fr;}
+  .bio-monitor{grid-template-columns:1fr;} .specs-grid{grid-template-columns:repeat(2,1fr);}
+  .cases-grid{grid-template-columns:1fr;} .arch-flow{flex-direction:column;}
+  .arch-arrow-h{transform:rotate(90deg);}
+}
+</style>
+</head>
+<body>
+
+<canvas id="bgCanvas"></canvas>
+
+<div class="status-bar">
+  <div class="logo">MoodGlow</div>
+  <div class="dots">
+    <span class="dot">BLE 已连接</span>
+    <span class="dot">传感器正常</span>
+    <span id="clock">--:--:--</span>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-badge anim">HARDWARE · INTERACTIVE · WEARABLE</div>
+  <h1 class="anim d1">MoodGlow<br>让情绪<em>被看见</em></h1>
+  <p class="subtitle anim d2">一枚硬币大小的可穿戴徽章，通过生物传感器感知你的情绪<br>用不同颜色的光晕，让世界温柔地理解你此刻的心情</p>
+  <div class="badge-preview anim d3">
+    <canvas id="badgeCanvas"></canvas>
+  </div>
+  <div class="hero-stats anim d4">
+    <div class="hero-stat"><div class="num" id="sEmotions">0</div><div class="label">情绪类型</div></div>
+    <div class="hero-stat"><div class="num" id="sBattery">0</div><div class="label">续航(小时)</div></div>
+    <div class="hero-stat"><div class="num" id="sWeight">0</div><div class="label">重量(g)</div></div>
+    <div class="hero-stat"><div class="num" id="sSensors">0</div><div class="label">传感器</div></div>
+  </div>
+</section>
+
+<!-- EMOTION SIMULATOR -->
+<section>
+  <div class="section-label">LIVE DEMO</div>
+  <div class="section-title">情绪光效模拟器</div>
+  <div class="section-desc">点击不同情绪按钮，体验 MoodGlow 徽章的光效变化。每种情绪对应独特的颜色、脉动频率和流动方式</div>
+
+  <div class="emotion-sim">
+    <div class="emotion-picker">
+      <div style="font-weight:600;margin-bottom:16px;">选择当前情绪状态</div>
+      <div class="emotion-grid" id="emotionGrid"></div>
+      <div style="padding:16px;border-radius:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);">
+        <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;" id="emotionExplain">
+          选择一种情绪，查看徽章如何呈现你的心情。
+        </div>
+      </div>
+    </div>
+    <div class="badge-display">
+      <canvas id="simBadgeCanvas" width="440" height="440"></canvas>
+      <div class="emotion-label" id="emotionLabel">平静</div>
+      <div class="emotion-sub" id="emotionSub">缓慢呼吸的蓝色光晕，如湖面微波</div>
+    </div>
+  </div>
+
+  <div class="bio-monitor">
+    <div class="bio-panel">
+      <div class="panel-title">
+        <span class="icon" style="background:rgba(216,64,64,0.1);">❤️</span>
+        实时心率波形 (PPG)
+      </div>
+      <canvas id="hrCanvas" width="600" height="200" style="width:100%;height:200px;"></canvas>
+      <div class="bio-stats">
+        <div class="bio-stat">
+          <div class="val" style="color:var(--angry-red);" id="hrVal">72</div>
+          <div class="unit">BPM</div>
+          <div class="lbl">当前心率</div>
+        </div>
+        <div class="bio-stat">
+          <div class="val" style="color:var(--calm-blue);" id="hrvVal">48</div>
+          <div class="unit">ms</div>
+          <div class="lbl">HRV 变异度</div>
+        </div>
+        <div class="bio-stat">
+          <div class="val" style="color:var(--focus-amber);" id="stressVal">32</div>
+          <div class="unit">%</div>
+          <div class="lbl">压力指数</div>
+        </div>
+      </div>
+    </div>
+    <div class="bio-panel">
+      <div class="panel-title">
+        <span class="icon" style="background:rgba(74,142,255,0.1);">⚡</span>
+        皮肤电导信号 (EDA)
+      </div>
+      <canvas id="edaCanvas" width="600" height="200" style="width:100%;height:200px;"></canvas>
+      <div class="bio-stats">
+        <div class="bio-stat">
+          <div class="val" style="color:var(--sad-purple);" id="edaVal">2.8</div>
+          <div class="unit">μS</div>
+          <div class="lbl">电导值</div>
+        </div>
+        <div class="bio-stat">
+          <div class="val" style="color:var(--happy-pink);" id="arousalVal">低</div>
+          <div class="unit">&nbsp;</div>
+          <div class="lbl">唤醒度</div>
+        </div>
+        <div class="bio-stat">
+          <div class="val" style="color:var(--calm-blue);" id="valenceVal">正</div>
+          <div class="unit">&nbsp;</div>
+          <div class="lbl">效价</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- EMOTION TIMELINE -->
+<section>
+  <div class="section-label">EMOTION JOURNAL</div>
+  <div class="section-title">24小时情绪日志</div>
+  <div class="section-desc">配套 App 自动记录全天情绪变化，帮你发现"每周一上午都焦虑"的隐藏规律，建立自我情绪认知</div>
+
+  <div class="timeline-container">
+    <div id="timelineChart"></div>
+    <div class="timeline-legend">
+      <span style="--c:var(--calm-blue);"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--calm-blue);"></span> 平静</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--focus-amber);"></span> 专注</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--happy-pink);"></span> 开心</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--anxious-orange);"></span> 焦虑</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--sad-purple);"></span> 低落</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--angry-red);"></span> 烦躁</span>
+    </div>
+  </div>
+</section>
+
+<!-- HARDWARE SPECS -->
+<section>
+  <div class="section-label">HARDWARE SPECS</div>
+  <div class="section-title">硬件规格参数</div>
+  <div class="section-desc">硬币大小的精密硬件，集成生物传感、LED 显示、无线通信和电源管理四大模块</div>
+
+  <div class="specs-grid">
+    <div class="spec-card">
+      <div class="spec-icon">💓</div>
+      <div class="spec-name">心率传感器</div>
+      <div class="spec-val">MAX30102</div>
+      <div class="spec-desc">光电式 PPG 心率+血氧</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">⚡</div>
+      <div class="spec-name">皮肤电导</div>
+      <div class="spec-val">EDA-AFE</div>
+      <div class="spec-desc">双电极皮肤电导检测</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">💡</div>
+      <div class="spec-name">LED 阵列</div>
+      <div class="spec-val">8×8 RGB</div>
+      <div class="spec-desc">64 颗 WS2812B 全彩 LED</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">🧠</div>
+      <div class="spec-name">主控芯片</div>
+      <div class="spec-val">nRF52840</div>
+      <div class="spec-desc">BLE 5.0 + ARM Cortex-M4</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">🔋</div>
+      <div class="spec-name">电池</div>
+      <div class="spec-val">200mAh</div>
+      <div class="spec-desc">锂聚合物，磁吸充电</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">📐</div>
+      <div class="spec-name">尺寸</div>
+      <div class="spec-val">Ø42×8mm</div>
+      <div class="spec-desc">硬币大小，轻若无物</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">⚖️</div>
+      <div class="spec-name">重量</div>
+      <div class="spec-val">15g</div>
+      <div class="spec-desc">含电池和外壳</div>
+    </div>
+    <div class="spec-card">
+      <div class="spec-icon">🛡️</div>
+      <div class="spec-name">防护等级</div>
+      <div class="spec-val">IP54</div>
+      <div class="spec-desc">防汗防溅水</div>
+    </div>
+  </div>
+</section>
+
+<!-- HARDWARE ARCHITECTURE -->
+<section>
+  <div class="section-label">SYSTEM ARCHITECTURE</div>
+  <div class="section-title">系统架构与数据流</div>
+  <div class="section-desc">从生物信号采集到情绪识别再到光效呈现，完整的端到端处理链路</div>
+
+  <div class="arch-flow">
+    <div class="arch-node">
+      <div class="node-icon">💓</div>
+      <div class="node-name">生物传感器</div>
+      <div class="node-detail">PPG + EDA<br>原始信号采集</div>
+    </div>
+    <div class="arch-arrow-h">→<span class="arrow-label">I2C/ADC</span></div>
+    <div class="arch-node">
+      <div class="node-icon">🧠</div>
+      <div class="node-name">主控 MCU</div>
+      <div class="node-detail">nRF52840<br>信号预处理</div>
+    </div>
+    <div class="arch-arrow-h">→<span class="arrow-label">SPI</span></div>
+    <div class="arch-node">
+      <div class="node-icon">💡</div>
+      <div class="node-name">LED 驱动</div>
+      <div class="node-detail">WS2812B 阵列<br>光效渲染</div>
+    </div>
+  </div>
+  <div style="text-align:center;margin:8px 0;">
+    <span style="font-size:14px;color:var(--text-dim);">↕ BLE 5.0 无线传输 ↕</span>
+  </div>
+  <div class="arch-flow">
+    <div class="arch-node">
+      <div class="node-icon">📱</div>
+      <div class="node-name">手机 App</div>
+      <div class="node-detail">情绪日志<br>趋势分析</div>
+    </div>
+    <div class="arch-arrow-h">←<span class="arrow-label">AI 推理</span></div>
+    <div class="arch-node">
+      <div class="node-icon">☁️</div>
+      <div class="node-name">云端服务</div>
+      <div class="node-detail">情绪识别模型<br>个性化校准</div>
+    </div>
+    <div class="arch-arrow-h">←<span class="arrow-label">特征提取</span></div>
+    <div class="arch-node">
+      <div class="node-icon">📊</div>
+      <div class="node-name">数据引擎</div>
+      <div class="node-detail">HRV/EDA 特征<br>时序分析</div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section>
+  <div class="section-label">USE CASES</div>
+  <div class="section-title">四大使用场景</div>
+  <div class="section-desc">从办公室到社交聚会，从学校到家庭，MoodGlow 让情绪成为沟通的桥梁而非障碍</div>
+
+  <div class="cases-grid">
+    <div class="case-card">
+      <div class="case-icon" style="background:rgba(74,142,255,0.1);">🏢</div>
+      <div class="case-title">开放式办公室</div>
+      <div class="case-desc">同事看到你的徽章亮起琥珀色专注光，自觉减少打扰。红色脉动代表"赶 deadline 中"，蓝色呼吸代表"可以聊天"。减少 30% 不必要的打断。</div>
+    </div>
+    <div class="case-card">
+      <div class="case-icon" style="background:rgba(232,138,170,0.1);">🎉</div>
+      <div class="case-title">社交破冰</div>
+      <div class="case-desc">聚会上看到对方徽章是温暖的粉色渐变，自然开口："你今天心情不错呀！"——情绪徽章成为最自然的社交话题开启器。</div>
+    </div>
+    <div class="case-card">
+      <div class="case-icon" style="background:rgba(122,90,220,0.1);">🏫</div>
+      <div class="case-title">特殊儿童关怀</div>
+      <div class="case-desc">自闭症谱系儿童难以表达情绪，佩戴 MoodGlow 后，老师通过颜色变化及时感知孩子的焦虑或不安，提前介入安抚。</div>
+    </div>
+    <div class="case-card">
+      <div class="case-icon" style="background:rgba(224,160,64,0.1);">📊</div>
+      <div class="case-title">情绪自我认知</div>
+      <div class="case-desc">App 自动生成每日/每周情绪报告，发现"每次周一上午都焦虑""和某同事开会后总是低落"等隐藏规律，建立自我情绪觉察力。</div>
+    </div>
+    <div class="case-card">
+      <div class="case-icon" style="background:rgba(232,112,64,0.1);">👨‍👩‍👧</div>
+      <div class="case-title">家庭情绪沟通</div>
+      <div class="case-desc">回家后看到孩子的徽章是紫色低落，主动关心而不是追问成绩。看到伴侣是橙色焦虑，选择先给一杯热茶再谈事情。</div>
+    </div>
+    <div class="case-card">
+      <div class="case-icon" style="background:rgba(64,200,154,0.1);">🧘</div>
+      <div class="case-title">冥想与放松训练</div>
+      <div class="case-desc">冥想时徽章实时反馈情绪状态，从焦虑红渐变为平静蓝，给你可视化的"放松进度条"。训练情绪自我调节能力。</div>
+    </div>
+  </div>
+</section>
+
+<!-- TECH STACK -->
+<section>
+  <div class="section-label">TECHNOLOGY</div>
+  <div class="section-title">技术架构与原理</div>
+  <div class="section-desc">四层技术栈，从生物信号采集到情绪识别再到光效渲染，构建完整的可穿戴情绪计算系统</div>
+
+  <div class="tech-stack">
+    <div class="tech-layer">
+      <span class="layer-tag" style="background:rgba(232,138,170,0.12);color:var(--happy-pink);">感知层</span>
+      <span class="layer-name">生物信号采集</span>
+      <div class="layer-items">
+        <span class="layer-item">MAX30102 PPG</span>
+        <span class="layer-item">EDA 双电极</span>
+        <span class="layer-item">体温传感器</span>
+        <span class="layer-item">三轴加速度计</span>
+      </div>
+    </div>
+    <div class="arch-arrow-v">↕</div>
+    <div class="tech-layer">
+      <span class="layer-tag" style="background:rgba(74,142,255,0.12);color:var(--calm-blue);">计算层</span>
+      <span class="layer-name">情绪识别引擎</span>
+      <div class="layer-items">
+        <span class="layer-item">HRV 频域分析</span>
+        <span class="layer-item">EDA 峰值检测</span>
+        <span class="layer-item">LSTM 情绪分类</span>
+        <span class="layer-item">个性化校准</span>
+      </div>
+    </div>
+    <div class="arch-arrow-v">↕</div>
+    <div class="tech-layer">
+      <span class="layer-tag" style="background:rgba(224,160,64,0.12);color:var(--focus-amber);">通信层</span>
+      <span class="layer-name">无线传输</span>
+      <div class="layer-items">
+        <span class="layer-item">BLE 5.0 低功耗</span>
+        <span class="layer-item">数据压缩编码</span>
+        <span class="layer-item">OTA 固件升级</span>
+        <span class="layer-item">多设备互联</span>
+      </div>
+    </div>
+    <div class="arch-arrow-v">↕</div>
+    <div class="tech-layer">
+      <span class="layer-tag" style="background:rgba(122,90,220,0.12);color:var(--sad-purple);">呈现层</span>
+      <span class="layer-name">光效与应用</span>
+      <div class="layer-items">
+        <span class="layer-item">WS2812B 光效引擎</span>
+        <span class="layer-item">情绪日志 App</span>
+        <span class="layer-item">趋势分析面板</span>
+        <span class="layer-item">团队情绪看板</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="footer">
+  <div class="footer-brand">MoodGlow</div>
+  <div>可穿戴情绪徽章 —— 让情绪被看见，让理解更温柔</div>
+  <div style="margin-top:8px;color:var(--text-dim);">硬件交互赛道 · TraeAI 创意大赛</div>
+</div>
+
+</div>
+
+<script>
+// Clock
+function updateClock(){
+  document.getElementById('clock').textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+}
+setInterval(updateClock,1000); updateClock();
+
+// Background Canvas
+(function(){
+  const c=document.getElementById('bgCanvas'),x=c.getContext('2d');
+  let w,h,ps=[];
+  function resize(){w=c.width=innerWidth;h=c.height=innerHeight;}
+  resize(); addEventListener('resize',resize);
+  const cols=['#4a8eff','#e88aaa','#e0a040','#7a5adc','#e87040'];
+  for(let i=0;i<50;i++) ps.push({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.25,vy:(Math.random()-.5)*.25,r:Math.random()*1.8+.8,color:cols[~~(Math.random()*cols.length)],a:Math.random()*.4+.15});
+  function draw(){
+    x.clearRect(0,0,w,h);
+    ps.forEach((p,i)=>{
+      p.x+=p.vx;p.y+=p.vy;
+      if(p.x<0||p.x>w)p.vx*=-1;if(p.y<0||p.y>h)p.vy*=-1;
+      x.beginPath();x.arc(p.x,p.y,p.r,0,Math.PI*2);
+      x.fillStyle=p.color;x.globalAlpha=p.a;x.fill();
+      for(let j=i+1;j<ps.length;j++){
+        const d=Math.hypot(p.x-ps[j].x,p.y-ps[j].y);
+        if(d<140){x.beginPath();x.moveTo(p.x,p.y);x.lineTo(ps[j].x,ps[j].y);x.strokeStyle=p.color;x.globalAlpha=(1-d/140)*.06;x.lineWidth=.5;x.stroke();}
+      }
+    });
+    x.globalAlpha=1;requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// Hero Badge Canvas
+(function(){
+  const c=document.getElementById('badgeCanvas'),x=c.getContext('2d');
+  c.width=520;c.height=520;
+  let t=0;
+  const emotions=['#4a8eff','#e0a040','#e88aaa','#e87040','#7a5adc','#d84040'];
+  function draw(){
+    x.clearRect(0,0,520,520);t+=.008;
+    const cx=260,cy=260;
+    // outer glow rings
+    for(let r=0;r<3;r++){
+      const radius=80+r*25+Math.sin(t*2+r)*8;
+      const ei=~~((t*.3+r*.5)%emotions.length);
+      const col=emotions[ei];
+      x.beginPath();x.arc(cx,cy,radius,0,Math.PI*2);
+      x.strokeStyle=col;x.globalAlpha=.08+Math.sin(t*3+r)*.04;x.lineWidth=2;x.stroke();
+    }
+    // core glow
+    const grad=x.createRadialGradient(cx,cy,0,cx,cy,100);
+    const ci=~~((t*.5)%emotions.length);
+    grad.addColorStop(0,emotions[ci]+'60');
+    grad.addColorStop(.5,emotions[ci]+'20');
+    grad.addColorStop(1,emotions[ci]+'00');
+    x.beginPath();x.arc(cx,cy,100,0,Math.PI*2);x.fillStyle=grad;x.globalAlpha=1;x.fill();
+    // badge body
+    x.beginPath();x.arc(cx,cy,55,0,Math.PI*2);
+    const bg=x.createRadialGradient(cx-15,cy-15,0,cx,cy,55);
+    bg.addColorStop(0,'#2a2a35');bg.addColorStop(1,'#18181f');
+    x.fillStyle=bg;x.globalAlpha=1;x.fill();
+    x.strokeStyle='rgba(255,255,255,0.08)';x.lineWidth=1.5;x.stroke();
+    // inner LED dots
+    for(let i=0;i<8;i++){
+      const a=(i/8)*Math.PI*2+t;
+      const r2=30;
+      const dx=cx+Math.cos(a)*r2,dy=cy+Math.sin(a)*r2;
+      const col2=emotions[~~((t+i*.5)%emotions.length)];
+      x.beginPath();x.arc(dx,dy,3+Math.sin(t*4+i)*.8,0,Math.PI*2);
+      x.fillStyle=col2;x.globalAlpha=.7+Math.sin(t*3+i)*.3;x.fill();
+    }
+    x.globalAlpha=1;requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// Counter animation
+function animC(el,target,dur){
+  let s=0;const step=target/(dur/16);
+  function tick(){s+=step;if(s>=target){el.textContent=target;return;}el.textContent=~~s;requestAnimationFrame(tick);}
+  tick();
+}
+setTimeout(()=>{
+  animC(document.getElementById('sEmotions'),6,1000);
+  animC(document.getElementById('sBattery'),18,1200);
+  animC(document.getElementById('sWeight'),15,800);
+  animC(document.getElementById('sSensors'),4,600);
+},500);
+
+// Emotion Data
+const EMOTIONS=[
+  {id:'calm',name:'平静',icon:'🌊',color:'#4a8eff',desc:'缓慢呼吸的蓝色光晕，如湖面微波',
+   explain:'心率平稳(65-75BPM)，HRV高，皮肤电导低且平稳。LED呈现2秒周期的蓝色呼吸灯效果。',
+   hr:68,hrv:55,eda:2.2,arousal:'低',valence:'正',stress:20},
+  {id:'focus',name:'专注',icon:'🎯',color:'#e0a040',desc:'稳定的琥珀色恒光，如烛光不动',
+   explain:'心率略低(60-70BPM)，HRV中等，皮肤电导稳定。LED呈现不闪烁的琥珀色恒光，表示深度专注。',
+   hr:64,hrv:42,eda:2.8,arousal:'低',valence:'正',stress:25},
+  {id:'happy',name:'开心',icon:'😊',color:'#e88aaa',desc:'流动的暖粉渐变，如晚霞流转',
+   explain:'心率适中(70-85BPM)，HRV较高，皮肤电导微升。LED呈现粉-金渐变流动效果，如呼吸般柔和变化。',
+   hr:78,hrv:50,eda:3.5,arousal:'中',valence:'正',stress:15},
+  {id:'anxious',name:'焦虑',icon:'😰',color:'#e87040',desc:'快速脉动的橙色光，如心跳加速',
+   explain:'心率升高(90-110BPM)，HRV降低，皮肤电导上升且有波动。LED呈现1秒周期的橙色快速脉动。',
+   hr:98,hrv:28,eda:5.8,arousal:'高',valence:'负',stress:72},
+  {id:'sad',name:'低落',icon:'😔',color:'#7a5adc',desc:'微弱的深紫暗光，如将灭的星',
+   explain:'心率偏低(58-68BPM)，HRV低，皮肤电导极低。LED呈现低亮度紫色微光，缓慢明暗变化。',
+   hr:62,hrv:22,eda:1.5,arousal:'低',valence:'负',stress:45},
+  {id:'angry',name:'烦躁',icon:'😤',color:'#d84040',desc:'急促闪烁的红色光，如火焰跳动',
+   explain:'心率显著升高(100-120BPM)，HRV极低，皮肤电导急剧上升。LED呈现不规则红色闪烁，频率随心率同步。',
+   hr:108,hrv:15,eda:7.2,arousal:'高',valence:'负',stress:85}
+];
+
+let currentEmotion=0;
+
+// Render emotion buttons
+const egrid=document.getElementById('emotionGrid');
+EMOTIONS.forEach((e,i)=>{
+  const btn=document.createElement('div');
+  btn.className='emotion-btn'+(i===0?' active':'');
+  btn.style.setProperty('--ec',e.color);
+  btn.innerHTML=`<div class="e-icon">${e.icon}</div><div class="e-name">${e.name}</div><div class="e-desc">${e.color.slice(0,7)}</div>`;
+  btn.onclick=()=>selectEmotion(i);
+  egrid.appendChild(btn);
+});
+
+function selectEmotion(idx){
+  currentEmotion=idx;
+  const e=EMOTIONS[idx];
+  document.querySelectorAll('.emotion-btn').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  document.getElementById('emotionLabel').textContent=e.name;
+  document.getElementById('emotionLabel').style.color=e.color;
+  document.getElementById('emotionSub').textContent=e.desc;
+  document.getElementById('emotionExplain').textContent=e.explain;
+  // Update bio values
+  document.getElementById('hrVal').textContent=e.hr;
+  document.getElementById('hrvVal').textContent=e.hrv;
+  document.getElementById('stressVal').textContent=e.stress;
+  document.getElementById('edaVal').textContent=e.eda;
+  document.getElementById('arousalVal').textContent=e.arousal;
+  document.getElementById('valenceVal').textContent=e.valence;
+}
+
+// Sim Badge Canvas
+(function(){
+  const c=document.getElementById('simBadgeCanvas'),x=c.getContext('2d');
+  let t=0;
+  function draw(){
+    x.clearRect(0,0,440,440);t+=.012;
+    const cx=220,cy=200,e=EMOTIONS[currentEmotion],col=e.color;
+    // speed factor per emotion
+    const speeds={calm:1,focus:0.3,happy:1.5,anxious:4,sad:0.5,angry:5};
+    const spd=speeds[e.id]||1;
+    // outer glow
+    for(let r=0;r<4;r++){
+      const radius=60+r*18+Math.sin(t*spd+r)*6;
+      x.beginPath();x.arc(cx,cy,radius,0,Math.PI*2);
+      x.strokeStyle=col;x.globalAlpha=.06+Math.sin(t*spd*2+r)*.03;x.lineWidth=1.5;x.stroke();
+    }
+    // core glow
+    const pulse=Math.sin(t*spd)*.3+.7;
+    const grad=x.createRadialGradient(cx,cy,0,cx,cy,80);
+    grad.addColorStop(0,col+Math.round(pulse*80).toString(16).padStart(2,'0'));
+    grad.addColorStop(.6,col+'20');
+    grad.addColorStop(1,col+'00');
+    x.beginPath();x.arc(cx,cy,80,0,Math.PI*2);x.fillStyle=grad;x.globalAlpha=1;x.fill();
+    // badge body
+    x.beginPath();x.arc(cx,cy,45,0,Math.PI*2);
+    const bg=x.createRadialGradient(cx-10,cy-10,0,cx,cy,45);
+    bg.addColorStop(0,'#2a2a35');bg.addColorStop(1,'#18181f');
+    x.fillStyle=bg;x.globalAlpha=1;x.fill();
+    x.strokeStyle=col+'40';x.lineWidth=2;x.stroke();
+    // LED ring
+    const ledCount=12;
+    for(let i=0;i<ledCount;i++){
+      const a=(i/ledCount)*Math.PI*2+t*spd*.5;
+      const r2=28;
+      const dx=cx+Math.cos(a)*r2,dy=cy+Math.sin(a)*r2;
+      const brightness=e.id==='anxious'||e.id==='angry'?(Math.sin(t*spd*3+i*2)>.3?1:.2):(.6+Math.sin(t*spd+i)*.4);
+      x.beginPath();x.arc(dx,dy,2.5,0,Math.PI*2);
+      x.fillStyle=col;x.globalAlpha=brightness;x.fill();
+    }
+    // flowing effect for happy
+    if(e.id==='happy'){
+      for(let i=0;i<5;i++){
+        const a=t*1.5+i*1.2;
+        const r3=50+Math.sin(t+i)*10;
+        const dx=cx+Math.cos(a)*r3,dy=cy+Math.sin(a)*r3;
+        x.beginPath();x.arc(dx,dy,2,0,Math.PI*2);
+        x.fillStyle='#e88aaa';x.globalAlpha=.5;x.fill();
+      }
+    }
+    x.globalAlpha=1;requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// HR Waveform Canvas
+(function(){
+  const c=document.getElementById('hrCanvas'),x=c.getContext('2d');
+  let data=new Array(300).fill(0),t=0;
+  function draw(){
+    const w=c.width,h=c.height,e=EMOTIONS[currentEmotion];
+    const speeds={calm:1.2,focus:1,happy:1.5,anxious:2.5,sad:0.8,angry:3};
+    const amps={calm:.6,focus:.5,happy:.7,anxious:1,sad:.4,angry:1.2};
+    const spd=speeds[e.id]||1,amp=amps[e.id]||.6;
+    t+=.05*spd;
+    // generate PPG-like wave
+    const v=Math.sin(t*3)*amp*.4+Math.sin(t*6)*amp*.2+(Math.sin(t)>.7?amp*.4:0)+Math.random()*.05;
+    data.push(v);if(data.length>300)data.shift();
+    x.clearRect(0,0,w,h);
+    // grid
+    x.strokeStyle='rgba(255,255,255,0.03)';x.lineWidth=1;
+    for(let y=0;y<h;y+=h/4){x.beginPath();x.moveTo(0,y);x.lineTo(w,y);x.stroke();}
+    // waveform
+    x.beginPath();
+    data.forEach((v,i)=>{
+      const px=(i/300)*w,py=h/2-v*h*.35;
+      i===0?x.moveTo(px,py):x.lineTo(px,py);
+    });
+    x.strokeStyle=e.color;x.lineWidth=2;x.stroke();
+    // glow
+    x.beginPath();
+    data.forEach((v,i)=>{
+      const px=(i/300)*w,py=h/2-v*h*.35;
+      i===0?x.moveTo(px,py):x.lineTo(px,py);
+    });
+    x.strokeStyle=e.color+'40';x.lineWidth=6;x.stroke();
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// EDA Waveform Canvas
+(function(){
+  const c=document.getElementById('edaCanvas'),x=c.getContext('2d');
+  let data=new Array(300).fill(0),t=0;
+  function draw(){
+    const w=c.width,h=c.height,e=EMOTIONS[currentEmotion];
+    const bases={calm:.3,focus:.35,happy:.45,anxious:.7,sad:.2,angry:.85};
+    const noise={calm:.02,focus:.02,happy:.04,anxious:.1,sad:.01,angry:.12};
+    const base=bases[e.id]||.3,n=noise[e.id]||.03;
+    t+=.03;
+    const v=base+Math.sin(t*.5)*.05+(Math.random()-.5)*n;
+    data.push(v);if(data.length>300)data.shift();
+    x.clearRect(0,0,w,h);
+    x.strokeStyle='rgba(255,255,255,0.03)';x.lineWidth=1;
+    for(let y=0;y<h;y+=h/4){x.beginPath();x.moveTo(0,y);x.lineTo(w,y);x.stroke();}
+    x.beginPath();
+    data.forEach((v,i)=>{
+      const px=(i/300)*w,py=h-v*h*.8;
+      i===0?x.moveTo(px,py):x.lineTo(px,py);
+    });
+    x.strokeStyle='#7a5adc';x.lineWidth=2;x.stroke();
+    x.beginPath();
+    data.forEach((v,i)=>{
+      const px=(i/300)*w,py=h-v*h*.8;
+      i===0?x.moveTo(px,py):x.lineTo(px,py);
+    });
+    x.strokeStyle='#7a5adc40';x.lineWidth=6;x.stroke();
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// Timeline Chart
+(function(){
+  const chart=echarts.init(document.getElementById('timelineChart'));
+  const hours=Array.from({length:24},(_, i)=>`${i}:00`);
+  const emotionColors=['#4a8eff','#e0a040','#e88aaa','#e87040','#7a5adc','#d84040'];
+  const emotionNames=['平静','专注','开心','焦虑','低落','烦躁'];
+  // simulate a day's emotion data
+  const dayData=[
+    [0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,4],[7,0], // 0-7: sleep/calm
+    [8,1],[9,1],[10,3],[11,1],[12,2],[13,1],[14,1],[15,3], // 8-15: work
+    [16,2],[17,2],[18,0],[19,2],[20,0],[21,0],[22,0],[23,0] // 16-23: evening
+  ];
+  const scatterData=dayData.map(([h,ei])=>({
+    value:[hours[h],1],
+    itemStyle:{color:emotionColors[ei]},
+    symbolSize:20,
+    emotion:emotionNames[ei]
+  }));
+  // intensity line
+  const intensityData=dayData.map(([h,ei])=>{
+    const intensities=[60,75,80,90,40,95];
+    return intensities[ei];
+  });
+
+  chart.setOption({
+    backgroundColor:'transparent',
+    tooltip:{
+      trigger:'item',backgroundColor:'#16161f',borderColor:'#2e2e40',
+      textStyle:{color:'#eae6f0'},
+      formatter:p=>p.seriesIndex===0?`${p.value[0]}<br/>情绪: <b>${p.data.emotion}</b>`:''
+    },
+    grid:{left:60,right:40,top:40,bottom:60},
+    xAxis:{
+      type:'category',data:hours,
+      axisLabel:{color:'#5a5670',fontSize:11,interval:2},
+      axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},
+      splitLine:{show:false}
+    },
+    yAxis:[
+      {type:'value',show:false,min:0,max:2},
+      {type:'value',max:100,axisLabel:{color:'#5a5670',fontSize:11,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.03)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}}
+    ],
+    series:[
+      {
+        type:'scatter',yAxisIndex:0,data:scatterData,
+        emphasis:{scale:1.5}
+      },
+      {
+        type:'line',yAxisIndex:1,data:intensityData,smooth:true,
+        lineStyle:{color:'rgba(255,255,255,0.1)',width:1,type:'dashed'},
+        itemStyle:{color:'transparent'},symbol:'none',
+        areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,
+          colorStops:[{offset:0,color:'rgba(255,255,255,0.03)'},{offset:1,color:'rgba(255,255,255,0)'}]}}
+      }
+    ]
+  });
+  addEventListener('resize',()=>chart.resize());
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工厂设备异常停机原因分析平台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --surface: #111824;
+            --surface-light: #1a2332;
+            --border: #1e2d3d;
+            --green: #00c8a0;
+            --green-dim: rgba(0,200,160,0.15);
+            --amber: #f0a030;
+            --amber-dim: rgba(240,160,48,0.15);
+            --red: #e85050;
+            --red-dim: rgba(232,80,80,0.15);
+            --blue: #3a8ae0;
+            --blue-dim: rgba(58,138,224,0.15);
+            --text: #e8eef5;
+            --text-secondary: #8a9bb0;
+            --text-muted: #5a6a7d;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        /* Background Canvas */
+        #bgCanvas {
+            position: fixed;
+            top:0; left:0;
+            width:100%; height:100%;
+            z-index:0;
+            pointer-events:none;
+            opacity:0.4;
+        }
+        .container { position:relative; z-index:1; max-width:1400px; margin:0 auto; padding:0 24px; }
+
+        /* Header */
+        header {
+            border-bottom:1px solid var(--border);
+            background:rgba(10,14,20,0.85);
+            backdrop-filter:blur(12px);
+            position:sticky; top:0; z-index:100;
+        }
+        .header-inner {
+            display:flex; align-items:center; justify-content:space-between;
+            padding:14px 24px; max-width:1400px; margin:0 auto;
+        }
+        .brand {
+            display:flex; align-items:center; gap:12px;
+        }
+        .brand-icon {
+            width:36px; height:36px; border-radius:8px;
+            background:linear-gradient(135deg, var(--green), var(--blue));
+            display:flex; align-items:center; justify-content:center;
+            font-size:18px; font-weight:700; color:#fff;
+        }
+        .brand-title {
+            font-family:'Space Grotesk', sans-serif;
+            font-size:18px; font-weight:600; letter-spacing:-0.3px;
+        }
+        .brand-sub { font-size:11px; color:var(--text-muted); margin-top:2px; }
+        .header-status {
+            display:flex; align-items:center; gap:20px;
+            font-size:13px; color:var(--text-secondary);
+        }
+        .status-dot {
+            width:8px; height:8px; border-radius:50%;
+            background:var(--green);
+            box-shadow:0 0 8px var(--green);
+            animation:pulse 2s infinite;
+        }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+        .header-time { font-family:'JetBrains Mono', monospace; font-size:13px; }
+
+        /* Hero KPI */
+        .hero {
+            padding:32px 0 20px;
+        }
+        .hero-title {
+            font-family:'Space Grotesk', sans-serif;
+            font-size:28px; font-weight:700;
+            margin-bottom:4px;
+        }
+        .hero-desc { color:var(--text-secondary); font-size:14px; margin-bottom:24px; }
+        .kpi-grid {
+            display:grid;
+            grid-template-columns:repeat(4, 1fr);
+            gap:16px;
+        }
+        .kpi-card {
+            background:var(--surface);
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:20px;
+            position:relative;
+            overflow:hidden;
+            transition:transform 0.2s, border-color 0.2s;
+        }
+        .kpi-card:hover { transform:translateY(-2px); border-color:#2a3d52; }
+        .kpi-card::before {
+            content:''; position:absolute; top:0; left:0; right:0; height:3px;
+        }
+        .kpi-card.green::before { background:var(--green); box-shadow:0 0 12px var(--green); }
+        .kpi-card.amber::before { background:var(--amber); box-shadow:0 0 12px var(--amber); }
+        .kpi-card.red::before { background:var(--red); box-shadow:0 0 12px var(--red); }
+        .kpi-card.blue::before { background:var(--blue); box-shadow:0 0 12px var(--blue); }
+        .kpi-label { font-size:12px; color:var(--text-secondary); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px; }
+        .kpi-value {
+            font-family:'JetBrains Mono', monospace;
+            font-size:32px; font-weight:600;
+            margin-bottom:6px;
+        }
+        .kpi-change { font-size:12px; }
+        .kpi-change.up { color:var(--red); }
+        .kpi-change.down { color:var(--green); }
+        .kpi-change.neutral { color:var(--text-muted); }
+
+        /* Section */
+        .section { margin:32px 0; }
+        .section-header {
+            display:flex; align-items:center; justify-content:space-between;
+            margin-bottom:16px;
+        }
+        .section-title {
+            font-family:'Space Grotesk', sans-serif;
+            font-size:18px; font-weight:600;
+            display:flex; align-items:center; gap:10px;
+        }
+        .section-title::before {
+            content:''; width:4px; height:20px; border-radius:2px;
+            background:var(--green);
+        }
+        .section-action {
+            font-size:13px; color:var(--blue); cursor:pointer;
+            padding:6px 14px; border:1px solid var(--border); border-radius:6px;
+            background:var(--surface); transition:all 0.2s;
+        }
+        .section-action:hover { border-color:var(--blue); background:var(--blue-dim); }
+
+        /* Equipment Grid */
+        .eq-grid {
+            display:grid;
+            grid-template-columns:repeat(4, 1fr);
+            gap:14px;
+        }
+        .eq-card {
+            background:var(--surface);
+            border:1px solid var(--border);
+            border-radius:10px;
+            padding:16px;
+            cursor:pointer;
+            transition:all 0.25s;
+            position:relative;
+        }
+        .eq-card:hover { border-color:#2a3d52; transform:translateY(-2px); }
+        .eq-card.running { border-left:3px solid var(--green); }
+        .eq-card.warning { border-left:3px solid var(--amber); }
+        .eq-card.stopped { border-left:3px solid var(--red); }
+        .eq-header {
+            display:flex; align-items:center; justify-content:space-between;
+            margin-bottom:10px;
+        }
+        .eq-name { font-weight:500; font-size:14px; }
+        .eq-status {
+            display:flex; align-items:center; gap:6px;
+            font-size:11px; font-weight:500;
+            padding:3px 10px; border-radius:20px;
+        }
+        .eq-status.running { background:var(--green-dim); color:var(--green); }
+        .eq-status.warning { background:var(--amber-dim); color:var(--amber); }
+        .eq-status.stopped { background:var(--red-dim); color:var(--red); }
+        .eq-status-dot { width:7px; height:7px; border-radius:50%; }
+        .eq-status.running .eq-status-dot { background:var(--green); box-shadow:0 0 6px var(--green); animation:pulse 2s infinite; }
+        .eq-status.warning .eq-status-dot { background:var(--amber); box-shadow:0 0 6px var(--amber); animation:pulse 1.5s infinite; }
+        .eq-status.stopped .eq-status-dot { background:var(--red); box-shadow:0 0 8px var(--red); }
+        .eq-meta { display:flex; gap:16px; margin-top:12px; }
+        .eq-meta-item { display:flex; flex-direction:column; gap:2px; }
+        .eq-meta-label { font-size:11px; color:var(--text-muted); }
+        .eq-meta-value { font-family:'JetBrains Mono', monospace; font-size:13px; color:var(--text-secondary); }
+        .eq-progress {
+            margin-top:12px; height:4px; background:#0f1824; border-radius:2px; overflow:hidden;
+        }
+        .eq-progress-bar { height:100%; border-radius:2px; transition:width 1s; }
+        .eq-progress-bar.green { background:var(--green); }
+        .eq-progress-bar.amber { background:var(--amber); }
+        .eq-progress-bar.red { background:var(--red); }
+
+        /* Analysis Center */
+        .analysis-wrap {
+            display:grid;
+            grid-template-columns:340px 1fr;
+            gap:16px;
+        }
+        .panel {
+            background:var(--surface);
+            border:1px solid var(--border);
+            border-radius:12px;
+            overflow:hidden;
+        }
+        .panel-header {
+            padding:14px 18px;
+            border-bottom:1px solid var(--border);
+            font-weight:500; font-size:14px;
+            display:flex; align-items:center; justify-content:space-between;
+        }
+        .panel-body { padding:14px 18px; }
+
+        /* Incident List */
+        .incident-item {
+            padding:12px;
+            border-radius:8px;
+            margin-bottom:8px;
+            cursor:pointer;
+            border:1px solid transparent;
+            transition:all 0.2s;
+            position:relative;
+        }
+        .incident-item:hover, .incident-item.active {
+            background:var(--surface-light);
+            border-color:#2a3d52;
+        }
+        .incident-item.active {
+            border-left:3px solid var(--red);
+        }
+        .incident-title { font-size:13px; font-weight:500; margin-bottom:4px; }
+        .incident-meta {
+            display:flex; gap:12px;
+            font-size:11px; color:var(--text-muted);
+        }
+        .incident-tag {
+            display:inline-block;
+            padding:2px 8px; border-radius:4px;
+            font-size:11px; font-weight:500;
+            margin-top:6px;
+        }
+        .tag-mechanical { background:var(--blue-dim); color:var(--blue); }
+        .tag-electrical { background:var(--amber-dim); color:var(--amber); }
+        .tag-thermal { background:var(--red-dim); color:var(--red); }
+
+        /* Causal Tree */
+        .causal-tree {
+            padding:10px 0;
+        }
+        .tree-node {
+            display:flex; align-items:flex-start;
+            gap:12px; margin-bottom:16px;
+            position:relative;
+            padding-left:24px;
+        }
+        .tree-node::before {
+            content:''; position:absolute; left:7px; top:14px; bottom:-16px;
+            width:2px; background:var(--border);
+        }
+        .tree-node:last-child::before { display:none; }
+        .tree-dot {
+            width:16px; height:16px; border-radius:50%;
+            flex-shrink:0; margin-top:2px;
+            display:flex; align-items:center; justify-content:center;
+            font-size:9px; font-weight:700; color:#fff;
+            position:relative; z-index:2;
+        }
+        .tree-dot.cause { background:var(--red); box-shadow:0 0 10px var(--red); }
+        .tree-dot.factor { background:var(--amber); box-shadow:0 0 10px var(--amber); }
+        .tree-dot.root { background:var(--green); box-shadow:0 0 10px var(--green); }
+        .tree-content { flex:1; }
+        .tree-label { font-size:13px; font-weight:500; margin-bottom:2px; }
+        .tree-desc { font-size:12px; color:var(--text-secondary); line-height:1.5; }
+        .tree-data {
+            font-family:'JetBrains Mono', monospace;
+            font-size:11px; color:var(--text-muted);
+            margin-top:4px; padding:6px 10px;
+            background:#0f1824; border-radius:6px;
+            display:inline-block;
+        }
+
+        /* Timeline */
+        .timeline-wrap { margin-top:20px; padding-top:16px; border-top:1px solid var(--border); }
+        .timeline-title { font-size:13px; font-weight:500; margin-bottom:12px; }
+        .timeline { position:relative; padding-left:20px; }
+        .timeline::before {
+            content:''; position:absolute; left:5px; top:4px; bottom:4px;
+            width:2px; background:var(--border);
+        }
+        .t-item {
+            position:relative; margin-bottom:14px;
+            padding-left:16px;
+        }
+        .t-item::before {
+            content:''; position:absolute; left:-16px; top:5px;
+            width:10px; height:10px; border-radius:50%;
+            background:var(--surface);
+            border:2px solid var(--amber);
+        }
+        .t-item.critical::before { border-color:var(--red); background:var(--red); box-shadow:0 0 8px var(--red); }
+        .t-time { font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--text-muted); margin-bottom:2px; }
+        .t-event { font-size:12px; }
+
+        /* Knowledge Base */
+        .kb-wrap {
+            display:grid;
+            grid-template-columns:280px 1fr;
+            gap:16px;
+        }
+        .kb-search {
+            position:relative;
+        }
+        .kb-search input {
+            width:100%; padding:10px 14px 10px 36px;
+            background:var(--surface-light);
+            border:1px solid var(--border); border-radius:8px;
+            color:var(--text); font-size:13px;
+            outline:none; transition:border-color 0.2s;
+        }
+        .kb-search input:focus { border-color:var(--blue); }
+        .kb-search-icon {
+            position:absolute; left:12px; top:50%; transform:translateY(-50%);
+            color:var(--text-muted); font-size:14px;
+        }
+        .kb-filters { margin-top:12px; display:flex; flex-wrap:wrap; gap:6px; }
+        .kb-filter {
+            padding:5px 12px; border-radius:6px;
+            font-size:12px; cursor:pointer;
+            border:1px solid var(--border);
+            background:var(--surface); color:var(--text-secondary);
+            transition:all 0.2s;
+        }
+        .kb-filter:hover, .kb-filter.active { border-color:var(--blue); color:var(--blue); background:var(--blue-dim); }
+        .kb-list { display:flex; flex-direction:column; gap:10px; }
+        .kb-card {
+            background:var(--surface); border:1px solid var(--border);
+            border-radius:10px; padding:16px;
+            cursor:pointer; transition:all 0.2s;
+        }
+        .kb-card:hover { border-color:#2a3d52; transform:translateX(4px); }
+        .kb-card-title { font-size:14px; font-weight:500; margin-bottom:6px; }
+        .kb-card-desc { font-size:12px; color:var(--text-secondary); line-height:1.6; margin-bottom:10px; }
+        .kb-card-tags { display:flex; gap:6px; flex-wrap:wrap; }
+        .kb-tag {
+            font-size:11px; padding:2px 8px; border-radius:4px;
+            background:var(--surface-light); color:var(--text-muted);
+        }
+
+        /* Chart Area */
+        .chart-grid {
+            display:grid;
+            grid-template-columns:1fr 1fr;
+            gap:16px;
+        }
+        .chart-box {
+            background:var(--surface); border:1px solid var(--border);
+            border-radius:12px; padding:18px;
+        }
+        .chart-title { font-size:14px; font-weight:500; margin-bottom:14px; }
+        .chart-canvas { width:100%; height:180px; }
+
+        /* Tech Section */
+        .tech-grid {
+            display:grid;
+            grid-template-columns:repeat(3, 1fr);
+            gap:16px;
+        }
+        .tech-card {
+            background:var(--surface); border:1px solid var(--border);
+            border-radius:12px; padding:20px;
+            transition:all 0.25s;
+        }
+        .tech-card:hover { border-color:var(--blue); transform:translateY(-3px); }
+        .tech-icon {
+            width:44px; height:44px; border-radius:10px;
+            display:flex; align-items:center; justify-content:center;
+            font-size:20px; margin-bottom:14px;
+        }
+        .tech-icon.green { background:var(--green-dim); }
+        .tech-icon.blue { background:var(--blue-dim); }
+        .tech-icon.amber { background:var(--amber-dim); }
+        .tech-name { font-size:15px; font-weight:600; margin-bottom:8px; }
+        .tech-desc { font-size:13px; color:var(--text-secondary); line-height:1.7; }
+
+        /* Footer */
+        footer {
+            border-top:1px solid var(--border);
+            margin-top:40px; padding:24px 0;
+            text-align:center;
+            font-size:12px; color:var(--text-muted);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width:6px; }
+        ::-webkit-scrollbar-track { background:var(--bg); }
+        ::-webkit-scrollbar-thumb { background:#2a3d52; border-radius:3px; }
+
+        /* Responsive */
+        @media (max-width:1100px) {
+            .kpi-grid { grid-template-columns:repeat(2, 1fr); }
+            .eq-grid { grid-template-columns:repeat(2, 1fr); }
+            .analysis-wrap { grid-template-columns:1fr; }
+            .kb-wrap { grid-template-columns:1fr; }
+            .chart-grid { grid-template-columns:1fr; }
+            .tech-grid { grid-template-columns:1fr; }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="bgCanvas"></canvas>
+
+    <header>
+        <div class="header-inner">
+            <div class="brand">
+                <div class="brand-icon">E</div>
+                <div>
+                    <div class="brand-title">EquipMind 设备智析</div>
+                    <div class="brand-sub">工厂设备异常停机原因分析平台</div>
+                </div>
+            </div>
+            <div class="header-status">
+                <div style="display:flex;align-items:center;gap:8px">
+                    <div class="status-dot"></div>
+                    <span>系统运行正常</span>
+                </div>
+                <div class="header-time" id="clock">--:--:--</div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Hero KPI -->
+        <div class="hero">
+            <div class="hero-title">设备运维指挥中心</div>
+            <div class="hero-desc">实时监控产线设备状态，智能分析停机根因，将排查时间从小时级缩短至分钟级</div>
+            <div class="kpi-grid">
+                <div class="kpi-card red">
+                    <div class="kpi-label">今日异常停机</div>
+                    <div class="kpi-value" style="color:var(--red)">3<span style="font-size:16px;color:var(--text-secondary)"> 次</span></div>
+                    <div class="kpi-change up">↑ 较昨日 +1</div>
+                </div>
+                <div class="kpi-card amber">
+                    <div class="kpi-label">平均修复时间 MTTR</div>
+                    <div class="kpi-value" style="color:var(--amber)">42<span style="font-size:16px;color:var(--text-secondary)"> min</span></div>
+                    <div class="kpi-change down">↓ 较上周 -18 min</div>
+                </div>
+                <div class="kpi-card green">
+                    <div class="kpi-label">设备综合效率 OEE</div>
+                    <div class="kpi-value" style="color:var(--green)">87.3<span style="font-size:16px;color:var(--text-secondary)"> %</span></div>
+                    <div class="kpi-change down">↑ 较上月 +4.2%</div>
+                </div>
+                <div class="kpi-card blue">
+                    <div class="kpi-label">待处理预警</div>
+                    <div class="kpi-value" style="color:var(--blue)">7<span style="font-size:16px;color:var(--text-secondary)"> 条</span></div>
+                    <div class="kpi-change neutral">-- 无变化</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Equipment Monitor -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title">产线设备实时监控</div>
+                <div class="section-action">查看全部 24 台设备 →</div>
+            </div>
+            <div class="eq-grid" id="eqGrid">
+                <!-- JS renders cards -->
+            </div>
+        </div>
+
+        <!-- Analysis Center -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title" style="--green:var(--red)">异常停机分析中心</div>
+                <div class="section-action">导出分析报告</div>
+            </div>
+            <div class="analysis-wrap">
+                <div class="panel">
+                    <div class="panel-header">
+                        <span>今日停机事件</span>
+                        <span style="font-size:12px;color:var(--text-muted)">3 条记录</span>
+                    </div>
+                    <div class="panel-body" id="incidentList">
+                        <!-- JS renders -->
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <span id="analysisTitle">因果分析树</span>
+                        <span style="font-size:12px;color:var(--text-muted)">自动关联传感器数据</span>
+                    </div>
+                    <div class="panel-body">
+                        <div class="causal-tree" id="causalTree">
+                            <!-- JS renders tree -->
+                        </div>
+                        <div class="timeline-wrap">
+                            <div class="timeline-title">异常征兆时间线</div>
+                            <div class="timeline" id="timeline">
+                                <!-- JS renders -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Knowledge Base -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title" style="--green:var(--blue)">故障知识库</div>
+                <div class="section-action">+ 添加案例</div>
+            </div>
+            <div class="kb-wrap">
+                <div>
+                    <div class="kb-search">
+                        <span class="kb-search-icon">🔍</span>
+                        <input type="text" placeholder="搜索故障关键词：如"主轴过热"" id="kbSearch">
+                    </div>
+                    <div class="kb-filters">
+                        <span class="kb-filter active">全部</span>
+                        <span class="kb-filter">机械故障</span>
+                        <span class="kb-filter">电气故障</span>
+                        <span class="kb-filter">程序错误</span>
+                        <span class="kb-filter">环境因素</span>
+                    </div>
+                </div>
+                <div class="kb-list" id="kbList">
+                    <!-- JS renders -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title" style="--green:var(--amber)">停机数据分析</div>
+            </div>
+            <div class="chart-grid">
+                <div class="chart-box">
+                    <div class="chart-title">近7天停机次数趋势</div>
+                    <canvas id="trendChart" class="chart-canvas"></canvas>
+                </div>
+                <div class="chart-box">
+                    <div class="chart-title">停机原因分布</div>
+                    <canvas id="pieChart" class="chart-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tech Highlights -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title" style="--green:var(--green)">技术原理与亮点</div>
+            </div>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <div class="tech-icon green">🔗</div>
+                    <div class="tech-name">多源数据融合</div>
+                    <div class="tech-desc">自动采集PLC、传感器、SCADA系统的温度、振动、电流、压力数据，建立设备数字孪生档案，实现跨系统的数据关联分析。</div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-icon blue">🌳</div>
+                    <div class="tech-name">因果推理引擎</div>
+                    <div class="tech-desc">基于历史维修记录训练因果图模型，当停机发生时自动构建"现象→中间因素→根因"推理链，将老师傅的经验转化为可复用的算法逻辑。</div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-icon amber">⏱️</div>
+                    <div class="tech-name">时序异常检测</div>
+                    <div class="tech-desc">对传感器时序数据应用变点检测算法，在停机前30-60分钟识别异常趋势，实现从"事后抢修"到"事前预警"的运维模式转变。</div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            EquipMind 设备智析平台 · 创意演示版本 · TRAE AI 创意大赛作品
+        </footer>
+    </div>
+
+    <script>
+    // Clock
+    function updateClock() {
+        const now = new Date();
+        document.getElementById('clock').textContent = now.toLocaleTimeString('zh-CN',{hour12:false});
+    }
+    setInterval(updateClock,1000); updateClock();
+
+    // Equipment Data
+    const equipments = [
+        {name:'CNC-001 数控车床',status:'running',line:'一号线',type:'数控车床',runtime:'1,248h',health:92},
+        {name:'CNC-002 数控铣床',status:'running',line:'一号线',type:'数控铣床',runtime:'986h',health:88},
+        {name:'ROB-001 焊接机器人',status:'warning',line:'二号线',type:'六轴机器人',runtime:'2,104h',health:67},
+        {name:'HVM-001 立式加工中心',status:'stopped',line:'一号线',type:'加工中心',runtime:'3h',health:34},
+        {name:'INJ-001 注塑机',status:'running',line:'三号线',type:'注塑成型',runtime:'567h',health:95},
+        {name:'CON-001 传送带系统',status:'running',line:'二号线',type:'输送设备',runtime:'4,512h',health:78},
+        {name:'PWR-001 空压机组',status:'warning',line:'动力站',type:'动力设备',runtime:'8,920h',health:61},
+        {name:'HVM-002 龙门铣床',status:'running',line:'一号线',type:'龙门铣床',runtime:'445h',health:91},
+    ];
+    const eqGrid = document.getElementById('eqGrid');
+    const statusMap = {running:'运行中',warning:'预警中',stopped:'已停机'};
+    const statusClass = {running:'running',warning:'warning',stopped:'stopped'};
+    equipments.forEach(eq=>{
+        const card = document.createElement('div');
+        card.className = `eq-card ${statusClass[eq.status]}`;
+        card.innerHTML = `
+            <div class="eq-header">
+                <div class="eq-name">${eq.name}</div>
+                <div class="eq-status ${statusClass[eq.status]}">
+                    <div class="eq-status-dot"></div>
+                    <span>${statusMap[eq.status]}</span>
+                </div>
+            </div>
+            <div class="eq-meta">
+                <div class="eq-meta-item"><div class="eq-meta-label">所属产线</div><div class="eq-meta-value">${eq.line}</div></div>
+                <div class="eq-meta-item"><div class="eq-meta-label">累计运行</div><div class="eq-meta-value">${eq.runtime}</div></div>
+            </div>
+            <div class="eq-progress">
+                <div class="eq-progress-bar ${statusClass[eq.status]}" style="width:${eq.health}%"></div>
+            </div>
+            <div style="margin-top:6px;font-size:11px;color:var(--text-muted);text-align:right">健康度 ${eq.health}%</div>
+        `;
+        eqGrid.appendChild(card);
+    });
+
+    // Incidents
+    const incidents = [
+        {id:1, title:'HVM-001 主轴异常停机', time:'09:23', duration:'36分钟', type:'mechanical', desc:'主轴轴承温度超限触发保护停机', active:true},
+        {id:2, title:'ROB-001 焊接偏移报警', time:'11:05', duration:'--', type:'electrical', desc:'伺服电机编码器反馈异常', active:false},
+        {id:3, title:'PWR-001 气压不足告警', time:'13:47', duration:'--', type:'thermal', desc:'空压机组冷却系统效率下降', active:false},
+    ];
+    const trees = {
+        1: [
+            {dot:'cause', label:'现象：主轴驱动器报警 E-074', desc:'加工中心主轴在切削铝件时突然停止旋转，数控系统显示伺服报警', data:'报警码 E-074 | 主轴转速 0 rpm'},
+            {dot:'factor', label:'中间因素：轴承温升异常', desc:'主轴前轴承温度在15分钟内从62°C升至89°C，超过安全阈值85°C', data:'温度曲线: 62→78→85→89°C | 温升速率 1.8°C/min'},
+            {dot:'factor', label:'中间因素：润滑油脂劣化', desc:'振动频谱显示轴承特征频率处出现明显峰值，表明润滑失效导致摩擦增大', data:'振动速度 4.2 mm/s | 频谱 BPFI 增大 320%'},
+            {dot:'root', label:'根因：润滑周期设置过长', desc:'当前润滑周期设为240分钟，而该型号在高负载铝件加工时应缩短至120分钟', data:'建议：缩短润滑周期至120min | 更换高速轴承脂'},
+        ],
+        2: [
+            {dot:'cause', label:'现象：焊接轨迹偏移 2.3mm', desc:'机器人焊接轨迹偏离编程路径，焊缝质量不合格', data:'偏移量 2.3mm | 重复精度超差'},
+            {dot:'factor', label:'中间因素：J3关节编码器漂移', desc:'伺服电机编码器反馈值与实际位置存在系统性偏差', data:'编码器误差 0.15° | 累计漂移 2.1mm'},
+            {dot:'root', label:'根因：编码器线缆接头松动', desc:'机器人频繁往复运动导致J3轴编码器线缆接头逐渐松动，信号传输不稳定', data:'建议：紧固接头 + 增加线缆固定夹'},
+        ],
+        3: [
+            {dot:'cause', label:'现象：供气压力低于 0.55MPa', desc:'气动设备频繁低压报警，影响焊接夹具夹紧力', data:'当前压力 0.52MPa | 设定值 0.60MPa'},
+            {dot:'factor', label:'中间因素：冷却风扇转速下降', desc:'空压机冷却风扇转速从额定2800rpm降至2100rpm，散热不足导致排气温度升高', data:'风扇转速 2100rpm | 排气温度 108°C'},
+            {dot:'root', label:'根因：冷却风扇电机轴承磨损', desc:'长期连续运行导致风扇电机轴承间隙增大，启动电容容量衰减', data:'建议：更换风扇电机 + 清理散热器'},
+        ]
+    };
+    const timelines = {
+        1: [
+            {time:'08:45', event:'设备正常启动，开始铝件加工程序', critical:false},
+            {time:'09:08', event:'主轴温度达到62°C，进入正常加工温区', critical:false},
+            {time:'09:18', event:'温度传感器检测到温升速率异常（1.8°C/min）', critical:false},
+            {time:'09:21', event:'轴承振动频谱出现BPFI特征频率峰值', critical:false},
+            {time:'09:23', event:'主轴轴承温度达到89°C，触发E-074报警停机', critical:true},
+        ],
+        2: [
+            {time:'10:30', event:'机器人正常启动，开始焊接作业', critical:false},
+            {time:'10:55', event:'质检发现焊缝偏移，偏差约1.1mm', critical:false},
+            {time:'11:02', event:'连续3件产品偏移量增大至2.3mm', critical:false},
+            {time:'11:05', event:'系统触发轨迹偏移报警，机器人暂停', critical:true},
+        ],
+        3: [
+            {time:'12:00', event:'空压机正常运行，供气压力0.60MPa', critical:false},
+            {time:'13:20', event:'压力逐渐下降至0.58MPa', critical:false},
+            {time:'13:35', event:'焊接工位出现夹紧力不足报警', critical:false},
+            {time:'13:47', event:'系统触发气压不足预警', critical:true},
+        ]
+    };
+    const incidentList = document.getElementById('incidentList');
+    function renderIncidents() {
+        incidentList.innerHTML = '';
+        incidents.forEach(inc=>{
+            const el = document.createElement('div');
+            el.className = `incident-item ${inc.active?'active':''}`;
+            const tagClass = inc.type==='mechanical'?'tag-mechanical':inc.type==='electrical'?'tag-electrical':'tag-thermal';
+            const tagText = inc.type==='mechanical'?'机械故障':inc.type==='electrical'?'电气故障':'热管理';
+            el.innerHTML = `
+                <div class="incident-title">${inc.title}</div>
+                <div class="incident-meta">
+                    <span>⏱ ${inc.time}</span>
+                    <span>⌛ ${inc.duration}</span>
+                </div>
+                <div class="incident-desc" style="font-size:12px;color:var(--text-secondary);margin-top:4px">${inc.desc}</div>
+                <span class="incident-tag ${tagClass}">${tagText}</span>
+            `;
+            el.onclick = ()=>{ incidents.forEach(i=>i.active=false); inc.active=true; renderIncidents(); renderTree(inc.id); };
+            incidentList.appendChild(el);
+        });
+    }
+    function renderTree(id) {
+        const tree = document.getElementById('causalTree');
+        const timeline = document.getElementById('timeline');
+        const title = document.getElementById('analysisTitle');
+        title.textContent = '因果分析树 — ' + incidents.find(i=>i.id===id).title.split(' ')[0];
+        tree.innerHTML = trees[id].map(node=>`
+            <div class="tree-node">
+                <div class="tree-dot ${node.dot}">${node.dot==='cause'?'!':node.dot==='root'?'✓':'→'}</div>
+                <div class="tree-content">
+                    <div class="tree-label">${node.label}</div>
+                    <div class="tree-desc">${node.desc}</div>
+                    <div class="tree-data">${node.data}</div>
+                </div>
+            </div>
+        `).join('');
+        timeline.innerHTML = timelines[id].map(t=>`
+            <div class="t-item ${t.critical?'critical':''}">
+                <div class="t-time">${t.time}</div>
+                <div class="t-event">${t.event}</div>
+            </div>
+        `).join('');
+    }
+    renderIncidents();
+    renderTree(1);
+
+    // Knowledge Base
+    const kbData = [
+        {title:'主轴轴承过热故障排查手册', desc:'适用于所有配备电主轴的加工中心。涵盖温度异常升高、振动增大、异响等典型症状的系统性排查流程，包含润滑检查、冷却系统检测、轴承更换标准。', tags:['机械故障','主轴','温度']},
+        {title:'伺服电机编码器漂移处理指南', desc:'六轴工业机器人常见故障。详细说明编码器零点校准步骤、线缆接头检查要点、电磁干扰排查方法，以及预防性维护周期建议。', tags:['电气故障','机器人','编码器']},
+        {title:'空压机组效率下降诊断', desc:'针对螺杆式和活塞式空压机的常见故障。包含压力不足、排气温度高、油耗增大等问题的诊断树，以及冷却系统、进气滤芯、油分芯的维护标准。', tags:['热管理','动力设备','预防维护']},
+        {title:'CNC加工中心刀具磨损补偿策略', desc:'介绍如何通过主轴负载电流和振动信号判断刀具磨损状态，提供自动补偿参数设置建议，减少因刀具崩刃导致的意外停机。', tags:['程序优化','刀具管理','预测维护']},
+    ];
+    const kbList = document.getElementById('kbList');
+    function renderKB(filter='') {
+        kbList.innerHTML = '';
+        kbData.filter(k=>!filter || k.title.includes(filter) || k.tags.some(t=>t.includes(filter))).forEach(k=>{
+            const el = document.createElement('div');
+            el.className = 'kb-card';
+            el.innerHTML = `
+                <div class="kb-card-title">${k.title}</div>
+                <div class="kb-card-desc">${k.desc}</div>
+                <div class="kb-card-tags">${k.tags.map(t=>`<span class="kb-tag">${t}</span>`).join('')}</div>
+            `;
+            kbList.appendChild(el);
+        });
+    }
+    renderKB();
+    document.getElementById('kbSearch').addEventListener('input',e=>renderKB(e.target.value));
+    document.querySelectorAll('.kb-filter').forEach(f=>{
+        f.addEventListener('click',()=>{
+            document.querySelectorAll('.kb-filter').forEach(x=>x.classList.remove('active'));
+            f.classList.add('active');
+            const text = f.textContent==='全部'?'':f.textContent;
+            renderKB(text);
+        });
+    });
+
+    // Charts
+    function drawTrend() {
+        const c = document.getElementById('trendChart');
+        const ctx = c.getContext('2d');
+        const dpr = window.devicePixelRatio||1;
+        const rect = c.getBoundingClientRect();
+        c.width = rect.width*dpr; c.height = rect.height*dpr;
+        ctx.scale(dpr,dpr);
+        const w=rect.width, h=rect.height;
+        const data = [2,4,3,5,2,3,4];
+        const labels = ['周一','周二','周三','周四','周五','周六','周日'];
+        const max = Math.max(...data);
+        const pad=30, bw=(w-pad*2)/data.length, bh=h-pad*2;
+        // Grid
+        ctx.strokeStyle='#1e2d3d'; ctx.lineWidth=1;
+        for(let i=0;i<=4;i++){ const y=pad+i*bh/4; ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(w-pad,y);ctx.stroke(); }
+        // Bars
+        data.forEach((v,i)=>{
+            const x=pad+i*bw+bw*0.2, barW=bw*0.6, barH=(v/max)*bh;
+            const grad=ctx.createLinearGradient(0,h-pad-barH,0,h-pad);
+            grad.addColorStop(0,'#00c8a0'); grad.addColorStop(1,'rgba(0,200,160,0.2)');
+            ctx.fillStyle=grad;
+            ctx.fillRect(x,h-pad-barH,barW,barH);
+            // label
+            ctx.fillStyle='#8a9bb0'; ctx.font='11px JetBrains Mono'; ctx.textAlign='center';
+            ctx.fillText(labels[i],x+barW/2,h-pad+16);
+            ctx.fillStyle='#e8eef5'; ctx.fillText(v,x+barW/2,h-pad-barH-8);
+        });
+    }
+    function drawPie() {
+        const c = document.getElementById('pieChart');
+        const ctx = c.getContext('2d');
+        const dpr = window.devicePixelRatio||1;
+        const rect = c.getBoundingClientRect();
+        c.width = rect.width*dpr; c.height = rect.height*dpr;
+        ctx.scale(dpr,dpr);
+        const w=rect.width, h=rect.height;
+        const data = [
+            {label:'机械磨损',value:35,color:'#e85050'},
+            {label:'电气故障',value:28,color:'#f0a030'},
+            {label:'程序错误',value:18,color:'#3a8ae0'},
+            {label:'环境因素',value:12,color:'#00c8a0'},
+            {label:'人为操作',value:7,color:'#8a7aaa'},
+        ];
+        const cx=w/2-60, cy=h/2, r=Math.min(cx,cy)-20;
+        let start=0, total=data.reduce((a,b)=>a+b.value,0);
+        data.forEach(d=>{
+            const ang=(d.value/total)*Math.PI*2;
+            ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,start,start+ang); ctx.closePath();
+            ctx.fillStyle=d.color; ctx.fill();
+            // label line
+            const mx=cx+Math.cos(start+ang/2)*(r+12);
+            const my=cy+Math.sin(start+ang/2)*(r+12);
+            ctx.strokeStyle=d.color; ctx.beginPath(); ctx.moveTo(cx+Math.cos(start+ang/2)*r,cy+Math.sin(start+ang/2)*r); ctx.lineTo(mx,my); ctx.stroke();
+            ctx.fillStyle='#e8eef5'; ctx.font='12px Noto Sans SC'; ctx.textAlign=mx>cx?'left':'right';
+            ctx.fillText(d.label+' '+d.value+'%',mx+(mx>cx?4:-4),my+4);
+            start+=ang;
+        });
+        // center hole
+        ctx.beginPath(); ctx.arc(cx,cy,r*0.55,0,Math.PI*2); ctx.fillStyle='#111824'; ctx.fill();
+        ctx.fillStyle='#e8eef5'; ctx.font='bold 14px JetBrains Mono'; ctx.textAlign='center';
+        ctx.fillText('总计',cx,cy-4); ctx.fillText('42次',cx,cy+14);
+    }
+    setTimeout(()=>{drawTrend();drawPie();},300);
+    window.addEventListener('resize',()=>{drawTrend();drawPie();});
+
+    // Background Canvas Grid + Particles
+    (function(){
+        const canvas = document.getElementById('bgCanvas');
+        const ctx = canvas.getContext('2d');
+        let w,h;
+        function resize(){ w=canvas.width=window.innerWidth; h=canvas.height=window.innerHeight; }
+        resize(); window.addEventListener('resize',resize);
+        const particles = Array.from({length:40},()=>({
+            x:Math.random()*w, y:Math.random()*h,
+            vx:(Math.random()-0.5)*0.3, vy:(Math.random()-0.5)*0.3,
+            r:Math.random()*1.5+0.5, alpha:Math.random()*0.3+0.1
+        }));
+        function draw() {
+            ctx.clearRect(0,0,w,h);
+            // Grid
+            ctx.strokeStyle='rgba(30,45,61,0.3)'; ctx.lineWidth=1;
+            const gs=60;
+            for(let x=0;x<w;x+=gs){ ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke(); }
+            for(let y=0;y<h;y+=gs){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke(); }
+            // Particles
+            particles.forEach(p=>{
+                p.x+=p.vx; p.y+=p.vy;
+                if(p.x<0)p.x=w; if(p.x>w)p.x=0; if(p.y<0)p.y=h; if(p.y>h)p.y=0;
+                ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+                ctx.fillStyle=`rgba(0,200,160,${p.alpha})`; ctx.fill();
+            });
+            // Connections
+            for(let i=0;i<particles.length;i++){
+                for(let j=i+1;j<particles.length;j++){
+                    const dx=particles[i].x-particles[j].x, dy=particles[i].y-particles[j].y;
+                    const dist=Math.sqrt(dx*dx+dy*dy);
+                    if(dist<120){
+                        ctx.beginPath(); ctx.moveTo(particles[i].x,particles[i].y); ctx.lineTo(particles[j].x,particles[j].y);
+                        ctx.strokeStyle=`rgba(0,200,160,${0.08*(1-dist/120)})`; ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(draw);
+        }
+        draw();
+    })();
+    </script>
+</body>
+</html>

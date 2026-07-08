@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>像素俄罗斯方块</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-color: #0a0a1a;
+      --game-bg: #1a1a2e;
+      --grid-line: #2a2a4a;
+      --text-color: #ffffff;
+      --accent: #ff00ff;
+    }
+
+    body {
+      font-family: 'Press Start 2P', monospace;
+      background: var(--bg-color);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: var(--text-color);
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      gap: 40px;
+      padding: 20px;
+    }
+
+    .game-container {
+      position: relative;
+    }
+
+    .game-title {
+      text-align: center;
+      font-size: 24px;
+      color: var(--accent);
+      text-shadow: 0 0 10px var(--accent);
+      margin-bottom: 20px;
+      animation: flicker 2s infinite;
+    }
+
+    @keyframes flicker {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.8; }
+    }
+
+    .game-wrapper {
+      position: relative;
+      border: 4px solid var(--accent);
+      box-shadow: 0 0 20px var(--accent), inset 0 0 20px rgba(255, 0, 255, 0.1);
+    }
+
+    #gameCanvas {
+      display: block;
+      background: var(--game-bg);
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    .crt-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.1) 0px,
+        rgba(0, 0, 0, 0.1) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+    }
+
+    .crt-overlay::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: radial-gradient(ellipse at center, transparent 0%, rgba(0, 0, 0, 0.3) 100%);
+    }
+
+    .side-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-width: 180px;
+    }
+
+    .panel-box {
+      background: var(--game-bg);
+      border: 3px solid var(--grid-line);
+      padding: 15px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+    }
+
+    .panel-title {
+      font-size: 10px;
+      color: var(--accent);
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
+
+    .panel-value {
+      font-size: 16px;
+      color: var(--text-color);
+      text-shadow: 0 0 5px var(--accent);
+    }
+
+    #nextCanvas {
+      display: block;
+      margin: 0 auto;
+      background: var(--bg-color);
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    .controls {
+      font-size: 8px;
+      line-height: 2;
+      color: #888;
+    }
+
+    .controls span {
+      color: var(--accent);
+    }
+
+    .game-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      z-index: 10;
+    }
+
+    .game-overlay.hidden {
+      display: none;
+    }
+
+    .overlay-title {
+      font-size: 20px;
+      color: var(--accent);
+      text-shadow: 0 0 15px var(--accent);
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+
+    .overlay-text {
+      font-size: 10px;
+      color: #aaa;
+    }
+
+    .game-over-title {
+      color: #ff0040;
+      text-shadow: 0 0 15px #ff0040;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
+    }
+
+    .shake {
+      animation: shake 0.3s ease-in-out;
+    }
+
+    @keyframes flash {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .flash {
+      animation: flash 0.2s ease-in-out 3;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    const COLS = 10;
+    const ROWS = 20;
+    const BLOCK_SIZE = 32;
+
+    const COLORS = {
+      I: '#00f5ff',
+      O: '#ffd700',
+      T: '#bf00ff',
+      S: '#00ff00',
+      Z: '#ff0040',
+      J: '#0080ff',
+      L: '#ff8000'
+    };
+
+    const SHAPES = {
+      I: [
+        [[0,0,0,0], [1,1,1,1], [0,0,0,0], [0,0,0,0]],
+        [[0,0,1,0], [0,0,1,0], [0,0,1,0], [0,0,1,0]],
+        [[0,0,0,0], [0,0,0,0], [1,1,1,1], [0,0,0,0]],
+        [[0,1,0,0], [0,1,0,0], [0,1,0,0], [0,1,0,0]]
+      ],
+      O: [
+        [[1,1], [1,1]],
+        [[1,1], [1,1]],
+        [[1,1], [1,1]],
+        [[1,1], [1,1]]
+      ],
+      T: [
+        [[0,1,0], [1,1,1], [0,0,0]],
+        [[0,1,0], [0,1,1], [0,1,0]],
+        [[0,0,0], [1,1,1], [0,1,0]],
+        [[0,1,0], [1,1,0], [0,1,0]]
+      ],
+      S: [
+        [[0,1,1], [1,1,0], [0,0,0]],
+        [[0,1,0], [0,1,1], [0,0,1]],
+        [[0,0,0], [0,1,1], [1,1,0]],
+        [[1,0,0], [1,1,0], [0,1,0]]
+      ],
+      Z: [
+        [[1,1,0], [0,1,1], [0,0,0]],
+        [[0,0,1], [0,1,1], [0,1,0]],
+        [[0,0,0], [1,1,0], [0,1,1]],
+        [[0,1,0], [1,1,0], [1,0,0]]
+      ],
+      J: [
+        [[1,0,0], [1,1,1], [0,0,0]],
+        [[0,1,1], [0,1,0], [0,1,0]],
+        [[0,0,0], [1,1,1], [0,0,1]],
+        [[0,1,0], [0,1,0], [1,1,0]]
+      ],
+      L: [
+        [[0,0,1], [1,1,1], [0,0,0]],
+        [[0,1,0], [0,1,0], [0,1,1]],
+        [[0,0,0], [1,1,1], [1,0,0]],
+        [[1,1,0], [0,1,0], [0,1,0]]
+      ]
+    };
+
+    // 音效管理器 - 使用 Web Audio API 生成复古8-bit风格音效
+    class SoundManager {
+      constructor() {
+        this.audioContext = null;
+        this.sfxEnabled = true;
+        this.bgmEnabled = true;
+        this.initialized = false;
+        this.bgmNodes = [];
+        this.bgmPlaying = false;
+        this.bgmTimer = null;
+        this.beatDuration = 0.15; // 每个八分音符的时长（秒）
+        this.currentStep = 0;     // 当前已调度到第几个八分音符
+        this.nextStepTime = 0;    // 下一步的精确时间
+      }
+
+      init() {
+        if (this.initialized) return;
+        try {
+          this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          this.initialized = true;
+        } catch (e) {
+          console.warn('Web Audio API not supported');
+          this.sfxEnabled = false;
+          this.bgmEnabled = false;
+        }
+      }
+
+      // ========== 音符频率表 ==========
+      NOTE_FREQ(note) {
+        // 基于 A4 = 440Hz 的标准音阶
+        const notes = {
+          'A2': 110.00, 'B2': 123.47,
+          'C3': 130.81, 'D3': 146.83, 'E3': 164.81, 'F3': 174.61, 'G3': 196.00, 'A3': 220.00, 'B3': 246.94,
+          'C4': 261.63, 'D4': 293.66, 'E4': 329.63, 'F4': 349.23, 'G4': 392.00, 'A4': 440.00, 'B4': 493.88,
+          'C5': 523.25, 'D5': 587.33, 'E5': 659.25, 'F5': 698.46, 'G5': 783.99, 'A5': 880.00,
+          null: 0
+        };
+        return notes[note] || 0;
+      }
+
+      // ========== 核心合成器：播放单个有包络的音符 ==========
+      playTone(freq, startTime, duration, type, volume) {
+        if (!this.audioContext || freq <= 0 || duration <= 0) return;
+        if (startTime < this.audioContext.currentTime - 0.05) return; // 跳过过期
+
+        const ctx = this.audioContext;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, startTime);
+
+        // ADSR 包络（短促有力的芯片音乐声）
+        const attack = 0.005;
+        const decay = 0.02;
+        const sustain = volume * 0.7;
+        const sustainTime = Math.max(0, duration - attack - decay - 0.02);
+        const release = 0.02;
+
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(volume, startTime + attack);
+        gain.gain.linearRampToValueAtTime(sustain, startTime + attack + decay);
+        gain.gain.setValueAtTime(sustain, startTime + attack + decay + sustainTime);
+        gain.gain.linearRampToValueAtTime(0, startTime + duration);
+
+        osc.start(startTime);
+        osc.stop(startTime + duration + 0.02);
+
+        this.bgmNodes.push(osc);
+        osc.onended = () => {
+          const idx = this.bgmNodes.indexOf(osc);
+          if (idx > -1) this.bgmNodes.splice(idx, 1);
+        };
+      }
+
+      // ========== 魂斗罗风格背景音乐数据 ==========
+      // 主旋律：A小调，8小节，每小节8个八分音符（共64步循环）
+      getBgmMelody() {
+        return [
+          // 第1小节 (E-E-F-G-A-G-F-E)
+          { note: 'E4', beats: 1 }, { note: 'E4', beats: 1 },
+          { note: 'F4', beats: 1 }, { note: 'G4', beats: 1 },
+          { note: 'A4', beats: 1 }, { note: 'G4', beats: 1 },
+          { note: 'F4', beats: 1 }, { note: 'E4', beats: 1 },
+
+          // 第2小节 (D-D-E-F-G-F-E-D)
+          { note: 'D4', beats: 1 }, { note: 'D4', beats: 1 },
+          { note: 'E4', beats: 1 }, { note: 'F4', beats: 1 },
+          { note: 'G4', beats: 1 }, { note: 'F4', beats: 1 },
+          { note: 'E4', beats: 1 }, { note: 'D4', beats: 1 },
+
+          // 第3小节 (C-C-D-E-F-G-A-B)
+          { note: 'C4', beats: 1 }, { note: 'C4', beats: 1 },
+          { note: 'D4', beats: 1 }, { note: 'E4', beats: 1 },
+          { note: 'F4', beats: 1 }, { note: 'G4', beats: 1 },
+          { note: 'A4', beats: 1 }, { note: 'B4', beats: 1 },
+
+          // 第4小节 (C5-- B A G-- E D)
+          { note: 'C5', beats: 2 }, { note: 'B4', beats: 1 }, { note: 'A4', beats: 1 },
+          { note: 'G4', beats: 2 }, { note: 'E4', beats: 1 }, { note: 'D4', beats: 1 },
+
+          // 第5小节 - 重复第1小节
+          { note: 'E4', beats: 1 }, { note: 'E4', beats: 1 },
+          { note: 'F4', beats: 1 }, { note: 'G4', beats: 1 },
+          { note: 'A4', beats: 1 }, { note: 'G4', beats: 1 },
+          { note: 'F4', beats: 1 }, { note: 'E4', beats: 1 },
+
+          // 第6小节 - 重复第2小节
+          { note: 'D4', beats: 1 }, { note: 'D4', beats: 1 },
+          { note: 'E4', beats: 1 }, { note: 'F4', beats: 1 },
+          { note: 'G4', beats: 1 }, { note: 'F4', beats: 1 },
+          { note: 'E4', beats: 1 }, { note: 'D4', beats: 1 },
+
+          // 第7小节 (C5-B-A-G-F-E-D-C)
+          { note: 'C5', beats: 1 }, { note: 'B4', beats: 1 },
+          { note: 'A4', beats: 1 }, { note: 'G4', beats: 1 },
+          { note: 'F4', beats: 1 }, { note: 'E4', beats: 1 },
+          { note: 'D4', beats: 1 }, { note: 'C4', beats: 1 },
+
+          // 第8小节 (A3-- REST C4 E4-- REST REST)
+          { note: 'A3', beats: 2 }, { note: null, beats: 1 }, { note: 'C4', beats: 1 },
+          { note: 'E4', beats: 2 }, { note: null, beats: 2 }
+        ];
+      }
+
+      // 低音线：每4个八分音符换一次低音
+      getBgmBass() {
+        return [
+          { note: 'A2', beats: 2 }, { note: 'E3', beats: 2 },
+          { note: 'A2', beats: 2 }, { note: 'E3', beats: 2 },
+          { note: 'F3', beats: 2 }, { note: 'C3', beats: 2 },
+          { note: 'G3', beats: 2 }, { note: 'D3', beats: 2 },
+          { note: 'A2', beats: 2 }, { note: 'E3', beats: 2 },
+          { note: 'A2', beats: 2 }, { note: 'E3', beats: 2 },
+          { note: 'F3', beats: 2 }, { note: 'C3', beats: 2 },
+          { note: 'E3', beats: 2 }, { note: 'A2', beats: 2 }
+        ];
+      }
+
+      // 鼓点模式：8小节，每小节8拍（step）
+      // kick=1, snare=2, hat=3, null=静音
+      getBgmDrums() {
+        const pattern = [];
+        for (let bar = 0; bar < 8; bar++) {
+          for (let step = 0; step < 8; step++) {
+            const hats = (step % 2 === 0) ? 3 : 3; // 连续 hi-hat
+            let kick = null;
+            let snare = null;
+            if (step === 0 || step === 4) kick = 1;
+            if (step === 2 || step === 6) snare = 2;
+            pattern.push({ kick, snare, hat: hats });
+          }
+        }
+        return pattern;
+      }
+
+      // 播放 kick drum
+      playKick(time) {
+        if (!this.audioContext) return;
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        osc.connect(gain);
+        gain.connect(this.audioContext.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(150, time);
+        osc.frequency.exponentialRampToValueAtTime(40, time + 0.1);
+        gain.gain.setValueAtTime(0.25, time);
+        gain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+        osc.start(time);
+        osc.stop(time + 0.17);
+        this.bgmNodes.push(osc);
+        osc.onended = () => {
+          const idx = this.bgmNodes.indexOf(osc);
+          if (idx > -1) this.bgmNodes.splice(idx, 1);
+        };
+      }
+
+      // 播放 snare
+      playSnare(time) {
+        if (!this.audioContext) return;
+        const bufferSize = Math.floor(this.audioContext.sampleRate * 0.12);
+        const noiseBuffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2.5);
+        }
+        const noise = this.audioContext.createBufferSource();
+        noise.buffer = noiseBuffer;
+        const filter = this.audioContext.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.setValueAtTime(1500, time);
+        const gain = this.audioContext.createGain();
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.audioContext.destination);
+        gain.gain.setValueAtTime(0.18, time);
+        gain.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
+        noise.start(time);
+        noise.stop(time + 0.15);
+        this.bgmNodes.push(noise);
+        noise.onended = () => {
+          const idx = this.bgmNodes.indexOf(noise);
+          if (idx > -1) this.bgmNodes.splice(idx, 1);
+        };
+      }
+
+      // 播放 hi-hat
+      playHat(time) {
+        if (!this.audioContext) return;
+        const bufferSize = Math.floor(this.audioContext.sampleRate * 0.04);
+        const noiseBuffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 1);
+        }
+        const noise = this.audioContext.createBufferSource();
+        noise.buffer = noiseBuffer;
+        const filter = this.audioContext.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.setValueAtTime(7000, time);
+        const gain = this.audioContext.createGain();
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.audioContext.destination);
+        gain.gain.setValueAtTime(0.05, time);
+        gain.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+        noise.start(time);
+        noise.stop(time + 0.05);
+        this.bgmNodes.push(noise);
+        noise.onended = () => {
+          const idx = this.bgmNodes.indexOf(noise);
+          if (idx > -1) this.bgmNodes.splice(idx, 1);
+        };
+      }
+
+      // ========== BGM 启动/停止 ==========
+      startBgm() {
+        if (!this.bgmEnabled || !this.audioContext || this.bgmPlaying) return;
+        if (this.audioContext.state === 'suspended') {
+          this.audioContext.resume();
+        }
+        this.bgmPlaying = true;
+        this.currentStep = 0;
+        this.nextStepTime = this.audioContext.currentTime + 0.05;
+        this.scheduleBgm();
+      }
+
+      stopBgm() {
+        this.bgmPlaying = false;
+        if (this.bgmTimer) {
+          clearTimeout(this.bgmTimer);
+          this.bgmTimer = null;
+        }
+        const nodes = [...this.bgmNodes];
+        nodes.forEach(node => {
+          try { node.stop(); } catch(e) {}
+        });
+        this.bgmNodes = [];
+      }
+
+      // ========== BGM 调度器：按 step 精确播放 ==========
+      scheduleBgm() {
+        if (!this.bgmPlaying || !this.bgmEnabled || !this.audioContext) return;
+
+        const melody = this.getBgmMelody();
+        const bass = this.getBgmBass();
+        const drums = this.getBgmDrums();
+
+        // 计算旋律和低音的展开数组（每个 step 的起点信息）
+        // { freq, duration } 如果当前 step 是音符起始点；null 否则
+        const melodySchedule = this.buildStepSchedule(melody);
+        const bassSchedule = this.buildStepSchedule(bass);
+
+        const totalSteps = 64; // 8小节 × 8 步 = 64 步循环
+        const scheduleAhead = 0.25; // 提前250ms调度
+
+        // 循环调度直到当前时间 + 提前量
+        while (this.nextStepTime < this.audioContext.currentTime + scheduleAhead) {
+          const loopStep = this.currentStep % totalSteps;
+
+          // 主旋律
+          if (melodySchedule[loopStep] && melodySchedule[loopStep].freq > 0) {
+            this.playTone(
+              melodySchedule[loopStep].freq,
+              this.nextStepTime,
+              melodySchedule[loopStep].duration * this.beatDuration,
+              'square',
+              0.07
+            );
+          }
+
+          // 低音
+          if (bassSchedule[loopStep] && bassSchedule[loopStep].freq > 0) {
+            this.playTone(
+              bassSchedule[loopStep].freq,
+              this.nextStepTime,
+              bassSchedule[loopStep].duration * this.beatDuration * 0.95,
+              'triangle',
+              0.12
+            );
+          }
+
+          // 鼓点
+          if (drums[loopStep]) {
+            if (drums[loopStep].kick === 1) this.playKick(this.nextStepTime);
+            if (drums[loopStep].snare === 2) this.playSnare(this.nextStepTime);
+            if (drums[loopStep].hat === 3) this.playHat(this.nextStepTime);
+          }
+
+          // 推进
+          this.nextStepTime += this.beatDuration;
+          this.currentStep++;
+        }
+
+        // 定时继续调度
+        this.bgmTimer = setTimeout(() => this.scheduleBgm(), 50);
+      }
+
+      // 将 { note, beats } 的数组转换为 step-indexed 的调度表
+      buildStepSchedule(notes) {
+        const schedule = [];
+        let pos = 0;
+        notes.forEach(n => {
+          const freq = this.NOTE_FREQ(n.note);
+          schedule[pos] = { freq: freq, duration: n.beats };
+          // 中间步长为 null（延续音符，不重新触发）
+          for (let i = 1; i < n.beats; i++) {
+            schedule[pos + i] = null;
+          }
+          pos += n.beats;
+        });
+        return schedule;
+      }
+
+      // ========== 特效声音 ==========
+      playMove() {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const t = this.audioContext.currentTime;
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        osc.connect(gain);
+        gain.connect(this.audioContext.destination);
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(660, t);
+        gain.gain.setValueAtTime(0.1, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+        osc.start(t);
+        osc.stop(t + 0.07);
+      }
+
+      playRotate() {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const t = this.audioContext.currentTime;
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        osc.connect(gain);
+        gain.connect(this.audioContext.destination);
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(440, t);
+        osc.frequency.linearRampToValueAtTime(880, t + 0.06);
+        gain.gain.setValueAtTime(0.1, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+        osc.start(t);
+        osc.stop(t + 0.12);
+      }
+
+      playHardDrop() {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const t = this.audioContext.currentTime;
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        osc.connect(gain);
+        gain.connect(this.audioContext.destination);
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(900, t);
+        osc.frequency.linearRampToValueAtTime(80, t + 0.25);
+        gain.gain.setValueAtTime(0.18, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        osc.start(t);
+        osc.stop(t + 0.27);
+      }
+
+      playLock() {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const t = this.audioContext.currentTime;
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        osc.connect(gain);
+        gain.connect(this.audioContext.destination);
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(180, t);
+        osc.frequency.exponentialRampToValueAtTime(60, t + 0.08);
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+        osc.start(t);
+        osc.stop(t + 0.1);
+      }
+
+      playClear(lines) {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const notes = [523, 659, 784, 1047];
+        for (let i = 0; i < Math.min(lines * 2, 4); i++) {
+          const t = this.audioContext.currentTime + i * 0.06;
+          const osc = this.audioContext.createOscillator();
+          const gain = this.audioContext.createGain();
+          osc.connect(gain);
+          gain.connect(this.audioContext.destination);
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(notes[i], t);
+          gain.gain.setValueAtTime(0.18, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          osc.start(t);
+          osc.stop(t + 0.17);
+        }
+      }
+
+      playLevelUp() {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const notes = [262, 330, 392, 523, 659, 784, 1047];
+        notes.forEach((freq, i) => {
+          const t = this.audioContext.currentTime + i * 0.06;
+          const osc = this.audioContext.createOscillator();
+          const gain = this.audioContext.createGain();
+          osc.connect(gain);
+          gain.connect(this.audioContext.destination);
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(freq, t);
+          gain.gain.setValueAtTime(0.18, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+          osc.start(t);
+          osc.stop(t + 0.15);
+        });
+      }
+
+      playGameOver() {
+        this.stopBgm();
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const notes = [392, 349, 330, 262, 196];
+        notes.forEach((freq, i) => {
+          const t = this.audioContext.currentTime + i * 0.18;
+          const osc = this.audioContext.createOscillator();
+          const gain = this.audioContext.createGain();
+          osc.connect(gain);
+          gain.connect(this.audioContext.destination);
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(freq, t);
+          gain.gain.setValueAtTime(0.22, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+          osc.start(t);
+          osc.stop(t + 0.32);
+        });
+      }
+
+      playStart() {
+        if (!this.sfxEnabled || !this.audioContext) return;
+        const notes = [262, 330, 392, 523];
+        notes.forEach((freq, i) => {
+          const t = this.audioContext.currentTime + i * 0.08;
+          const osc = this.audioContext.createOscillator();
+          const gain = this.audioContext.createGain();
+          osc.connect(gain);
+          gain.connect(this.audioContext.destination);
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(freq, t);
+          gain.gain.setValueAtTime(0.15, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          osc.start(t);
+          osc.stop(t + 0.17);
+        });
+      }
+
+      // ========== 开关控制 ==========
+      toggleSfx() {
+        this.sfxEnabled = !this.sfxEnabled;
+        return this.sfxEnabled;
+      }
+
+      toggleBgm() {
+        this.bgmEnabled = !this.bgmEnabled;
+        if (!this.bgmEnabled) {
+          this.stopBgm();
+        }
+        return this.bgmEnabled;
+      }
+    }
+
+    class Game {
+      constructor() {
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = COLS * BLOCK_SIZE;
+        this.canvas.height = ROWS * BLOCK_SIZE;
+        this.ctx = this.canvas.getContext('2d');
+        
+        this.nextCanvas = document.createElement('canvas');
+        this.nextCanvas.width = 4 * BLOCK_SIZE;
+        this.nextCanvas.height = 4 * BLOCK_SIZE;
+        this.nextCtx = this.nextCanvas.getContext('2d');
+        
+        this.sound = new SoundManager();
+        
+        this.setupDOM();
+        this.setupControls();
+        this.reset();
+      }
+
+      setupDOM() {
+        const container = document.getElementById('app');
+        
+        const gameContainer = document.createElement('div');
+        gameContainer.className = 'game-container';
+        
+        const title = document.createElement('div');
+        title.className = 'game-title';
+        title.textContent = 'PIXEL TETRIS';
+        
+        const wrapper = document.createElement('div');
+        wrapper.className = 'game-wrapper';
+        wrapper.appendChild(this.canvas);
+        
+        const crtOverlay = document.createElement('div');
+        crtOverlay.className = 'crt-overlay';
+        wrapper.appendChild(crtOverlay);
+        
+        const overlay = document.createElement('div');
+        overlay.className = 'game-overlay';
+        overlay.id = 'gameOverlay';
+        overlay.innerHTML = `
+          <div class="overlay-title" id="overlayTitle">PIXEL TETRIS</div>
+          <div class="overlay-text" id="overlayText">按 空格键 开始游戏</div>
+        `;
+        wrapper.appendChild(overlay);
+        
+        gameContainer.appendChild(title);
+        gameContainer.appendChild(wrapper);
+        
+        const sidePanel = document.createElement('div');
+        sidePanel.className = 'side-panel';
+        
+        sidePanel.innerHTML = `
+          <div class="panel-box">
+            <div class="panel-title">Score</div>
+            <div class="panel-value" id="score">0</div>
+          </div>
+          <div class="panel-box">
+            <div class="panel-title">Level</div>
+            <div class="panel-value" id="level">1</div>
+          </div>
+          <div class="panel-box">
+            <div class="panel-title">Lines</div>
+            <div class="panel-value" id="lines">0</div>
+          </div>
+          <div class="panel-box">
+            <div class="panel-title">Next</div>
+            <canvas id="nextCanvas" width="128" height="128"></canvas>
+          </div>
+          <div class="panel-box controls">
+            <div><span>←→</span> 移动</div>
+            <div><span>↑</span> 旋转</div>
+            <div><span>↓</span> 软降</div>
+            <div><span>空格</span> 硬降</div>
+            <div><span>P</span> 暂停</div>
+            <div><span>S</span> 特效音开关</div>
+            <div><span>B</span> 背景音开关</div>
+          </div>
+        `;
+        
+        container.appendChild(gameContainer);
+        container.appendChild(sidePanel);
+        
+        this.scoreEl = document.getElementById('score');
+        this.levelEl = document.getElementById('level');
+        this.linesEl = document.getElementById('lines');
+        this.overlayEl = document.getElementById('gameOverlay');
+        this.overlayTitle = document.getElementById('overlayTitle');
+        this.overlayText = document.getElementById('overlayText');
+        this.wrapperEl = wrapper;
+        
+        this.nextCanvas = document.getElementById('nextCanvas');
+        this.nextCtx = this.nextCanvas.getContext('2d');
+      }
+
+      setupControls() {
+        document.addEventListener('keydown', (e) => {
+          // 首次按键时初始化音频上下文（浏览器安全策略要求）
+          this.sound.init();
+          
+          if (this.status === 'idle' || this.status === 'gameover') {
+            if (e.code === 'Space') {
+              e.preventDefault();
+              this.startGame();
+            }
+            return;
+          }
+          
+          if (e.code === 'KeyP') {
+            e.preventDefault();
+            this.togglePause();
+            return;
+          }
+          
+          if (e.code === 'KeyS') {
+            e.preventDefault();
+            this.sound.toggleSfx();
+            return;
+          }
+          
+          if (e.code === 'KeyB') {
+            e.preventDefault();
+            this.sound.toggleBgm();
+            return;
+          }
+          
+          if (this.status !== 'playing') return;
+          
+          switch (e.code) {
+            case 'ArrowLeft':
+              e.preventDefault();
+              if (this.move(-1)) this.sound.playMove();
+              break;
+            case 'ArrowRight':
+              e.preventDefault();
+              if (this.move(1)) this.sound.playMove();
+              break;
+            case 'ArrowUp':
+              e.preventDefault();
+              if (this.rotate()) this.sound.playRotate();
+              break;
+            case 'ArrowDown':
+              e.preventDefault();
+              this.softDrop();
+              break;
+            case 'Space':
+              e.preventDefault();
+              this.hardDrop();
+              break;
+          }
+        });
+      }
+
+      reset() {
+        this.board = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
+        this.score = 0;
+        this.level = 1;
+        this.lines = 0;
+        this.status = 'idle';
+        this.dropCounter = 0;
+        this.dropInterval = 1000;
+        this.lastTime = 0;
+        
+        this.currentPiece = null;
+        this.nextPiece = this.generatePiece();
+        
+        this.updateUI();
+      }
+
+      start() {
+        this.update();
+      }
+
+      startGame() {
+        this.board = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
+        this.score = 0;
+        this.level = 1;
+        this.lines = 0;
+        this.status = 'playing';
+        this.dropInterval = 1000;
+        
+        this.spawnPiece();
+        this.overlayEl.classList.add('hidden');
+        this.updateUI();
+        this.sound.playStart();
+        this.sound.startBgm();
+      }
+
+      spawnPiece() {
+        this.currentPiece = this.nextPiece;
+        this.nextPiece = this.generatePiece();
+        
+        this.currentPiece.x = Math.floor((COLS - this.currentPiece.shape[0].length) / 2);
+        this.currentPiece.y = 0;
+        
+        if (this.checkCollision()) {
+          this.gameOver();
+        }
+        
+        this.renderNextPiece();
+      }
+
+      generatePiece() {
+        const types = Object.keys(SHAPES);
+        const type = types[Math.floor(Math.random() * types.length)];
+        return {
+          type,
+          shape: SHAPES[type],
+          rotation: 0,
+          x: 0,
+          y: 0,
+          color: COLORS[type]
+        };
+      }
+
+      checkCollision(piece = this.currentPiece) {
+        const shape = piece.shape[piece.rotation];
+        for (let y = 0; y < shape.length; y++) {
+          for (let x = 0; x < shape[y].length; x++) {
+            if (shape[y][x]) {
+              const newX = piece.x + x;
+              const newY = piece.y + y;
+              
+              if (newX < 0 || newX >= COLS || newY >= ROWS) {
+                return true;
+              }
+              
+              if (newY >= 0 && this.board[newY][newX]) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      }
+
+      move(dir) {
+        this.currentPiece.x += dir;
+        if (this.checkCollision()) {
+          this.currentPiece.x -= dir;
+          return false;
+        }
+        return true;
+      }
+
+      rotate() {
+        const oldRotation = this.currentPiece.rotation;
+        this.currentPiece.rotation = (this.currentPiece.rotation + 1) % 4;
+        
+        if (this.checkCollision()) {
+          this.currentPiece.rotation = oldRotation;
+          return false;
+        }
+        return true;
+      }
+
+      softDrop() {
+        this.currentPiece.y++;
+        if (this.checkCollision()) {
+          this.currentPiece.y--;
+          this.lockPiece();
+        } else {
+          this.score += 1;
+          this.updateUI();
+        }
+      }
+
+      hardDrop() {
+        this.sound.playHardDrop();
+        while (!this.checkCollision()) {
+          this.currentPiece.y++;
+        }
+        this.currentPiece.y--;
+        this.lockPiece();
+      }
+
+      lockPiece() {
+        this.sound.playLock();
+        const shape = this.currentPiece.shape[this.currentPiece.rotation];
+        for (let y = 0; y < shape.length; y++) {
+          for (let x = 0; x < shape[y].length; x++) {
+            if (shape[y][x]) {
+              const boardY = this.currentPiece.y + y;
+              const boardX = this.currentPiece.x + x;
+              if (boardY >= 0) {
+                this.board[boardY][boardX] = this.currentPiece.color;
+              }
+            }
+          }
+        }
+        
+        this.clearLines();
+        this.spawnPiece();
+      }
+
+      clearLines() {
+        let linesCleared = 0;
+        
+        for (let y = ROWS - 1; y >= 0; y--) {
+          if (this.board[y].every(cell => cell !== null)) {
+            this.board.splice(y, 1);
+            this.board.unshift(Array(COLS).fill(null));
+            linesCleared++;
+            y++;
+          }
+        }
+        
+        if (linesCleared > 0) {
+          this.sound.playClear(linesCleared);
+          const points = [0, 100, 300, 500, 800];
+          this.score += points[linesCleared] * this.level;
+          this.lines += linesCleared;
+          
+          const newLevel = Math.floor(this.lines / 10) + 1;
+          if (newLevel > this.level) {
+            this.level = newLevel;
+            this.dropInterval = Math.max(100, 1000 - (this.level - 1) * 100);
+            this.flashScreen();
+            this.sound.playLevelUp();
+          }
+          
+          this.updateUI();
+          this.flashLines();
+        }
+      }
+
+      flashScreen() {
+        this.wrapperEl.classList.add('flash');
+        setTimeout(() => this.wrapperEl.classList.remove('flash'), 600);
+      }
+
+      flashLines() {
+        this.canvas.classList.add('flash');
+        setTimeout(() => this.canvas.classList.remove('flash'), 600);
+      }
+
+      togglePause() {
+        if (this.status === 'playing') {
+          this.status = 'paused';
+          this.overlayTitle.textContent = 'PAUSED';
+          this.overlayText.textContent = '按 P 继续';
+          this.overlayEl.classList.remove('hidden');
+          this.overlayTitle.classList.remove('game-over-title');
+          this.sound.stopBgm();
+        } else if (this.status === 'paused') {
+          this.status = 'playing';
+          this.overlayEl.classList.add('hidden');
+          this.sound.startBgm();
+        }
+      }
+
+      gameOver() {
+        this.status = 'gameover';
+        this.overlayTitle.textContent = 'GAME OVER';
+        this.overlayTitle.classList.add('game-over-title');
+        this.overlayText.textContent = '按 空格键 重新开始';
+        this.overlayEl.classList.remove('hidden');
+        this.wrapperEl.classList.add('shake');
+        setTimeout(() => this.wrapperEl.classList.remove('shake'), 300);
+        this.sound.playGameOver();
+      }
+
+      update(time = 0) {
+        if (this.status !== 'playing') {
+          this.render();
+          requestAnimationFrame((t) => this.update(t));
+          return;
+        }
+        
+        const deltaTime = time - this.lastTime;
+        this.lastTime = time;
+        
+        this.dropCounter += deltaTime;
+        if (this.dropCounter > this.dropInterval) {
+          this.dropCounter = 0;
+          this.currentPiece.y++;
+          if (this.checkCollision()) {
+            this.currentPiece.y--;
+            this.lockPiece();
+          }
+        }
+        
+        this.render();
+        requestAnimationFrame((t) => this.update(t));
+      }
+
+      render() {
+        const ctx = this.ctx;
+        
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        ctx.strokeStyle = '#2a2a4a';
+        ctx.lineWidth = 1;
+        for (let x = 0; x <= COLS; x++) {
+          ctx.beginPath();
+          ctx.moveTo(x * BLOCK_SIZE, 0);
+          ctx.lineTo(x * BLOCK_SIZE, this.canvas.height);
+          ctx.stroke();
+        }
+        for (let y = 0; y <= ROWS; y++) {
+          ctx.beginPath();
+          ctx.moveTo(0, y * BLOCK_SIZE);
+          ctx.lineTo(this.canvas.width, y * BLOCK_SIZE);
+          ctx.stroke();
+        }
+        
+        for (let y = 0; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            if (this.board[y][x]) {
+              this.drawBlock(ctx, x, y, this.board[y][x]);
+            }
+          }
+        }
+        
+        if (this.currentPiece && this.status === 'playing') {
+          this.drawGhost();
+          const shape = this.currentPiece.shape[this.currentPiece.rotation];
+          for (let y = 0; y < shape.length; y++) {
+            for (let x = 0; x < shape[y].length; x++) {
+              if (shape[y][x]) {
+                this.drawBlock(ctx, this.currentPiece.x + x, this.currentPiece.y + y, this.currentPiece.color);
+              }
+            }
+          }
+        }
+      }
+
+      drawGhost() {
+        const shape = this.currentPiece.shape[this.currentPiece.rotation];
+        let ghostY = this.currentPiece.y;
+        
+        while (!this.checkCollisionAt(this.currentPiece.x, ghostY + 1)) {
+          ghostY++;
+        }
+        
+        if (ghostY > this.currentPiece.y) {
+          const ctx = this.ctx;
+          ctx.globalAlpha = 0.3;
+          for (let y = 0; y < shape.length; y++) {
+            for (let x = 0; x < shape[y].length; x++) {
+              if (shape[y][x]) {
+                this.drawBlock(ctx, this.currentPiece.x + x, ghostY + y, this.currentPiece.color);
+              }
+            }
+          }
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      checkCollisionAt(newX, newY) {
+        const shape = this.currentPiece.shape[this.currentPiece.rotation];
+        for (let y = 0; y < shape.length; y++) {
+          for (let x = 0; x < shape[y].length; x++) {
+            if (shape[y][x]) {
+              const boardX = newX + x;
+              const boardY = newY + y;
+              
+              if (boardX < 0 || boardX >= COLS || boardY >= ROWS) {
+                return true;
+              }
+              
+              if (boardY >= 0 && this.board[boardY][boardX]) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      }
+
+      drawBlock(ctx, x, y, color) {
+        const px = x * BLOCK_SIZE;
+        const py = y * BLOCK_SIZE;
+        const size = BLOCK_SIZE;
+        
+        ctx.fillStyle = color;
+        ctx.fillRect(px + 2, py + 2, size - 4, size - 4);
+        
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.fillRect(px + 2, py + 2, size - 4, 4);
+        ctx.fillRect(px + 2, py + 2, 4, size - 4);
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.fillRect(px + size - 6, py + 6, 4, size - 8);
+        ctx.fillRect(px + 6, py + size - 6, size - 8, 4);
+      }
+
+      renderNextPiece() {
+        const ctx = this.nextCtx;
+        const piece = this.nextPiece;
+        
+        ctx.fillStyle = '#0a0a1a';
+        ctx.fillRect(0, 0, this.nextCanvas.width, this.nextCanvas.height);
+        
+        if (!piece) return;
+        
+        const shape = piece.shape[0];
+        const blockSize = 28;
+        const offsetX = (4 - shape[0].length) / 2;
+        const offsetY = (4 - shape.length) / 2;
+        
+        for (let y = 0; y < shape.length; y++) {
+          for (let x = 0; x < shape[y].length; x++) {
+            if (shape[y][x]) {
+              const px = (offsetX + x) * blockSize;
+              const py = (offsetY + y) * blockSize;
+              
+              ctx.fillStyle = piece.color;
+              ctx.fillRect(px + 2, py + 2, blockSize - 4, blockSize - 4);
+              
+              ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+              ctx.fillRect(px + 2, py + 2, blockSize - 4, 3);
+              ctx.fillRect(px + 2, py + 2, 3, blockSize - 4);
+              
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+              ctx.fillRect(px + blockSize - 5, py + 4, 3, blockSize - 6);
+              ctx.fillRect(px + 4, py + blockSize - 5, blockSize - 6, 3);
+            }
+          }
+        }
+      }
+
+      updateUI() {
+        this.scoreEl.textContent = this.score;
+        this.levelEl.textContent = this.level;
+        this.linesEl.textContent = this.lines;
+      }
+    }
+
+    const game = new Game();
+    game.start();
+  </script>
+</body>
+</html>

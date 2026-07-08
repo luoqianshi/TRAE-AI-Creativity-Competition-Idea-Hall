@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agent-fs-guard — AI 编程代理文件系统护栏</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+
+  :root {
+    --bg-0: #0a0e0a;
+    --bg-1: #0f1710;
+    --bg-2: #141f16;
+    --line: #1a2a1d;
+    --text-0: #e8f5ea;
+    --text-1: #a3c9a8;
+    --text-2: #5a8a63;
+    --accent: #4ade80;
+    --accent-dim: #22c55e;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --info: #60a5fa;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg-0);
+    color: var(--text-0);
+    overflow-x: hidden;
+    line-height: 1.7;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(74, 222, 128, 0.02) 2px,
+      rgba(74, 222, 128, 0.02) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Grid background */
+  .grid-bg {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      linear-gradient(rgba(74, 222, 128, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(74, 222, 128, 0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 32px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Nav */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    background: rgba(10, 14, 10, 0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  nav .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 64px;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-dot {
+    width: 10px; height: 10px;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 32px;
+    list-style: none;
+  }
+
+  .nav-links a {
+    color: var(--text-1);
+    text-decoration: none;
+    font-size: 14px;
+    font-family: var(--mono);
+    transition: color 0.2s;
+  }
+
+  .nav-links a:hover { color: var(--accent); }
+
+  /* Hero */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    padding-top: 64px;
+    position: relative;
+  }
+
+  .hero-content {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 60px;
+    align-items: center;
+  }
+
+  .hero-text h1 {
+    font-size: clamp(36px, 5vw, 56px);
+    font-weight: 900;
+    line-height: 1.1;
+    margin-bottom: 24px;
+    letter-spacing: -0.02em;
+  }
+
+  .hero-text h1 .highlight {
+    color: var(--accent);
+    position: relative;
+    display: inline-block;
+  }
+
+  .hero-text h1 .highlight::after {
+    content: '';
+    position: absolute;
+    bottom: -4px; left: 0; right: 0;
+    height: 3px;
+    background: var(--accent);
+    box-shadow: 0 0 20px var(--accent);
+  }
+
+  .hero-subtitle {
+    font-size: 18px;
+    color: var(--text-1);
+    margin-bottom: 32px;
+    max-width: 520px;
+  }
+
+  .hero-tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 6px 14px;
+    border-radius: 100px;
+    margin-bottom: 24px;
+    letter-spacing: 0.05em;
+  }
+
+  .hero-stats {
+    display: flex;
+    gap: 40px;
+    margin-top: 40px;
+  }
+
+  .stat {
+    text-align: left;
+  }
+
+  .stat-number {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .stat-label {
+    font-size: 13px;
+    color: var(--text-2);
+    margin-top: 4px;
+  }
+
+  /* Terminal */
+  .terminal {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(74, 222, 128, 0.1);
+  }
+
+  .terminal-header {
+    background: var(--bg-2);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .terminal-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+  }
+
+  .terminal-dot.red { background: #f87171; }
+  .terminal-dot.yellow { background: #fbbf24; }
+  .terminal-dot.green { background: #4ade80; }
+
+  .terminal-title {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-2);
+    margin-left: 12px;
+  }
+
+  .terminal-body {
+    padding: 20px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    min-height: 380px;
+  }
+
+  .terminal-line {
+    opacity: 0;
+    animation: typeIn 0.3s forwards;
+  }
+
+  .terminal-line:nth-child(1) { animation-delay: 0.2s; }
+  .terminal-line:nth-child(2) { animation-delay: 0.5s; }
+  .terminal-line:nth-child(3) { animation-delay: 0.8s; }
+  .terminal-line:nth-child(4) { animation-delay: 1.1s; }
+  .terminal-line:nth-child(5) { animation-delay: 1.4s; }
+  .terminal-line:nth-child(6) { animation-delay: 1.7s; }
+  .terminal-line:nth-child(7) { animation-delay: 2.0s; }
+  .terminal-line:nth-child(8) { animation-delay: 2.3s; }
+  .terminal-line:nth-child(9) { animation-delay: 2.6s; }
+  .terminal-line:nth-child(10) { animation-delay: 2.9s; }
+
+  @keyframes typeIn {
+    to { opacity: 1; }
+  }
+
+  .prompt { color: var(--accent); }
+  .cmd { color: var(--text-0); }
+  .comment { color: var(--text-2); }
+  .output { color: var(--text-1); }
+  .warn { color: var(--warn); }
+  .danger { color: var(--danger); }
+  .info { color: var(--info); }
+  .success { color: var(--accent); }
+
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+
+  /* Section */
+  section {
+    padding: 120px 0;
+    position: relative;
+  }
+
+  .section-label {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  .section-title {
+    font-size: clamp(28px, 4vw, 40px);
+    font-weight: 900;
+    line-height: 1.2;
+    margin-bottom: 20px;
+  }
+
+  .section-desc {
+    font-size: 16px;
+    color: var(--text-1);
+    max-width: 640px;
+    margin-bottom: 60px;
+  }
+
+  /* Problem section */
+  .problem-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+
+  .problem-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 32px;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .problem-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--danger);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.3s;
+  }
+
+  .problem-card:hover {
+    border-color: rgba(248, 113, 113, 0.3);
+    transform: translateY(-4px);
+  }
+
+  .problem-card:hover::before {
+    transform: scaleX(1);
+  }
+
+  .problem-icon {
+    font-size: 32px;
+    margin-bottom: 20px;
+  }
+
+  .problem-card h3 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--danger);
+  }
+
+  .problem-card p {
+    font-size: 14px;
+    color: var(--text-1);
+    line-height: 1.7;
+  }
+
+  /* Features */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+
+  .feature-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 28px;
+    transition: all 0.3s;
+    display: flex;
+    gap: 20px;
+  }
+
+  .feature-card:hover {
+    border-color: rgba(74, 222, 128, 0.3);
+    background: var(--bg-2);
+  }
+
+  .feature-num {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(74, 222, 128, 0.1);
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .feature-content h4 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .feature-content p {
+    font-size: 14px;
+    color: var(--text-1);
+    line-height: 1.7;
+  }
+
+  /* Architecture */
+  .arch-diagram {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 48px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+
+  .arch-line {
+    color: var(--text-2);
+    white-space: pre;
+  }
+
+  .arch-line .accent { color: var(--accent); }
+  .arch-line .warn { color: var(--warn); }
+  .arch-line .info { color: var(--info); }
+  .arch-line .text0 { color: var(--text-0); }
+
+  /* Risk rules */
+  .rules-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  .rules-table th {
+    text-align: left;
+    padding: 16px 20px;
+    background: var(--bg-2);
+    color: var(--accent);
+    font-weight: 600;
+    border-bottom: 2px solid var(--line);
+  }
+
+  .rules-table td {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text-1);
+  }
+
+  .rules-table tr:hover td {
+    background: var(--bg-1);
+  }
+
+  .risk-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--sans);
+  }
+
+  .risk-badge.critical {
+    background: rgba(248, 113, 113, 0.15);
+    color: var(--danger);
+  }
+
+  .risk-badge.high {
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--warn);
+  }
+
+  .risk-badge.medium {
+    background: rgba(96, 165, 250, 0.15);
+    color: var(--info);
+  }
+
+  /* Adapters */
+  .adapters-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+
+  .adapter-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    transition: all 0.3s;
+  }
+
+  .adapter-card:hover {
+    border-color: rgba(74, 222, 128, 0.4);
+    transform: translateY(-2px);
+  }
+
+  .adapter-icon {
+    font-size: 36px;
+    margin-bottom: 16px;
+  }
+
+  .adapter-card h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .adapter-card p {
+    font-size: 12px;
+    color: var(--text-2);
+    font-family: var(--mono);
+  }
+
+  /* Value section */
+  .value-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+  }
+
+  .value-card {
+    background: linear-gradient(135deg, var(--bg-1), var(--bg-2));
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 40px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .value-card::after {
+    content: '';
+    position: absolute;
+    top: -50%; right: -20%;
+    width: 200px;
+    height: 200px;
+    background: radial-gradient(circle, rgba(74, 222, 128, 0.1), transparent);
+    border-radius: 50%;
+  }
+
+  .value-card h3 {
+    font-size: 24px;
+    font-weight: 800;
+    margin-bottom: 16px;
+    color: var(--accent);
+    position: relative;
+    z-index: 1;
+  }
+
+  .value-card ul {
+    list-style: none;
+    position: relative;
+    z-index: 1;
+  }
+
+  .value-card li {
+    padding: 10px 0;
+    padding-left: 24px;
+    position: relative;
+    color: var(--text-1);
+    font-size: 15px;
+  }
+
+  .value-card li::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+  }
+
+  /* Roadmap */
+  .roadmap {
+    position: relative;
+  }
+
+  .roadmap::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 24px;
+    width: 2px;
+    background: var(--line);
+  }
+
+  .roadmap-item {
+    position: relative;
+    padding-left: 72px;
+    padding-bottom: 48px;
+  }
+
+  .roadmap-item:last-child {
+    padding-bottom: 0;
+  }
+
+  .roadmap-dot {
+    position: absolute;
+    left: 16px;
+    top: 4px;
+    width: 18px;
+    height: 18px;
+    background: var(--bg-0);
+    border: 3px solid var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(74, 222, 128, 0.4);
+  }
+
+  .roadmap-item.future .roadmap-dot {
+    border-color: var(--text-2);
+    box-shadow: none;
+  }
+
+  .roadmap-version {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .roadmap-item.future .roadmap-version {
+    color: var(--text-2);
+  }
+
+  .roadmap-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .roadmap-desc {
+    color: var(--text-1);
+    font-size: 14px;
+    line-height: 1.8;
+  }
+
+  .roadmap-desc ul {
+    margin-top: 12px;
+    padding-left: 20px;
+  }
+
+  .roadmap-desc li {
+    margin-bottom: 6px;
+  }
+
+  /* CTA */
+  .cta-section {
+    text-align: center;
+    padding: 140px 0;
+  }
+
+  .cta-section h2 {
+    font-size: clamp(32px, 5vw, 48px);
+    font-weight: 900;
+    margin-bottom: 24px;
+  }
+
+  .cta-section p {
+    font-size: 18px;
+    color: var(--text-1);
+    max-width: 600px;
+    margin: 0 auto 40px;
+  }
+
+  .cta-code {
+    display: inline-block;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 28px;
+    font-family: var(--mono);
+    font-size: 15px;
+    color: var(--accent);
+    margin-bottom: 40px;
+  }
+
+  .cta-tags {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .cta-tag {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-2);
+    border: 1px solid var(--line);
+    padding: 6px 14px;
+    border-radius: 100px;
+  }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 40px 0;
+    text-align: center;
+  }
+
+  footer p {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  footer p span {
+    color: var(--accent);
+  }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .hero-content { grid-template-columns: 1fr; }
+    .problem-grid { grid-template-columns: 1fr; }
+    .features-grid { grid-template-columns: 1fr; }
+    .adapters-grid { grid-template-columns: repeat(2, 1fr); }
+    .value-grid { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+    .hero-stats { flex-wrap: wrap; gap: 24px; }
+    section { padding: 80px 0; }
+    .arch-diagram { padding: 24px; font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<nav>
+  <div class="container">
+    <div class="logo">
+      <div class="logo-dot"></div>
+      agent-fs-guard
+    </div>
+    <ul class="nav-links">
+      <li><a href="#problem">问题</a></li>
+      <li><a href="#features">功能</a></li>
+      <li><a href="#architecture">架构</a></li>
+      <li><a href="#roadmap">路线图</a></li>
+    </ul>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <div class="hero-content">
+      <div class="hero-text">
+        <div class="hero-tag">// v0.1 MVP — 开发者工具</div>
+        <h1>为 AI 编程代理<br>装上<span class="highlight">安全护栏</span></h1>
+        <p class="hero-subtitle">
+          agent-fs-guard 是一个供应商中立的文件系统防护工具，监控、审计、归档并预防 AI 编程代理对文件系统的危险操作，让你放心地把代码交给 AI。
+        </p>
+        <div class="hero-stats">
+          <div class="stat">
+            <div class="stat-number">7</div>
+            <div class="stat-label">风险检测规则</div>
+          </div>
+          <div class="stat">
+            <div class="stat-number">4+</div>
+            <div class="stat-label">适配 AI 工具</div>
+          </div>
+          <div class="stat">
+            <div class="stat-number">100%</div>
+            <div class="stat-label">开源 MIT</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <div class="terminal-title">afg watch — 实时监控中</div>
+        </div>
+        <div class="terminal-body">
+          <div class="terminal-line"><span class="prompt">$</span> <span class="cmd">afg init</span></div>
+          <div class="terminal-line"><span class="output">✓ 配置文件已生成: agent-fs-guard.yaml</span></div>
+          <div class="terminal-line"><span class="prompt">$</span> <span class="cmd">afg watch</span></div>
+          <div class="terminal-line"><span class="info">ℹ 正在监控 2 个工作目录...</span></div>
+          <div class="terminal-line"><span class="success">✓ 归档引擎已就绪</span></div>
+          <div class="terminal-line"><span class="warn">⚠ [WARN] 检测到大量删除: 23 files/min</span></div>
+          <div class="terminal-line"><span class="warn">  → 规则: mass_delete (阈值: 20/min)</span></div>
+          <div class="terminal-line"><span class="success">✓ 已自动归档 23 个文件</span></div>
+          <div class="terminal-line"><span class="danger">✗ [BLOCK] 尝试写入受保护路径: .env</span></div>
+          <div class="terminal-line"><span class="danger">  → 规则: protected_path_write<span class="cursor"></span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="problem">
+  <div class="container">
+    <div class="section-label">// 痛点问题</div>
+    <h2 class="section-title">AI 编程代理很强大，但也很危险</h2>
+    <p class="section-desc">
+      当你把文件系统权限交给 AI 时，一次误操作就可能导致不可逆的损失。这些风险真实存在，且每天都在发生。
+    </p>
+
+    <div class="problem-grid">
+      <div class="problem-card">
+        <div class="problem-icon">🗑️</div>
+        <h3>误删重要文件</h3>
+        <p>一条 <code style="color:var(--danger);font-family:var(--mono);">rm -rf</code> 命令可能清空整个项目目录，甚至波及系统文件，恢复成本极高。</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">🔐</div>
+        <h3>凭证泄露风险</h3>
+        <p>AI 可能无意中读取或修改 .env、密钥文件等敏感信息，导致 API Key、密码等凭证泄露。</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">🕳️</div>
+        <h3>越界写入</h3>
+        <p>通过符号链接或路径遍历，AI 可能写入项目目录之外的位置，破坏系统稳定性或植入恶意代码。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <div class="section-label">// 核心功能</div>
+    <h2 class="section-title">全方位的文件系统防护</h2>
+    <p class="section-desc">
+      从实时监控到风险评估，从自动归档到一键恢复，agent-fs-guard 为你的 AI 工作流提供完整的安全网。
+    </p>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-num">01</div>
+        <div class="feature-content">
+          <h4>实时文件监控</h4>
+          <p>基于 chokidar 的高效文件系统监控，追踪所有文件的创建、修改和删除事件，毫秒级响应。</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">02</div>
+        <div class="feature-content">
+          <h4>7 条风险检测规则</h4>
+          <p>覆盖大规模删除、凭证文件写入、工作区越界、符号链接逃逸、大文件写入等常见风险场景。</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">03</div>
+        <div class="feature-content">
+          <h4>自动归档 & 恢复</h4>
+          <p>文件被修改或删除前自动备份，支持 sha256 校验的归档清单，一条命令即可完整恢复。</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">04</div>
+        <div class="feature-content">
+          <h4>审计日志</h4>
+          <p>所有操作记录到 JSONL 审计日志，敏感路径自动脱敏，满足合规和追溯需求。</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">05</div>
+        <div class="feature-content">
+          <h4>多工具适配</h4>
+          <p>支持 Claude Code、Codex、Cursor、MCP 文件系统服务器等主流 AI 编程工具，供应商中立。</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">06</div>
+        <div class="feature-content">
+          <h4>策略决策引擎</h4>
+          <p>支持 observe/warn/quarantine/block 四种模式，按风险等级采取不同级别的防护措施。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="container">
+    <div class="section-label">// 系统架构</div>
+    <h2 class="section-title">事件驱动的防护管道</h2>
+    <p class="section-desc">
+      从文件系统事件捕获到风险评估、策略决策、归档审计，每一层都清晰解耦，可独立扩展。
+    </p>
+
+    <div class="arch-diagram">
+<div class="arch-line">                      ┌─────────────────────────────────────────────┐</div>
+<div class="arch-line">                      │         <span class="text0">AI 代理 / 工具</span>                  │</div>
+<div class="arch-line">                      │  <span class="text0">(Claude, Codex, MCP, Cursor, ...)</span>       │</div>
+<div class="arch-line">                      └───────────────┬─────────────────────────────┘</div>
+<div class="arch-line">                                      │ <span class="warn">filesystem mutation</span></div>
+<div class="arch-line">                                      ▼</div>
+<div class="arch-line">   ┌──────────────────────────────────────────────────────────────────┐</div>
+<div class="arch-line">   │                    <span class="accent">Watcher (chokidar)</span>                           │</div>
+<div class="arch-line">   │  观察 workspace_roots, 忽略 ignore_paths, 发出 FileEvent          │</div>
+<div class="arch-line">   └───────────────┬────────────────────────────┬─────────────┘</div>
+<div class="arch-line">                   │                            │</div>
+<div class="arch-line">                   ▼                            ▼</div>
+<div class="arch-line">   ┌──────────────────────────────┐   ┌──────────────────────────┐</div>
+<div class="arch-line">   │      <span class="accent">Risk Engine</span>             │   │  <span class="info">File Snapshot</span>          │</div>
+<div class="arch-line">   │  7 条规则 → RiskResult       │◄──│  滑动 60s 窗口:          │</div>
+<div class="arch-line">   │  (level, score, reasons)     │   │  deletes/min, bytes/min  │</div>
+<div class="arch-line">   └───────────────┬──────────────┘   └──────────────────────────┘</div>
+<div class="arch-line">                   │ <span class="warn">RiskResult + FileEvent</span></div>
+<div class="arch-line">                   ▼</div>
+<div class="arch-line">   ┌──────────────────────────────┐</div>
+<div class="arch-line">   │   <span class="accent">Policy Decision Engine</span>    │</div>
+<div class="arch-line">   │  风险 + 模式 → GuardDecision │</div>
+<div class="arch-line">   │  allow | warn | archive |    │</div>
+<div class="arch-line">   │  quarantine | block          │</div>
+<div class="arch-line">   └───────────┬──────┬───────────┘</div>
+<div class="arch-line">               │      │      └──────────┐</div>
+<div class="arch-line">               ▼      ▼                 ▼</div>
+<div class="arch-line">   ┌──────────────┐ ┌──────────┐ ┌──────────────────┐</div>
+<div class="arch-line">   │  <span class="info">Audit Log</span>   │ │ <span class="info">Archive</span>  │ │  <span class="warn">Adapter Hooks</span>   │</div>
+<div class="arch-line">   │  (JSONL)     │ │ Engine   │ │  (pre/post tool)  │</div>
+<div class="arch-line">   │  敏感路径脱敏 │ │ sha256 + │ │  block / forward  │</div>
+<div class="arch-line">   └──────────────┘ └──────────┘ └──────────────────┘</div>
+    </div>
+
+    <div style="margin-top: 80px;">
+      <div class="section-label" style="margin-bottom: 24px;">// 风险规则</div>
+      <div style="overflow-x: auto; border: 1px solid var(--line); border-radius: 12px;">
+        <table class="rules-table">
+          <thead>
+            <tr>
+              <th>规则名称</th>
+              <th>风险等级</th>
+              <th>默认动作</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>outside_workspace</td>
+              <td><span class="risk-badge critical">Critical</span></td>
+              <td>block</td>
+              <td>写入工作区目录之外的路径</td>
+            </tr>
+            <tr>
+              <td>protected_path_write</td>
+              <td><span class="risk-badge critical">Critical</span></td>
+              <td>block</td>
+              <td>写入 .env、密钥等敏感文件</td>
+            </tr>
+            <tr>
+              <td>symlink_escape</td>
+              <td><span class="risk-badge critical">Critical</span></td>
+              <td>block</td>
+              <td>通过符号链接逃逸工作区</td>
+            </tr>
+            <tr>
+              <td>agent_config_mutation</td>
+              <td><span class="risk-badge critical">Critical</span></td>
+              <td>block</td>
+              <td>修改 CLAUDE.md、SKILL.md 等代理配置</td>
+            </tr>
+            <tr>
+              <td>mass_delete</td>
+              <td><span class="risk-badge high">High</span></td>
+              <td>quarantine</td>
+              <td>短时间内大量删除文件</td>
+            </tr>
+            <tr>
+              <td>single_large_file</td>
+              <td><span class="risk-badge high">High</span></td>
+              <td>warn/block</td>
+              <td>单个文件超过大小阈值</td>
+            </tr>
+            <tr>
+              <td>large_write_burst</td>
+              <td><span class="risk-badge medium">Medium</span></td>
+              <td>warn</td>
+              <td>短时间内大量写入数据</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-label">// 多工具适配</div>
+    <h2 class="section-title">供应商中立，开箱即用</h2>
+    <p class="section-desc">
+      无论你使用哪款 AI 编程工具，agent-fs-guard 都能无缝集成，提供一致的安全防护体验。
+    </p>
+
+    <div class="adapters-grid">
+      <div class="adapter-card">
+        <div class="adapter-icon">🧠</div>
+        <h4>Claude Code</h4>
+        <p>PreToolUse 钩子</p>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-icon">⚡</div>
+        <h4>Codex</h4>
+        <p>权限配置文件</p>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-icon">🖱️</div>
+        <h4>Cursor</h4>
+        <p>规则 + 文档集成</p>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-icon">🔌</div>
+        <h4>MCP Server</h4>
+        <p>文件系统包装器</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-label">// 价值与意义</div>
+    <h2 class="section-title">为什么 agent-fs-guard 很重要</h2>
+    <p class="section-desc">
+      AI 编程代理正在改变软件开发的方式，但安全永远不能妥协。
+    </p>
+
+    <div class="value-grid">
+      <div class="value-card">
+        <h3>🚀 效率提升</h3>
+        <ul>
+          <li>放心使用 AI 自动化编码，不用时刻担心误操作</li>
+          <li>一键恢复误删文件，省去 Git 回滚或手动重建的麻烦</li>
+          <li>审计日志让你快速了解 AI 做了什么改动</li>
+          <li>降低 Code Review 中检查文件操作的心智负担</li>
+        </ul>
+      </div>
+      <div class="value-card">
+        <h3>🌍 社会价值</h3>
+        <ul>
+          <li>推动 AI 编程工具的安全标准建立</li>
+          <li>开源项目，促进开发者社区安全意识提升</li>
+          <li>为 AI Agent 安全研究提供参考实现</li>
+          <li>降低企业和个人使用 AI 编程工具的安全门槛</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="container">
+    <div class="section-label">// 发展路线图</div>
+    <h2 class="section-title">从被动响应到主动防护</h2>
+    <p class="section-desc">
+      我们的目标是让文件系统防护从用户态监控进化到内核级强制，从被动归档进化到主动拦截。
+    </p>
+
+    <div class="roadmap">
+      <div class="roadmap-item">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-version">v0.1 — MVP（当前）</div>
+        <div class="roadmap-title">基础能力：可见性 + 归档 + 建议性防护</div>
+        <div class="roadmap-desc">
+          <ul>
+            <li>pnpm + TypeScript monorepo（core、cli、adapters、skill）</li>
+            <li>7 条规则风险引擎 + 策略决策引擎</li>
+            <li>JSONL 审计日志 + sha256 归档引擎</li>
+            <li>Claude Code 钩子、Codex TOML 配置、MCP 包装模板</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-version">v0.2 — 预防性加固</div>
+        <div class="roadmap-title">让适配器真正做到事前拦截</div>
+        <div class="roadmap-desc">
+          <ul>
+            <li>强化 Claude Code PreToolUse 规则集</li>
+            <li>MCP 网关脚本，真正拦截写入/删除/重命名</li>
+            <li>跨适配器会话 ID 串联，完整还原一次 AI 操作</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-version">v0.3 — 操作系统级监控</div>
+        <div class="roadmap-title">从用户态通知到内核级观察</div>
+        <div class="roadmap-desc">
+          <ul>
+            <li>Linux: fanotify + eBPF 高性能事件捕获</li>
+            <li>macOS: EndpointSecurity 系统级文件拦截</li>
+            <li>Windows: ETW + USN journal 变更追踪</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-version">v0.4 — 防篡改审计</div>
+        <div class="roadmap-title">让审计日志本身也值得信任</div>
+        <div class="roadmap-desc">
+          <ul>
+            <li>SQLite 审计存储，事务性追加</li>
+            <li>哈希链：每条记录包含前一条的哈希</li>
+            <li>afg verify-audit 命令验证链完整性</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-version">v1.0 — 稳定 API + 插件系统</div>
+        <div class="roadmap-title">生产就绪，社区可扩展</div>
+        <div class="roadmap-desc">
+          <ul>
+            <li>稳定的公共 API 和配置 schema</li>
+            <li>第三方规则包和归档后端插件</li>
+            <li>安全审计 + 外部代码审查</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="container">
+    <h2>让 AI 编程更<span style="color:var(--accent);">安全</span>一点</h2>
+    <p>
+      agent-fs-guard 是一个开源的安全层，而不是沙箱替代品。<br>
+      但它能让你在使用 AI 编程工具时，多一份安心，少一份担忧。
+    </p>
+    <div class="cta-code">
+      <span style="color:var(--text-2);">$</span> pnpm install && pnpm build
+    </div>
+    <div class="cta-tags">
+      <span class="cta-tag">TypeScript</span>
+      <span class="cta-tag">开源 MIT</span>
+      <span class="cta-tag">AI 安全</span>
+      <span class="cta-tag">开发者工具</span>
+      <span class="cta-tag">文件系统</span>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>Made with <span>♥</span> for safer AI coding · agent-fs-guard v0.1</p>
+  </div>
+</footer>
+
+<script>
+  // Scroll reveal animation
+  const observerOptions = {
+    threshold: 0.1,
+    rootMargin: '0px 0px -50px 0px'
+  };
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.style.opacity = '1';
+        entry.target.style.transform = 'translateY(0)';
+      }
+    });
+  }, observerOptions);
+
+  document.querySelectorAll('.problem-card, .feature-card, .adapter-card, .value-card, .roadmap-item').forEach(el => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(20px)';
+    el.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+    observer.observe(el);
+  });
+
+  // Staggered animation for grid items
+  document.querySelectorAll('.problem-grid, .features-grid, .adapters-grid').forEach(grid => {
+    Array.from(grid.children).forEach((child, i) => {
+      child.style.transitionDelay = `${i * 0.08}s`;
+    });
+  });
+</script>
+
+</body>
+</html>

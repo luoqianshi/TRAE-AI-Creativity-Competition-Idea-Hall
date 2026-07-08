@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 模型加载器</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a2e;
+            --bg-card: rgba(26, 26, 46, 0.85);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(99, 102, 241, 0.4);
+            --text-primary: #e8e8f0;
+            --text-secondary: #8888a8;
+            --text-muted: #55556a;
+            --accent: #6366f1;
+            --accent-light: #818cf8;
+            --accent-glow: rgba(99, 102, 241, 0.3);
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* ===== Canvas ===== */
+        #canvas-container {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* ===== Upload Overlay ===== */
+        #upload-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(10, 10, 15, 0.92);
+            backdrop-filter: blur(20px);
+            transition: opacity 0.5s ease, visibility 0.5s ease;
+        }
+
+        #upload-overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .upload-zone {
+            position: relative;
+            width: 580px;
+            max-width: 90vw;
+            padding: 60px 40px;
+            border: 2px dashed var(--border-color);
+            border-radius: 24px;
+            background: var(--bg-card);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.05);
+            box-shadow: 0 0 60px var(--accent-glow);
+        }
+
+        .upload-zone.drag-over {
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            border-radius: 20px;
+            background: linear-gradient(135deg, var(--accent), #a855f7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            box-shadow: 0 8px 32px var(--accent-glow);
+        }
+
+        .upload-icon svg {
+            width: 40px;
+            height: 40px;
+            fill: white;
+        }
+
+        .upload-title {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .upload-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+
+        .upload-formats {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .format-tag {
+            padding: 6px 14px;
+            border-radius: 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        .format-tag .dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        .dot-glb { background: #22c55e; }
+        .dot-obj { background: #3b82f6; }
+        .dot-fbx { background: #f59e0b; }
+        .dot-stl { background: #ef4444; }
+
+        #file-input {
+            display: none;
+        }
+
+        /* ===== Loading Bar ===== */
+        .loading-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 0%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent), #a855f7, var(--accent-light));
+            z-index: 200;
+            transition: width 0.3s ease;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .loading-bar.active {
+            animation: loading-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes loading-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* ===== Top Toolbar ===== */
+        #toolbar {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        #toolbar.visible {
+            opacity: 1;
+        }
+
+        .toolbar-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .toolbar-btn:hover {
+            border-color: var(--border-hover);
+            color: var(--text-primary);
+            background: rgba(99, 102, 241, 0.08);
+        }
+
+        .toolbar-btn svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        .toolbar-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--border-color);
+        }
+
+        /* ===== Info Panel ===== */
+        #info-panel {
+            position: fixed;
+            top: 80px;
+            left: 16px;
+            z-index: 50;
+            width: 280px;
+            padding: 20px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.5s ease;
+            pointer-events: none;
+        }
+
+        #info-panel.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .info-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .info-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .info-close {
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .info-close:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .info-row:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-value {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        /* ===== Control Panel ===== */
+        #control-panel {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            z-index: 50;
+            width: 260px;
+            padding: 20px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.5s ease;
+        }
+
+        #control-panel.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .panel-title svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--accent-light);
+        }
+
+        .control-group {
+            margin-bottom: 14px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .control-value {
+            color: var(--accent-light);
+            font-weight: 500;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            box-shadow: 0 0 10px var(--accent-glow);
+            transition: transform 0.15s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 0;
+        }
+
+        .toggle-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .toggle {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border: 1px solid var(--border-color);
+        }
+
+        .toggle.active {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: white;
+            transition: transform 0.2s;
+        }
+
+        .toggle.active::after {
+            transform: translateX(16px);
+        }
+
+        /* ===== Color Picker Row ===== */
+        .color-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 0;
+        }
+
+        .color-row label {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .color-row input[type="color"] {
+            width: 28px;
+            height: 28px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            background: none;
+            padding: 0;
+        }
+
+        .color-row input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 2px;
+        }
+
+        .color-row input[type="color"]::-webkit-color-swatch {
+            border: none;
+            border-radius: 4px;
+        }
+
+        /* ===== Stats Bar ===== */
+        #stats-bar {
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            z-index: 50;
+            display: flex;
+            gap: 12px;
+            padding: 10px 16px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        #stats-bar.visible {
+            opacity: 1;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .stat-value {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        /* ===== Toast ===== */
+        #toast-container {
+            position: fixed;
+            top: 70px;
+            right: 16px;
+            z-index: 300;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .toast {
+            padding: 12px 20px;
+            border-radius: 12px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            font-size: 13px;
+            color: var(--text-primary);
+            animation: toast-in 0.3s ease, toast-out 0.3s ease 2.7s forwards;
+            max-width: 320px;
+        }
+
+        .toast.success { border-color: rgba(34, 197, 94, 0.3); }
+        .toast.error { border-color: rgba(239, 68, 68, 0.3); }
+        .toast.warning { border-color: rgba(245, 158, 11, 0.3); }
+
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes toast-out {
+            from { opacity: 1; transform: translateX(0); }
+            to { opacity: 0; transform: translateX(20px); }
+        }
+
+        /* ===== Model Name ===== */
+        #model-name {
+            position: fixed;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 50;
+            padding: 8px 20px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            white-space: nowrap;
+            max-width: 80vw;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #model-name.visible {
+            opacity: 1;
+        }
+
+        /* ===== Grid ===== */
+        #grid-toggle {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 50;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        #grid-toggle.visible {
+            opacity: 1;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            #info-panel { width: 240px; top: 70px; left: 8px; padding: 14px; }
+            #control-panel { width: 220px; bottom: 8px; right: 8px; padding: 14px; }
+            .upload-zone { padding: 40px 24px; }
+            .upload-title { font-size: 18px; }
+            .toolbar-btn span { display: none; }
+            #stats-bar { left: 8px; bottom: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Bar -->
+    <div class="loading-bar" id="loading-bar"></div>
+
+    <!-- Upload Overlay -->
+    <div id="upload-overlay">
+        <div class="upload-zone" id="upload-zone">
+            <div class="upload-icon">
+                <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2l5 5h-5V4zM8 17l3-3 3 3m-3-3v8" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <div class="upload-title">拖拽或点击上传 3D 模型</div>
+            <div class="upload-subtitle">支持拖拽文件到窗口任意位置，或点击此处选择文件</div>
+            <div class="upload-formats">
+                <span class="format-tag"><span class="dot dot-glb"></span>GLB / GLTF</span>
+                <span class="format-tag"><span class="dot dot-obj"></span>OBJ</span>
+                <span class="format-tag"><span class="dot dot-fbx"></span>FBX</span>
+                <span class="format-tag"><span class="dot dot-stl"></span>STL</span>
+            </div>
+            <input type="file" id="file-input" accept=".glb,.gltf,.obj,.fbx,.stl">
+        </div>
+    </div>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- Top Toolbar -->
+    <div id="toolbar">
+        <button class="toolbar-btn" id="btn-open" title="打开文件">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>
+            <span>打开</span>
+        </button>
+        <div class="toolbar-divider"></div>
+        <button class="toolbar-btn" id="btn-screenshot" title="截图">
+            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            <span>截图</span>
+        </button>
+        <button class="toolbar-btn" id="btn-center" title="重置视角">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span>重置视角</span>
+        </button>
+        <div class="toolbar-divider"></div>
+        <button class="toolbar-btn" id="btn-wireframe" title="线框模式">
+            <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h16v12zM6 10h2v4H6zm4-2h2v8h-2zm4 4h2v4h-2z"/></svg>
+            <span>线框</span>
+        </button>
+        <button class="toolbar-btn" id="btn-fullscreen" title="全屏">
+            <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            <span>全屏</span>
+        </button>
+    </div>
+
+    <!-- Model Info Panel -->
+    <div id="info-panel">
+        <div class="info-header">
+            <span class="info-title">模型信息</span>
+            <button class="info-close" id="info-close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div class="info-row">
+            <span class="info-label">文件名</span>
+            <span class="info-value" id="info-filename">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">文件大小</span>
+            <span class="info-value" id="info-filesize">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">格式</span>
+            <span class="info-value" id="info-format">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">顶点数</span>
+            <span class="info-value" id="info-vertices">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">三角面数</span>
+            <span class="info-value" id="info-triangles">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">网格数</span>
+            <span class="info-value" id="info-meshes">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">动画</span>
+            <span class="info-value" id="info-animations">-</span>
+        </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div id="control-panel">
+        <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3" fill="none"/></svg>
+            显示控制
+        </div>
+
+        <div class="control-group">
+            <div class="control-label">
+                <span>环境光强度</span>
+                <span class="control-value" id="ambient-val">0.6</span>
+            </div>
+            <input type="range" id="ambient-intensity" min="0" max="3" step="0.1" value="0.6">
+        </div>
+
+        <div class="control-group">
+            <div class="control-label">
+                <span>方向光强度</span>
+                <span class="control-value" id="directional-val">1.0</span>
+            </div>
+            <input type="range" id="directional-intensity" min="0" max="5" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <div class="toggle-row">
+                <span class="toggle-label">自动旋转</span>
+                <div class="toggle" id="toggle-autorotate"></div>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="toggle-row">
+                <span class="toggle-label">网格地面</span>
+                <div class="toggle active" id="toggle-grid"></div>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="toggle-row">
+                <span class="toggle-label">坐标轴</span>
+                <div class="toggle" id="toggle-axes"></div>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="color-row">
+                <label>背景颜色</label>
+                <input type="color" id="bg-color" value="#0a0a0f">
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div id="stats-bar">
+        <div class="stat-item">FPS <span class="stat-value" id="stat-fps">0</span></div>
+        <div class="stat-item">绘制调用 <span class="stat-value" id="stat-calls">0</span></div>
+        <div class="stat-item">三角面 <span class="stat-value" id="stat-triangles">0</span></div>
+    </div>
+
+    <!-- Model Name -->
+    <div id="model-name"></div>
+
+    <!-- Toast Container -->
+    <div id="toast-container"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+
+        // ===== Global State =====
+        let scene, camera, renderer, controls;
+        let currentModel = null;
+        let mixer = null;
+        let gridHelper, axesHelper;
+        let clock = new THREE.Clock();
+        let animationActions = [];
+        let frameCount = 0;
+        let lastFpsTime = performance.now();
+        let infoPanelVisible = false;
+
+        // ===== Init Scene =====
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0f);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 2000);
+            camera.position.set(3, 2, 5);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true,
+                preserveDrawingBuffer: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.minDistance = 0.1;
+            controls.maxDistance = 500;
+            controls.target.set(0, 0, 0);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            ambientLight.name = 'ambientLight';
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            directionalLight.name = 'directionalLight';
+            directionalLight.position.set(5, 10, 7);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 0.1;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -10;
+            directionalLight.shadow.camera.right = 10;
+            directionalLight.shadow.camera.top = 10;
+            directionalLight.shadow.camera.bottom = -10;
+            scene.add(directionalLight);
+
+            const fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
+            fillLight.position.set(-5, 3, -5);
+            scene.add(fillLight);
+
+            const rimLight = new THREE.DirectionalLight(0xffd700, 0.2);
+            rimLight.position.set(0, -3, -5);
+            scene.add(rimLight);
+
+            const hemisphereLight = new THREE.HemisphereLight(0x8888cc, 0x444422, 0.3);
+            scene.add(hemisphereLight);
+
+            // Grid
+            gridHelper = new THREE.GridHelper(20, 40, 0x333355, 0x222244);
+            gridHelper.material.opacity = 0.4;
+            gridHelper.material.transparent = true;
+            scene.add(gridHelper);
+
+            // Axes
+            axesHelper = new THREE.AxesHelper(3);
+            axesHelper.visible = false;
+            scene.add(axesHelper);
+
+            // Animation Loop
+            animate();
+
+            // Events
+            window.addEventListener('resize', onResize);
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            if (mixer) mixer.update(delta);
+            controls.update();
+            renderer.render(scene, camera);
+
+            // FPS counter
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFpsTime >= 1000) {
+                document.getElementById('stat-fps').textContent = frameCount;
+                frameCount = 0;
+                lastFpsTime = now;
+            }
+
+            // Renderer stats
+            const info = renderer.info;
+            document.getElementById('stat-calls').textContent = info.render.calls;
+            document.getElementById('stat-triangles').textContent = info.render.triangles.toLocaleString();
+        }
+
+        // ===== Model Loading =====
+        function clearModel() {
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel.traverse((child) => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(m => disposeMaterial(m));
+                        } else {
+                            disposeMaterial(child.material);
+                        }
+                    }
+                });
+                currentModel = null;
+            }
+            if (mixer) {
+                mixer.stopAllAction();
+                mixer = null;
+            }
+            animationActions = [];
+        }
+
+        function disposeMaterial(material) {
+            for (const key of Object.keys(material)) {
+                if (material[key] && typeof material[key].dispose === 'function') {
+                    material[key].dispose();
+                }
+            }
+            material.dispose();
+        }
+
+        function fitCameraToModel(object) {
+            const box = new THREE.Box3().setFromObject(object);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const distance = maxDim / (2 * Math.tan(camera.fov * Math.PI / 360)) * 1.8;
+
+            camera.position.set(
+                center.x + distance * 0.5,
+                center.y + distance * 0.4,
+                center.z + distance
+            );
+            controls.target.copy(center);
+            camera.near = Math.max(0.001, maxDim * 0.001);
+            camera.far = maxDim * 100;
+            camera.updateProjectionMatrix();
+            controls.update();
+        }
+
+        function getFormat(ext) {
+            const map = { glb: 'GLB', gltf: 'GLTF', obj: 'OBJ', fbx: 'FBX', stl: 'STL' };
+            return map[ext.toLowerCase()] || ext.toUpperCase();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        }
+
+        function getModelStats(object) {
+            let vertices = 0, triangles = 0, meshes = 0;
+            object.traverse((child) => {
+                if (child.isMesh) {
+                    meshes++;
+                    if (child.geometry) {
+                        const pos = child.geometry.getAttribute('position');
+                        if (pos) vertices += pos.count;
+                        const idx = child.geometry.getIndex();
+                        if (idx) triangles += idx.count / 3;
+                        else if (pos) triangles += pos.count / 3;
+                    }
+                }
+            });
+            return { vertices, triangles: Math.round(triangles), meshes };
+        }
+
+        function updateInfoPanel(file) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            document.getElementById('info-filename').textContent = file.name.length > 16 
+                ? file.name.slice(0, 14) + '...' + ext 
+                : file.name;
+            document.getElementById('info-filesize').textContent = formatFileSize(file.size);
+            document.getElementById('info-format').textContent = getFormat(ext);
+            document.getElementById('model-name').textContent = file.name;
+        }
+
+        function showModelStats(object, animations) {
+            const stats = getModelStats(object);
+            document.getElementById('info-vertices').textContent = stats.vertices.toLocaleString();
+            document.getElementById('info-triangles').textContent = stats.triangles.toLocaleString();
+            document.getElementById('info-meshes').textContent = stats.meshes;
+            document.getElementById('info-animations').textContent = animations > 0 
+                ? `${animations} 个` : '无';
+        }
+
+        function showUI() {
+            document.getElementById('toolbar').classList.add('visible');
+            document.getElementById('control-panel').classList.add('visible');
+            document.getElementById('stats-bar').classList.add('visible');
+            document.getElementById('model-name').classList.add('visible');
+        }
+
+        function setProgress(percent) {
+            const bar = document.getElementById('loading-bar');
+            bar.style.width = percent + '%';
+            bar.classList.toggle('active', percent > 0 && percent < 100);
+        }
+
+        // ===== Loaders =====
+        function loadModel(file) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            const url = URL.createObjectURL(file);
+
+            clearModel();
+            setProgress(10);
+            updateInfoPanel(file);
+
+            switch (ext) {
+                case 'glb':
+                case 'gltf':
+                    loadGLTF(url, file);
+                    break;
+                case 'obj':
+                    loadOBJ(url, file);
+                    break;
+                case 'fbx':
+                    loadFBX(url, file);
+                    break;
+                case 'stl':
+                    loadSTL(url, file);
+                    break;
+                default:
+                    showToast('不支持的文件格式: .' + ext, 'error');
+                    setProgress(0);
+            }
+        }
+
+        function loadGLTF(url, file) {
+            const loader = new GLTFLoader();
+            loader.load(
+                url,
+                (gltf) => {
+                    currentModel = gltf.scene;
+
+                    // Enable shadows
+                    currentModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+
+                    scene.add(currentModel);
+                    fitCameraToModel(currentModel);
+
+                    // Animations
+                    if (gltf.animations && gltf.animations.length > 0) {
+                        mixer = new THREE.AnimationMixer(currentModel);
+                        gltf.animations.forEach((clip) => {
+                            const action = mixer.clipAction(clip);
+                            action.play();
+                            animationActions.push(action);
+                        });
+                    }
+
+                    showModelStats(currentModel, gltf.animations?.length || 0);
+                    onLoadComplete(file.name);
+                },
+                (progress) => {
+                    if (progress.total > 0) {
+                        setProgress(10 + (progress.loaded / progress.total) * 85);
+                    }
+                },
+                (error) => {
+                    console.error('GLTF load error:', error);
+                    showToast('加载 GLTF 模型失败', 'error');
+                    setProgress(0);
+                }
+            );
+        }
+
+        function loadOBJ(url, file) {
+            const loader = new OBJLoader();
+            loader.load(
+                url,
+                (object) => {
+                    currentModel = object;
+
+                    // Apply default material if none
+                    currentModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                            if (!child.material || (child.material.type === 'MeshBasicMaterial' && !child.material.map)) {
+                                child.material = new THREE.MeshStandardMaterial({
+                                    color: 0xaaaaaa,
+                                    metalness: 0.3,
+                                    roughness: 0.6
+                                });
+                            }
+                        }
+                    });
+
+                    scene.add(currentModel);
+                    fitCameraToModel(currentModel);
+                    showModelStats(currentModel, 0);
+                    onLoadComplete(file.name);
+                },
+                (progress) => {
+                    if (progress.total > 0) {
+                        setProgress(10 + (progress.loaded / progress.total) * 85);
+                    }
+                },
+                (error) => {
+                    console.error('OBJ load error:', error);
+                    showToast('加载 OBJ 模型失败', 'error');
+                    setProgress(0);
+                }
+            );
+        }
+
+        function loadFBX(url, file) {
+            const loader = new FBXLoader();
+            loader.load(
+                url,
+                (object) => {
+                    currentModel = object;
+
+                    currentModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+
+                    scene.add(currentModel);
+                    fitCameraToModel(currentModel);
+
+                    // Animations
+                    if (object.animations && object.animations.length > 0) {
+                        mixer = new THREE.AnimationMixer(currentModel);
+                        object.animations.forEach((clip) => {
+                            const action = mixer.clipAction(clip);
+                            action.play();
+                            animationActions.push(action);
+                        });
+                    }
+
+                    showModelStats(currentModel, object.animations?.length || 0);
+                    onLoadComplete(file.name);
+                },
+                (progress) => {
+                    if (progress.total > 0) {
+                        setProgress(10 + (progress.loaded / progress.total) * 85);
+                    }
+                },
+                (error) => {
+                    console.error('FBX load error:', error);
+                    showToast('加载 FBX 模型失败', 'error');
+                    setProgress(0);
+                }
+            );
+        }
+
+        function loadSTL(url, file) {
+            const loader = new STLLoader();
+            loader.load(
+                url,
+                (geometry) => {
+                    geometry.computeVertexNormals();
+
+                    const material = new THREE.MeshStandardMaterial({
+                        color: 0xb0b0c0,
+                        metalness: 0.4,
+                        roughness: 0.5
+                    });
+
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+
+                    currentModel = new THREE.Group();
+                    currentModel.add(mesh);
+                    scene.add(currentModel);
+                    fitCameraToModel(currentModel);
+                    showModelStats(currentModel, 0);
+                    onLoadComplete(file.name);
+                },
+                (progress) => {
+                    if (progress.total > 0) {
+                        setProgress(10 + (progress.loaded / progress.total) * 85);
+                    }
+                },
+                (error) => {
+                    console.error('STL load error:', error);
+                    showToast('加载 STL 模型失败', 'error');
+                    setProgress(0);
+                }
+            );
+        }
+
+        function onLoadComplete(filename) {
+            setProgress(100);
+            setTimeout(() => setProgress(0), 500);
+            document.getElementById('upload-overlay').classList.add('hidden');
+            showUI();
+            showToast('模型加载成功: ' + filename, 'success');
+            URL.revokeObjectURL(filename);
+        }
+
+        // ===== Toast =====
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // ===== Event Handlers =====
+
+        // File Input
+        const fileInput = document.getElementById('file-input');
+        const uploadZone = document.getElementById('upload-zone');
+
+        uploadZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) loadModel(e.target.files[0]);
+        });
+
+        // Drag & Drop (whole page)
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('drag-over');
+        });
+
+        document.addEventListener('dragleave', (e) => {
+            if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
+                uploadZone.classList.remove('drag-over');
+            }
+        });
+
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length > 0) {
+                loadModel(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Toolbar Buttons
+        document.getElementById('btn-open').addEventListener('click', () => fileInput.click());
+
+        document.getElementById('btn-screenshot').addEventListener('click', () => {
+            renderer.render(scene, camera);
+            const link = document.createElement('a');
+            link.download = 'screenshot_' + Date.now() + '.png';
+            link.href = renderer.domElement.toDataURL('image/png');
+            link.click();
+            showToast('截图已保存', 'success');
+        });
+
+        document.getElementById('btn-center').addEventListener('click', () => {
+            if (currentModel) {
+                fitCameraToModel(currentModel);
+                showToast('视角已重置', 'success');
+            }
+        });
+
+        let wireframeMode = false;
+        document.getElementById('btn-wireframe').addEventListener('click', () => {
+            wireframeMode = !wireframeMode;
+            if (currentModel) {
+                currentModel.traverse((child) => {
+                    if (child.isMesh && child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(m => m.wireframe = wireframeMode);
+                        } else {
+                            child.material.wireframe = wireframeMode;
+                        }
+                    }
+                });
+            }
+            showToast(wireframeMode ? '线框模式: 开' : '线框模式: 关', 'success');
+        });
+
+        document.getElementById('btn-fullscreen').addEventListener('click', () => {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        });
+
+        // Info Panel Toggle
+        document.getElementById('info-close').addEventListener('click', () => {
+            document.getElementById('info-panel').classList.remove('visible');
+            infoPanelVisible = false;
+        });
+
+        // Double-click to show info panel
+        renderer.domElement.addEventListener('dblclick', () => {
+            infoPanelVisible = !infoPanelVisible;
+            document.getElementById('info-panel').classList.toggle('visible', infoPanelVisible);
+        });
+
+        // Control Panel
+        document.getElementById('ambient-intensity').addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            document.getElementById('ambient-val').textContent = val.toFixed(1);
+            const light = scene.getObjectByName('ambientLight');
+            if (light) light.intensity = val;
+        });
+
+        document.getElementById('directional-intensity').addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            document.getElementById('directional-val').textContent = val.toFixed(1);
+            const light = scene.getObjectByName('directionalLight');
+            if (light) light.intensity = val;
+        });
+
+        // Toggles
+        document.getElementById('toggle-autorotate').addEventListener('click', function() {
+            this.classList.toggle('active');
+            controls.autoRotate = this.classList.contains('active');
+            controls.autoRotateSpeed = 2.0;
+        });
+
+        document.getElementById('toggle-grid').addEventListener('click', function() {
+            this.classList.toggle('active');
+            gridHelper.visible = this.classList.contains('active');
+        });
+
+        document.getElementById('toggle-axes').addEventListener('click', function() {
+            this.classList.toggle('active');
+            axesHelper.visible = this.classList.contains('active');
+        });
+
+        // Background Color
+        document.getElementById('bg-color').addEventListener('input', (e) => {
+            scene.background = new THREE.Color(e.target.value);
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'o' || e.key === 'O') {
+                fileInput.click();
+            }
+            if (e.key === 'g' || e.key === 'G') {
+                const toggle = document.getElementById('toggle-grid');
+                toggle.click();
+            }
+            if (e.key === 'w' || e.key === 'W') {
+                document.getElementById('btn-wireframe').click();
+            }
+            if (e.key === 'f' || e.key === 'F') {
+                document.getElementById('btn-fullscreen').click();
+            }
+            if (e.key === 'r' || e.key === 'R') {
+                document.getElementById('btn-center').click();
+            }
+            if (e.key === 'i' || e.key === 'I') {
+                infoPanelVisible = !infoPanelVisible;
+                document.getElementById('info-panel').classList.toggle('visible', infoPanelVisible);
+            }
+        });
+
+        // ===== Start =====
+        init();
+    </script>
+</body>
+</html>

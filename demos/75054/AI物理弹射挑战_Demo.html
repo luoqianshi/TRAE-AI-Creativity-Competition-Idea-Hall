@@ -1,0 +1,1517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AI物理挑战实验室</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #0a0a1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+    #game-container {
+      width: 812px;
+      height: 375px;
+      border: 4px solid #00aaff;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 0 30px rgba(0, 170, 255, 0.3);
+      background: #000;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+  </div>
+
+  <script>
+    const Constants = {
+      SCREEN_WIDTH: 812,
+      SCREEN_HEIGHT: 375,
+      GRAVITY: 0.35,
+      FRICTION: 0.995,
+      LEVELS_COUNT: 5,
+      MAX_LEVEL: 5,
+      EXPERIENCE_PER_LEVEL: [0, 100, 200, 350, 500, 700],
+      THEMES: { LAB: 'lab', GRASS: 'grass', MOON: 'moon', JUPITER: 'jupiter' },
+      OBSTACLE_TYPES: { BRICK: 'brick', WOOD: 'wood', ICE: 'ice', STONE: 'stone', WALL: 'wall', BARRIER: 'barrier' },
+      ENEMY_TYPES: { TARGET: 'target', MOVING_TARGET: 'moving_target', BONUS: 'bonus' },
+      PROJECTILE_TYPES: { BIRD: 'projectile_bird' },
+      LAUNCHER_TYPES: { SCI_FI: 'launcher_sci-fi' },
+      GAME_STATES: { MENU: 'menu', GAME: 'game', RESULT: 'result', GUIDE: 'guide', SETTINGS: 'settings' },
+      COLORS: {
+        BACKGROUND_LAB: '#0a1628', BACKGROUND_GRASS: '#87CEEB', BACKGROUND_MOON: '#1a1a3e', BACKGROUND_JUPITER: '#2a1a0a',
+        GROUND_LAB: '#1a2a4a', GROUND_GRASS: '#7CB342', GROUND_MOON: '#3a3a5a', GROUND_JUPITER: '#4a3a2a',
+        BRICK: '#8B4513', WOOD: '#A0522D', ICE: '#ADD8E6', STONE: '#808080',
+        TARGET: '#00FF00', MOVING_TARGET: '#FF00FF', BONUS: '#FFFF00',
+        HUD_BLUE: '#00AAFF', HUD_GREEN: '#00FF00', HUD_YELLOW: '#FFFF00', HUD_RED: '#FF0000',
+        GRID_LINE: 'rgba(0, 170, 255, 0.2)'
+      },
+      PHYSICS_PRESETS: {
+        EARTH: { name: '地球', gravity: 0.35, wind: 0, color: '#00AAFF' },
+        MOON: { name: '月球', gravity: 0.06, wind: 0, color: '#AAAAAA' },
+        JUPITER: { name: '木星', gravity: 0.85, wind: 0, color: '#FF8800' },
+        WIND_EASY: { name: '微风', gravity: 0.35, wind: 0.5, color: '#88FF88' },
+        WIND_HARD: { name: '强风', gravity: 0.35, wind: 1.5, color: '#FF8888' }
+      },
+      STORAGE_KEYS: { PLAYER_SAVE: 'physics_lab_player_save', HIGH_SCORE: 'physics_lab_high_score' },
+      TILE_SIZE: 16,
+      PIXEL_SIZE: 1
+    };
+
+    const Projectiles = {
+      projectile_bird: { id: 'projectile_bird', name: '像素小鸟弹', level: 1, damage: 1, speed: 12, radius: 15, color: '#FF6B6B', effect: 'normal', description: '均衡伤害的基础弹药' },
+      projectile_bomb: { id: 'projectile_bomb', name: '爆破炸弹弹', level: 3, damage: 2, speed: 10, radius: 16, color: '#4ECDC4', effect: 'explosion', explosionRadius: 60, description: '撞击后产生范围爆炸' },
+      projectile_spear: { id: 'projectile_spear', name: '穿透长矛弹', level: 5, damage: 1, speed: 18, radius: 10, color: '#95E1D3', effect: 'pierce', pierceCount: 3, description: '可穿过多层障碍物' },
+      projectile_ice: { id: 'projectile_ice', name: '冰冻冰晶弹', level: 7, damage: 1, speed: 11, radius: 15, color: '#A8D8EA', effect: 'freeze', freezeRadius: 40, description: '撞击冻结范围内砖块' },
+      projectile_laser: { id: 'projectile_laser', name: '追踪镭射飞弹', level: 9, damage: 3, speed: 15, radius: 12, color: '#DDA0DD', effect: 'homing', homingStrength: 0.1, description: '自动锁定最近敌方单位' }
+    };
+
+    const Launchers = {
+      launcher_wood: { id: 'launcher_wood', name: '木质简易炮台', level: 1, powerMultiplier: 1.0, chargeSpeed: 1.0, color: '#8B4513', aimAssist: false, description: '初始基础款炮台' },
+      launcher_iron: { id: 'launcher_iron', name: '铁质加固炮台', level: 3, powerMultiplier: 1.3, chargeSpeed: 1.0, color: '#708090', aimAssist: false, description: '蓄力距离更长，基础伤害提升' },
+      launcher_alloy: { id: 'launcher_alloy', name: '合金机械炮台', level: 5, powerMultiplier: 1.5, chargeSpeed: 1.0, color: '#C0C0C0', aimAssist: true, description: '自带小幅瞄准辅助线' },
+      launcher_sci_fi: { id: 'launcher_sci-fi', name: '科幻机甲炮台', level: 7, powerMultiplier: 1.7, chargeSpeed: 1.3, color: '#00CED1', aimAssist: true, description: '蓄力速度加快' },
+      launcher_laser: { id: 'launcher_laser', name: '终极镭射炮台', level: 9, powerMultiplier: 2.0, chargeSpeed: 1.5, color: '#FF00FF', aimAssist: true, description: '弹射力度大幅强化' }
+    };
+
+    const Levels = [
+      { id: 1, name: '基础抛物线', theme: 'lab', physics: 'EARTH', launcherPosition: { x: 100, y: 280 }, ammoCount: 5, obstacles: [], enemies: [{ type: 'target', x: 600, y: 200, health: 1 }], hint: '尝试调整角度，45°时水平距离最远', lesson: '抛体运动基本公式: x = v₀·cos(θ)·t, y = v₀·sin(θ)·t - ½gt²' },
+      { id: 2, name: '障碍穿越', theme: 'lab', physics: 'EARTH', launcherPosition: { x: 100, y: 280 }, ammoCount: 5, obstacles: [{ type: 'wall', x: 350, y: 200, width: 20, height: 100, health: 999 }], enemies: [{ type: 'target', x: 550, y: 120, health: 1 }], hint: '需要足够的高度越过障碍', lesson: '斜抛运动中，初速度的竖直分量决定上升高度' },
+      { id: 3, name: '月球低重力', theme: 'moon', physics: 'MOON', launcherPosition: { x: 100, y: 280 }, ammoCount: 5, obstacles: [], enemies: [{ type: 'target', x: 700, y: 150, health: 1 }], hint: '月球重力只有地球的1/6，弹道会更高更远', lesson: '重力加速度影响下落速度，g越小，抛物线越平缓' },
+      { id: 4, name: '微风挑战', theme: 'lab', physics: 'WIND_EASY', launcherPosition: { x: 100, y: 280 }, ammoCount: 5, obstacles: [], enemies: [{ type: 'target', x: 500, y: 220, health: 1 }], hint: '顺风会帮助弹丸飞得更远', lesson: '空气阻力和风力会影响水平方向的速度' },
+      { id: 5, name: '移动靶训练', theme: 'lab', physics: 'EARTH', launcherPosition: { x: 100, y: 280 }, ammoCount: 5, obstacles: [], enemies: [{ type: 'moving_target', x: 550, y: 200, health: 1 }], hint: '需要预判目标的移动位置', lesson: '当目标移动时，需要计算提前量' }
+    ];
+
+    const MathUtils = {
+      distance(x1, y1, x2, y2) { return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2); },
+      angle(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1); },
+      clamp(value, min, max) { return Math.max(min, Math.min(max, value)); },
+      lerp(start, end, t) { return start + (end - start) * t; },
+      normalizeAngle(angle) { while (angle < -Math.PI) angle += Math.PI * 2; while (angle > Math.PI) angle -= Math.PI * 2; return angle; },
+      randomRange(min, max) { return Math.random() * (max - min) + min; },
+      randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; },
+      degToRad(degrees) { return degrees * Math.PI / 180; },
+      radToDeg(radians) { return radians * 180 / Math.PI; },
+      dot(v1, v2) { return v1.x * v2.x + v1.y * v2.y; },
+      reflect(v, normal) { const dotProduct = this.dot(v, normal); return { x: v.x - 2 * dotProduct * normal.x, y: v.y - 2 * dotProduct * normal.y }; },
+      normalize(v) { const length = Math.sqrt(v.x * v.x + v.y * v.y); if (length === 0) return { x: 0, y: 0 }; return { x: v.x / length, y: v.y / length }; },
+      rotate(v, angle) { const cos = Math.cos(angle); const sin = Math.sin(angle); return { x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos }; },
+      predictProjectilePath(startX, startY, vx, vy, gravity, friction, wind, maxSteps = 100, stepSize = 1) {
+        const path = [];
+        let x = startX;
+        let y = startY;
+        let currentVx = vx;
+        let currentVy = vy;
+        path.push({ x, y });
+        for (let i = 0; i < maxSteps; i++) {
+          currentVy += gravity * stepSize;
+          currentVx += wind * stepSize;
+          currentVx *= Math.pow(friction, stepSize);
+          currentVy *= Math.pow(friction, stepSize);
+          x += currentVx * stepSize;
+          y += currentVy * stepSize;
+          if (y > Constants.SCREEN_HEIGHT || x < 0 || x > Constants.SCREEN_WIDTH) break;
+          path.push({ x, y });
+        }
+        return path;
+      }
+    };
+
+    const AISceneGenerator = {
+      generate(physicsPreset, difficulty = 'normal') {
+        const preset = Constants.PHYSICS_PRESETS[physicsPreset] || Constants.PHYSICS_PRESETS.EARTH;
+        const gravity = preset.gravity;
+        const wind = preset.wind;
+        
+        const launcherX = 100;
+        const launcherY = 280;
+        
+        let targetDistance, targetHeight;
+        const baseDistance = 400 + Math.random() * 200;
+        const heightFactor = gravity < 0.2 ? 1.5 : gravity > 0.5 ? 0.7 : 1;
+        
+        targetDistance = baseDistance * heightFactor;
+        targetHeight = 100 + Math.random() * 150 * heightFactor;
+        
+        if (wind > 0) {
+          targetDistance += wind * 50;
+        } else if (wind < 0) {
+          targetDistance -= Math.abs(wind) * 50;
+        }
+        
+        const targetX = launcherX + targetDistance;
+        const targetY = launcherY - targetHeight;
+        
+        const obstacles = [];
+        const hasObstacle = Math.random() > 0.3;
+        
+        if (hasObstacle) {
+          const obstacleX = launcherX + targetDistance * 0.4 + Math.random() * 100;
+          const obstacleHeight = 60 + Math.random() * 60;
+          obstacles.push({
+            type: 'wall',
+            x: obstacleX,
+            y: launcherY - obstacleHeight,
+            width: 20,
+            height: obstacleHeight,
+            health: 999
+          });
+        }
+        
+        const levelName = `${preset.name}挑战`;
+        const hint = this.generateHint(physicsPreset, hasObstacle);
+        const lesson = this.generateLesson(physicsPreset);
+        
+        return {
+          id: 999,
+          name: levelName,
+          theme: physicsPreset === 'MOON' ? 'moon' : physicsPreset === 'JUPITER' ? 'jupiter' : 'lab',
+          physics: physicsPreset,
+          launcherPosition: { x: launcherX, y: launcherY },
+          ammoCount: 5,
+          obstacles: obstacles,
+          enemies: [{ type: Math.random() > 0.7 ? 'moving_target' : 'target', x: targetX, y: targetY, health: 1 }],
+          hint: hint,
+          lesson: lesson,
+          isAI: true
+        };
+      },
+      generateHint(physicsPreset, hasObstacle) {
+        const preset = Constants.PHYSICS_PRESETS[physicsPreset];
+        const hints = [];
+        
+        if (physicsPreset === 'MOON') {
+          hints.push('月球重力很小，弹道会更高更远');
+        } else if (physicsPreset === 'JUPITER') {
+          hints.push('木星重力很大，弹道会很陡峭');
+        } else if (physicsPreset === 'WIND_EASY') {
+          hints.push('顺风会帮助弹丸飞得更远');
+        } else if (physicsPreset === 'WIND_HARD') {
+          hints.push('强风会影响弹丸轨迹，注意调整角度');
+        }
+        
+        if (hasObstacle) {
+          hints.push('需要足够高度越过障碍物');
+        }
+        
+        return hints.join('，');
+      },
+      generateLesson(physicsPreset) {
+        const preset = Constants.PHYSICS_PRESETS[physicsPreset];
+        
+        if (physicsPreset === 'MOON') {
+          return '重力加速度g越小，物体下落越慢，抛物线越平缓';
+        } else if (physicsPreset === 'JUPITER') {
+          return '重力加速度g越大，物体下落越快，抛物线越陡峭';
+        } else if (physicsPreset === 'WIND_EASY' || physicsPreset === 'WIND_HARD') {
+          return '风力会产生水平加速度，改变弹丸的水平速度';
+        }
+        
+        return '抛体运动中，水平方向匀速运动，竖直方向匀加速运动';
+      }
+    };
+
+    const Collision = {
+      AABB(rect1, rect2) { return rect1.left < rect2.right && rect1.right > rect2.left && rect1.top < rect2.bottom && rect1.bottom > rect2.top; },
+      circleRect(circle, rect) {
+        const closestX = Math.max(rect.left, Math.min(circle.x, rect.right));
+        const closestY = Math.max(rect.top, Math.min(circle.y, rect.bottom));
+        const distanceX = circle.x - closestX;
+        const distanceY = circle.y - closestY;
+        return Math.sqrt(distanceX * distanceX + distanceY * distanceY) < circle.radius;
+      },
+      circleCircle(c1, c2) { const dx = c2.x - c1.x; const dy = c2.y - c1.y; return Math.sqrt(dx * dx + dy * dy) < c1.radius + c2.radius; },
+      getCircleRectCollisionPoint(circle, rect) { const closestX = Math.max(rect.left, Math.min(circle.x, rect.right)); const closestY = Math.max(rect.top, Math.min(circle.y, rect.bottom)); return { x: closestX, y: closestY }; },
+      getCollisionNormal(circle, rect) { const p = this.getCircleRectCollisionPoint(circle, rect); const dx = circle.x - p.x; const dy = circle.y - p.y; const len = Math.sqrt(dx * dx + dy * dy); return len === 0 ? { x: 0, y: -1 } : { x: dx / len, y: dy / len }; },
+      resolveCircleRectCollision(circle, rect) {
+        const p = this.getCircleRectCollisionPoint(circle, rect);
+        const dx = circle.x - p.x; const dy = circle.y - p.y; const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist === 0) return;
+        const pen = circle.radius - dist; const normal = { x: dx / dist, y: dy / dist };
+        circle.x += normal.x * pen; circle.y += normal.y * pen;
+        const velDot = circle.vx * normal.x + circle.vy * normal.y;
+        if (velDot < 0) { const rest = 0.6; circle.vx -= (1 + rest) * velDot * normal.x; circle.vy -= (1 + rest) * velDot * normal.y; }
+      },
+      checkProjectileObstacle(projectile, obstacle) { return this.circleRect({ x: projectile.x, y: projectile.y, radius: projectile.radius }, obstacle.getBounds()); },
+      checkProjectileEnemy(projectile, enemy) { return this.circleRect({ x: projectile.x, y: projectile.y, radius: projectile.radius }, enemy.getBounds()); },
+      getClosestEnemy(projectile, enemies) {
+        let closest = null, minDist = Infinity;
+        for (const e of enemies) { if (!e.isActive) continue; const dx = e.x - projectile.x; const dy = e.y - projectile.y; const dist = Math.sqrt(dx * dx + dy * dy); if (dist < minDist) { minDist = dist; closest = e; } }
+        return closest;
+      }
+    };
+
+    class PixelParticle {
+      constructor(x, y, color, speed, life) {
+        this.x = x; this.y = y; this.color = color; this.speed = speed;
+        this.life = this.maxLife = life;
+        this.angle = MathUtils.randomRange(0, Math.PI * 2);
+        this.vx = Math.cos(this.angle) * this.speed;
+        this.vy = Math.sin(this.angle) * this.speed;
+        this.size = MathUtils.randomInt(2, 4);
+        this.gravity = 0.1;
+        this.shrinkRate = MathUtils.randomRange(0.95, 0.99);
+      }
+      update() { this.x += this.vx; this.y += this.vy; this.vy += this.gravity; this.life--; this.vx *= 0.96; this.vy *= 0.96; this.size *= this.shrinkRate; }
+      draw(ctx) { 
+        const alpha = this.life / this.maxLife; 
+        ctx.save();
+        ctx.fillStyle = this.color; 
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 8 * alpha;
+        ctx.globalAlpha = alpha; 
+        ctx.fillRect(Math.floor(this.x), Math.floor(this.y), Math.max(1, this.size), Math.max(1, this.size)); 
+        ctx.restore();
+      }
+    }
+
+    class SparkParticle {
+      constructor(x, y, color, speed, angle) {
+        this.x = x; this.y = y; this.color = color;
+        this.speed = speed; this.angle = angle;
+        this.vx = Math.cos(angle) * speed;
+        this.vy = Math.sin(angle) * speed;
+        this.life = MathUtils.randomInt(20, 40);
+        this.maxLife = this.life;
+        this.size = MathUtils.randomInt(3, 6);
+        this.trail = [];
+        this.maxTrail = 5;
+      }
+      update() {
+        this.trail.push({ x: this.x, y: this.y });
+        if (this.trail.length > this.maxTrail) this.trail.shift();
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.05;
+        this.vx *= 0.98;
+        this.vy *= 0.98;
+        this.life--;
+        this.size *= 0.98;
+      }
+      draw(ctx) {
+        const alpha = this.life / this.maxLife;
+        ctx.save();
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 10 * alpha;
+        ctx.globalAlpha = alpha;
+        if (this.trail.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(this.trail[0].x, this.trail[0].y);
+          for (let i = 1; i < this.trail.length; i++) {
+            ctx.lineTo(this.trail[i].x, this.trail[i].y);
+          }
+          ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(Math.floor(this.x), Math.floor(this.y), Math.max(1, this.size), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    class PixelEffect {
+      constructor() { this.particles = []; this.sparks = []; }
+      createExplosion(x, y, color, count = 20, speed = 5) { 
+        for (let i = 0; i < count; i++) this.particles.push(new PixelParticle(x, y, color, speed, 30)); 
+        for (let i = 0; i < count * 2; i++) {
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const sparkSpeed = MathUtils.randomRange(3, speed * 1.5);
+          const sparkColor = Math.random() > 0.5 ? '#FFAA00' : '#FF6600';
+          this.sparks.push(new SparkParticle(x, y, sparkColor, sparkSpeed, angle));
+        }
+      }
+      createPixelFragments(x, y, width, height, color) { const cnt = Math.floor((width * height) / 30); for (let i = 0; i < cnt; i++) this.particles.push(new PixelParticle(MathUtils.randomRange(x, x + width), MathUtils.randomRange(y, y + height), color, 3, 20)); }
+      createIceEffect(x, y, radius) { for (let i = 0; i < 15; i++) { const angle = (i / 15) * Math.PI * 2; const dist = MathUtils.randomRange(0, radius); this.particles.push(new PixelParticle(x + Math.cos(angle) * dist, y + Math.sin(angle) * dist, '#A8D8EA', 2, 25)); } }
+      createWoodDestroy(x, y, width, height) {
+        const colors = ['#5D3A1A', '#7D4F2A', '#9D6F3A', '#3D250F'];
+        for (let i = 0; i < 15; i++) {
+          const px = MathUtils.randomRange(x, x + width);
+          const py = MathUtils.randomRange(y, y + height);
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const speed = MathUtils.randomRange(2, 5);
+          const particle = new PixelParticle(px, py, colors[Math.floor(Math.random() * colors.length)], speed, 25);
+          particle.vx = Math.cos(angle) * speed;
+          particle.vy = Math.sin(angle) * speed - 2;
+          this.particles.push(particle);
+        }
+        for (let i = 0; i < 8; i++) {
+          const angle = MathUtils.randomRange(-Math.PI / 4, Math.PI / 4);
+          const sparkSpeed = MathUtils.randomRange(3, 6);
+          this.sparks.push(new SparkParticle(x + width / 2, y + height / 2, '#FFAA00', sparkSpeed, angle));
+        }
+      }
+      createBrickDestroy(x, y, width, height) {
+        const colors = ['#B06030', '#804020', '#D08050', '#603010'];
+        for (let i = 0; i < 20; i++) {
+          const px = MathUtils.randomRange(x, x + width);
+          const py = MathUtils.randomRange(y, y + height);
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const speed = MathUtils.randomRange(3, 6);
+          const particle = new PixelParticle(px, py, colors[Math.floor(Math.random() * colors.length)], speed, 20);
+          particle.vx = Math.cos(angle) * speed;
+          particle.vy = Math.sin(angle) * speed;
+          this.particles.push(particle);
+        }
+      }
+      createIceDestroy(x, y, width, height) {
+        const colors = ['#A8D8EA', '#CCEEFF', '#88BBDD', '#FFFFFF'];
+        for (let i = 0; i < 12; i++) {
+          const px = MathUtils.randomRange(x, x + width);
+          const py = MathUtils.randomRange(y, y + height);
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const speed = MathUtils.randomRange(1, 3);
+          const particle = new PixelParticle(px, py, colors[Math.floor(Math.random() * colors.length)], speed, 30);
+          particle.vx = Math.cos(angle) * speed;
+          particle.vy = Math.sin(angle) * speed;
+          this.particles.push(particle);
+        }
+      }
+      createStoneDestroy(x, y, width, height) {
+        const colors = ['#666666', '#555555', '#777777', '#444444'];
+        for (let i = 0; i < 18; i++) {
+          const px = MathUtils.randomRange(x, x + width);
+          const py = MathUtils.randomRange(y, y + height);
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const speed = MathUtils.randomRange(2, 4);
+          const particle = new PixelParticle(px, py, colors[Math.floor(Math.random() * colors.length)], speed, 25);
+          particle.vx = Math.cos(angle) * speed;
+          particle.vy = Math.sin(angle) * speed;
+          this.particles.push(particle);
+        }
+      }
+      createEnemyReward(x, y, type) {
+        let colors;
+        if (type === 'boss') colors = ['#FF0000', '#FF6600', '#FFAA00', '#FFFF00'];
+        else if (type === 'monster') colors = ['#E94560', '#FF6B6B', '#FF8E8E', '#FFFFFF'];
+        else colors = ['#FFB6C1', '#FF69B4', '#FF1493', '#FFFFFF'];
+        for (let i = 0; i < 25; i++) {
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const dist = MathUtils.randomRange(5, 30);
+          const px = x + Math.cos(angle) * dist;
+          const py = y + Math.sin(angle) * dist;
+          const speed = MathUtils.randomRange(2, 6);
+          const particle = new PixelParticle(px, py, colors[Math.floor(Math.random() * colors.length)], speed, 35);
+          particle.vx = Math.cos(angle) * speed;
+          particle.vy = Math.sin(angle) * speed - 3;
+          this.particles.push(particle);
+        }
+        for (let i = 0; i < 15; i++) {
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const speed = MathUtils.randomRange(4, 8);
+          this.sparks.push(new SparkParticle(x, y, '#FFD700', speed, angle));
+        }
+      }
+      update() { 
+        this.particles = this.particles.filter(p => p.life > 0); 
+        this.particles.forEach(p => p.update());
+        this.sparks = this.sparks.filter(s => s.life > 0);
+        this.sparks.forEach(s => s.update());
+      }
+      draw(ctx) { 
+        this.particles.forEach(p => p.draw(ctx));
+        this.sparks.forEach(s => s.draw(ctx));
+      }
+    }
+
+    class DataStorage {
+      constructor() { this.saveData = null; this.load(); }
+      load() { try { const saved = localStorage.getItem(Constants.STORAGE_KEYS.PLAYER_SAVE); this.saveData = saved ? JSON.parse(saved) : this.initNewSave(); } catch { this.initNewSave(); } }
+      initNewSave() {
+        this.saveData = { version: '1.0', level: 1, experience: 0, totalScore: 0, levelProgress: {}, unlockedItems: {}, currentLauncher: 'launcher_wood', currentProjectile: 'projectile_bird' };
+        for (let i = 1; i <= Constants.LEVELS_COUNT; i++) {
+          this.saveData.levelProgress[i] = { unlocked: i === 1, stars: 0, bestScore: 0, bestAmmoLeft: 0 };
+        }
+        this.saveData.unlockedItems['launcher_wood'] = true;
+        this.saveData.unlockedItems['projectile_bird'] = true;
+        this.save();
+        return this.saveData;
+      }
+      save() { try { localStorage.setItem(Constants.STORAGE_KEYS.PLAYER_SAVE, JSON.stringify(this.saveData)); } catch (e) { console.error('Save failed:', e); } }
+      getLevel() { return this.saveData.level; }
+      setLevel(level) { this.saveData.level = level; this.save(); }
+      getExperience() { return this.saveData.experience; }
+      addExperience(amount) { this.saveData.experience += amount; this.save(); }
+      setExperience(amount) { this.saveData.experience = amount; this.save(); }
+      getTotalScore() { return this.saveData.totalScore; }
+      addScore(amount) { this.saveData.totalScore += amount; this.save(); }
+      getLevelProgress(levelId) { return this.saveData.levelProgress[levelId] || { unlocked: false, stars: 0, bestScore: 0, bestAmmoLeft: 0 }; }
+      updateLevelProgress(levelId, stars, score, ammoLeft) {
+        const p = this.saveData.levelProgress[levelId];
+        if (p) { if (stars > p.stars) p.stars = stars; if (score > p.bestScore) p.bestScore = score; if (ammoLeft > p.bestAmmoLeft) p.bestAmmoLeft = ammoLeft; this.save(); }
+      }
+      unlockLevel(levelId) { const p = this.saveData.levelProgress[levelId]; if (p) { p.unlocked = true; this.save(); } }
+      isLevelUnlocked(levelId) { const p = this.saveData.levelProgress[levelId]; return p ? p.unlocked : false; }
+      unlockItem(itemId) { this.saveData.unlockedItems[itemId] = true; this.save(); }
+      isItemUnlocked(itemId) { return !!this.saveData.unlockedItems[itemId]; }
+      getUnlockedItems() { return Object.keys(this.saveData.unlockedItems).filter(id => this.saveData.unlockedItems[id]); }
+      getCurrentLauncher() { return this.saveData.currentLauncher; }
+      setCurrentLauncher(launcherId) { if (this.isItemUnlocked(launcherId)) { this.saveData.currentLauncher = launcherId; this.save(); return true; } return false; }
+      getCurrentProjectile() { return this.saveData.currentProjectile; }
+      setCurrentProjectile(projectileId) { if (this.isItemUnlocked(projectileId)) { this.saveData.currentProjectile = projectileId; this.save(); return true; } return false; }
+      getNextLevelExp() { const l = this.saveData.level; return l >= Constants.MAX_LEVEL ? Infinity : Constants.EXPERIENCE_PER_LEVEL[l]; }
+    }
+
+    class UpgradeSystem {
+      constructor(dataStorage) { this.dataStorage = dataStorage; this.levelUpCallbacks = []; this.itemUnlockCallbacks = []; }
+      addExperience(amount) {
+        const currExp = this.dataStorage.getExperience();
+        const currLvl = this.dataStorage.getLevel();
+        const nextExp = this.getNextLevelExp();
+        this.dataStorage.addExperience(amount);
+        if (currLvl < Constants.MAX_LEVEL && this.dataStorage.getExperience() >= nextExp) this.levelUp();
+        return this.dataStorage.getExperience();
+      }
+      levelUp() {
+        let newLvl = this.dataStorage.getLevel() + 1;
+        while (newLvl <= Constants.MAX_LEVEL && this.dataStorage.getExperience() >= Constants.EXPERIENCE_PER_LEVEL[newLvl - 1]) {
+          this.dataStorage.setLevel(newLvl);
+          this.checkUnlockItems(newLvl);
+          this.levelUpCallbacks.forEach(cb => cb(newLvl));
+          newLvl++;
+        }
+      }
+      checkUnlockItems(level) {
+        const map = { 3: ['launcher_iron', 'projectile_bomb'], 5: ['launcher_alloy', 'projectile_spear'], 7: ['launcher_sci-fi', 'projectile_ice'], 9: ['launcher_laser', 'projectile_laser'] };
+        const items = map[level];
+        if (items) items.forEach(id => { if (!this.dataStorage.isItemUnlocked(id)) { this.dataStorage.unlockItem(id); this.itemUnlockCallbacks.forEach(cb => cb(id)); } });
+      }
+      getLevel() { return this.dataStorage.getLevel(); }
+      getExperience() { return this.dataStorage.getExperience(); }
+      getNextLevelExp() { return this.dataStorage.getNextLevelExp(); }
+      getCurrentLauncherConfig() { const id = this.dataStorage.getCurrentLauncher(); return Launchers[id] || Launchers.launcher_wood; }
+      getCurrentProjectileConfig() { const id = this.dataStorage.getCurrentProjectile(); return Projectiles[id] || Projectiles.projectile_bird; }
+      isProjectileUnlocked(id) { return this.dataStorage.isItemUnlocked(id); }
+      isLauncherUnlocked(id) { return this.dataStorage.isItemUnlocked(id); }
+      getUnlockedProjectiles() { return Object.keys(Projectiles).filter(id => this.dataStorage.isItemUnlocked(id)); }
+      getUnlockedLaunchers() { return Object.keys(Launchers).filter(id => this.dataStorage.isItemUnlocked(id)); }
+      selectProjectile(id) { return this.dataStorage.setCurrentProjectile(id); }
+      selectLauncher(id) { return this.dataStorage.setCurrentLauncher(id); }
+      onLevelUp(cb) { this.levelUpCallbacks.push(cb); }
+      onItemUnlock(cb) { this.itemUnlockCallbacks.push(cb); }
+      calculateStarRating(ammoLeft, totalAmmo, enemiesKilled, totalEnemies) {
+        const ammoRatio = ammoLeft / totalAmmo; const killRatio = enemiesKilled / totalEnemies;
+        if (ammoRatio >= 0.5 && killRatio === 1) return 3;
+        if (ammoRatio >= 0.25 && killRatio === 1) return 2;
+        if (killRatio === 1) return 1;
+        return 0;
+      }
+      calculateExperienceGain(stars, levelId, obstaclesDestroyed, ammoLeft) {
+        let base = 100, bonus = 0;
+        bonus += stars * 50; bonus += obstaclesDestroyed * 10; bonus += ammoLeft * 20; bonus += (levelId - 1) * 20;
+        return base + bonus;
+      }
+    }
+
+    class Renderer {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.width = Constants.SCREEN_WIDTH;
+        this.height = Constants.SCREEN_HEIGHT;
+        this.canvas.width = this.width;
+        this.canvas.height = this.height;
+        this.pixelSize = Constants.PIXEL_SIZE;
+      }
+      clear(color = '#87CEEB') { this.ctx.fillStyle = color; this.ctx.fillRect(0, 0, this.width, this.height); }
+      drawPixel(x, y, color, size = 1) { this.ctx.fillStyle = color; this.ctx.fillRect(Math.floor(x), Math.floor(y), size, size); }
+      drawRect(x, y, width, height, color) { this.ctx.fillStyle = color; this.ctx.fillRect(Math.floor(x), Math.floor(y), width, height); }
+      drawRectOutline(x, y, width, height, color, lineWidth = 2) { this.ctx.strokeStyle = color; this.ctx.lineWidth = lineWidth; this.ctx.strokeRect(Math.floor(x), Math.floor(y), width, height); }
+      drawCircle(x, y, radius, color) { this.ctx.fillStyle = color; this.ctx.beginPath(); this.ctx.arc(Math.floor(x), Math.floor(y), radius, 0, Math.PI * 2); this.ctx.fill(); }
+      drawCircleOutline(x, y, radius, color, lineWidth = 2) { this.ctx.strokeStyle = color; this.ctx.lineWidth = lineWidth; this.ctx.beginPath(); this.ctx.arc(Math.floor(x), Math.floor(y), radius, 0, Math.PI * 2); this.ctx.stroke(); }
+      drawLine(x1, y1, x2, y2, color, lineWidth = 2) { this.ctx.strokeStyle = color; this.ctx.lineWidth = lineWidth; this.ctx.beginPath(); this.ctx.moveTo(Math.floor(x1), Math.floor(y1)); this.ctx.lineTo(Math.floor(x2), Math.floor(y2)); this.ctx.stroke(); }
+      drawText(text, x, y, color, size = 16, font = 'Courier New') { this.ctx.fillStyle = color; this.ctx.font = `${size}px ${font}`; this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle'; this.ctx.fillText(text, Math.floor(x), Math.floor(y)); }
+      drawTextLeft(text, x, y, color, size = 16, font = 'Courier New') { this.ctx.fillStyle = color; this.ctx.font = `${size}px ${font}`; this.ctx.textAlign = 'left'; this.ctx.textBaseline = 'middle'; this.ctx.fillText(text, Math.floor(x), Math.floor(y)); }
+      drawTextRight(text, x, y, color, size = 16, font = 'Courier New') { this.ctx.fillStyle = color; this.ctx.font = `${size}px ${font}`; this.ctx.textAlign = 'right'; this.ctx.textBaseline = 'middle'; this.ctx.fillText(text, Math.floor(x), Math.floor(y)); }
+      drawStar(x, y, size, color, points = 5) {
+        this.ctx.fillStyle = color; this.ctx.beginPath();
+        for (let i = 0; i < points * 2; i++) { const angle = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2; const radius = i % 2 === 0 ? size : size / 2; const px = x + Math.cos(angle) * radius; const py = y + Math.sin(angle) * radius; if (i === 0) this.ctx.moveTo(px, py); else this.ctx.lineTo(px, py); }
+        this.ctx.closePath(); this.ctx.fill();
+      }
+      drawBackground(theme) {
+        const colors = Constants.COLORS;
+        let skyColor, groundColor;
+        switch (theme) { 
+          case 'lab': skyColor = colors.BACKGROUND_LAB; groundColor = colors.GROUND_LAB; break;
+          case 'moon': skyColor = colors.BACKGROUND_MOON; groundColor = colors.GROUND_MOON; break;
+          case 'jupiter': skyColor = colors.BACKGROUND_JUPITER; groundColor = colors.GROUND_JUPITER; break;
+          case 'grass': skyColor = colors.BACKGROUND_GRASS; groundColor = colors.GROUND_GRASS; break; 
+          case 'snow': skyColor = colors.BACKGROUND_SNOW; groundColor = colors.GROUND_SNOW; break; 
+          case 'desert': skyColor = colors.BACKGROUND_DESERT; groundColor = colors.GROUND_DESERT; break; 
+          case 'city': skyColor = colors.BACKGROUND_CITY; groundColor = colors.GROUND_CITY; break; 
+          default: skyColor = colors.BACKGROUND_LAB; groundColor = colors.GROUND_LAB; 
+        }
+        this.drawRect(0, 0, this.width, this.height - 100, skyColor);
+        this.drawRect(0, this.height - 100, this.width, 100, groundColor);
+        this.drawGroundTexture(theme);
+        if (theme === 'lab') {
+          this.drawGrid();
+        }
+      }
+      drawGrid() {
+        const ctx = this.ctx;
+        const colors = Constants.COLORS;
+        ctx.save();
+        ctx.strokeStyle = colors.GRID_LINE;
+        ctx.lineWidth = 1;
+        
+        for (let x = 0; x < this.width; x += 40) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, this.height - 100);
+          ctx.stroke();
+        }
+        
+        for (let y = 0; y < this.height - 100; y += 40) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(this.width, y);
+          ctx.stroke();
+        }
+        
+        ctx.fillStyle = 'rgba(0, 170, 255, 0.3)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        for (let x = 0; x < this.width; x += 80) {
+          ctx.fillText(`${x}`, x - 5, this.height - 90);
+        }
+        
+        ctx.textAlign = 'left';
+        for (let y = 0; y < this.height - 100; y += 40) {
+          ctx.fillText(`${y}`, 5, y + 4);
+        }
+        ctx.restore();
+      }
+      drawGroundTexture(theme) {
+        const ctx = this.ctx;
+        const groundY = this.height - 100;
+        if (theme === 'lab') {
+          ctx.fillStyle = '#0a1628';
+          ctx.fillRect(0, groundY, this.width, 100);
+          ctx.fillStyle = '#00AAFF';
+          ctx.fillRect(0, groundY + 5, this.width, 3);
+          ctx.fillStyle = '#0088CC';
+          ctx.fillRect(0, groundY + 10, this.width, 2);
+          for (let i = 0; i < this.width; i += 60) {
+            ctx.fillStyle = '#1a2a4a';
+            ctx.fillRect(i, groundY + 20, 50, 60);
+            ctx.fillStyle = '#2a3a5a';
+            ctx.fillRect(i + 5, groundY + 25, 40, 50);
+            ctx.fillStyle = '#00AAFF';
+            ctx.fillRect(i + 15, groundY + 35, 8, 8);
+            ctx.fillRect(i + 27, groundY + 35, 8, 8);
+          }
+        } else if (theme === 'grass') { for (let i = 0; i < this.width; i += 8) { const h = Math.random() > 0.5 ? 4 : 6; this.drawRect(i, groundY - h, 2, h, '#228B22'); } }
+        else if (theme === 'snow') { for (let i = 0; i < this.width; i += 12) { this.drawCircle(i + 6, groundY - 3, 2, '#E8F4F8'); } }
+        else if (theme === 'desert') { for (let i = 0; i < this.width; i += 10) { this.drawCircle(i + 5, groundY - 2, 2, '#C4A35A'); } }
+        else if (theme === 'city') { this.drawRect(0, groundY + 50, this.width, 50, '#222222'); for (let i = 0; i < this.width; i += 60) { this.drawRect(i + 10, groundY - 40, 40, 40, '#555555'); this.drawRect(i + 20, groundY - 30, 8, 8, '#FFD700'); this.drawRect(i + 32, groundY - 30, 8, 8, '#FFD700'); } }
+        else if (theme === 'moon') {
+          ctx.fillStyle = '#3a3a5a';
+          ctx.fillRect(0, groundY, this.width, 100);
+          for (let i = 0; i < this.width; i += 50) {
+            const size = Math.random() * 8 + 4;
+            ctx.fillStyle = '#4a4a6a';
+            ctx.beginPath();
+            ctx.arc(i + Math.random() * 50, groundY + 20 + Math.random() * 40, size / 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else if (theme === 'jupiter') {
+          ctx.fillStyle = '#4a3a2a';
+          ctx.fillRect(0, groundY, this.width, 100);
+          ctx.fillStyle = '#5a4a3a';
+          for (let i = 0; i < this.width; i += 40) {
+            ctx.fillRect(i, groundY, 40, 100);
+          }
+        }
+      }
+      get fillStyle() { return this.ctx.fillStyle; }
+      set fillStyle(value) { this.ctx.fillStyle = value; }
+    }
+
+    class Projectile {
+      constructor(x, y, config) {
+        this.x = x; this.y = y; this.vx = 0; this.vy = 0; this.config = config;
+        this.radius = config.radius; this.isActive = true; this.type = 'projectile';
+        this.pierceCount = config.pierceCount || 0;
+        this.onExplosion = null; this.onFreeze = null;
+        this.angle = 0; this.rotationSpeed = 0.1;
+        this.trail = []; this.maxTrailLength = 15;
+        this.trailOffset = 0;
+      }
+      launch(vx, vy) { this.vx = vx; this.vy = vy; }
+      update() {
+        this.angle += this.rotationSpeed;
+        this.trail.push({ x: this.x, y: this.y, alpha: 1 });
+        if (this.trail.length > this.maxTrailLength) this.trail.shift();
+        this.trail.forEach(t => t.alpha *= 0.9);
+        if (Math.abs(this.vx) < 0.01 && Math.abs(this.vy) < 0.01) this.isActive = false;
+      }
+      draw(ctx) {
+        this.drawTrail(ctx);
+        ctx.save(); ctx.translate(Math.floor(this.x), Math.floor(this.y)); ctx.rotate(this.angle);
+        const color = this.config.color;
+        ctx.shadowColor = color; ctx.shadowBlur = 15;
+        if (this.config.effect === 'homing') {
+          ctx.fillStyle = '#FFFFFF'; ctx.beginPath(); ctx.arc(0, 0, this.radius + 2, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, -this.radius); ctx.lineTo(-this.radius * 0.7, this.radius); ctx.lineTo(this.radius * 0.7, this.radius); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#000000'; ctx.beginPath(); ctx.arc(this.radius * 0.3, -this.radius * 0.2, 2, 0, Math.PI * 2); ctx.fill();
+        } else if (this.config.effect === 'pierce') {
+          ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, -this.radius); ctx.lineTo(this.radius * 0.5, this.radius); ctx.lineTo(0, this.radius * 0.5); ctx.lineTo(-this.radius * 0.5, this.radius); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#FFFFFF'; ctx.fillRect(-2, -this.radius + 4, 4, this.radius * 0.6);
+        } else if (this.config.effect === 'freeze') {
+          ctx.fillStyle = '#FFFFFF'; ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, this.radius * 0.7, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 2; for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; const x = Math.cos(a) * this.radius * 0.3; const y = Math.sin(a) * this.radius * 0.3; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x * 2, y * 2); ctx.stroke(); }
+        } else if (this.config.effect === 'explosion') {
+          ctx.fillStyle = '#FFFFFF'; ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, this.radius * 0.8, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#FF4444'; ctx.beginPath(); ctx.arc(0, 0, this.radius * 0.4, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#FFFFFF'; ctx.beginPath(); ctx.arc(-this.radius * 0.3, -this.radius * 0.3, 3, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#000000'; ctx.beginPath(); ctx.arc(this.radius * 0.3, -this.radius * 0.2, 3, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(-this.radius * 0.3, -this.radius * 0.2, 3, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, this.radius * 0.3, this.radius * 0.4, 0.1, Math.PI - 0.1); ctx.stroke();
+        }
+        ctx.restore();
+      }
+      drawTrail(ctx) {
+        if (this.trail.length < 2) return;
+        ctx.save();
+        ctx.lineCap = 'round';
+        const color = this.config.color;
+        const gradient = ctx.createLinearGradient(this.trail[0].x, this.trail[0].y, this.x, this.y);
+        gradient.addColorStop(0, 'rgba(255,255,255,0)');
+        gradient.addColorStop(0.5, `rgba(255,255,255,0.5)`);
+        gradient.addColorStop(1, color);
+        ctx.strokeStyle = gradient;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(this.trail[0].x, this.trail[0].y);
+        for (let i = 1; i < this.trail.length; i++) {
+          const t = this.trail[i];
+          ctx.lineTo(t.x, t.y);
+        }
+        ctx.stroke();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    class Obstacle {
+      constructor(x, y, width, height, type, health) {
+        this.x = x; this.y = y; this.width = width; this.height = height; this.entityType = type;
+        this.type = 'obstacle'; this.health = this.maxHealth = health; this.isActive = true; this.isStatic = true; this.vx = 0; this.vy = 0;
+        this.frozen = false; this.frozenTime = 0; this.onDestroy = null;
+      }
+      getBounds() { return { left: this.x, right: this.x + this.width, top: this.y, bottom: this.y + this.height }; }
+      takeDamage(damage) { this.health -= this.frozen ? damage * 2 : damage; if (this.health <= 0) this.destroy(); else this.isStatic = false; }
+      freeze(duration) { this.frozen = true; this.frozenTime = Date.now() + duration; }
+      update() {
+        if (this.frozen && Date.now() > this.frozenTime) this.frozen = false;
+        if (!this.isStatic) {
+          this.vy += Constants.GRAVITY; this.vx *= Constants.FRICTION; this.vy *= Constants.FRICTION;
+          this.x += this.vx; this.y += this.vy;
+          if (this.y > Constants.SCREEN_HEIGHT - 100 - this.height) { this.y = Constants.SCREEN_HEIGHT - 100 - this.height; this.vy = 0; this.isStatic = true; }
+        }
+      }
+      destroy() { this.isActive = false; if (this.onDestroy) this.onDestroy(this); }
+      draw(ctx) {
+        const colors = Constants.COLORS;
+        let color;
+        switch (this.entityType) { case 'brick': color = colors.BRICK; break; case 'wood': color = colors.WOOD; break; case 'ice': color = colors.ICE; break; case 'stone': color = colors.STONE; break; default: color = '#888888'; }
+        ctx.fillStyle = color; ctx.fillRect(Math.floor(this.x), Math.floor(this.y), this.width, this.height);
+        if (this.entityType === 'brick') { ctx.strokeStyle = '#5D2E0C'; ctx.lineWidth = 2; ctx.strokeRect(Math.floor(this.x), Math.floor(this.y), this.width, this.height); ctx.strokeStyle = '#A06030'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(this.x, this.y + this.height / 2); ctx.lineTo(this.x + this.width, this.y + this.height / 2); ctx.stroke(); ctx.beginPath(); ctx.moveTo(this.x + this.width / 2, this.y); ctx.lineTo(this.x + this.width / 2, this.y + this.height); ctx.stroke(); }
+        else if (this.entityType === 'wood') { ctx.strokeStyle = '#6D3A10'; ctx.lineWidth = 2; ctx.strokeRect(Math.floor(this.x), Math.floor(this.y), this.width, this.height); ctx.fillStyle = '#C08050'; for (let i = 0; i < 3; i++) ctx.fillRect(Math.floor(this.x + 4), Math.floor(this.y + 8 + i * 8), this.width - 8, 2); }
+        else if (this.entityType === 'ice') { ctx.strokeStyle = '#88BBDD'; ctx.lineWidth = 2; ctx.strokeRect(Math.floor(this.x), Math.floor(this.y), this.width, this.height); ctx.strokeStyle = '#CCEEFF'; ctx.lineWidth = 1; for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) { ctx.beginPath(); ctx.moveTo(this.x + 10 + i * 15, this.y + 10 + j * 10); ctx.lineTo(this.x + 18 + i * 15, this.y + 18 + j * 10); ctx.stroke(); } }
+        else if (this.entityType === 'stone') { ctx.strokeStyle = '#555555'; ctx.lineWidth = 2; ctx.strokeRect(Math.floor(this.x), Math.floor(this.y), this.width, this.height); ctx.fillStyle = '#666666'; ctx.beginPath(); ctx.arc(this.x + this.width * 0.3, this.y + this.height * 0.3, 4, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(this.x + this.width * 0.7, this.y + this.height * 0.6, 3, 0, Math.PI * 2); ctx.fill(); }
+        if (this.frozen) { ctx.fillStyle = 'rgba(168, 216, 234, 0.4)'; ctx.fillRect(Math.floor(this.x), Math.floor(this.y), this.width, this.height); }
+        if (this.health < this.maxHealth) {
+          const ratio = this.health / this.maxHealth;
+          ctx.fillStyle = '#333333'; ctx.fillRect(Math.floor(this.x), Math.floor(this.y - 6), this.width, 4);
+          ctx.fillStyle = ratio > 0.5 ? '#00FF00' : ratio > 0.25 ? '#FFFF00' : '#FF0000';
+          ctx.fillRect(Math.floor(this.x), Math.floor(this.y - 6), this.width * ratio, 4);
+        }
+      }
+    }
+
+    class Debris {
+      constructor(x, y, width, height, color, vx, vy) {
+        this.x = x; this.y = y; this.width = width; this.height = height;
+        this.color = color; this.vx = vx; this.vy = vy;
+        this.type = 'debris'; this.isActive = true; this.isStatic = false;
+        this.bounce = 0.2; this.friction = 0.98;
+        this.rotation = MathUtils.randomRange(0, Math.PI * 2);
+        this.rotationSpeed = MathUtils.randomRange(-0.2, 0.2);
+        this.lifeTime = MathUtils.randomRange(1000, 3000);
+        this.spawnTime = Date.now();
+        this.hasHitGround = false;
+      }
+      getBounds() {
+        return { left: this.x, right: this.x + this.width, top: this.y, bottom: this.y + this.height };
+      }
+      update() {
+        if (Date.now() - this.spawnTime > this.lifeTime) {
+          this.isActive = false;
+          return;
+        }
+        this.vy += Constants.GRAVITY * 1.5;
+        this.vx *= this.friction;
+        this.vy *= this.friction;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.rotation += this.rotationSpeed;
+        const groundY = Constants.SCREEN_HEIGHT - 100 - this.height;
+        if (this.y >= groundY) {
+          this.y = groundY;
+          this.vy = -this.vy * this.bounce;
+          this.vx *= 0.8;
+          if (Math.abs(this.vy) < 0.5) {
+            this.vy = 0;
+            this.isStatic = true;
+          }
+          this.hasHitGround = true;
+        }
+        if (this.x < 0 || this.x > Constants.SCREEN_WIDTH) this.isActive = false;
+      }
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+        ctx.rotate(this.rotation);
+        ctx.fillStyle = this.color;
+        ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+        ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(-this.width / 2, -this.height / 2, this.width, this.height);
+        ctx.restore();
+      }
+    }
+
+    class Enemy {
+      constructor(x, y, type, health) {
+        this.x = x; this.y = y; this.entityType = type; this.health = this.maxHealth = health;
+        this.type = 'enemy'; this.isActive = true; this.isStatic = true; this.vx = 0; this.vy = 0;
+        this.width = type === 'bonus' ? 36 : type === 'moving_target' ? 28 : 28; 
+        this.height = type === 'bonus' ? 36 : type === 'moving_target' ? 28 : 28;
+        this.onDestroy = null; this.blinkTime = 0; this.isBlinking = false;
+        
+        if (type === 'moving_target') {
+          this.baseX = x;
+          this.moveRange = 80;
+          this.moveSpeed = 0.02;
+          this.moveTimer = 0;
+        }
+      }
+      getBounds() { 
+        const padding = 8;
+        return { left: this.x - this.width / 2 - padding, right: this.x + this.width / 2 + padding, top: this.y - this.height / 2 - padding, bottom: this.y + this.height / 2 + padding }; 
+      }
+      takeDamage(damage) { this.health -= damage; this.isBlinking = true; this.blinkTime = Date.now() + 200; if (!this.isStatic) { this.vx *= 0.5; this.vy *= 0.5; } if (this.health <= 0) this.destroy(); else this.isStatic = false; }
+      updateMovement() {
+        this.moveTimer++;
+        this.x = this.baseX + Math.sin(this.moveTimer * this.moveSpeed) * this.moveRange;
+      }
+      update() {
+        if (this.isBlinking && Date.now() > this.blinkTime) this.isBlinking = false;
+        if (!this.isStatic) {
+          this.vy += Constants.GRAVITY; this.vx *= Constants.FRICTION; this.vy *= Constants.FRICTION;
+          this.x += this.vx; this.y += this.vy;
+          if (this.y > Constants.SCREEN_HEIGHT - 100 - this.height / 2) { this.y = Constants.SCREEN_HEIGHT - 100 - this.height / 2; this.vy = 0; this.isStatic = true; }
+        }
+      }
+      destroy() { this.isActive = false; if (this.onDestroy) this.onDestroy(this); }
+      draw(ctx) {
+        if (this.isBlinking && Math.floor(Date.now() / 50) % 2 === 0) ctx.globalAlpha = 0.5;
+        const colors = Constants.COLORS;
+        let color;
+        switch (this.entityType) { 
+          case 'target': color = colors.TARGET; this.drawTarget(ctx, color); break; 
+          case 'moving_target': color = colors.MOVING_TARGET; this.drawMovingTarget(ctx, color); break; 
+          case 'bonus': color = colors.BONUS; this.drawBonus(ctx, color); break;
+          default: color = '#888888'; ctx.fillStyle = color; ctx.fillRect(Math.floor(this.x - this.width / 2), Math.floor(this.y - this.height / 2), this.width, this.height); 
+        }
+        ctx.globalAlpha = 1;
+      }
+      drawTarget(ctx, color) {
+        ctx.save();
+        ctx.translate(Math.floor(this.x), Math.floor(this.y));
+        ctx.fillStyle = '#333333';
+        ctx.beginPath(); ctx.arc(0, 0, this.width / 2 + 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(0, 0, this.width / 2, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-this.width / 4, 0); ctx.lineTo(this.width / 4, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -this.width / 4); ctx.lineTo(0, this.width / 4); ctx.stroke();
+        ctx.restore();
+      }
+      drawMovingTarget(ctx, color) {
+        ctx.save();
+        ctx.translate(Math.floor(this.x), Math.floor(this.y));
+        ctx.fillStyle = '#333333';
+        ctx.beginPath(); ctx.arc(0, 0, this.width / 2 + 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.shadowColor = color; ctx.shadowBlur = 15;
+        ctx.beginPath(); ctx.arc(0, 0, this.width / 2, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-this.width / 4, 0); ctx.lineTo(this.width / 4, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -this.width / 4); ctx.lineTo(0, this.width / 4); ctx.stroke();
+        ctx.restore();
+      }
+      drawBonus(ctx, color) {
+        ctx.save();
+        ctx.translate(Math.floor(this.x), Math.floor(this.y));
+        const pulse = Math.sin(Date.now() * 0.01) * 0.3 + 0.7;
+        ctx.fillStyle = '#333333';
+        ctx.beginPath(); ctx.arc(0, 0, this.width / 2 + 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.globalAlpha = pulse;
+        ctx.shadowColor = color; ctx.shadowBlur = 20;
+        ctx.beginPath(); ctx.arc(0, 0, this.width / 2, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#000000';
+        ctx.font = 'bold 16px Courier New';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('★', 0, 0);
+        ctx.restore();
+      }
+    }
+
+    class Launcher {
+      constructor(x, y, config) {
+        this.x = x; this.y = y; this.config = config; this.color = config.color;
+        this.isCharging = false; this.chargePower = 0; this.maxChargePower = 100;
+        this.dragStart = null; this.dragCurrent = null;
+        this.width = 60; this.height = 80;
+        this.elasticLength = 0; this.elasticAngle = 0;
+        this.animationFrame = 0;
+      }
+      startCharge(startX, startY) { this.isCharging = true; this.dragStart = { x: startX, y: startY }; this.dragCurrent = { x: startX, y: startY }; this.chargePower = 0; }
+      updateCharge(currentX, currentY) {
+        if (!this.isCharging) return;
+        this.dragCurrent = { x: currentX, y: currentY };
+        const dx = this.dragStart.x - this.dragCurrent.x; const dy = this.dragStart.y - this.dragCurrent.y;
+        this.elasticLength = Math.sqrt(dx * dx + dy * dy);
+        this.elasticAngle = Math.atan2(dy, dx);
+        const maxLen = 150 * this.config.chargeSpeed;
+        this.elasticLength = Math.min(this.elasticLength, maxLen);
+        this.chargePower = (this.elasticLength / maxLen) * this.maxChargePower;
+      }
+      releaseCharge() {
+        const power = (this.chargePower / this.maxChargePower) * this.config.powerMultiplier;
+        const vx = Math.cos(this.elasticAngle) * this.elasticLength * 0.12 * power;
+        const vy = Math.sin(this.elasticAngle) * this.elasticLength * 0.12 * power;
+        this.isCharging = false; this.chargePower = 0; this.elasticLength = 0; this.dragStart = null; this.dragCurrent = null;
+        return { vx, vy, power };
+      }
+      update() { this.animationFrame++; }
+      getLauncherPosition() { return { x: this.x, y: this.y }; }
+      draw(ctx, wind = 0) {
+        ctx.save(); ctx.translate(Math.floor(this.x), Math.floor(this.y));
+        const color = this.config.color; const id = this.config.id;
+        if (id === 'launcher_laser') this.drawLaserLauncher(ctx, color);
+        else if (id === 'launcher_sci-fi') this.drawSciFiLauncher(ctx, color);
+        else if (id === 'launcher_alloy') this.drawAlloyLauncher(ctx, color);
+        else if (id === 'launcher_iron') this.drawIronLauncher(ctx, color);
+        else this.drawSciFiLauncher(ctx, color);
+        if (this.isCharging) {
+          this.drawElastic(ctx);
+          this.drawAimAssist(ctx, wind);
+        }
+        ctx.restore();
+      }
+      drawWoodLauncher(ctx, color) { ctx.fillStyle = '#5D3A1A'; ctx.fillRect(-15, 0, 30, 50); ctx.fillStyle = color; ctx.fillRect(-8, -20, 16, 30); ctx.fillStyle = '#3D250F'; ctx.fillRect(-10, -5, 20, 5); ctx.fillStyle = '#7D4F2A'; for (let i = 0; i < 4; i++) ctx.fillRect(-12, 10 + i * 10, 24, 2); }
+      drawIronLauncher(ctx, color) { ctx.fillStyle = '#4A4A4A'; ctx.fillRect(-18, 0, 36, 55); ctx.fillStyle = color; ctx.fillRect(-10, -25, 20, 35); ctx.fillStyle = '#333333'; ctx.fillRect(-12, -8, 24, 6); ctx.fillStyle = '#666666'; ctx.fillRect(-14, -30, 8, 10); ctx.fillRect(6, -30, 8, 10); ctx.fillStyle = '#555555'; for (let i = 0; i < 3; i++) ctx.fillRect(-15, 15 + i * 12, 30, 3); }
+      drawAlloyLauncher(ctx, color) { ctx.fillStyle = '#666666'; ctx.fillRect(-20, 0, 40, 60); ctx.fillStyle = color; ctx.fillRect(-12, -30, 24, 40); ctx.fillStyle = '#888888'; ctx.fillRect(-14, -10, 28, 8); ctx.fillStyle = '#AAAAAA'; ctx.fillRect(-16, -35, 10, 12); ctx.fillRect(6, -35, 10, 12); ctx.fillStyle = '#FFD700'; ctx.fillRect(-5, 20, 10, 4); ctx.fillRect(-5, 30, 10, 4); ctx.fillStyle = '#444444'; for (let i = 0; i < 3; i++) ctx.fillRect(-17, 20 + i * 12, 34, 4); }
+      drawSciFiLauncher(ctx, color) { ctx.fillStyle = '#1A1A2E'; ctx.fillRect(-22, 0, 44, 65); ctx.fillStyle = color; ctx.fillRect(-14, -35, 28, 45); ctx.fillStyle = '#16213E'; ctx.fillRect(-16, -12, 32, 10); ctx.fillStyle = '#0F3460'; ctx.fillRect(-18, -40, 12, 15); ctx.fillRect(6, -40, 12, 15); ctx.fillStyle = '#00FF88'; ctx.fillRect(-6, 25, 12, 4); ctx.fillRect(-6, 35, 12, 4); ctx.fillRect(-6, 45, 12, 4); ctx.fillStyle = '#00FF88'; ctx.beginPath(); ctx.arc(-8, 15, 3, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(8, 15, 3, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#E94560'; ctx.fillRect(-3, -50, 6, 15); }
+      drawLaserLauncher(ctx, color) { ctx.fillStyle = '#2D0A4E'; ctx.fillRect(-25, 0, 50, 70); ctx.fillStyle = color; ctx.fillRect(-16, -40, 32, 50); ctx.fillStyle = '#1A052E'; ctx.fillRect(-18, -15, 36, 12); ctx.fillStyle = '#4A1F7A'; ctx.fillRect(-20, -45, 14, 18); ctx.fillRect(6, -45, 14, 18); ctx.fillStyle = '#FF00FF'; ctx.fillRect(-8, 30, 16, 4); ctx.fillRect(-8, 40, 16, 4); ctx.fillRect(-8, 50, 16, 4); ctx.fillStyle = '#FF00FF'; ctx.beginPath(); ctx.arc(-10, 20, 4, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(10, 20, 4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#00FFFF'; ctx.fillRect(-4, -55, 8, 20); const pulse = Math.sin(this.animationFrame * 0.2) * 0.3 + 0.7; ctx.fillStyle = `rgba(255, 0, 255, ${pulse})`; ctx.beginPath(); ctx.arc(0, -35, 8, 0, Math.PI * 2); ctx.fill(); }
+      drawElastic(ctx) {
+        const baseX = 0, baseY = -10;
+        const endX = Math.cos(this.elasticAngle) * this.elasticLength;
+        const endY = Math.sin(this.elasticAngle) * this.elasticLength;
+        ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+        const ctrlX = baseX + endX * 0.5; const ctrlY = baseY + endY * 0.5 + Math.abs(endX) * 0.3;
+        ctx.beginPath(); ctx.moveTo(baseX, baseY); ctx.quadraticCurveTo(ctrlX, ctrlY, endX, endY); ctx.stroke();
+        ctx.strokeStyle = '#CCCCCC'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(baseX, baseY); ctx.quadraticCurveTo(ctrlX, ctrlY - 5, endX, endY); ctx.stroke();
+        ctx.fillStyle = '#FF6B6B'; ctx.beginPath(); ctx.arc(endX, endY, 12, 0, Math.PI * 2); ctx.fill();
+      }
+      drawAimAssist(ctx, wind = 0) {
+        const effectivePower = (this.chargePower / this.maxChargePower) * this.config.powerMultiplier;
+        const startX = 0;
+        const startY = 0;
+        const vx = Math.cos(this.elasticAngle) * this.elasticLength * 0.12 * effectivePower;
+        const vy = Math.sin(this.elasticAngle) * this.elasticLength * 0.12 * effectivePower;
+        const path = MathUtils.predictProjectilePath(startX, startY, vx, vy, Constants.GRAVITY, Constants.FRICTION, wind, 300, 1);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.6)';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.shadowColor = '#00FFFF';
+        ctx.shadowBlur = 10;
+        ctx.setLineDash([8, 4]);
+        ctx.beginPath();
+        ctx.moveTo(path[0].x, path[0].y);
+        for (let i = 1; i < path.length; i++) {
+          ctx.lineTo(path[i].x, path[i].y);
+        }
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 0;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        const angleDeg = MathUtils.radToDeg(this.elasticAngle);
+        const speed = Math.sqrt(vx * vx + vy * vy);
+        ctx.fillStyle = '#00FFFF';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'left';
+        ctx.fillText(`θ=${angleDeg.toFixed(0)}°`, 10, -30);
+        ctx.fillText(`v=${speed.toFixed(1)}`, 10, -18);
+        
+        ctx.restore();
+      }
+    }
+
+    class LevelManager {
+      constructor() {
+        this.currentLevel = null; this.levelIndex = 0; this.obstacles = []; this.enemies = [];
+        this.onLevelComplete = null; this.onLevelFailed = null; this.onEnemyKilled = null; this.onObstacleDestroyed = null;
+      }
+      loadLevel(levelId) {
+        this.levelIndex = levelId - 1; this.currentLevel = Levels[this.levelIndex];
+        this.obstacles = []; this.enemies = [];
+        if (this.currentLevel.obstacles) { this.currentLevel.obstacles.forEach(cfg => { const obs = new Obstacle(cfg.x, cfg.y, cfg.width, cfg.height, cfg.type, cfg.health); obs.onDestroy = o => { if (this.onObstacleDestroyed) this.onObstacleDestroyed(o); }; this.obstacles.push(obs); }); }
+        if (this.currentLevel.enemies) { this.currentLevel.enemies.forEach(cfg => { const e = new Enemy(cfg.x, cfg.y, cfg.type, cfg.health); e.onDestroy = enemy => { if (this.onEnemyKilled) this.onEnemyKilled(enemy); this.checkLevelComplete(); }; this.enemies.push(e); }); }
+        return this.currentLevel;
+      }
+      checkLevelComplete() { if (this.enemies.filter(e => e.isActive).length === 0 && this.onLevelComplete) this.onLevelComplete(); }
+      checkLevelFailed(ammoLeft) { if (ammoLeft <= 0 && this.enemies.filter(e => e.isActive).length > 0 && this.onLevelFailed) this.onLevelFailed(); }
+      update() { this.obstacles.forEach(o => o.update()); this.enemies.forEach(e => e.update()); }
+      draw(ctx) { this.obstacles.forEach(o => o.draw(ctx)); this.enemies.forEach(e => e.draw(ctx)); }
+      getLauncherPosition() { return this.currentLevel ? this.currentLevel.launcherPosition : { x: 60, y: 500 }; }
+      getAmmoCount() { return this.currentLevel ? this.currentLevel.ammoCount : 5; }
+      getTheme() { return this.currentLevel ? this.currentLevel.theme : 'grass'; }
+      getTotalEnemies() { return this.enemies.length; }
+      getActiveEnemies() { return this.enemies.filter(e => e.isActive); }
+      getActiveObstacles() { return this.obstacles.filter(o => o.isActive); }
+      getLevelName() { return this.currentLevel ? this.currentLevel.name : '未知关卡'; }
+      getLevelId() { return this.currentLevel ? this.currentLevel.id : 0; }
+      freezeObstaclesInRange(x, y, radius) { this.obstacles.forEach(o => { if (!o.isActive) return; const rect = o.getBounds(); const cx = rect.left + (rect.right - rect.left) / 2; const cy = rect.top + (rect.bottom - rect.top) / 2; const dx = x - cx; const dy = y - cy; if (Math.sqrt(dx * dx + dy * dy) < radius) o.freeze(3000); }); }
+      applyExplosionDamage(x, y, radius, damage) {
+        this.obstacles.forEach(o => { if (!o.isActive) return; const rect = o.getBounds(); const cx = rect.left + (rect.right - rect.left) / 2; const cy = rect.top + (rect.bottom - rect.top) / 2; const dx = x - cx; const dy = y - cy; const dist = Math.sqrt(dx * dx + dy * dy); if (dist < radius) { const mult = 1 - dist / radius; o.takeDamage(Math.floor(damage * mult)); } });
+        this.enemies.forEach(e => { if (!e.isActive) return; const dx = x - e.x; const dy = y - e.y; const dist = Math.sqrt(dx * dx + dy * dy); if (dist < radius) { const mult = 1 - dist / radius; e.takeDamage(Math.floor(damage * mult)); } });
+      }
+    }
+
+    class PhysicsEngine {
+      constructor() {
+        this.entities = []; this.projectiles = []; this.obstacles = []; this.enemies = []; this.debris = [];
+        this.gravity = Constants.GRAVITY; this.friction = Constants.FRICTION;
+        this.wind = 0;
+      }
+      setPhysicsParams(gravity, wind) {
+        this.gravity = gravity;
+        this.wind = wind;
+      }
+      addEntity(entity) {
+        this.entities.push(entity);
+        if (entity.type === 'projectile') this.projectiles.push(entity);
+        else if (entity.type === 'obstacle') this.obstacles.push(entity);
+        else if (entity.type === 'enemy') this.enemies.push(entity);
+        else if (entity.type === 'debris') this.debris.push(entity);
+      }
+      removeEntity(entity) { const i = this.entities.indexOf(entity); if (i !== -1) this.entities.splice(i, 1); if (entity.type === 'projectile') { const j = this.projectiles.indexOf(entity); if (j !== -1) this.projectiles.splice(j, 1); } else if (entity.type === 'obstacle') { const j = this.obstacles.indexOf(entity); if (j !== -1) this.obstacles.splice(j, 1); } else if (entity.type === 'enemy') { const j = this.enemies.indexOf(entity); if (j !== -1) this.enemies.splice(j, 1); } else if (entity.type === 'debris') { const j = this.debris.indexOf(entity); if (j !== -1) this.debris.splice(j, 1); } }
+      clear() { this.entities = []; this.projectiles = []; this.obstacles = []; this.enemies = []; this.debris = []; }
+      update(deltaTime) { this.updateProjectiles(); this.updateObstacles(); this.updateEnemies(); this.updateDebris(); this.checkCollisions(); this.cleanupEntities(); }
+      updateDebris() { this.debris.forEach(d => { if (d.isActive) d.update(); }); }
+      updateProjectiles() {
+        this.projectiles.forEach(p => {
+          if (!p.isActive) return;
+          if (p.config.effect === 'homing') { const e = Collision.getClosestEnemy(p, this.enemies); if (e) { const dx = e.x - p.x; const dy = e.y - p.y; const targetAngle = Math.atan2(dy, dx); const currAngle = Math.atan2(p.vy, p.vx); const diff = MathUtils.normalizeAngle(targetAngle - currAngle); const turn = p.config.homingStrength; const newAngle = currAngle + diff * turn; const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy); p.vx = Math.cos(newAngle) * speed; p.vy = Math.sin(newAngle) * speed; } }
+          p.vy += this.gravity;
+          p.vx += this.wind;
+          p.vx *= this.friction; p.vy *= this.friction;
+          p.x += p.vx; p.y += p.vy;
+          if (p.y > Constants.SCREEN_HEIGHT + 50 || p.x < -50 || p.x > Constants.SCREEN_WIDTH + 50) p.isActive = false;
+          if (Math.abs(p.vx) < 0.1 && Math.abs(p.vy) < 0.1) p.isActive = false;
+        });
+      }
+      updateObstacles() { this.obstacles.forEach(o => { if (!o.isStatic && o.isActive) { o.vy += this.gravity; o.vx *= this.friction; o.vy *= this.friction; o.x += o.vx; o.y += o.vy; if (o.y > Constants.SCREEN_HEIGHT - 50) { o.y = Constants.SCREEN_HEIGHT - 50; o.vy = 0; o.isStatic = true; } } }); }
+      updateEnemies() { this.enemies.forEach(e => { if (e.entityType === 'moving_target') { e.updateMovement(); } if (!e.isStatic && e.isActive) { e.vy += this.gravity; e.vx *= this.friction; e.vy *= this.friction; e.x += e.vx; e.y += e.vy; if (e.y > Constants.SCREEN_HEIGHT - 50) { e.y = Constants.SCREEN_HEIGHT - 50; e.vy = 0; e.isStatic = true; } } }); }
+      checkCollisions() {
+        this.projectiles.forEach(p => {
+          if (!p.isActive) return;
+          this.obstacles.forEach(o => { if (!o.isActive) return; if (Collision.checkProjectileObstacle(p, o)) this.handleProjectileObstacleCollision(p, o); });
+          this.enemies.forEach(e => { if (!e.isActive) return; if (Collision.checkProjectileEnemy(p, e)) this.handleProjectileEnemyCollision(p, e); });
+        });
+      }
+      handleProjectileObstacleCollision(p, o) {
+        const rect = o.getBounds(); const circle = { x: p.x, y: p.y, radius: p.radius, vx: p.vx, vy: p.vy };
+        Collision.resolveCircleRectCollision(circle, rect); p.x = circle.x; p.y = circle.y; p.vx = circle.vx; p.vy = circle.vy;
+        o.takeDamage(p.config.damage);
+        if (p.config.effect === 'pierce') { p.pierceCount--; if (p.pierceCount <= 0) p.isActive = false; }
+        else if (p.config.effect === 'freeze') { p.isActive = false; if (p.onFreeze) p.onFreeze(p.x, p.y, p.config.freezeRadius); }
+        else if (p.config.effect === 'explosion') { p.isActive = false; if (p.onExplosion) p.onExplosion(p.x, p.y, p.config.explosionRadius); }
+        else p.isActive = false;
+      }
+      handleProjectileEnemyCollision(p, e) {
+        const bounds = e.getBounds();
+        const circle = { x: p.x, y: p.y, radius: p.radius, vx: p.vx, vy: p.vy };
+        Collision.resolveCircleRectCollision(circle, bounds);
+        p.x = circle.x;
+        p.y = circle.y;
+        p.vx = circle.vx;
+        p.vy = circle.vy;
+        e.vx = -circle.vx * 0.5;
+        e.vy = -circle.vy * 0.5;
+        e.isStatic = false;
+        e.takeDamage(p.config.damage);
+        if (p.config.effect === 'pierce') { p.pierceCount--; if (p.pierceCount <= 0) p.isActive = false; }
+        else if (p.config.effect === 'explosion') { p.isActive = false; if (p.onExplosion) p.onExplosion(p.x, p.y, p.config.explosionRadius); }
+        else if (p.config.effect === 'freeze') p.isActive = false;
+        else p.isActive = false;
+      }
+      cleanupEntities() { this.projectiles = this.projectiles.filter(p => p.isActive); this.obstacles = this.obstacles.filter(o => o.isActive); this.enemies = this.enemies.filter(e => e.isActive); this.entities = this.entities.filter(e => e.isActive); }
+      getActiveProjectilesCount() { return this.projectiles.filter(p => p.isActive).length; }
+      getActiveEnemiesCount() { return this.enemies.filter(e => e.isActive).length; }
+      getActiveObstaclesCount() { return this.obstacles.filter(o => o.isActive).length; }
+    }
+
+    class GameManager {
+      constructor() {
+        this.dataStorage = new DataStorage();
+        this.upgradeSystem = new UpgradeSystem(this.dataStorage);
+        this.levelManager = new LevelManager();
+        this.physicsEngine = new PhysicsEngine();
+        this.pixelEffect = new PixelEffect();
+        this.renderer = null; this.canvas = null;
+        this.gameState = Constants.GAME_STATES.MENU;
+        this.launcher = null; this.projectiles = [];
+        this.ammoLeft = 0; this.totalAmmo = 0; this.score = 0; this.obstaclesDestroyed = 0; this.enemiesKilled = 0;
+        this.currentProjectileConfig = null; this.currentLauncherConfig = null;
+        this.gameLoopId = null; this.lastTime = 0;
+        this.isFirstLaunch = true;
+      }
+      init() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.renderer = new Renderer(this.canvas);
+        this.setupEventListeners();
+        this.loadPlayerData();
+        if (this.isFirstLaunch) { this.gameState = Constants.GAME_STATES.GUIDE; this.isFirstLaunch = false; }
+        else this.gameState = Constants.GAME_STATES.MENU;
+        this.startGameLoop();
+      }
+      loadPlayerData() {
+        const launcherId = this.dataStorage.getCurrentLauncher();
+        const projectileId = this.dataStorage.getCurrentProjectile();
+        this.currentLauncherConfig = Launchers[launcherId] || Launchers.launcher_wood;
+        this.currentProjectileConfig = Projectiles[projectileId] || Projectiles.projectile_bird;
+      }
+      setupEventListeners() {
+        this.levelManager.onLevelComplete = () => this.handleLevelComplete();
+        this.levelManager.onLevelFailed = () => this.handleLevelFailed();
+        this.levelManager.onEnemyKilled = e => this.handleEnemyKilled(e);
+        this.levelManager.onObstacleDestroyed = o => this.handleObstacleDestroyed(o);
+        this.upgradeSystem.onLevelUp = level => this.handleLevelUp(level);
+        this.upgradeSystem.onItemUnlock = itemId => this.handleItemUnlock(itemId);
+        
+        let touchStart = null, touchCurrent = null, isDragging = false;
+        
+        this.canvas.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; touchStart = { x: t.clientX, y: t.clientY }; touchCurrent = { x: t.clientX, y: t.clientY }; isDragging = true; this.handleTouchStart(touchStart); });
+        this.canvas.addEventListener('touchmove', e => { e.preventDefault(); if (!isDragging) return; const t = e.touches[0]; touchCurrent = { x: t.clientX, y: t.clientY }; this.handleTouchMove(touchStart, touchCurrent); });
+        this.canvas.addEventListener('touchend', e => { e.preventDefault(); if (!isDragging) return; const t = e.changedTouches[0]; const touchEnd = { x: t.clientX, y: t.clientY }; isDragging = false; this.handleTouchEnd(touchStart, touchEnd); });
+        
+        this.canvas.addEventListener('mousedown', e => { const r = this.canvas.getBoundingClientRect(); touchStart = { x: e.clientX - r.left, y: e.clientY - r.top }; touchCurrent = touchStart; isDragging = true; this.handleTouchStart(touchStart); });
+        this.canvas.addEventListener('mousemove', e => { if (!isDragging) return; const r = this.canvas.getBoundingClientRect(); touchCurrent = { x: e.clientX - r.left, y: e.clientY - r.top }; this.handleTouchMove(touchStart, touchCurrent); });
+        this.canvas.addEventListener('mouseup', e => { if (!isDragging) return; const r = this.canvas.getBoundingClientRect(); const touchEnd = { x: e.clientX - r.left, y: e.clientY - r.top }; isDragging = false; this.handleTouchEnd(touchStart, touchEnd); });
+      }
+      startGameLoop() {
+        const loop = ts => { const dt = ts - this.lastTime; this.lastTime = ts; this.update(dt); this.render(); this.gameLoopId = requestAnimationFrame(loop); };
+        this.lastTime = performance.now();
+        this.gameLoopId = requestAnimationFrame(loop);
+      }
+      update(deltaTime) {
+        switch (this.gameState) { case Constants.GAME_STATES.MENU: break; case Constants.GAME_STATES.GAME: this.updateGame(deltaTime); break; case Constants.GAME_STATES.RESULT: break; case Constants.GAME_STATES.GUIDE: break; }
+        this.pixelEffect.update();
+      }
+      updateGame(deltaTime) {
+        this.physicsEngine.update(deltaTime);
+        this.levelManager.update();
+        if (this.launcher) this.launcher.update();
+        this.projectiles.forEach(p => p.update());
+        this.projectiles = this.projectiles.filter(p => p.isActive);
+        if (this.screenShake && this.screenShake.timer > 0) {
+          this.screenShake.timer -= deltaTime;
+          if (this.screenShake.timer < 0) this.screenShake.timer = 0;
+        }
+        if (this.ammoLeft <= 0 && this.physicsEngine.getActiveProjectilesCount() === 0) this.levelManager.checkLevelFailed(this.ammoLeft);
+      }
+      render() {
+        this.renderer.clear();
+        switch (this.gameState) { case Constants.GAME_STATES.MENU: this.renderMenu(); break; case Constants.GAME_STATES.GAME: this.renderGame(); break; case Constants.GAME_STATES.RESULT: this.renderResult(); break; case Constants.GAME_STATES.GUIDE: this.renderGuide(); break; }
+        this.pixelEffect.draw(this.renderer.ctx);
+      }
+      renderMenu() {
+        this.renderer.drawBackground('lab');
+        
+        this.renderer.drawText('🤖', Constants.SCREEN_WIDTH / 2, 30, '#00AAFF', 36);
+        this.renderer.drawText('AI物理挑战实验室', Constants.SCREEN_WIDTH / 2, 60, '#00AAFF', 26);
+        this.renderer.drawText('AI PHYSICS CHALLENGE LAB', Constants.SCREEN_WIDTH / 2, 80, '#00FFFF', 12);
+        
+        this.renderer.fillStyle = '#1a3a5a'; this.renderer.drawRect(20, 100, 376, 260);
+        this.renderer.drawRectOutline(20, 100, 376, 260, '#00AAFF', 2);
+        this.renderer.drawText('📚 教学实验', 208, 120, '#00AAFF', 14);
+        
+        for (let i = 0; i < Constants.LEVELS_COUNT; i++) {
+          const row = Math.floor(i / 3); const col = i % 3; const x = 50 + col * 115; const y = 145 + row * 75; const levelId = i + 1;
+          const progress = this.dataStorage.getLevelProgress(levelId);
+          const levelData = Levels[i];
+          
+          if (progress.unlocked) {
+            this.renderer.fillStyle = '#0a1a3a'; this.renderer.drawCircle(x, y, 32);
+            this.renderer.drawCircleOutline(x, y, 32, '#00AAFF', 2);
+            this.renderer.drawText(levelId.toString(), x, y, '#00AAFF', 20);
+            this.renderer.drawText(levelData?.name || '', x, y + 45, '#FFFFFF', 9);
+            for (let s = 0; s < progress.stars; s++) this.renderer.drawStar(x - 25 + s * 20, y + 25, 3, '#FFD700');
+          } else {
+            this.renderer.fillStyle = '#222222'; this.renderer.drawCircle(x, y, 32);
+            this.renderer.drawCircleOutline(x, y, 32, '#444444', 2);
+            this.renderer.drawText('🔒', x, y, '#555555', 18);
+          }
+        }
+        
+        this.renderer.fillStyle = '#1a2a4a'; this.renderer.drawRect(416, 100, 376, 260);
+        this.renderer.drawRectOutline(416, 100, 376, 260, '#00FF88', 2);
+        this.renderer.drawText('🤖 AI 挑战', 604, 120, '#00FF88', 14);
+        
+        const presets = Object.keys(Constants.PHYSICS_PRESETS);
+        presets.forEach((key, i) => {
+          const preset = Constants.PHYSICS_PRESETS[key];
+          const row = Math.floor(i / 2); const col = i % 2;
+          const x = 446 + col * 175;
+          const y = 145 + row * 75;
+          this.renderer.fillStyle = '#0a1a3a'; this.renderer.drawRect(x, y, 150, 60);
+          this.renderer.drawRectOutline(x, y, 150, 60, preset.color, 2);
+          this.renderer.fillStyle = preset.color;
+          this.renderer.drawText(preset.name, x + 75, y + 18, '#FFFFFF', 12);
+          this.renderer.drawText(`g=${preset.gravity.toFixed(2)}`, x + 75, y + 38, '#FFFFFF', 10);
+          this.renderer.drawText(`wind=${preset.wind > 0 ? '+' : ''}${preset.wind.toFixed(2)}`, x + 75, y + 52, '#FFFFFF', 9);
+        });
+        
+        this.renderer.fillStyle = '#00AAFF';
+        this.renderer.drawText('💡 拖拽炮台调整角度和力度，观察预测轨迹', Constants.SCREEN_WIDTH / 2, 350, '#CCCCCC', 10);
+      }
+      renderGame() {
+        const theme = this.levelManager.getTheme(); this.renderer.drawBackground(theme);
+        const ctx = this.renderer.ctx;
+        ctx.save();
+        if (this.screenShake && this.screenShake.timer > 0) {
+          const intensity = (this.screenShake.timer / 100) * this.screenShake.maxIntensity;
+          ctx.translate(MathUtils.randomRange(-intensity, intensity), MathUtils.randomRange(-intensity, intensity));
+        }
+        this.levelManager.draw(ctx);
+        this.physicsEngine.debris.forEach(d => { if (d.isActive) d.draw(ctx); });
+        this.projectiles.forEach(p => p.draw(ctx));
+        if (this.launcher) this.launcher.draw(ctx, this.physicsEngine.wind);
+        ctx.restore();
+        this.renderGameUI();
+      }
+      renderGameUI() {
+        const theme = this.levelManager.getTheme();
+        const physics = this.levelManager.currentLevel?.physics;
+        const preset = physics ? Constants.PHYSICS_PRESETS[physics] : null;
+        const lesson = this.levelManager.currentLevel?.lesson;
+        
+        this.renderer.fillStyle = 'rgba(0, 0, 0, 0.8)'; this.renderer.drawRect(10, 5, Constants.SCREEN_WIDTH - 20, 45);
+        
+        this.renderer.drawText(`实验 #${this.levelManager.getLevelId()}`, 50, 20, '#00AAFF', 12);
+        this.renderer.drawText(this.levelManager.getLevelName(), 50, 38, '#FFFFFF', 10);
+        
+        if (preset) {
+          this.renderer.drawText(`🌍 ${preset.name}`, Constants.SCREEN_WIDTH - 120, 20, preset.color, 12);
+          this.renderer.drawText(`g=${preset.gravity.toFixed(2)} | wind=${preset.wind > 0 ? '+' : ''}${preset.wind.toFixed(2)}`, Constants.SCREEN_WIDTH - 120, 38, '#CCCCCC', 10);
+        }
+        
+        this.renderer.fillStyle = '#FFD700'; this.renderer.drawCircle(730, 25, 15);
+        this.renderer.drawText(`${this.ammoLeft}`, 730, 25, '#000000', 14);
+        
+        if (this.launcher && this.launcher.isCharging) {
+          const angleDeg = MathUtils.radToDeg(this.launcher.elasticAngle);
+          const effectivePower = (this.launcher.chargePower / this.launcher.maxChargePower) * this.launcher.config.powerMultiplier;
+          const speed = this.launcher.elasticLength * 0.12 * effectivePower;
+          this.renderer.fillStyle = 'rgba(0, 255, 255, 0.9)';
+          this.renderer.drawText(`θ=${angleDeg.toFixed(0)}°`, 620, 20, '#FFFFFF', 11);
+          this.renderer.drawText(`v=${speed.toFixed(1)}`, 620, 38, '#FFFFFF', 11);
+        }
+        
+        this.renderer.fillStyle = 'rgba(0, 170, 255, 0.15)'; 
+        this.renderer.drawRect(10, Constants.SCREEN_HEIGHT - 60, Constants.SCREEN_WIDTH - 20, 50);
+        
+        const hint = this.levelManager.currentLevel?.hint;
+        if (hint) {
+          this.renderer.drawText(`💡 ${hint}`, Constants.SCREEN_WIDTH / 2, Constants.SCREEN_HEIGHT - 45, '#00AAFF', 11);
+        }
+        
+        if (lesson) {
+          this.renderer.fillStyle = '#00FFFF';
+          this.renderer.drawText(`📐 ${lesson}`, Constants.SCREEN_WIDTH / 2, Constants.SCREEN_HEIGHT - 28, '#00FFFF', 10);
+        }
+        
+        this.renderer.fillStyle = '#444444'; this.renderer.drawRect(Constants.SCREEN_WIDTH - 45, Constants.SCREEN_HEIGHT - 55, 28, 28); 
+        this.renderer.drawRectOutline(Constants.SCREEN_WIDTH - 45, Constants.SCREEN_HEIGHT - 55, 28, 28, '#00AAFF', 2);
+        this.renderer.drawText('↻', Constants.SCREEN_WIDTH - 31, Constants.SCREEN_HEIGHT - 41, '#00AAFF', 16);
+        
+        if (this.aiReportTime > 0) {
+          const elapsed = Date.now() - this.aiReportTime;
+          if (elapsed < 2500) {
+            const alpha = 1 - (elapsed / 2500);
+            const preset = physics ? Constants.PHYSICS_PRESETS[physics] : null;
+            const gravity = preset ? preset.gravity : 0.35;
+            const angleRange = gravity < 0.2 ? '30°-60°' : gravity > 0.5 ? '25°-45°' : '35°-55°';
+            const difficulty = gravity < 0.2 ? '⭐⭐⭐' : gravity > 0.5 ? '⭐⭐⭐⭐' : '⭐⭐';
+            
+            this.renderer.fillStyle = `rgba(0, 0, 0, ${0.8 * alpha})`;
+            this.renderer.drawRect(100, 80, Constants.SCREEN_WIDTH - 200, 60);
+            this.renderer.fillStyle = '#00AAFF';
+            this.renderer.drawText('🤖 AI 设计报告', Constants.SCREEN_WIDTH / 2, 98, '#00AAFF', 12);
+            this.renderer.drawText(`环境: ${preset?.name || '标准'} | 推荐角度: ${angleRange} | 难度: ${difficulty}`, Constants.SCREEN_WIDTH / 2, 120, '#FFFFFF', 10);
+          }
+        }
+      }
+      renderResult() {
+        const theme = this.levelManager.getTheme(); this.renderer.drawBackground(theme);
+        this.renderer.fillStyle = 'rgba(0, 0, 0, 0.7)'; this.renderer.drawRect(100, 60, Constants.SCREEN_WIDTH - 200, 250);
+        const isWin = this.enemiesKilled === this.levelManager.getTotalEnemies();
+        this.renderer.drawText(isWin ? '通关成功!' : '挑战失败', Constants.SCREEN_WIDTH / 2, 100, isWin ? '#00FF00' : '#FF0000', 28);
+        this.renderer.drawText(`关卡 ${this.levelManager.getLevelId()}`, Constants.SCREEN_WIDTH / 2, 130, '#FFFFFF', 18);
+        
+        const stars = isWin ? this.upgradeSystem.calculateStarRating(this.ammoLeft, this.totalAmmo, this.enemiesKilled, this.levelManager.getTotalEnemies()) : 0;
+        for (let i = 0; i < 3; i++) { const x = Constants.SCREEN_WIDTH / 2 - 50 + i * 50; this.renderer.drawStar(x, 165, i < stars ? 18 : 18, i < stars ? '#FFD700' : '#555555'); }
+        
+        this.renderer.drawText(`分数: ${this.score}`, Constants.SCREEN_WIDTH / 2, 200, '#FFFFFF', 16);
+        this.renderer.drawText(`击杀: ${this.enemiesKilled} | 击碎: ${this.obstaclesDestroyed} | 剩余: ${this.ammoLeft}`, Constants.SCREEN_WIDTH / 2, 225, '#FFFFFF', 12);
+        
+        if (isWin) { const expGain = this.upgradeSystem.calculateExperienceGain(stars, this.levelManager.getLevelId(), this.obstaclesDestroyed, this.ammoLeft); this.renderer.drawText(`获得经验: +${expGain}`, Constants.SCREEN_WIDTH / 2, 250, '#00FF00', 16); }
+        
+        if (isWin && this.levelManager.getLevelId() < Constants.LEVELS_COUNT) {
+          this.renderer.fillStyle = '#4ECDC4'; this.renderer.drawRect(Constants.SCREEN_WIDTH / 2 - 60, 280, 120, 32); this.renderer.drawRectOutline(Constants.SCREEN_WIDTH / 2 - 60, 280, 120, 32, '#2EA89E', 2);
+          this.renderer.drawText('下一关', Constants.SCREEN_WIDTH / 2, 298, '#FFFFFF', 16);
+        }
+        
+        const retryY = isWin && this.levelManager.getLevelId() < Constants.LEVELS_COUNT ? 320 : 280;
+        this.renderer.fillStyle = '#FF6B6B'; this.renderer.drawRect(Constants.SCREEN_WIDTH / 2 - 60, retryY, 120, 32); this.renderer.drawRectOutline(Constants.SCREEN_WIDTH / 2 - 60, retryY, 120, 32, '#CC4444', 2);
+        this.renderer.drawText('重新挑战', Constants.SCREEN_WIDTH / 2, retryY + 16, '#FFFFFF', 16);
+        
+        const menuY = isWin && this.levelManager.getLevelId() < Constants.LEVELS_COUNT ? 360 : 320;
+        this.renderer.fillStyle = '#888888'; this.renderer.drawRect(Constants.SCREEN_WIDTH / 2 - 60, menuY, 120, 32); this.renderer.drawRectOutline(Constants.SCREEN_WIDTH / 2 - 60, menuY, 120, 32, '#555555', 2);
+        this.renderer.drawText('返回菜单', Constants.SCREEN_WIDTH / 2, menuY + 16, '#FFFFFF', 16);
+      }
+      renderGuide() {
+        this.renderer.drawBackground('lab');
+        this.renderer.fillStyle = 'rgba(0, 0, 0, 0.7)'; this.renderer.drawRect(50, 50, Constants.SCREEN_WIDTH - 100, 270);
+        this.renderer.drawText('物理实验指南', Constants.SCREEN_WIDTH / 2, 85, '#00AAFF', 26);
+        const guides = ['🎮 拖拽左侧炮台蓄力', '📐 观察角度和速度参数', '🎯 松开手指发射弹丸', '🌍 不同星球有不同重力', '💨 风力会影响弹道'];
+        guides.forEach((g, i) => this.renderer.drawText(g, Constants.SCREEN_WIDTH / 2, 125 + i * 35, '#FFFFFF', 14));
+        this.renderer.drawText('物理公式:', Constants.SCREEN_WIDTH / 2, 300, '#FFFF00', 14);
+        this.renderer.drawText('x = v₀·cos(θ)·t  |  y = v₀·sin(θ)·t - ½gt²', Constants.SCREEN_WIDTH / 2, 320, '#00FFFF', 10);
+        this.renderer.fillStyle = '#00AAFF'; this.renderer.drawRect(Constants.SCREEN_WIDTH / 2 - 60, 340, 120, 32); this.renderer.drawRectOutline(Constants.SCREEN_WIDTH / 2 - 60, 340, 120, 32, '#0088CC', 2);
+        this.renderer.drawText('开始实验', Constants.SCREEN_WIDTH / 2, 358, '#FFFFFF', 16);
+      }
+      handleTouchStart(start) {
+        if (this.gameState === Constants.GAME_STATES.GAME) {
+          const pos = this.launcher ? { x: this.launcher.x, y: this.launcher.y } : { x: 60, y: 250 };
+          if (start.x < pos.x + 50 && start.x > pos.x - 50 && start.y < pos.y + 50 && start.y > pos.y - 50) { if (this.ammoLeft > 0) this.launcher.startCharge(start.x, start.y); return; }
+          
+          if (start.x >= Constants.SCREEN_WIDTH - 45 && start.x <= Constants.SCREEN_WIDTH - 17 && start.y >= Constants.SCREEN_HEIGHT - 55 && start.y <= Constants.SCREEN_HEIGHT - 27) { this.restartLevel(); return; }
+        } else if (this.gameState === Constants.GAME_STATES.MENU) {
+          for (let i = 0; i < Constants.LEVELS_COUNT; i++) { 
+            const row = Math.floor(i / 3); const col = i % 3; 
+            const x = 50 + col * 115; const y = 145 + row * 75; 
+            const levelId = i + 1; 
+            const dx = start.x - x; const dy = start.y - y;
+            if (dx * dx + dy * dy <= 32 * 32) { 
+              const progress = this.dataStorage.getLevelProgress(levelId); 
+              if (progress.unlocked) { this.startGame(levelId); return; } 
+            } 
+          }
+          
+          const presets = Object.keys(Constants.PHYSICS_PRESETS);
+          for (let i = 0; i < presets.length; i++) {
+            const row = Math.floor(i / 2); const col = i % 2;
+            const x = 446 + col * 175;
+            const y = 145 + row * 75;
+            if (start.x >= x && start.x <= x + 150 && start.y >= y && start.y <= y + 60) {
+              const aiLevel = AISceneGenerator.generate(presets[i]);
+              this.startGame(999, aiLevel);
+              return;
+            }
+          }
+        } else if (this.gameState === Constants.GAME_STATES.RESULT) {
+          const isWin = this.enemiesKilled === this.levelManager.getTotalEnemies();
+          const nextY = isWin && this.levelManager.getLevelId() < Constants.LEVELS_COUNT ? 280 : -100;
+          const retryY = isWin && this.levelManager.getLevelId() < Constants.LEVELS_COUNT ? 320 : 280;
+          const menuY = isWin && this.levelManager.getLevelId() < Constants.LEVELS_COUNT ? 360 : 320;
+          if (nextY !== -100 && start.x >= Constants.SCREEN_WIDTH / 2 - 60 && start.x <= Constants.SCREEN_WIDTH / 2 + 60 && start.y >= nextY && start.y <= nextY + 32) { this.startGame(this.levelManager.getLevelId() + 1); return; }
+          if (start.x >= Constants.SCREEN_WIDTH / 2 - 60 && start.x <= Constants.SCREEN_WIDTH / 2 + 60 && start.y >= retryY && start.y <= retryY + 32) { this.restartLevel(); return; }
+          if (start.x >= Constants.SCREEN_WIDTH / 2 - 60 && start.x <= Constants.SCREEN_WIDTH / 2 + 60 && start.y >= menuY && start.y <= menuY + 32) { this.showMenu(); return; }
+        } else if (this.gameState === Constants.GAME_STATES.GUIDE) {
+          if (start.x >= Constants.SCREEN_WIDTH / 2 - 60 && start.x <= Constants.SCREEN_WIDTH / 2 + 60 && start.y >= 340 && start.y <= 372) { this.showMenu(); return; }
+        }
+      }
+      handleTouchMove(start, current) {
+        if (this.gameState === Constants.GAME_STATES.GAME && this.launcher && this.launcher.isCharging) this.launcher.updateCharge(current.x, current.y);
+      }
+      handleTouchEnd(start, end) {
+        if (this.gameState === Constants.GAME_STATES.GAME && this.launcher && this.launcher.isCharging) {
+          const r = this.launcher.releaseCharge();
+          if (r.power > 0.1) this.fireProjectile(r.vx, r.vy);
+        }
+      }
+      fireProjectile(vx, vy) {
+        if (this.ammoLeft <= 0) return;
+        const pos = this.launcher.getLauncherPosition();
+        const p = new Projectile(pos.x, pos.y, this.currentProjectileConfig);
+        p.launch(vx, vy);
+        p.onExplosion = (x, y, radius) => { this.pixelEffect.createExplosion(x, y, '#FF4444', 40, 10); this.levelManager.applyExplosionDamage(x, y, radius, this.currentProjectileConfig.damage); };
+        p.onFreeze = (x, y, radius) => { this.pixelEffect.createIceEffect(x, y, radius); this.levelManager.freezeObstaclesInRange(x, y, radius); };
+        this.projectiles.push(p);
+        this.physicsEngine.addEntity(p);
+        this.ammoLeft--;
+        this.createLaunchSparks(pos.x, pos.y, this.launcher.elasticAngle);
+      }
+      createLaunchSparks(x, y, angle) {
+        for (let i = 0; i < 8; i++) {
+          const spreadAngle = angle + MathUtils.randomRange(-0.5, 0.5);
+          const speed = MathUtils.randomRange(2, 5);
+          const color = Math.random() > 0.5 ? '#FFAA00' : '#FFFFFF';
+          this.pixelEffect.sparks.push(new SparkParticle(x, y, color, speed, spreadAngle));
+        }
+      }
+      handleEnemyKilled(e) { 
+        this.enemiesKilled++; 
+        this.score += e.entityType === 'boss' ? 500 : e.entityType === 'monster' ? 200 : 100; 
+        this.pixelEffect.createEnemyReward(e.x, e.y, e.entityType);
+      }
+      handleObstacleDestroyed(o) { 
+        this.obstaclesDestroyed++; 
+        this.score += 50; 
+        const rect = o.getBounds();
+        const centerX = rect.left + (rect.right - rect.left) / 2;
+        const centerY = rect.top + (rect.bottom - rect.top) / 2;
+        this.createDebris(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, o.entityType);
+        this.triggerScreenShake(3);
+        switch (o.entityType) {
+          case 'wood': this.pixelEffect.createWoodDestroy(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top); break;
+          case 'brick': this.pixelEffect.createBrickDestroy(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top); break;
+          case 'ice': this.pixelEffect.createIceDestroy(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top); break;
+          case 'stone': this.pixelEffect.createStoneDestroy(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top); break;
+          default: this.pixelEffect.createPixelFragments(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, '#8B4513');
+        }
+      }
+      createDebris(x, y, width, height, entityType) {
+        const colors = {
+          wood: ['#5D3A1A', '#7D4F2A', '#9D6F3A', '#3D250F'],
+          brick: ['#B06030', '#804020', '#D08050', '#603010'],
+          ice: ['#A8D8EA', '#CCEEFF', '#88BBDD', '#FFFFFF'],
+          stone: ['#666666', '#555555', '#777777', '#444444']
+        };
+        const colorList = colors[entityType] || ['#888888'];
+        const debrisCount = Math.floor((width * height) / 80) + 3;
+        const centerX = x + width / 2;
+        const centerY = y + height / 2;
+        for (let i = 0; i < debrisCount; i++) {
+          const debrisWidth = MathUtils.randomRange(4, 8);
+          const debrisHeight = MathUtils.randomRange(4, 8);
+          const debrisX = MathUtils.randomRange(x, x + width - debrisWidth);
+          const debrisY = MathUtils.randomRange(y, y + height - debrisHeight);
+          const angle = MathUtils.randomRange(0, Math.PI * 2);
+          const speed = MathUtils.randomRange(3, 8);
+          const vx = Math.cos(angle) * speed;
+          const vy = Math.sin(angle) * speed - 2;
+          const debris = new Debris(debrisX, debrisY, debrisWidth, debrisHeight, colorList[Math.floor(Math.random() * colorList.length)], vx, vy);
+          this.physicsEngine.addEntity(debris);
+        }
+      }
+      triggerScreenShake(intensity) {
+        if (!this.screenShake) this.screenShake = { x: 0, y: 0, timer: 0, maxIntensity: 0 };
+        this.screenShake.maxIntensity = intensity;
+        this.screenShake.timer = 100;
+      }
+      handleLevelComplete() {
+        this.gameState = Constants.GAME_STATES.RESULT;
+        const stars = this.upgradeSystem.calculateStarRating(this.ammoLeft, this.totalAmmo, this.enemiesKilled, this.levelManager.getTotalEnemies());
+        const expGain = this.upgradeSystem.calculateExperienceGain(stars, this.levelManager.getLevelId(), this.obstaclesDestroyed, this.ammoLeft);
+        this.upgradeSystem.addExperience(expGain);
+        this.dataStorage.updateLevelProgress(this.levelManager.getLevelId(), stars, this.score, this.ammoLeft);
+        if (this.levelManager.getLevelId() < Constants.LEVELS_COUNT) this.dataStorage.unlockLevel(this.levelManager.getLevelId() + 1);
+        this.dataStorage.addScore(this.score);
+      }
+      handleLevelFailed() { this.gameState = Constants.GAME_STATES.RESULT; }
+      handleLevelUp(level) { this.pixelEffect.createExplosion(Constants.SCREEN_WIDTH / 2, Constants.SCREEN_HEIGHT / 2, '#FFD700', 50, 10); }
+      handleItemUnlock(itemId) { console.log('Unlocked:', itemId); }
+      startGame(levelId, aiLevel = null) {
+        this.gameState = Constants.GAME_STATES.GAME;
+        this.aiReportTime = aiLevel ? Date.now() : 0;
+        
+        if (aiLevel) {
+          this.levelManager.currentLevel = aiLevel;
+          this.levelManager.obstacles = [];
+          this.levelManager.enemies = [];
+          if (aiLevel.obstacles) {
+            aiLevel.obstacles.forEach(cfg => {
+              const obs = new Obstacle(cfg.x, cfg.y, cfg.width, cfg.height, cfg.type, cfg.health);
+              obs.onDestroy = o => { if (this.levelManager.onObstacleDestroyed) this.levelManager.onObstacleDestroyed(o); };
+              this.levelManager.obstacles.push(obs);
+            });
+          }
+          if (aiLevel.enemies) {
+            aiLevel.enemies.forEach(cfg => {
+              const e = new Enemy(cfg.x, cfg.y, cfg.type, cfg.health);
+              e.onDestroy = enemy => { if (this.levelManager.onEnemyKilled) this.levelManager.onEnemyKilled(enemy); this.levelManager.checkLevelComplete(); };
+              this.levelManager.enemies.push(e);
+            });
+          }
+        } else {
+          this.levelManager.loadLevel(levelId);
+        }
+        
+        const physics = this.levelManager.currentLevel?.physics;
+        const preset = physics ? Constants.PHYSICS_PRESETS[physics] : Constants.PHYSICS_PRESETS.EARTH;
+        this.physicsEngine.setPhysicsParams(preset.gravity, preset.wind);
+        
+        this.score = 0; this.obstaclesDestroyed = 0; this.enemiesKilled = 0; this.totalAmmo = this.levelManager.getAmmoCount(); this.ammoLeft = this.totalAmmo;
+        this.projectiles = []; this.physicsEngine.clear();
+        const pos = this.levelManager.getLauncherPosition();
+        this.launcher = new Launcher(pos.x, pos.y, this.currentLauncherConfig);
+        this.levelManager.obstacles.forEach(o => this.physicsEngine.addEntity(o));
+        this.levelManager.enemies.forEach(e => this.physicsEngine.addEntity(e));
+      }
+      restartLevel() { this.startGame(this.levelManager.getLevelId()); }
+      showMenu() { this.gameState = Constants.GAME_STATES.MENU; this.projectiles = []; this.physicsEngine.clear(); this.launcher = null; }
+      getHighestUnlockedLevel() { for (let i = Constants.LEVELS_COUNT; i >= 1; i--) { if (this.dataStorage.isLevelUnlocked(i)) return i; } return 1; }
+    }
+
+    window.onload = () => { window.gameManager = new GameManager(); window.gameManager.init(); };
+  </script>
+</body>
+</html>

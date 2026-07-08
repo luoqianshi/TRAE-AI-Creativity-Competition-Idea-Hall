@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>精灵图播放器 · Sprite Player</title>
+<style>
+  /* ============ 全局样式 ============ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0f1117;
+    color: #e4e6eb;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  /* ============ 主容器 ============ */
+  .app {
+    display: flex;
+    gap: 32px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    max-width: 1000px;
+    width: 100%;
+  }
+
+  /* ============ 预览区域（左侧） ============ */
+  .preview-panel {
+    background: #1a1d27;
+    border-radius: 16px;
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  /* 棋盘格背景，凸显透明区域 */
+  .stage {
+    background-image:
+      linear-gradient(45deg, #2a2d37 25%, transparent 25%),
+      linear-gradient(-45deg, #2a2d37 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #2a2d37 75%),
+      linear-gradient(-45deg, transparent 75%, #2a2d37 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    border-radius: 12px;
+    padding: 16px;
+    position: relative;
+    /* 用 CSS 变量控制窗口尺寸，默认 148x192 */
+    --frame-w: 148px;
+    --frame-h: 192px;
+  }
+  #spriteCanvas {
+    display: block;
+    width: var(--frame-w);
+    height: var(--frame-h);
+    image-rendering: pixelated; /* 像素风精灵图保持锐利 */
+  }
+
+  /* 帧信息 */
+  .frame-info {
+    font-size: 14px;
+    color: #8b8f9a;
+    text-align: center;
+  }
+  .frame-info strong { color: #4fc3f7; }
+
+  /* ============ 控制面板（右侧） ============ */
+  .control-panel {
+    background: #1a1d27;
+    border-radius: 16px;
+    padding: 28px;
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .control-panel h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  /* 表单行 */
+  .form-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .form-row label { font-size: 14px; color: #b0b3bc; }
+  .form-row input[type="number"] {
+    width: 80px;
+    padding: 6px 10px;
+    background: #0f1117;
+    border: 1px solid #2e323e;
+    border-radius: 8px;
+    color: #e4e6eb;
+    font-size: 14px;
+    text-align: center;
+  }
+  .form-row input[type="range"] { flex: 1; }
+
+  /* 上传区 */
+  .upload-area {
+    border: 2px dashed #3a3e4a;
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .upload-area:hover, .upload-area.dragover {
+    border-color: #4fc3f7;
+    background: rgba(79, 195, 247, 0.05);
+  }
+  .upload-area p { font-size: 14px; color: #8b8f9a; }
+  .upload-area input { display: none; }
+
+  /* 播放按钮组 */
+  .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 0.1s, background 0.2s;
+    background: #2e323e;
+    color: #e4e6eb;
+  }
+  .btn:hover { background: #3a3e4a; }
+  .btn:active { transform: scale(0.96); }
+  .btn-primary { background: #4fc3f7; color: #0f1117; }
+  .btn-primary:hover { background: #29b6f6; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ============ 缩略图帧条 ============ */
+  .thumb-strip {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 8px 0;
+    max-width: 100%;
+  }
+  .thumb {
+    flex-shrink: 0;
+    width: 48px;
+    height: 62px;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    background: #0f1117;
+    object-fit: cover;
+  }
+  .thumb.active { border-color: #4fc3f7; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ========== 左侧：预览舞台 ========== -->
+  <div class="preview-panel">
+    <div class="stage" id="stage">
+      <!-- Canvas 用于绘制当前帧，尺寸由 JS 动态设置 -->
+      <canvas id="spriteCanvas" width="148" height="192"></canvas>
+    </div>
+    <div class="frame-info">
+      帧 <strong id="curFrame">0</strong> / <strong id="totalFrames">0</strong>
+      &nbsp;|&nbsp; FPS: <strong id="fpsLabel">12</strong>
+    </div>
+    <!-- 缩略图帧条，点击可跳转到指定帧 -->
+    <div class="thumb-strip" id="thumbStrip"></div>
+  </div>
+
+  <!-- ========== 右侧：控制面板 ========== -->
+  <div class="control-panel">
+    <h2>精灵图播放器</h2>
+
+    <!-- 上传精灵图 -->
+    <div class="upload-area" id="uploadArea">
+      <p>📁 点击或拖拽上传精灵图</p>
+      <p style="font-size:12px;color:#5a5e6a;margin-top:6px">支持 PNG / JPG / WebP</p>
+      <input type="file" id="fileInput" accept="image/*">
+    </div>
+
+    <!-- 帧尺寸配置 -->
+    <div class="form-row">
+      <label>帧宽度 (px)</label>
+      <input type="number" id="frameW" value="148" min="1">
+    </div>
+    <div class="form-row">
+      <label>帧高度 (px)</label>
+      <input type="number" id="frameH" value="192" min="1">
+    </div>
+
+    <!-- 列数：精灵图中每行有多少帧 -->
+    <div class="form-row">
+      <label>每行列数</label>
+      <input type="number" id="cols" value="1" min="1">
+    </div>
+
+    <!-- 播放速度 -->
+    <div class="form-row">
+      <label>帧率 FPS</label>
+      <input type="range" id="fpsRange" min="1" max="60" value="12">
+      <input type="number" id="fpsInput" value="12" min="1" max="60" style="width:60px">
+    </div>
+
+    <!-- 播放控制按钮 -->
+    <div class="btn-group">
+      <button class="btn btn-primary" id="playBtn" disabled>▶ 播放</button>
+      <button class="btn" id="prevBtn" disabled>◀ 上一帧</button>
+      <button class="btn" id="nextBtn" disabled>下一帧 ▶</button>
+      <button class="btn" id="resetBtn" disabled>⏮ 重置</button>
+    </div>
+
+    <!-- 使用说明 -->
+    <div style="font-size:12px;color:#5a5e6a;line-height:1.8;margin-top:8px">
+      <p>使用方法：</p>
+      <p>1. 上传精灵图（所有帧横向/网格排列在一张大图）</p>
+      <p>2. 设置每帧尺寸（默认 148×192）和每行列数</p>
+      <p>3. 调整 FPS 控制播放速度，点击播放</p>
+    </div>
+  </div>
+</div>
+
+<script>
+// =============================================================
+// 精灵图播放器核心逻辑
+// 原理：将精灵图视为行列网格，每帧是其中一个格子，
+//       通过 Canvas drawImage 截取对应格子并绘制。
+// =============================================================
+
+// 获取 DOM 元素
+const canvas = document.getElementById("spriteCanvas");
+const ctx = canvas.getContext("2d");
+const fileInput = document.getElementById("fileInput");
+const uploadArea = document.getElementById("uploadArea");
+const frameWInput = document.getElementById("frameW");
+const frameHInput = document.getElementById("frameH");
+const colsInput = document.getElementById("cols");
+const fpsRange = document.getElementById("fpsRange");
+const fpsInput = document.getElementById("fpsInput");
+const playBtn = document.getElementById("playBtn");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const resetBtn = document.getElementById("resetBtn");
+const curFrameLabel = document.getElementById("curFrame");
+const totalFramesLabel = document.getElementById("totalFrames");
+const fpsLabel = document.getElementById("fpsLabel");
+const thumbStrip = document.getElementById("thumbStrip");
+
+// 播放状态
+let spriteImage = null;   // 加载的精灵图 Image 对象
+let totalFrames = 0;      // 总帧数
+let currentFrame = 0;     // 当前帧索引
+let isPlaying = false;    // 是否正在播放
+let lastTime = 0;         // 上一帧绘制的时间戳（用于控制 FPS）
+let rafId = null;         // requestAnimationFrame 的 ID
+
+/**
+ * 根据 FPS 计算帧间隔（毫秒）
+ */
+function getFrameInterval() {
+  const fps = parseInt(fpsInput.value) || 12;
+  return 1000 / fps;
+}
+
+/**
+ * 重新计算总帧数并更新画布尺寸
+ * 当图片加载或尺寸/列数变化时调用
+ */
+function recalcFrames() {
+  if (!spriteImage) return;
+  const fw = parseInt(frameWInput.value) || 148;
+  const fh = parseInt(frameHInput.value) || 192;
+  const cols = parseInt(colsInput.value) || 1;
+  // 根据图片实际宽高和帧尺寸计算行列数
+  const actualCols = Math.min(cols, Math.floor(spriteImage.naturalWidth / fw));
+  const rows = Math.floor(spriteImage.naturalHeight / fh);
+  totalFrames = actualCols * rows;
+
+  // 更新 Canvas 尺寸为单帧大小
+  canvas.width = fw;
+  canvas.height = fh;
+  // 更新舞台 CSS 变量，让显示区域与帧尺寸匹配
+  document.getElementById("stage").style.setProperty("--frame-w", fw + "px");
+  document.getElementById("stage").style.setProperty("--frame-h", fh + "px");
+
+  totalFramesLabel.textContent = totalFrames;
+  currentFrame = 0;
+  generateThumbnails(actualCols, rows, fw, fh);
+  drawFrame();
+}
+
+/**
+ * 生成缩略图帧条，便于快速跳转和预览所有帧
+ */
+function generateThumbnails(cols, rows, fw, fh) {
+  thumbStrip.innerHTML = "";
+  for (let i = 0; i < totalFrames; i++) {
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    // 用临时 canvas 截取该帧并转为缩略图
+    const tc = document.createElement("canvas");
+    tc.width = fw;
+    tc.height = fh;
+    tc.getContext("2d").drawImage(
+      spriteImage,
+      col * fw, row * fh, fw, fh,  // 源区域
+      0, 0, fw, fh                  // 目标区域
+    );
+    const img = document.createElement("img");
+    img.src = tc.toDataURL();
+    img.className = "thumb";
+    img.dataset.frame = i;
+    img.onclick = () => { currentFrame = i; drawFrame(); updateThumbs(); };
+    thumbStrip.appendChild(img);
+  }
+}
+
+/** 更新缩略图高亮状态 */
+function updateThumbs() {
+  [...thumbStrip.children].forEach((el, i) => {
+    el.classList.toggle("active", i === currentFrame);
+  });
+}
+
+/**
+ * 绘制当前帧到 Canvas
+ */
+function drawFrame() {
+  if (!spriteImage) return;
+  const fw = parseInt(frameWInput.value) || 148;
+  const fh = parseInt(frameHInput.value) || 192;
+  const cols = parseInt(colsInput.value) || 1;
+  const actualCols = Math.min(cols, Math.floor(spriteImage.naturalWidth / fw));
+
+  const row = Math.floor(currentFrame / actualCols);
+  const col = currentFrame % actualCols;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // 从精灵图中截取对应帧并绘制到 canvas
+  ctx.drawImage(
+    spriteImage,
+    col * fw, row * fh, fw, fh,
+    0, 0, fw, fh
+  );
+  curFrameLabel.textContent = currentFrame + 1;
+  updateThumbs();
+}
+
+/**
+ * 播放循环（基于 requestAnimationFrame + 时间戳节流）
+ */
+function playLoop(timestamp) {
+  if (!isPlaying) return;
+  if (timestamp - lastTime >= getFrameInterval()) {
+    lastTime = timestamp;
+    currentFrame = (currentFrame + 1) % totalFrames; // 循环播放
+    drawFrame();
+  }
+  rafId = requestAnimationFrame(playLoop);
+}
+
+/** 开始播放 */
+function play() {
+  isPlaying = true;
+  lastTime = 0;
+  playBtn.textContent = "⏸ 暂停";
+  rafId = requestAnimationFrame(playLoop);
+}
+/** 暂停播放 */
+function pause() {
+  isPlaying = false;
+  playBtn.textContent = "▶ 播放";
+  if (rafId) cancelAnimationFrame(rafId);
+}
+
+/**
+ * 加载图片文件（来自文件选择或拖拽）
+ */
+function loadImageFile(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    alert("请上传图片文件");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      spriteImage = img;
+      recalcFrames();
+      // 启用所有控制按钮
+      [playBtn, prevBtn, nextBtn, resetBtn].forEach(b => b.disabled = false);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ============ 事件绑定 ============
+
+// 文件选择
+fileInput.addEventListener("change", (e) => {
+  if (e.target.files[0]) loadImageFile(e.target.files[0]);
+});
+
+// 拖拽上传
+uploadArea.addEventListener("click", () => fileInput.click());
+uploadArea.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  uploadArea.classList.add("dragover");
+});
+uploadArea.addEventListener("dragleave", () => uploadArea.classList.remove("dragover"));
+uploadArea.addEventListener("drop", (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove("dragover");
+  if (e.dataTransfer.files[0]) loadImageFile(e.dataTransfer.files[0]);
+});
+
+// 参数变化时重新计算
+[frameWInput, frameHInput, colsInput].forEach(el => {
+  el.addEventListener("change", recalcFrames);
+});
+
+// FPS 联动（滑块和输入框同步）
+fpsRange.addEventListener("input", () => {
+  fpsInput.value = fpsRange.value;
+  fpsLabel.textContent = fpsRange.value;
+});
+fpsInput.addEventListener("input", () => {
+  fpsRange.value = fpsInput.value;
+  fpsLabel.textContent = fpsInput.value;
+});
+
+// 播放/暂停
+playBtn.addEventListener("click", () => {
+  if (isPlaying) pause(); else play();
+});
+// 上一帧
+prevBtn.addEventListener("click", () => {
+  pause();
+  currentFrame = (currentFrame - 1 + totalFrames) % totalFrames;
+  drawFrame();
+});
+// 下一帧
+nextBtn.addEventListener("click", () => {
+  pause();
+  currentFrame = (currentFrame + 1) % totalFrames;
+  drawFrame();
+});
+// 重置到第一帧
+resetBtn.addEventListener("click", () => {
+  pause();
+  currentFrame = 0;
+  drawFrame();
+});
+
+// 键盘快捷键
+document.addEventListener("keydown", (e) => {
+  if (!spriteImage) return;
+  if (e.code === "Space") { e.preventDefault(); playBtn.click(); }
+  if (e.code === "ArrowLeft") prevBtn.click();
+  if (e.code === "ArrowRight") nextBtn.click();
+});
+</script>
+</body>
+</html>

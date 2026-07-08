@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>AI手绘造景器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=ZCOOL+KuaiLe&display=swap');
+        
+        :root {
+            --primary-color: #6366f1;
+            --secondary-color: #8b5cf6;
+            --accent-color: #f472b6;
+            --bg-gradient-start: #0f0f23;
+            --bg-gradient-end: #1a1a2e;
+        }
+
+        body {
+            font-family: 'Noto Serif SC', serif;
+            background: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .font-cute {
+            font-family: 'ZCOOL KuaiLe', cursive;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+        }
+
+        .style-btn {
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .style-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .style-btn:hover::before {
+            left: 100%;
+        }
+
+        .style-btn.active {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
+        }
+
+        .slider-container {
+            position: relative;
+        }
+
+        .slider-track {
+            position: absolute;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            width: 100%;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+
+        .slider-fill {
+            position: absolute;
+            height: 6px;
+            background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+            border-radius: 3px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            transition: width 0.1s ease;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: transparent;
+            cursor: pointer;
+            position: relative;
+            z-index: 1;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s ease;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .canvas-container {
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .canvas-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            backdrop-filter: blur(5px);
+        }
+
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .progress-bar {
+            width: 200px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .animate-float {
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .animate-pulse-glow {
+            animation: pulse-glow 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.5); }
+            50% { box-shadow: 0 0 40px rgba(99, 102, 241, 0.8); }
+        }
+
+        .transition-fade {
+            transition: opacity 0.3s ease;
+        }
+
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .watercolor-bg {
+            background: radial-gradient(circle at 30% 30%, rgba(135, 206, 250, 0.3), transparent 50%),
+                        radial-gradient(circle at 70% 70%, rgba(255, 182, 193, 0.3), transparent 50%);
+        }
+
+        .ink-bg {
+            background: radial-gradient(circle at 50% 50%, rgba(47, 79, 79, 0.3), transparent 50%);
+        }
+
+        .cute-bg {
+            background: radial-gradient(circle at 30% 70%, rgba(255, 183, 178, 0.3), transparent 50%),
+                        radial-gradient(circle at 70% 30%, rgba(178, 255, 228, 0.3), transparent 50%);
+        }
+
+        .cyber-bg {
+            background: radial-gradient(circle at 50% 50%, rgba(0, 255, 255, 0.2), transparent 50%),
+                        radial-gradient(circle at 20% 80%, rgba(255, 0, 255, 0.2), transparent 50%);
+        }
+    </style>
+</head>
+<body class="text-white">
+    <div id="app" class="min-h-screen flex flex-col">
+        <header class="py-4 px-6 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center animate-float">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2v20"/>
+                        <path d="m17 5-5 5-5-5"/>
+                        <path d="m17 19-5-5-5 5"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold font-cute">AI手绘造景器</h1>
+                    <p class="text-xs text-gray-400">让想象力触手可及</p>
+                </div>
+            </div>
+            <button id="reset-btn" class="px-4 py-2 glass-panel text-sm hover:bg-white/10 transition-colors">
+                重置参数
+            </button>
+        </header>
+
+        <main class="flex-1 px-4 pb-24 md:pb-8">
+            <div class="mb-4">
+                <div class="glass-panel p-4">
+                    <label class="block text-sm text-gray-300 mb-2">场景关键词</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="keyword-input" placeholder="输入场景描述，如：山间小屋、星空大海、城市夜景..." 
+                            class="flex-1 px-4 py-3 rounded-xl bg-white/10 border border-white/20 focus:border-indigo-500 focus:outline-none text-white placeholder-gray-500 transition-colors">
+                        <button id="generate-btn" class="px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl font-bold hover:opacity-90 transition-opacity animate-pulse-glow">
+                            生成
+                        </button>
+                    </div>
+                    <div class="flex flex-wrap gap-2 mt-3">
+                        <span class="px-3 py-1 bg-white/10 rounded-full text-xs cursor-pointer hover:bg-white/20 transition-colors tag">山间小屋</span>
+                        <span class="px-3 py-1 bg-white/10 rounded-full text-xs cursor-pointer hover:bg-white/20 transition-colors tag">星空大海</span>
+                        <span class="px-3 py-1 bg-white/10 rounded-full text-xs cursor-pointer hover:bg-white/20 transition-colors tag">城市夜景</span>
+                        <span class="px-3 py-1 bg-white/10 rounded-full text-xs cursor-pointer hover:bg-white/20 transition-colors tag">森林秘境</span>
+                        <span class="px-3 py-1 bg-white/10 rounded-full text-xs cursor-pointer hover:bg-white/20 transition-colors tag">古镇老街</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <div class="glass-panel p-4">
+                    <label class="block text-sm text-gray-300 mb-3">手绘风格</label>
+                    <div class="grid grid-cols-4 gap-2">
+                        <button class="style-btn active" data-style="watercolor">
+                            <div class="w-full aspect-square rounded-xl watercolor-bg flex items-center justify-center mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-blue-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z"/>
+                                    <path d="M8 15c1.5-2 3-4 4-6s2-3 3-2"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs block">水彩</span>
+                        </button>
+                        <button class="style-btn" data-style="ink">
+                            <div class="w-full aspect-square rounded-xl ink-bg flex items-center justify-center mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z"/>
+                                    <path d="M8 16c2-3 4-5 6-6"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs block">水墨</span>
+                        </button>
+                        <button class="style-btn" data-style="cute">
+                            <div class="w-full aspect-square rounded-xl cute-bg flex items-center justify-center mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-pink-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z"/>
+                                    <circle cx="8" cy="10" r="1"/>
+                                    <circle cx="16" cy="10" r="1"/>
+                                    <path d="M8 14q2 2 4 2t4-2"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs block">治愈</span>
+                        </button>
+                        <button class="style-btn" data-style="cyber">
+                            <div class="w-full aspect-square rounded-xl cyber-bg flex items-center justify-center mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-cyan-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z"/>
+                                    <path d="M7 12l3-3 3 3 3-3"/>
+                                    <path d="M8 17h8"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs block">赛博</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <div class="glass-panel p-4">
+                    <label class="block text-sm text-gray-300 mb-4">参数调节</label>
+                    
+                    <div class="space-y-5">
+                        <div class="slider-container">
+                            <div class="flex justify-between text-sm mb-2">
+                                <span>笔触粗细</span>
+                                <span id="brush-size-value">50%</span>
+                            </div>
+                            <div class="slider-track">
+                                <div class="slider-fill" id="brush-size-fill"></div>
+                            </div>
+                            <input type="range" id="brush-size" min="1" max="100" value="50">
+                        </div>
+
+                        <div class="slider-container">
+                            <div class="flex justify-between text-sm mb-2">
+                                <span>色彩饱和度</span>
+                                <span id="saturation-value">70%</span>
+                            </div>
+                            <div class="slider-track">
+                                <div class="slider-fill" id="saturation-fill"></div>
+                            </div>
+                            <input type="range" id="saturation" min="0" max="100" value="70">
+                        </div>
+
+                        <div class="slider-container">
+                            <div class="flex justify-between text-sm mb-2">
+                                <span>画面噪点</span>
+                                <span id="noise-value">30%</span>
+                            </div>
+                            <div class="slider-track">
+                                <div class="slider-fill" id="noise-fill"></div>
+                            </div>
+                            <input type="range" id="noise" min="0" max="100" value="30">
+                        </div>
+
+                        <div class="slider-container">
+                            <div class="flex justify-between text-sm mb-2">
+                                <span>雾化程度</span>
+                                <span id="fog-value">20%</span>
+                            </div>
+                            <div class="slider-track">
+                                <div class="slider-fill" id="fog-fill"></div>
+                            </div>
+                            <input type="range" id="fog" min="0" max="100" value="20">
+                        </div>
+
+                        <div class="slider-container">
+                            <div class="flex justify-between text-sm mb-2">
+                                <span>构图比例</span>
+                                <span id="aspect-value">1:1</span>
+                            </div>
+                            <div class="slider-track">
+                                <div class="slider-fill" id="aspect-fill"></div>
+                            </div>
+                            <input type="range" id="aspect" min="0" max="2" step="0.1" value="1">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="canvas-container aspect-square md:aspect-video mx-auto" id="canvas-wrapper">
+                <canvas id="paper-layer" class="canvas-layer"></canvas>
+                <canvas id="ai-layer" class="canvas-layer"></canvas>
+                <canvas id="effect-layer" class="canvas-layer"></canvas>
+                
+                <div class="loading-overlay" id="loading-overlay" style="display: none;">
+                    <div class="loading-spinner"></div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <p class="mt-4 text-gray-300 text-sm" id="loading-text">正在生成...</p>
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-center gap-4">
+                <button id="download-png" class="px-6 py-3 glass-panel flex items-center gap-2 hover:bg-white/10 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    <span>下载PNG</span>
+                </button>
+                <button id="download-jpg" class="px-6 py-3 glass-panel flex items-center gap-2 hover:bg-white/10 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    <span>下载JPG</span>
+                </button>
+                <button id="create-poster" class="px-6 py-3 bg-gradient-to-r from-pink-500 to-orange-500 rounded-xl flex items-center gap-2 font-bold hover:opacity-90 transition-opacity">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                        <line x1="8" y1="21" x2="16" y2="21"/>
+                        <line x1="12" y1="17" x2="12" y2="21"/>
+                    </svg>
+                    <span>生成海报</span>
+                </button>
+            </div>
+        </main>
+
+        <div id="poster-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50" style="display: none;">
+            <div class="relative max-w-lg w-full mx-4">
+                <button id="close-poster" class="absolute -top-10 right-0 text-white hover:text-gray-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+                <canvas id="poster-canvas" class="w-full rounded-xl"></canvas>
+                <button id="download-poster" class="mt-4 w-full py-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl font-bold hover:opacity-90 transition-opacity">
+                    下载海报
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class AISceneCreator {
+            constructor() {
+                this.canvasWrapper = document.getElementById('canvas-wrapper');
+                this.paperCanvas = document.getElementById('paper-layer');
+                this.aiCanvas = document.getElementById('ai-layer');
+                this.effectCanvas = document.getElementById('effect-layer');
+                
+                this.paperCtx = this.paperCanvas.getContext('2d');
+                this.aiCtx = this.aiCanvas.getContext('2d');
+                this.effectCtx = this.effectCanvas.getContext('2d');
+
+                this.params = {
+                    style: 'watercolor',
+                    brushSize: 50,
+                    saturation: 70,
+                    noise: 30,
+                    fog: 20,
+                    aspect: 1
+                };
+
+                this.dpr = window.devicePixelRatio || 1;
+                this.isGenerating = false;
+                this.worker = null;
+
+                this.init();
+            }
+
+            init() {
+                this.setupCanvas();
+                this.setupEventListeners();
+                this.loadSavedParams();
+                this.renderPaperLayer();
+                this.renderEffectLayer();
+            }
+
+            setupCanvas() {
+                const containerWidth = this.canvasWrapper.clientWidth;
+                const containerHeight = this.canvasWrapper.clientHeight;
+                
+                const width = containerWidth * this.dpr;
+                const height = containerHeight * this.dpr;
+
+                [this.paperCanvas, this.aiCanvas, this.effectCanvas].forEach(canvas => {
+                    canvas.width = width;
+                    canvas.height = height;
+                    canvas.style.width = `${containerWidth}px`;
+                    canvas.style.height = `${containerHeight}px`;
+                });
+
+                this.paperCtx.scale(this.dpr, this.dpr);
+                this.aiCtx.scale(this.dpr, this.dpr);
+                this.effectCtx.scale(this.dpr, this.dpr);
+
+                this.canvasWidth = containerWidth;
+                this.canvasHeight = containerHeight;
+            }
+
+            setupEventListeners() {
+                window.addEventListener('resize', () => this.setupCanvas());
+
+                document.getElementById('keyword-input').addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') this.generateScene();
+                });
+
+                document.getElementById('generate-btn').addEventListener('click', () => this.generateScene());
+
+                document.querySelectorAll('.style-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        this.params.style = btn.dataset.style;
+                        this.saveParams();
+                        this.renderEffectLayer();
+                    });
+                });
+
+                const sliders = ['brush-size', 'saturation', 'noise', 'fog', 'aspect'];
+                sliders.forEach(id => {
+                    const slider = document.getElementById(id);
+                    slider.addEventListener('input', () => {
+                        const value = slider.value;
+                        const paramName = id.replace('-', '');
+                        this.params[paramName] = parseFloat(value);
+                        
+                        document.getElementById(`${id}-value`).textContent = 
+                            id === 'aspect' ? `${value}:1` : `${value}%`;
+                        
+                        document.getElementById(`${id}-fill`).style.width = 
+                            id === 'aspect' ? `${(value / 2) * 100}%` : `${value}%`;
+                        
+                        this.saveParams();
+                        this.renderEffectLayer();
+                    });
+                });
+
+                document.querySelectorAll('.tag').forEach(tag => {
+                    tag.addEventListener('click', () => {
+                        document.getElementById('keyword-input').value = tag.textContent;
+                    });
+                });
+
+                document.getElementById('reset-btn').addEventListener('click', () => this.resetParams());
+                document.getElementById('download-png').addEventListener('click', () => this.download('png'));
+                document.getElementById('download-jpg').addEventListener('click', () => this.download('jpg'));
+                document.getElementById('create-poster').addEventListener('click', () => this.createPoster());
+                document.getElementById('close-poster').addEventListener('click', () => {
+                    document.getElementById('poster-modal').style.display = 'none';
+                });
+                document.getElementById('download-poster').addEventListener('click', () => this.downloadPoster());
+            }
+
+            renderPaperLayer() {
+                const ctx = this.paperCtx;
+                const w = this.canvasWidth;
+                const h = this.canvasHeight;
+
+                ctx.fillStyle = '#f5f0e8';
+                ctx.fillRect(0, 0, w, h);
+
+                for (let i = 0; i < 5000; i++) {
+                    const x = Math.random() * w;
+                    const y = Math.random() * h;
+                    const alpha = Math.random() * 0.05;
+                    ctx.fillStyle = `rgba(150, 140, 130, ${alpha})`;
+                    ctx.fillRect(x, y, 1, 1);
+                }
+
+                ctx.strokeStyle = 'rgba(200, 190, 180, 0.3)';
+                ctx.lineWidth = 1;
+                for (let y = 0; y < h; y += 50) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(w, y);
+                    ctx.stroke();
+                }
+                for (let x = 0; x < w; x += 50) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, h);
+                    ctx.stroke();
+                }
+            }
+
+            renderEffectLayer() {
+                const ctx = this.effectCtx;
+                const w = this.canvasWidth;
+                const h = this.canvasHeight;
+
+                ctx.clearRect(0, 0, w, h);
+
+                const noiseAmount = this.params.noise / 100;
+                for (let i = 0; i < noiseAmount * 3000; i++) {
+                    const x = Math.random() * w;
+                    const y = Math.random() * h;
+                    const alpha = Math.random() * 0.15;
+                    ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+                    ctx.fillRect(x, y, 1, 1);
+                }
+
+                const fogAmount = this.params.fog / 100;
+                if (fogAmount > 0) {
+                    const gradient = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, Math.max(w, h)/2);
+                    gradient.addColorStop(0, `rgba(255, 255, 255, 0)`);
+                    gradient.addColorStop(1, `rgba(200, 200, 220, ${fogAmount * 0.5})`);
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(0, 0, w, h);
+                }
+
+                const brushSize = this.params.brushSize / 100;
+                if (brushSize > 0.5) {
+                    ctx.globalAlpha = (brushSize - 0.5) * 0.1;
+                    for (let i = 0; i < 50; i++) {
+                        const x = Math.random() * w;
+                        const y = Math.random() * h;
+                        const size = Math.random() * brushSize * 20;
+                        ctx.beginPath();
+                        ctx.arc(x, y, size, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(100, 100, 100, ${Math.random() * 0.3})`;
+                        ctx.fill();
+                    }
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            async generateScene() {
+                if (this.isGenerating) return;
+
+                const keyword = document.getElementById('keyword-input').value.trim();
+                if (!keyword) {
+                    alert('请输入场景关键词');
+                    return;
+                }
+
+                this.isGenerating = true;
+                const overlay = document.getElementById('loading-overlay');
+                const progressFill = document.getElementById('progress-fill');
+                const loadingText = document.getElementById('loading-text');
+                
+                overlay.style.display = 'flex';
+                progressFill.style.width = '0%';
+                loadingText.textContent = '正在初始化AI模型...';
+
+                try {
+                    await this.runAIGeneration(keyword, (progress, text) => {
+                        progressFill.style.width = `${progress}%`;
+                        loadingText.textContent = text;
+                    });
+                } catch (error) {
+                    console.error('生成失败:', error);
+                    alert('生成失败，请重试');
+                } finally {
+                    this.isGenerating = false;
+                    overlay.style.display = 'none';
+                }
+            }
+
+            async runAIGeneration(keyword, progressCallback) {
+                return new Promise((resolve) => {
+                    progressCallback(10, '正在分析场景...');
+                    
+                    setTimeout(() => {
+                        progressCallback(30, '正在生成基础构图...');
+                        
+                        setTimeout(() => {
+                            progressCallback(50, '正在渲染色彩...');
+                            
+                            setTimeout(() => {
+                                progressCallback(70, '正在添加手绘纹理...');
+                                
+                                setTimeout(() => {
+                                    progressCallback(90, '正在优化细节...');
+                                    
+                                    setTimeout(() => {
+                                        this.renderAIScene(keyword);
+                                        progressCallback(100, '生成完成！');
+                                        setTimeout(resolve, 500);
+                                    }, 400);
+                                }, 400);
+                            }, 400);
+                        }, 400);
+                    }, 400);
+                });
+            }
+
+            renderAIScene(keyword) {
+                const ctx = this.aiCtx;
+                const w = this.canvasWidth;
+                const h = this.canvasHeight;
+
+                ctx.clearRect(0, 0, w, h);
+
+                const style = this.params.style;
+                const saturation = this.params.saturation / 100;
+
+                let palette;
+                switch (style) {
+                    case 'watercolor':
+                        palette = { sky: '#87CEEB', ground: '#90EE90', accent: '#FFB6C1', dark: '#2F4F4F' };
+                        break;
+                    case 'ink':
+                        palette = { sky: '#E8E8E8', ground: '#808080', accent: '#4A4A4A', dark: '#202020' };
+                        break;
+                    case 'cute':
+                        palette = { sky: '#FFE4E1', ground: '#E0FFE0', accent: '#FFD700', dark: '#8B7355' };
+                        break;
+                    case 'cyber':
+                        palette = { sky: '#00CED1', ground: '#4B0082', accent: '#FF00FF', dark: '#000080' };
+                        break;
+                    default:
+                        palette = { sky: '#87CEEB', ground: '#90EE90', accent: '#FFB6C1', dark: '#2F4F4F' };
+                }
+
+                const gradient = ctx.createLinearGradient(0, 0, 0, h);
+                gradient.addColorStop(0, palette.sky);
+                gradient.addColorStop(0.6, this.adjustSaturation(palette.sky, saturation - 0.2));
+                gradient.addColorStop(1, palette.ground);
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, w, h);
+
+                this.drawClouds(ctx, w, h, palette, saturation);
+                this.drawMountains(ctx, w, h, palette, saturation);
+                this.drawTrees(ctx, w, h, palette, saturation);
+                this.drawWater(ctx, w, h, palette, saturation);
+                this.drawSunMoon(ctx, w, h, palette, saturation);
+                this.drawDetails(ctx, w, h, palette, saturation, keyword);
+            }
+
+            adjustSaturation(color, factor) {
+                const hex = color.replace('#', '');
+                const r = Math.min(255, parseInt(hex.substr(0, 2), 16) * (1 + factor * 0.5));
+                const g = Math.min(255, parseInt(hex.substr(2, 2), 16) * (1 + factor * 0.5));
+                const b = Math.min(255, parseInt(hex.substr(4, 2), 16) * (1 + factor * 0.5));
+                return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+            }
+
+            drawClouds(ctx, w, h, palette, saturation) {
+                const cloudY = h * 0.15;
+                const cloudCount = 3;
+
+                for (let i = 0; i < cloudCount; i++) {
+                    const x = (w / (cloudCount + 1)) * (i + 1);
+                    const scale = 0.8 + Math.random() * 0.4;
+                    
+                    ctx.beginPath();
+                    ctx.arc(x, cloudY, 40 * scale, 0, Math.PI * 2);
+                    ctx.arc(x + 30 * scale, cloudY - 10 * scale, 35 * scale, 0, Math.PI * 2);
+                    ctx.arc(x + 60 * scale, cloudY, 40 * scale, 0, Math.PI * 2);
+                    ctx.arc(x + 30 * scale, cloudY + 10 * scale, 30 * scale, 0, Math.PI * 2);
+                    
+                    if (this.params.style === 'ink') {
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                    } else {
+                        ctx.fillStyle = this.adjustSaturation('rgba(255, 255, 255, 0.9)', saturation);
+                    }
+                    ctx.fill();
+                }
+            }
+
+            drawMountains(ctx, w, h, palette, saturation) {
+                const mountainY = h * 0.4;
+                
+                ctx.beginPath();
+                ctx.moveTo(0, h);
+                
+                for (let x = 0; x <= w; x += 20) {
+                    const height = Math.sin(x * 0.005) * 100 + Math.sin(x * 0.01) * 50 + 80;
+                    ctx.lineTo(x, mountainY + height);
+                }
+                
+                ctx.lineTo(w, h);
+                ctx.closePath();
+                
+                const gradient = ctx.createLinearGradient(0, mountainY, 0, h);
+                gradient.addColorStop(0, this.adjustSaturation(palette.dark, saturation - 0.3));
+                gradient.addColorStop(1, this.adjustSaturation(palette.ground, saturation));
+                ctx.fillStyle = gradient;
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(0, h);
+                for (let x = 0; x <= w; x += 30) {
+                    const height = Math.sin(x * 0.008) * 60 + Math.sin(x * 0.015) * 30 + 40;
+                    ctx.lineTo(x, mountainY + height + 60);
+                }
+                ctx.lineTo(w, h);
+                ctx.closePath();
+                
+                const gradient2 = ctx.createLinearGradient(0, mountainY + 60, 0, h);
+                gradient2.addColorStop(0, this.adjustSaturation(palette.accent, saturation - 0.2));
+                gradient2.addColorStop(1, this.adjustSaturation(palette.ground, saturation));
+                ctx.fillStyle = gradient2;
+                ctx.fill();
+            }
+
+            drawTrees(ctx, w, h, palette, saturation) {
+                const treePositions = [0.1, 0.3, 0.5, 0.7, 0.9];
+                
+                treePositions.forEach(pos => {
+                    const x = w * pos;
+                    const y = h * 0.75;
+                    const scale = 0.6 + Math.random() * 0.6;
+
+                    ctx.fillStyle = this.adjustSaturation('#5D4037', saturation);
+                    ctx.fillRect(x - 5 * scale, y, 10 * scale, 30 * scale);
+
+                    ctx.beginPath();
+                    ctx.arc(x, y - 10 * scale, 25 * scale, Math.PI, 0);
+                    ctx.fillStyle = this.adjustSaturation(palette.ground, saturation + 0.2);
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.arc(x, y - 30 * scale, 20 * scale, Math.PI, 0);
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.arc(x, y - 45 * scale, 15 * scale, Math.PI, 0);
+                    ctx.fill();
+                });
+            }
+
+            drawWater(ctx, w, h, palette, saturation) {
+                const waterY = h * 0.85;
+                
+                ctx.beginPath();
+                ctx.moveTo(0, waterY);
+                
+                for (let x = 0; x <= w; x += 15) {
+                    const wave = Math.sin(x * 0.02 + Date.now() * 0.001) * 5;
+                    ctx.lineTo(x, waterY + wave);
+                }
+                
+                ctx.lineTo(w, h);
+                ctx.lineTo(0, h);
+                ctx.closePath();
+                
+                const gradient = ctx.createLinearGradient(0, waterY, 0, h);
+                gradient.addColorStop(0, this.adjustSaturation(palette.sky, saturation - 0.1));
+                gradient.addColorStop(1, this.adjustSaturation(palette.accent, saturation - 0.2));
+                ctx.fillStyle = gradient;
+                ctx.fill();
+
+                ctx.strokeStyle = this.adjustSaturation('rgba(255, 255, 255, 0.3)', saturation);
+                ctx.lineWidth = 1;
+                for (let y = waterY + 10; y < h; y += 20) {
+                    ctx.beginPath();
+                    for (let x = 0; x <= w; x += 15) {
+                        const wave = Math.sin(x * 0.02 + y * 0.1) * 3;
+                        if (x === 0) ctx.moveTo(x, y + wave);
+                        else ctx.lineTo(x, y + wave);
+                    }
+                    ctx.stroke();
+                }
+            }
+
+            drawSunMoon(ctx, w, h, palette, saturation) {
+                const sunX = w * 0.85;
+                const sunY = h * 0.12;
+                
+                if (this.params.style === 'cyber') {
+                    ctx.beginPath();
+                    ctx.arc(sunX, sunY, 30, 0, Math.PI * 2);
+                    ctx.fillStyle = this.adjustSaturation('#00FFFF', saturation);
+                    ctx.fill();
+
+                    ctx.strokeStyle = this.adjustSaturation('#FF00FF', saturation);
+                    ctx.lineWidth = 2;
+                    for (let i = 0; i < 8; i++) {
+                        const angle = (i / 8) * Math.PI * 2;
+                        ctx.beginPath();
+                        ctx.moveTo(sunX + Math.cos(angle) * 40, sunY + Math.sin(angle) * 40);
+                        ctx.lineTo(sunX + Math.cos(angle) * 55, sunY + Math.sin(angle) * 55);
+                        ctx.stroke();
+                    }
+                } else if (this.params.style === 'ink') {
+                    ctx.beginPath();
+                    ctx.arc(sunX, sunY, 25, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.fill();
+                } else {
+                    const gradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 40);
+                    gradient.addColorStop(0, this.adjustSaturation('#FFFF00', saturation + 0.3));
+                    gradient.addColorStop(1, 'rgba(255, 200, 0, 0)');
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(sunX - 40, sunY - 40, 80, 80);
+
+                    ctx.beginPath();
+                    ctx.arc(sunX, sunY, 25, 0, Math.PI * 2);
+                    ctx.fillStyle = this.adjustSaturation('#FFD700', saturation);
+                    ctx.fill();
+                }
+            }
+
+            drawDetails(ctx, w, h, palette, saturation, keyword) {
+                if (keyword.includes('小屋') || keyword.includes('房子')) {
+                    const houseX = w * 0.5;
+                    const houseY = h * 0.72;
+                    
+                    ctx.fillStyle = this.adjustSaturation('#DEB887', saturation);
+                    ctx.fillRect(houseX - 30, houseY, 60, 40);
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(houseX - 40, houseY);
+                    ctx.lineTo(houseX, houseY - 30);
+                    ctx.lineTo(houseX + 40, houseY);
+                    ctx.closePath();
+                    ctx.fillStyle = this.adjustSaturation('#8B4513', saturation);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = this.adjustSaturation('#4A4A4A', saturation);
+                    ctx.fillRect(houseX - 10, houseY + 15, 20, 25);
+                }
+
+                if (keyword.includes('花') || keyword.includes('花海')) {
+                    for (let i = 0; i < 20; i++) {
+                        const x = Math.random() * w;
+                        const y = h * 0.7 + Math.random() * (h * 0.15);
+                        const size = 3 + Math.random() * 5;
+                        
+                        ctx.beginPath();
+                        ctx.arc(x, y, size, 0, Math.PI * 2);
+                        ctx.fillStyle = this.adjustSaturation(palette.accent, saturation + 0.3);
+                        ctx.fill();
+                    }
+                }
+
+                if (keyword.includes('星星') || keyword.includes('星空')) {
+                    for (let i = 0; i < 50; i++) {
+                        const x = Math.random() * w;
+                        const y = Math.random() * (h * 0.5);
+                        const size = 1 + Math.random() * 2;
+                        const alpha = Math.random() * 0.8 + 0.2;
+                        
+                        ctx.beginPath();
+                        ctx.arc(x, y, size, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                        ctx.fill();
+                    }
+                }
+
+                if (keyword.includes('桥') || keyword.includes('桥梁')) {
+                    const bridgeX = w * 0.5;
+                    const bridgeY = h * 0.88;
+                    
+                    ctx.fillStyle = this.adjustSaturation('#8B7355', saturation);
+                    ctx.fillRect(bridgeX - 50, bridgeY, 100, 8);
+                    
+                    for (let i = 0; i < 5; i++) {
+                        ctx.fillRect(bridgeX - 40 + i * 20, bridgeY, 8, 15);
+                    }
+                }
+            }
+
+            saveParams() {
+                localStorage.setItem('ai-scene-creator-params', JSON.stringify(this.params));
+            }
+
+            loadSavedParams() {
+                const saved = localStorage.getItem('ai-scene-creator-params');
+                if (saved) {
+                    try {
+                        const savedParams = JSON.parse(saved);
+                        this.params = { ...this.params, ...savedParams };
+                        
+                        document.querySelectorAll('.style-btn').forEach(btn => {
+                            btn.classList.toggle('active', btn.dataset.style === this.params.style);
+                        });
+
+                        const sliders = ['brush-size', 'saturation', 'noise', 'fog', 'aspect'];
+                        sliders.forEach(id => {
+                            const paramName = id.replace('-', '');
+                            const slider = document.getElementById(id);
+                            slider.value = this.params[paramName];
+                            
+                            document.getElementById(`${id}-value`).textContent = 
+                                id === 'aspect' ? `${this.params[paramName]}:1` : `${this.params[paramName]}%`;
+                            
+                            document.getElementById(`${id}-fill`).style.width = 
+                                id === 'aspect' ? `${(this.params[paramName] / 2) * 100}%` : `${this.params[paramName]}%`;
+                        });
+                    } catch (e) {
+                        console.error('加载参数失败:', e);
+                    }
+                }
+            }
+
+            resetParams() {
+                this.params = {
+                    style: 'watercolor',
+                    brushSize: 50,
+                    saturation: 70,
+                    noise: 30,
+                    fog: 20,
+                    aspect: 1
+                };
+                
+                document.querySelectorAll('.style-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.style === 'watercolor');
+                });
+
+                const sliders = ['brush-size', 'saturation', 'noise', 'fog', 'aspect'];
+                sliders.forEach(id => {
+                    const paramName = id.replace('-', '');
+                    const slider = document.getElementById(id);
+                    slider.value = this.params[paramName];
+                    
+                    document.getElementById(`${id}-value`).textContent = 
+                        id === 'aspect' ? `${this.params[paramName]}:1` : `${this.params[paramName]}%`;
+                    
+                    document.getElementById(`${id}-fill`).style.width = 
+                        id === 'aspect' ? `${(this.params[paramName] / 2) * 100}%` : `${this.params[paramName]}%`;
+                });
+
+                this.saveParams();
+                this.renderEffectLayer();
+            }
+
+            download(format) {
+                const compositeCanvas = document.createElement('canvas');
+                compositeCanvas.width = this.paperCanvas.width;
+                compositeCanvas.height = this.paperCanvas.height;
+                const ctx = compositeCanvas.getContext('2d');
+
+                ctx.drawImage(this.paperCanvas, 0, 0);
+                ctx.drawImage(this.aiCanvas, 0, 0);
+                ctx.drawImage(this.effectCanvas, 0, 0);
+
+                const url = format === 'png' 
+                    ? compositeCanvas.toDataURL('image/png')
+                    : compositeCanvas.toDataURL('image/jpeg', 0.9);
+                
+                const link = document.createElement('a');
+                link.download = `ai-scene-${Date.now()}.${format}`;
+                link.href = url;
+                link.click();
+            }
+
+            createPoster() {
+                const modal = document.getElementById('poster-modal');
+                const posterCanvas = document.getElementById('poster-canvas');
+                
+                const width = 600;
+                const height = 800;
+                const dpr = 2;
+                
+                posterCanvas.width = width * dpr;
+                posterCanvas.height = height * dpr;
+                posterCanvas.style.width = `${width}px`;
+                posterCanvas.style.height = `${height}px`;
+                
+                const ctx = posterCanvas.getContext('2d');
+                ctx.scale(dpr, dpr);
+
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(0, 0, width, height);
+
+                const frameWidth = 20;
+                ctx.fillStyle = '#2a2a4e';
+                ctx.fillRect(frameWidth, frameWidth, width - frameWidth * 2, height - frameWidth * 2);
+
+                const sceneWidth = width - frameWidth * 4;
+                const sceneHeight = sceneWidth;
+                const sceneX = (width - sceneWidth) / 2;
+                const sceneY = frameWidth * 3;
+
+                ctx.drawImage(this.paperCanvas, sceneX, sceneY, sceneWidth, sceneHeight);
+                ctx.drawImage(this.aiCanvas, sceneX, sceneY, sceneWidth, sceneHeight);
+                ctx.drawImage(this.effectCanvas, sceneX, sceneY, sceneWidth, sceneHeight);
+
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 32px "ZCOOL KuaiLe", cursive';
+                ctx.textAlign = 'center';
+                ctx.fillText('AI手绘造景器', width / 2, height - 120);
+
+                ctx.font = '16px "Noto Serif SC", serif';
+                ctx.fillStyle = '#aaa';
+                ctx.fillText('让想象力触手可及', width / 2, height - 80);
+
+                const keyword = document.getElementById('keyword-input').value.trim() || '美丽风景';
+                ctx.font = '20px "Noto Serif SC", serif';
+                ctx.fillStyle = '#f472b6';
+                ctx.fillText(`「${keyword}」`, width / 2, height - 40);
+
+                modal.style.display = 'flex';
+            }
+
+            downloadPoster() {
+                const posterCanvas = document.getElementById('poster-canvas');
+                const url = posterCanvas.toDataURL('image/png');
+                
+                const link = document.createElement('a');
+                link.download = `ai-scene-poster-${Date.now()}.png`;
+                link.href = url;
+                link.click();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            new AISceneCreator();
+        });
+    </script>
+</body>
+</html>

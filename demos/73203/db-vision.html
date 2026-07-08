@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB-Vision 空间 SQL 交互面板</title>
+    <!-- 引入 Leaflet 地图样式和脚本 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- 引入代码高亮和图标 -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #1e1e1e;
+            --panel-bg: #252526;
+            --text-main: #d4d4d4;
+            --accent: #007acc;
+            --accent-hover: #005999;
+            --error: #f44336;
+            --success: #4caf50;
+            --border: #333;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 左侧编辑器面板 */
+        .editor-panel {
+            width: 450px;
+            background-color: var(--panel-bg);
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+            z-index: 10;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.5);
+        }
+
+        .panel-header {
+            padding: 15px 20px;
+            background-color: #2d2d30;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header h1 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel-header h1 i {
+            color: var(--accent);
+        }
+
+        .toolbar {
+            padding: 10px;
+            display: flex;
+            gap: 10px;
+            background-color: #2d2d30;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .btn {
+            background-color: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            background-color: #3e3e42;
+        }
+
+        .btn-primary {
+            background-color: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        /* 模拟代码编辑器 */
+        .code-editor {
+            flex: 1;
+            padding: 20px;
+            position: relative;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100%;
+            background-color: #1e1e1e;
+            color: #9cdcfe;
+            border: 1px solid var(--border);
+            padding: 15px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: none;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        textarea:focus {
+            border-color: var(--accent);
+        }
+
+        /* 右侧地图面板 */
+        .map-panel {
+            flex: 1;
+            position: relative;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+            background-color: #262626;
+        }
+
+        /* Toast 提示框 */
+        .toast-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 12px 20px;
+            border-radius: 4px;
+            color: white;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transform: translateX(120%);
+            transition: transform 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+
+        .toast.show {
+            transform: translateX(0);
+        }
+
+        .toast.error { background-color: var(--error); }
+        .toast.success { background-color: var(--success); }
+
+        /* 场景快捷按钮区 */
+        .scenarios {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border);
+            background-color: #252526;
+        }
+
+        .scenarios h3 {
+            font-size: 12px;
+            color: #858585;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+
+        .scenario-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 左侧编辑器 -->
+    <div class="editor-panel">
+        <div class="panel-header">
+            <h1><i class="fa-solid fa-database"></i> DB-Vision</h1>
+            <span style="font-size: 12px; color: #858585;">v1.0.0 (MVP)</span>
+        </div>
+        
+        <div class="toolbar">
+            <button class="btn btn-primary" onclick="executeSQL()">
+                <i class="fa-solid fa-play"></i> 执行 SQL (F5)
+            </button>
+            <button class="btn" onclick="clearAll()">
+                <i class="fa-solid fa-eraser"></i> 清空
+            </button>
+        </div>
+
+        <div class="code-editor">
+            <textarea id="sqlInput" spellcheck="false" placeholder="在此输入 PostGIS 空间 SQL 语句...&#10;&#10;例如:&#10;SELECT ST_Buffer(geom, 500) FROM points;&#10;SELECT ST_Intersects(geom1, geom2);"></textarea>
+        </div>
+
+        <div class="scenarios">
+            <h3>快捷演示场景 (Mock)</h3>
+            <div class="scenario-grid">
+                <button class="btn" onclick="loadScenario('buffer')">
+                    <i class="fa-regular fa-circle-dot"></i> ST_Buffer (缓冲区)
+                </button>
+                <button class="btn" onclick="loadScenario('intersects')">
+                    <i class="fa-solid fa-object-intersect"></i> ST_Intersects (相交)
+                </button>
+                <button class="btn" onclick="loadScenario('error')" style="grid-column: span 2;">
+                    <i class="fa-solid fa-bug"></i> 模拟 Fail-Fast 报错
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧地图 -->
+    <div class="map-panel">
+        <div class="toast-container" id="toastContainer"></div>
+        <div id="map"></div>
+    </div>
+
+    <script>
+        // 初始化地图 (使用暗黑风格底图)
+        const map = L.map('map', {
+            zoomControl: false // 自定义位置
+        }).setView([39.9042, 116.4074], 12); // 默认中心：北京
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        // 加载 CartoDB 暗色底图
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        let currentLayerGroup = L.featureGroup().addTo(map);
+
+        // 模拟数据
+        const mockData = {
+            buffer: {
+                sql: `-- 场景 1: ST_Buffer 缓冲区生成\n-- 以天安门为中心，生成半径 2000 米的缓冲区\n\nSELECT ST_Buffer(\n  ST_GeomFromText('POINT(116.3974 39.9092)', 4326), \n  0.02 -- 近似 2000 米度数\n) AS buffer_geom;`,
+                action: () => {
+                    const point = [39.9092, 116.3974];
+                    L.marker(point).addTo(currentLayerGroup).bindPopup("原点 (POINT)");
+                    L.circle(point, {
+                        radius: 2000,
+                        color: '#007acc',
+                        fillColor: '#007acc',
+                        fillOpacity: 0.3,
+                        weight: 2
+                    }).addTo(currentLayerGroup).bindPopup("ST_Buffer 区域");
+                    map.setView(point, 13);
+                }
+            },
+            intersects: {
+                sql: `-- 场景 2: ST_Intersects 多边形相交\n-- 判断规划区域 A 与 保护区域 B 是否重叠，并高亮重叠部分\n\nSELECT ST_Intersection(A.geom, B.geom) \nFROM \n  (SELECT ST_GeomFromText('POLYGON((...))') AS geom) A,\n  (SELECT ST_GeomFromText('POLYGON((...))') AS geom) B\nWHERE ST_Intersects(A.geom, B.geom);`,
+                action: () => {
+                    const polyA = [[39.92, 116.38], [39.92, 116.42], [39.89, 116.42], [39.89, 116.38]];
+                    const polyB = [[39.91, 116.40], [39.91, 116.44], [39.88, 116.44], [39.88, 116.40]];
+                    const intersect = [[39.91, 116.40], [39.91, 116.42], [39.89, 116.42], [39.89, 116.40]];
+
+                    L.polygon(polyA, {color: '#4caf50', fillOpacity: 0.1, dashArray: '5, 5'}).addTo(currentLayerGroup).bindPopup("区域 A");
+                    L.polygon(polyB, {color: '#ff9800', fillOpacity: 0.1, dashArray: '5, 5'}).addTo(currentLayerGroup).bindPopup("区域 B");
+                    L.polygon(intersect, {color: '#f44336', fillColor: '#f44336', fillOpacity: 0.5}).addTo(currentLayerGroup).bindPopup("ST_Intersection 相交结果");
+                    
+                    map.fitBounds(L.polygon(polyA).getBounds());
+                }
+            },
+            error: {
+                sql: `-- 错误场景演示: Fail-Fast 机制\n-- 缺少闭合括号，或者坐标类型不支持\n\nSELECT ST_Area(\n  ST_GeomFromText('POLYGON(116.39 39.90, 116.40 39.90, 116.40 39.89)', 4326)\n);`,
+                action: () => {
+                    showToast("❌ [SQL 解析失败] 语法错误：ST_GeomFromText 期望闭合括号或坐标无效。", "error");
+                }
+            }
+        };
+
+        function loadScenario(type) {
+            const textarea = document.getElementById('sqlInput');
+            textarea.value = mockData[type].sql;
+            
+            // 自动触发执行，但如果是 error 场景，延迟 300ms 演示点击执行的效果
+            if(type === 'error') {
+                clearMap();
+            } else {
+                executeSQL(type);
+            }
+        }
+
+        function executeSQL(forceType = null) {
+            const sql = document.getElementById('sqlInput').value;
+            if (!sql.trim()) {
+                showToast("⚠️ 请先输入 SQL 语句", "error");
+                return;
+            }
+
+            clearMap();
+            
+            // 简单的 Mock 逻辑：根据文本包含的关键字决定渲染什么
+            let type = forceType;
+            if (!type) {
+                if (sql.includes('ST_Buffer')) type = 'buffer';
+                else if (sql.includes('ST_Intersects')) type = 'intersects';
+                else if (sql.includes('错误') || sql.includes('Area')) type = 'error';
+                else {
+                    showToast("⚠️ MVP 版本仅支持演示 ST_Buffer 和 ST_Intersects 场景。", "error");
+                    return;
+                }
+            }
+
+            if (type === 'error') {
+                mockData.error.action();
+            } else {
+                mockData[type].action();
+                showToast("✅ SQL 执行成功，已渲染几何图形", "success");
+            }
+        }
+
+        function clearAll() {
+            document.getElementById('sqlInput').value = '';
+            clearMap();
+        }
+
+        function clearMap() {
+            currentLayerGroup.clearLayers();
+        }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            
+            const icon = type === 'success' ? '<i class="fa-solid fa-check-circle"></i>' : '<i class="fa-solid fa-circle-exclamation"></i>';
+            toast.innerHTML = `${icon} <span>${message}</span>`;
+            
+            container.appendChild(toast);
+            
+            // 触发动画
+            setTimeout(() => toast.classList.add('show'), 10);
+            
+            // 3秒后移除
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // 监听 F5 快捷键执行
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'F5') {
+                e.preventDefault();
+                executeSQL();
+            }
+        });
+    </script>
+</body>
+</html>

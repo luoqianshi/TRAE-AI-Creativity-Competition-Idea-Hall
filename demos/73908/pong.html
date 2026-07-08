@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>乒乓球 Pong</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a1a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Segoe UI', sans-serif;
+    color: #fff;
+    overflow: hidden;
+  }
+  .game-wrapper {
+    text-align: center;
+  }
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 12px;
+    letter-spacing: 4px;
+    color: #00e676;
+    text-shadow: 0 0 20px rgba(0,230,118,.4);
+  }
+  canvas {
+    border: 2px solid #00e676;
+    border-radius: 8px;
+    box-shadow: 0 0 40px rgba(0,230,118,.15);
+    display: block;
+    margin: 0 auto;
+    cursor: none;
+  }
+  .info {
+    margin-top: 14px;
+    font-size: .85rem;
+    color: #888;
+  }
+  .info kbd {
+    background: #1a1a2e;
+    border: 1px solid #333;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: inherit;
+    color: #ccc;
+  }
+  #overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,.75);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h2 {
+    font-size: 2.4rem;
+    margin-bottom: 10px;
+    color: #00e676;
+  }
+  #overlay p {
+    font-size: 1rem;
+    color: #bbb;
+    margin-bottom: 24px;
+  }
+  #overlay button {
+    background: #00e676;
+    color: #0a0a1a;
+    border: none;
+    padding: 12px 40px;
+    font-size: 1.1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 700;
+    letter-spacing: 1px;
+    transition: transform .15s, box-shadow .15s;
+  }
+  #overlay button:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 20px rgba(0,230,118,.4);
+  }
+</style>
+</head>
+<body>
+
+<div class="game-wrapper">
+  <h1>PONG</h1>
+  <canvas id="game" width="800" height="500"></canvas>
+  <div class="info">
+    <kbd>W</kbd> / <kbd>S</kbd> 控制左侧球拍 &nbsp;|&nbsp; 鼠标上下移动控制右侧球拍 &nbsp;|&nbsp; 先得 <strong>11</strong> 分获胜
+  </div>
+</div>
+
+<div id="overlay">
+  <h2>PONG</h2>
+  <p>经典乒乓球对战</p>
+  <button id="startBtn">开始游戏</button>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const W = canvas.width, H = canvas.height;
+
+  const WIN_SCORE = 11;
+  const PADDLE_W = 12, PADDLE_H = 90;
+  const BALL_R = 8;
+  const PADDLE_SPEED = 7;
+  const BALL_SPEED_INIT = 5;
+  const BALL_SPEED_MAX = 12;
+
+  let gameRunning = false;
+  let animId;
+
+  // --- objects ---
+  const playerL = { x: 20, y: H / 2 - PADDLE_H / 2, w: PADDLE_W, h: PADDLE_H, score: 0 };
+  const playerR = { x: W - 20 - PADDLE_W, y: H / 2 - PADDLE_H / 2, w: PADDLE_W, h: PADDLE_H, score: 0 };
+  const ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, speed: BALL_SPEED_INIT };
+
+  // trail effect
+  const trail = [];
+  const TRAIL_LEN = 12;
+
+  // particles
+  const particles = [];
+
+  const keys = {};
+  let mouseY = H / 2;
+
+  // --- reset ---
+  function resetBall(dir) {
+    ball.x = W / 2;
+    ball.y = H / 2;
+    ball.speed = BALL_SPEED_INIT;
+    const angle = (Math.random() * 0.8 - 0.4); // -0.4 to 0.4 rad
+    ball.vx = Math.cos(angle) * ball.speed * (dir || (Math.random() > 0.5 ? 1 : -1));
+    ball.vy = Math.sin(angle) * ball.speed;
+    trail.length = 0;
+  }
+
+  function resetGame() {
+    playerL.score = 0;
+    playerR.score = 0;
+    playerL.y = H / 2 - PADDLE_H / 2;
+    playerR.y = H / 2 - PADDLE_H / 2;
+    particles.length = 0;
+    resetBall();
+  }
+
+  // --- particles ---
+  function spawnParticles(x, y, color) {
+    for (let i = 0; i < 12; i++) {
+      particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 8,
+        vy: (Math.random() - 0.5) * 8,
+        life: 1,
+        color,
+        size: Math.random() * 3 + 1
+      });
+    }
+  }
+
+  function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= 0.04;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // --- update ---
+  function update() {
+    // left paddle (keyboard)
+    if (keys['w'] || keys['W'] || keys['ArrowUp'] && false) playerL.y -= PADDLE_SPEED;
+    if (keys['s'] || keys['S'] || keys['ArrowDown'] && false) playerL.y += PADDLE_SPEED;
+    // also allow arrow keys for left
+    if (keys['ArrowUp']) playerL.y -= PADDLE_SPEED;
+    if (keys['ArrowDown']) playerL.y += PADDLE_SPEED;
+    playerL.y = Math.max(0, Math.min(H - PADDLE_H, playerL.y));
+
+    // right paddle (mouse)
+    const targetY = mouseY - PADDLE_H / 2;
+    playerR.y += (targetY - playerR.y) * 0.15;
+    playerR.y = Math.max(0, Math.min(H - PADDLE_H, playerR.y));
+
+    // trail
+    trail.push({ x: ball.x, y: ball.y });
+    if (trail.length > TRAIL_LEN) trail.shift();
+
+    // ball
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    // top / bottom bounce
+    if (ball.y - BALL_R <= 0) { ball.y = BALL_R; ball.vy = Math.abs(ball.vy); }
+    if (ball.y + BALL_R >= H) { ball.y = H - BALL_R; ball.vy = -Math.abs(ball.vy); }
+
+    // paddle collision — left
+    if (
+      ball.vx < 0 &&
+      ball.x - BALL_R <= playerL.x + playerL.w &&
+      ball.x - BALL_R >= playerL.x &&
+      ball.y >= playerL.y &&
+      ball.y <= playerL.y + playerL.h
+    ) {
+      const rel = (ball.y - (playerL.y + PADDLE_H / 2)) / (PADDLE_H / 2);
+      const angle = rel * (Math.PI / 4);
+      ball.speed = Math.min(BALL_SPEED_MAX, ball.speed + 0.3);
+      ball.vx = Math.cos(angle) * ball.speed;
+      ball.vy = Math.sin(angle) * ball.speed;
+      ball.x = playerL.x + playerL.w + BALL_R;
+      spawnParticles(ball.x, ball.y, '#00e676');
+    }
+
+    // paddle collision — right
+    if (
+      ball.vx > 0 &&
+      ball.x + BALL_R >= playerR.x &&
+      ball.x + BALL_R <= playerR.x + playerR.w &&
+      ball.y >= playerR.y &&
+      ball.y <= playerR.y + playerR.h
+    ) {
+      const rel = (ball.y - (playerR.y + PADDLE_H / 2)) / (PADDLE_H / 2);
+      const angle = Math.PI - rel * (Math.PI / 4);
+      ball.speed = Math.min(BALL_SPEED_MAX, ball.speed + 0.3);
+      ball.vx = Math.cos(angle) * ball.speed;
+      ball.vy = Math.sin(angle) * ball.speed;
+      ball.x = playerR.x - BALL_R;
+      spawnParticles(ball.x, ball.y, '#ff5252');
+    }
+
+    // score
+    if (ball.x < -BALL_R * 2) {
+      playerR.score++;
+      spawnParticles(30, H / 2, '#ff5252');
+      if (playerR.score >= WIN_SCORE) return endGame('玩家 2 (鼠标)');
+      resetBall(-1);
+    }
+    if (ball.x > W + BALL_R * 2) {
+      playerL.score++;
+      spawnParticles(W - 30, H / 2, '#00e676');
+      if (playerL.score >= WIN_SCORE) return endGame('玩家 1 (键盘)');
+      resetBall(1);
+    }
+
+    updateParticles();
+  }
+
+  // --- draw ---
+  function draw() {
+    // background
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    // center dashed line
+    ctx.setLineDash([8, 12]);
+    ctx.strokeStyle = '#1e1e3a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W / 2, 0);
+    ctx.lineTo(W / 2, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // scores
+    ctx.font = '700 64px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,.08)';
+    ctx.fillText(playerL.score, W / 4, 80);
+    ctx.fillText(playerR.score, (3 * W) / 4, 80);
+
+    // trail
+    for (let i = 0; i < trail.length; i++) {
+      const t = trail[i];
+      const alpha = (i + 1) / trail.length * 0.3;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, BALL_R * (i / trail.length), 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(0,230,118,${alpha})`;
+      ctx.fill();
+    }
+
+    // ball
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.shadowColor = '#00e676';
+    ctx.shadowBlur = 20;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // paddles
+    drawPaddle(playerL, '#00e676');
+    drawPaddle(playerR, '#ff5252');
+
+    // particles
+    drawParticles();
+  }
+
+  function drawPaddle(p, color) {
+    const r = 6;
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.moveTo(p.x + r, p.y);
+    ctx.lineTo(p.x + p.w - r, p.y);
+    ctx.quadraticCurveTo(p.x + p.w, p.y, p.x + p.w, p.y + r);
+    ctx.lineTo(p.x + p.w, p.y + p.h - r);
+    ctx.quadraticCurveTo(p.x + p.w, p.y + p.h, p.x + p.w - r, p.y + p.h);
+    ctx.lineTo(p.x + r, p.y + p.h);
+    ctx.quadraticCurveTo(p.x, p.y + p.h, p.x, p.y + p.h - r);
+    ctx.lineTo(p.x, p.y + r);
+    ctx.quadraticCurveTo(p.x, p.y, p.x + r, p.y);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  // --- game loop ---
+  function loop() {
+    if (!gameRunning) return;
+    update();
+    draw();
+    animId = requestAnimationFrame(loop);
+  }
+
+  function endGame(winner) {
+    gameRunning = false;
+    cancelAnimationFrame(animId);
+    overlay.querySelector('h2').textContent = `${winner} 获胜!`;
+    overlay.querySelector('p').textContent = `${playerL.score} : ${playerR.score}`;
+    startBtn.textContent = '再来一局';
+    overlay.classList.remove('hidden');
+  }
+
+  // --- events ---
+  document.addEventListener('keydown', e => { keys[e.key] = true; });
+  document.addEventListener('keyup', e => { keys[e.key] = false; });
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouseY = (e.clientY - rect.top) * (H / rect.height);
+  });
+
+  startBtn.addEventListener('click', () => {
+    overlay.classList.add('hidden');
+    resetGame();
+    gameRunning = true;
+    loop();
+  });
+
+  // initial draw
+  draw();
+})();
+</script>
+</body>
+</html>
