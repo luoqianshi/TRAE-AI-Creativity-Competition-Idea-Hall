@@ -437,6 +437,165 @@ def crawl_missing_demos(topic_ids):
     
     return updated
 
+
+def get_screenshot_target(demo):
+    """Return a file:// or http(s) URL for screenshot, or None."""
+    from urllib.parse import urlparse
+    if not demo.get('has_demo'):
+        return None
+    demo_url = demo.get('demo_url')
+    if demo_url:
+        local_path = PROJECT_ROOT / demo_url
+        if local_path.exists():
+            return local_path.resolve().as_uri()
+        return None
+    external_url = demo.get('external_url')
+    if external_url:
+        parsed = urlparse(external_url)
+        if parsed.scheme in ('http', 'https'):
+            host = parsed.hostname or ''
+            if host in ('localhost', '127.0.0.1', '0.0.0.0'):
+                return None
+            return external_url
+    return None
+
+
+def screenshot_new_demos():
+    """Step 4.5: Generate screenshots for demos that have_demo but no screenshot.
+
+    Uses Playwright with headless Chromium. Failure-tolerant: if Playwright or
+    Chromium is not available, this step is skipped gracefully.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        print("\n[Step 4.5] playwright not installed, skipping screenshot generation")
+        return 0
+
+    CHROME_PATH = Path('/root/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome')
+    if not CHROME_PATH.exists():
+        # Try to find any installed chromium
+        import glob
+        candidates = glob.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome')
+        if candidates:
+            CHROME_PATH = Path(candidates[0])
+        else:
+            print("\n[Step 4.5] Chromium not found, skipping screenshot generation")
+            return 0
+
+    SCREENSHOTS_DIR = PROJECT_ROOT / 'assets' / 'screenshots'
+    VIEWPORT_W = 1280
+    VIEWPORT_H = 800
+    PAGE_TIMEOUT = 15000
+    RENDER_WAIT = 1500
+    CONCURRENCY = 8
+
+    with open(DATA_DIR / 'demos.json', 'r', encoding='utf-8') as f:
+        demos_data = json.load(f)
+
+    # Collect demos that need screenshots
+    work_items = []
+    for d in demos_data['demos']:
+        tid = d['topic_id']
+        if (SCREENSHOTS_DIR / f'{tid}.webp').exists():
+            continue
+        target = get_screenshot_target(d)
+        if target:
+            work_items.append((tid, target))
+
+    if not work_items:
+        print("\n[Step 4.5] No new demos need screenshots, skipping")
+        return 0
+
+    print(f"\n[Step 4.5] Generating screenshots for {len(work_items)} new demos...")
+
+    import asyncio
+
+    async def _run():
+        sem = asyncio.Semaphore(CONCURRENCY)
+        stats = {'ok': 0, 'err': 0}
+        results = {}
+
+        async def _cap(browser, tid, url):
+            async with sem:
+                page = None
+                try:
+                    page = await browser.new_page()
+                    await page.goto(url, wait_until='networkidle', timeout=PAGE_TIMEOUT)
+                    await page.wait_for_timeout(RENDER_WAIT)
+                    jpg = SCREENSHOTS_DIR / f'{tid}.jpg'
+                    await page.screenshot(
+                        path=str(jpg), type='jpeg', quality=75,
+                        clip={'x': 0, 'y': 0, 'width': VIEWPORT_W, 'height': VIEWPORT_H},
+                    )
+                    try:
+                        from PIL import Image
+                        img = Image.open(jpg)
+                        webp = SCREENSHOTS_DIR / f'{tid}.webp'
+                        img.save(webp, 'webp', quality=75, method=6)
+                        img.close()
+                        jpg.unlink(missing_ok=True)
+                    except ImportError:
+                        # Fallback: keep jpg, rename to webp path is wrong so just keep jpg
+                        jpg.rename(SCREENSHOTS_DIR / f'{tid}.jpg')
+                    results[tid] = f'assets/screenshots/{tid}.webp'
+                    stats['ok'] += 1
+                except Exception:
+                    results[tid] = None
+                    stats['err'] += 1
+                finally:
+                    if page:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+                    done = stats['ok'] + stats['err']
+                    if done % 100 == 0:
+                        print(f"    [{done}/{len(work_items)}] OK={stats['ok']} ERR={stats['err']}")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, executable_path=str(CHROME_PATH),
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+            )
+            context = await browser.new_context(viewport={'width': VIEWPORT_W, 'height': VIEWPORT_H})
+            tasks = [_cap(context, tid, url) for tid, url in work_items]
+            await asyncio.gather(*tasks)
+            await context.close()
+            await browser.close()
+
+        # Update demos_data with new screenshot paths
+        for demo in demos_data['demos']:
+            tid = demo['topic_id']
+            if tid in results:
+                demo['screenshot'] = results[tid]
+            elif (SCREENSHOTS_DIR / f'{tid}.webp').exists():
+                demo['screenshot'] = f'assets/screenshots/{tid}.webp'
+
+        return stats['ok']
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        ok_count = loop.run_until_complete(_run())
+        loop.close()
+    except Exception as e:
+        print(f"    WARNING: Screenshot generation failed: {e}")
+        return 0
+
+    # Save updated demos.json
+    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    active = [d for d in demos_data['demos'] if not d.get('archived', False)]
+    demos_data['total_count'] = len(active)
+    demos_data['approved_count'] = sum(1 for d in active if d.get('approved', False))
+    demos_data['unapproved_count'] = sum(1 for d in active if not d.get('approved', False))
+    with open(DATA_DIR / 'demos.json', 'w', encoding='utf-8') as f:
+        json.dump(demos_data, f, ensure_ascii=False, indent=2)
+
+    print(f"    Screenshot generation complete: {ok_count} new screenshots")
+    return ok_count
+
+
 def render_demos_min_js():
     """Regenerate demos.min.js from demos.json."""
     demos_json_path = DATA_DIR / 'demos.json'
@@ -570,6 +729,9 @@ def main():
                 print(f"Crawled {demos_found} new demos")
         else:
             print("\n[Step 4] No topics need demo crawl, skipping")
+        
+        # Step 4.5: Generate screenshots for new demos
+        screenshot_new_demos()
         
         # Step 5: Render
         print("\n[Step 5] Rendering demos.min.js and index.html...")

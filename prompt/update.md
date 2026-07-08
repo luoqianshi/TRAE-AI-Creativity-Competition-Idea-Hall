@@ -218,9 +218,34 @@ for demo in demos_data["demos"]:
 
 ---
 
-## 第四步：重新计算统计并渲染
+## 第四步（新增）：为新爬取的 Demo 生成截图
 
-### 4.1 更新 demos.json 统计
+在爬取完新 Demo 附件后、渲染前端文件前，需要为新增的 `has_demo=True` 但尚无截图的项目自动生成缩略图。
+
+### 4.0 截图策略
+
+使用 Playwright + headless Chromium：
+- 视口尺寸：1280×800
+- 超时：15 秒（本地 HTML）/ 15 秒（外部 URL）
+- 并发：8 路页面同时截图
+- 格式：JPEG 截图后转换为 WebP（quality=75），减少文件体积
+- 跳过已存在的截图文件（增量原则）
+- 跳过 `localhost`/`127.0.0.1` 等不可达的外部 URL
+- **容错设计**：如果 Playwright 或 Chromium 未安装，截图步骤应优雅跳过，不影响整体更新流程
+
+### 4.0.1 实现位置
+
+`screenshot_new_demos()` 函数位于 `scripts/daily_update.py`，在 `crawl_missing_demos()` 之后、`render_demos_min_js()` 之前调用（Step 4.5）。
+
+### 4.0.2 截图后更新 demos.json
+
+截图完成后，将新生成的 `assets/screenshots/{topic_id}.webp` 路径写入对应记录的 `screenshot` 字段，并保存 `demos.json`。这样后续渲染步骤才能正确包含截图路径。
+
+---
+
+## 第五步：重新计算统计并渲染
+
+### 5.1 更新 demos.json 统计
 
 ```python
 active = [d for d in demos["demos"] if not d.get("archived", False)]
@@ -230,15 +255,15 @@ demos["unapproved_count"] = sum(1 for d in active if not d.get("approved", False
 demos["last_updated"] = datetime.now(timezone.utc).isoformat()
 ```
 
-### 4.2 生成 demos.min.js
+### 5.2 生成 demos.min.js
 
 从 `demos.json` 中的活跃记录生成前端数据文件 `data/demos.min.js`：
 
 ```javascript
-window.DEMOS_DATA = [{"topic_id":123,"title":"...","insight":"...","tags":[...],"views":0,"like_count":0,"author":"...","created_at":"...","demo_url":"...","external_url":null,"has_demo":true,"approved":true},...];
+window.DEMOS_DATA = [{"topic_id":123,"title":"...","insight":"...","tags":[...],"views":0,"like_count":0,"author":"...","created_at":"...","demo_url":"...","external_url":null,"has_demo":true,"approved":true,"screenshot":"assets/screenshots/123.webp"},...];
 ```
 
-每个记录只保留前端渲染所需的字段。`insight` 字段使用规则引擎生成（基于 title + excerpt，无需外部 API），规则如下：
+每个记录只保留前端渲染所需的字段（**必须包含 `screenshot` 字段**）。`insight` 字段使用规则引擎生成（基于 title + excerpt，无需外部 API），规则如下：
 1. 提取「想解决什么问题」后的核心描述
 2. 提取「创意介绍」后的项目说明
 3. 取 excerpt 中第一个有意义的句子
@@ -247,15 +272,15 @@ window.DEMOS_DATA = [{"topic_id":123,"title":"...","insight":"...","tags":[...],
 
 使用 JSON 紧凑格式（无空格）以减小文件体积。
 
-### 4.3 渲染 index.html
+### 5.3 渲染 index.html
 
 使用 Jinja2 模板引擎渲染 `templates/index.html.j2`，传入统计数据。
 
 ---
 
-## 第五步：更新 README.md
+## 第六步：更新 README.md
 
-### 5.1 更新「当前数据」表格
+### 6.1 更新「当前数据」表格
 
 从 `demos.json` 的统计数据更新 README.md 中「当前数据」部分：
 
@@ -277,7 +302,7 @@ window.DEMOS_DATA = [{"topic_id":123,"title":"...","insight":"...","tags":[...],
 
 各赛道数量通过统计 `tags` 字段计算。
 
-### 5.2 更新数据更新时间和来源
+### 6.2 更新数据更新时间和来源
 
 更新 README.md 底部的更新时间提示行：
 
@@ -289,15 +314,17 @@ window.DEMOS_DATA = [{"topic_id":123,"title":"...","insight":"...","tags":[...],
 
 ---
 
-## 第六步：提交并推送到 GitHub
+## 第七步：提交并推送到 GitHub
 
-### 6.1 Git 提交
+### 7.1 Git 提交
 
 ```bash
-git add data/approved_projects.json data/demos.json data/demos.min.js index.html README.md demos/
+git add data/approved_projects.json data/demos.json data/demos.min.js index.html README.md demos/ assets/screenshots/
 
 # 如果有新的 demo 文件下载，也加入 demos/ 目录
 git add demos/
+# 如果有新的截图生成，加入 assets/screenshots/
+git add assets/screenshots/
 ```
 
 使用 Conventional Commits 格式提交：
@@ -306,12 +333,14 @@ git add demos/
 git commit -m "data: sync approved list from wiki ({YYYY-MM-DD})
 
 - Add {新增审核数量} new approved entries from {批次日期} batch
+- Crawl {新增Demo数量} new demo HTML attachments
+- Generate {新增截图数量} new screenshots
 - Update approved status in demos.json ({更新数量} records)
 - Regenerate demos.min.js ({总记录数} records)
 - Update README.md stats and data source date"
 ```
 
-### 6.2 推送到 main 分支
+### 7.2 推送到 main 分支
 
 ```bash
 git push origin main
@@ -529,3 +558,5 @@ git push origin main
 6. **去重**：飞书 6月18日表格实际有 2612 条（标题显示 2607），可能存在少量重复 topic_id，需去重处理。
 7. **跳过策略**：如果飞书 Wiki 中没有新增批次、且所有已有记录的审核状态均已正确标记，则本次更新可以只更新 `last_synced` 时间戳和 README 日期，无需重新爬取或渲染。
 8. **screenshot 字段保留（重要）**：`demos.json` 和 `demos.min.js` 中的 `screenshot` 字段记录了每个作品的截图路径。`daily_update.py` 在新增记录时必须包含 `'screenshot': None` 字段；`crawler_v2.py` 的 `render()` 方法在生成 `demos.min.js` 时必须包含 `"screenshot": d.get("screenshot")` 字段。**两处代码必须保持同步**，否则 `render()` 会覆盖 `render_demos_min_js()` 的正确输出，导致截图全部丢失。如果发现 `demos.min.js` 中截图全部为 `null`，请检查 `crawler_v2.py` 的 `render()` 方法是否包含 `screenshot` 字段。
+9. **增量更新后自动截图**：每次 `daily_update.py` 爬取到新 Demo 后，必须在渲染前调用 `screenshot_new_demos()` 为新增项目自动生成截图。截图步骤需具备容错能力（Playwright/Chromium 未安装时跳过，不影响主流程）。截图完成后需将路径写回 `demos.json` 再执行渲染，否则新增 Demo 不会有截图展示。
+10. **Git 提交需包含截图文件**：当有新截图生成时，`git add` 必须包含 `assets/screenshots/` 目录，否则新截图不会推送到远程仓库。
