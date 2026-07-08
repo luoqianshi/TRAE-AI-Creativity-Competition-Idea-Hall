@@ -774,6 +774,7 @@ class DemoHallCrawler:
                 "external_url": d.get("external_url"),
                 "has_demo": d.get("has_demo", False),
                 "approved": d.get("approved", False),
+                "screenshot": d.get("screenshot"),
             })
 
         data_js_path = Path(self.config["data_dir"]) / "demos.min.js"

@@ -501,12 +501,31 @@ git push origin main
 - Failed to fetch batch '7月6日（截至7.6 08:00）': No bitable found in section P59vdA8iOoG9PkxOioxchzYjnfg
 
 
+### 问题 18：crawler_v2.py render() 覆盖 demos.min.js 丢失 screenshot 字段（2026-07-08 发现）
+
+**现象**：执行 `daily_update.py` 后，`demos.min.js` 中所有 24,756 条记录的 `screenshot` 字段全部变为 `null`，前端截图展示完全失效。
+
+**根因**：`daily_update.py` 的 `main()` 函数依次调用两个渲染函数：
+1. `render_demos_min_js()` — 正确生成含 `screenshot` 字段的 `demos.min.js`
+2. `render_index_html()` → `crawler.render()` — **覆盖**了 `demos.min.js`，但 `crawler_v2.py` 的 `render()` 方法中 `frontend_demos.append()` **未包含 `screenshot` 字段**，导致所有截图数据丢失。
+
+此外，`update_demos_json_approved()` 函数中新增审核记录的字典也缺少 `screenshot` 字段，导致 1,368 条新记录在 `demos.json` 中没有该字段。
+
+**解决方案**：
+1. 在 `crawler_v2.py` 的 `render()` 方法中，`frontend_demos.append()` 增加 `"screenshot": d.get("screenshot")` 字段
+2. 在 `daily_update.py` 的 `update_demos_json_approved()` 函数中，新增记录字典增加 `'screenshot': None` 字段
+3. 对已损坏的数据进行修复：为 `demos.json` 中缺失 `screenshot` 键的记录补上该字段（检查磁盘上是否有对应截图文件），重新生成 `demos.min.js`
+
+**状态**：已修复（2026-07-08）。
+
+
 ## 注意事项
 
 1. **增量更新原则**：只处理新增或变更的数据，已有数据不要重复爬取。判断依据是 `topic_id` 是否已在 `demos.json` 中存在。
-2. **合并写入**：更新 `demos.json` 时使用合并模式，新数据只覆盖非 None 字段，保留已有字段（如已下载的 demo 文件路径）不被覆盖。
+2. **合并写入**：更新 `demos.json` 时使用合并模式，新数据只覆盖非 None 字段，保留已有字段（如已下载的 demo 文件路径、screenshot 路径）不被覆盖。
 3. **Bitable 字段名不一致**：不同批次的表格字段名可能不同（「帖子标题」vs「创意帖标题」），每次运行时必须先读取字段结构再解析数据。
 4. **飞书 API 限速**：lark-cli 调用有内置限速，不需要额外处理。Discourse API 请求间隔 1.5 秒。
 5. **安全**：推送后确认 remote URL 中不包含 token。不要在代码或提交信息中暴露任何凭证。
 6. **去重**：飞书 6月18日表格实际有 2612 条（标题显示 2607），可能存在少量重复 topic_id，需去重处理。
 7. **跳过策略**：如果飞书 Wiki 中没有新增批次、且所有已有记录的审核状态均已正确标记，则本次更新可以只更新 `last_synced` 时间戳和 README 日期，无需重新爬取或渲染。
+8. **screenshot 字段保留（重要）**：`demos.json` 和 `demos.min.js` 中的 `screenshot` 字段记录了每个作品的截图路径。`daily_update.py` 在新增记录时必须包含 `'screenshot': None` 字段；`crawler_v2.py` 的 `render()` 方法在生成 `demos.min.js` 时必须包含 `"screenshot": d.get("screenshot")` 字段。**两处代码必须保持同步**，否则 `render()` 会覆盖 `render_demos_min_js()` 的正确输出，导致截图全部丢失。如果发现 `demos.min.js` 中截图全部为 `null`，请检查 `crawler_v2.py` 的 `render()` 方法是否包含 `screenshot` 字段。

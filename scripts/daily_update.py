@@ -327,6 +327,7 @@ def update_demos_json_approved(wiki_ids, new_approved_records):
             'has_demo': has_demo,
             'archived': False,
             'insight': str(title)[:200] if title else '',
+            'screenshot': None,
         })
         existing_ids.add(tid)
         added_count += 1
