@@ -485,6 +485,15 @@ class DemoHallCrawler:
         self.data_mgr.data["last_updated"] = datetime.now(timezone.utc).isoformat()
         self.data_mgr.save()
 
+        # Step 4: Generate screenshots for newly crawled demos
+        if new_count > 0 or extra_count > 0:
+            print(f"\n  [Screenshot] Generating screenshots for new demos...")
+            screenshot_count = self.generate_screenshots()
+            if screenshot_count > 0:
+                print(f"  [Screenshot] Generated {screenshot_count} new screenshots")
+            else:
+                print(f"  [Screenshot] Skipped (Playwright/Chromium not available or no targets)")
+
         print(f"[{datetime.now()}] Crawl complete. Approved processed: {processed}, New: {new_count}, Updated: {updated_count}, Extra from API: {extra_count}")
         return processed + extra_count
 
@@ -620,6 +629,170 @@ class DemoHallCrawler:
         print("Running legacy Discourse-only crawl...")
         # This is the old crawl logic, simplified
         return 0
+
+    def _get_screenshot_target(self, demo):
+        """Return a file:// or http(s) URL for screenshot, or None."""
+        if not demo.get("has_demo"):
+            return None
+        demo_url = demo.get("demo_url")
+        if demo_url:
+            local_path = Path(demo_url)
+            if local_path.exists():
+                return local_path.resolve().as_uri()
+            return None
+        external_url = demo.get("external_url")
+        if external_url:
+            parsed = urlparse(external_url)
+            if parsed.scheme in ("http", "https"):
+                host = parsed.hostname or ""
+                if host in ("localhost", "127.0.0.1", "0.0.0.0"):
+                    return None
+                return external_url
+        return None
+
+    def generate_screenshots(self):
+        """Generate screenshots for demos that have_demo but no screenshot.
+
+        Uses Playwright with headless Chromium. Failure-tolerant: if Playwright
+        or Chromium is not available, this step is skipped gracefully.
+
+        Returns the number of screenshots successfully generated.
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            print("    playwright not installed, skipping screenshot generation")
+            return 0
+
+        import glob
+        import shutil
+        chrome_path = None
+        # 1. Try Playwright's bundled Chromium
+        for pattern in [
+            '/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome',
+            '/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome',
+        ]:
+            candidates = glob.glob(pattern)
+            if candidates:
+                chrome_path = candidates[0]
+                break
+        # 2. Try system-installed browsers
+        if not chrome_path:
+            for cmd in ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium']:
+                found = shutil.which(cmd)
+                if found:
+                    chrome_path = found
+                    break
+        if not chrome_path:
+            print("    No browser found (Chromium/Chrome), skipping screenshot generation")
+            return 0
+
+        screenshots_dir = Path("assets") / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+        VIEWPORT_W = 1280
+        VIEWPORT_H = 800
+        PAGE_TIMEOUT = 15000
+        RENDER_WAIT = 1500
+        CONCURRENCY = 8
+
+        # Reload latest data
+        self.data_mgr.data = self.data_mgr._load()
+        demos = self.data_mgr.get_active_demos()
+
+        # Collect demos that need screenshots
+        work_items = []
+        for d in demos:
+            tid = d["topic_id"]
+            if (screenshots_dir / f'{tid}.webp').exists():
+                continue
+            target = self._get_screenshot_target(d)
+            if target:
+                work_items.append((tid, target))
+
+        if not work_items:
+            print("    No new demos need screenshots, skipping")
+            return 0
+
+        print(f"    Generating screenshots for {len(work_items)} new demos...")
+
+        import asyncio
+
+        async def _run():
+            sem = asyncio.Semaphore(CONCURRENCY)
+            stats = {'ok': 0, 'err': 0}
+            results = {}
+
+            async def _cap(browser, tid, url):
+                async with sem:
+                    page = None
+                    try:
+                        page = await browser.new_page()
+                        await page.goto(url, wait_until='networkidle', timeout=PAGE_TIMEOUT)
+                        await page.wait_for_timeout(RENDER_WAIT)
+                        jpg = screenshots_dir / f'{tid}.jpg'
+                        await page.screenshot(
+                            path=str(jpg), type='jpeg', quality=75,
+                            clip={'x': 0, 'y': 0, 'width': VIEWPORT_W, 'height': VIEWPORT_H},
+                        )
+                        try:
+                            from PIL import Image
+                            img = Image.open(jpg)
+                            webp = screenshots_dir / f'{tid}.webp'
+                            img.save(webp, 'webp', quality=75, method=6)
+                            img.close()
+                            jpg.unlink(missing_ok=True)
+                        except ImportError:
+                            jpg.rename(screenshots_dir / f'{tid}.jpg')
+                        results[tid] = f'assets/screenshots/{tid}.webp'
+                        stats['ok'] += 1
+                    except Exception:
+                        results[tid] = None
+                        stats['err'] += 1
+                    finally:
+                        if page:
+                            try:
+                                await page.close()
+                            except Exception:
+                                pass
+                        done = stats['ok'] + stats['err']
+                        if done % 100 == 0:
+                            print(f"    [{done}/{len(work_items)}] OK={stats['ok']} ERR={stats['err']}")
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True, executable_path=chrome_path,
+                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+                )
+                context = await browser.new_context(viewport={'width': VIEWPORT_W, 'height': VIEWPORT_H})
+                tasks = [_cap(context, tid, url) for tid, url in work_items]
+                await asyncio.gather(*tasks)
+                await context.close()
+                await browser.close()
+
+            # Update demos data with new screenshot paths
+            for demo in self.data_mgr.data['demos']:
+                tid = demo['topic_id']
+                if tid in results:
+                    demo['screenshot'] = results[tid]
+                elif (screenshots_dir / f'{tid}.webp').exists():
+                    demo['screenshot'] = f'assets/screenshots/{tid}.webp'
+
+            return stats['ok']
+
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            ok_count = loop.run_until_complete(_run())
+            loop.close()
+        except Exception as e:
+            print(f"    WARNING: Screenshot generation failed: {e}")
+            return 0
+
+        # Save updated demos.json with screenshot paths
+        self.data_mgr.save()
+        print(f"    Screenshot generation complete: {ok_count} new screenshots")
+        return ok_count
 
     def render(self):
         """Render the static HTML page and generate frontend data file."""

@@ -435,6 +435,15 @@ def crawl_missing_demos(topic_ids):
         for e in errors[:5]:
             print(f"  - {e}")
     
+    # Auto-generate screenshots for newly crawled demos
+    if updated > 0:
+        print(f"\n  [Auto-Screenshot] Generating screenshots for {updated} new demos...")
+        screenshot_count = screenshot_new_demos()
+        if screenshot_count > 0:
+            print(f"  [Auto-Screenshot] Generated {screenshot_count} screenshots")
+        else:
+            print(f"  [Auto-Screenshot] Skipped (Playwright/Chromium not available or no targets)")
+    
     return updated
 
 
@@ -472,16 +481,34 @@ def screenshot_new_demos():
         print("\n[Step 4.5] playwright not installed, skipping screenshot generation")
         return 0
 
-    CHROME_PATH = Path('/root/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome')
-    if not CHROME_PATH.exists():
-        # Try to find any installed chromium
-        import glob
-        candidates = glob.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome')
+    CHROME_PATH = None
+    # 1. Try Playwright's bundled Chromium
+    import glob as _glob
+    for pattern in [
+        '/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome',
+        '/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome',
+    ]:
+        candidates = _glob.glob(pattern)
         if candidates:
-            CHROME_PATH = Path(candidates[0])
-        else:
-            print("\n[Step 4.5] Chromium not found, skipping screenshot generation")
-            return 0
+            CHROME_PATH = candidates[0]
+            break
+    # 2. Try system-installed Google Chrome
+    if not CHROME_PATH:
+        for cmd in ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium']:
+            result = subprocess.run(['which', cmd], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                CHROME_PATH = result.stdout.strip()
+                break
+    # 3. Try common paths
+    if not CHROME_PATH:
+        for p in ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
+                   '/usr/bin/chromium-browser', '/usr/bin/chromium']:
+            if Path(p).exists():
+                CHROME_PATH = p
+                break
+    if not CHROME_PATH:
+        print("\n[Step 4.5] No browser found (Chromium/Chrome), skipping screenshot generation")
+        return 0
 
     SCREENSHOTS_DIR = PROJECT_ROOT / 'assets' / 'screenshots'
     VIEWPORT_W = 1280
@@ -730,7 +757,8 @@ def main():
         else:
             print("\n[Step 4] No topics need demo crawl, skipping")
         
-        # Step 4.5: Generate screenshots for new demos
+        # Step 4.5: Generate screenshots for new demos (also called automatically
+        # inside crawl_missing_demos; this is a fallback for any missed demos)
         screenshot_new_demos()
         
         # Step 5: Render
