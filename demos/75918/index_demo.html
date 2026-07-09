@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>跳跳挖土车</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;overflow:hidden;touch-action:none;font-family:sans-serif}
+#game{position:fixed;top:0;left:0;width:100vw;height:100vh}
+#controls{position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:10}
+
+/* 按钮基础样式 */
+.btn{
+  position:absolute;pointer-events:auto;border:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:48px;user-select:none;-webkit-user-select:none;
+  transition:transform .1s ease,opacity .2s ease,box-shadow .2s ease;
+  color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.3)
+}
+.btn.enabled{opacity:1;transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.btn.disabled{opacity:.35;transform:none;box-shadow:none;pointer-events:none}
+.btn:active{transform:scale(.92)!important}
+
+/* 方向键 */
+.btn-dir{width:120px;height:120px;border-radius:24px;border:4px solid}
+#btn-left{left:20px;bottom:20px;background:#FFE0B2;border-color:#FFB74D;color:#E65100}
+#btn-right{right:20px;bottom:20px;background:#B2DFDB;border-color:#4DB6AC;color:#00695C}
+#btn-up{right:20px;top:20px;background:#B2DFDB;border-color:#4DB6AC;color:#00695C}
+#btn-down{right:20px;top:152px;background:#D1C4E9;border-color:#9575CD;color:#4527A0}
+
+/* 功能按钮 */
+.btn-func{width:240px;height:120px;border-radius:30px;border:4px solid;font-size:36px}
+#btn-load{left:160px;bottom:20px;background:#FFCCBC;border-color:#FF8A65;color:#BF360C}
+#btn-build{left:420px;bottom:20px;background:#FFAB91;border-color:#FF7043;color:#BF360C}
+
+/* 货物指示器 */
+#cargo-display{
+  position:fixed;left:50%;top:20px;transform:translateX(-50%);
+  display:flex;gap:6px;pointer-events:none;z-index:10
+}
+.cargo-slot{
+  width:28px;height:28px;border-radius:6px;border:2px solid rgba(255,255,255,.5);
+  background:rgba(0,0,0,.2)
+}
+.cargo-slot.dirt{background:#BCAAA4}
+.cargo-slot.stone{background:#B0BEC5}
+.cargo-slot.wood{background:#D7CCC8}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="cargo-display"></div>
+<div id="controls">
+  <button class="btn btn-dir" id="btn-left">←</button>
+  <button class="btn btn-func" id="btn-load">🪏</button>
+  <button class="btn btn-func" id="btn-build">🏠</button>
+  <button class="btn btn-dir" id="btn-right">→</button>
+  <button class="btn btn-dir" id="btn-up">↑</button>
+  <button class="btn btn-dir" id="btn-down">↓</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════════════
+// 1. 配置常量区
+// ═══════════════════════════════════════════════════════════════
+const CONFIG = {
+  VIEW_W: 1280, VIEW_H: 720,
+  MAP_W: 2000, MAP_H: 2000,
+  TRUCK_SPEED: 3,
+  TRUCK_START_X: 1000, TRUCK_START_Y: 1000,
+  MAX_CARGO: 6,
+  BOUNDARY: 60,
+
+  // 资源点
+  RES_INIT_MIN: 8, RES_INIT_MAX: 10,
+  RES_MAX: 12,
+  RES_SPAWN_MIN: 15000, RES_SPAWN_MAX: 20000,
+  RES_COLLECT_DIST: 150,
+  RES_MAX_USES: 3,
+
+  // 障碍物
+  OBS_MIN: 5, OBS_MAX: 8,
+  OBS_HIT_DIST: 55,
+  POTHOLE_DROP_MIN: 1, POTHOLE_DROP_MAX: 2,
+  PUDDLE_SLOW_RATIO: 0.5, PUDDLE_SLOW_TIME: 2000, PUDDLE_COOLDOWN: 5000,
+  MUD_STUCK_TIME: 2000, MUD_COOLDOWN: 5000,
+  ROCK_BOUNCE: 30,
+  OBS_MIN_DIST: 180,
+
+  // 建筑
+  BUILD_UPGRADE_DIST: 100,
+  BUILD_LEVELS: 3,
+
+  CAMERA_LERP: 0.08,
+  DECO_COUNT: 50,
+
+  C: {
+    grass1: 0xE8F5E9, grass2: 0xC8E6C9, grass3: 0xA5D6A7,
+    truckBody: 0xFFAB91, truckCab: 0xFF8A65, truckOutline: 0x5D4037,
+    wheel: 0x4E342E, window: 0x81D4FA,
+    dirt: 0xBCAAA4, dirtD: 0x8D6E63,
+    stone: 0xB0BEC5, stoneD: 0x78909C,
+    wood: 0xD7CCC8, woodD: 0xA1887F,
+    pothole: 0x4E342E, potholeRim: 0x6D4C41,
+    puddle: 0x81D4FA, puddleRim: 0x4FC3F7,
+    rock: 0x78909C, rockD: 0x546E7A,
+    mud: 0x6D4C41, mudD: 0x4E342E,
+    star: 0xFFF176, starD: 0xFBC02D,
+    flower1: 0xF48FB1, flower2: 0xCE93D8, flower3: 0xFFCC80,
+    tree: 0x81C784, treeD: 0x66BB6A,
+    roof: 0xEF9A9A, wall: 0x90CAF9,
+    cloud: 0xFFFFFF,
+    white: 0xFFFFFF, black: 0x333333,
+    garden: 0x8D6E63, gardenFlower: 0xF48FB1
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// 2. 音频管理器（Web Audio API 合成）
+// ═══════════════════════════════════════════════════════════════
+class AudioManager {
+  constructor() { this.ctx = null; this.engineSource = null; this.engineGain = null; }
+  init() {
+    if (this.ctx) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // 通用振荡器
+  _osc(type, freq, duration, vol = 0.15, slideTo = null) {
+    if (!this.ctx) return;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, this.ctx.currentTime + duration);
+    g.gain.setValueAtTime(vol, this.ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+    o.connect(g); g.connect(this.ctx.destination);
+    o.start(); o.stop(this.ctx.currentTime + duration);
+  }
+  // 白噪声
+  _noise(duration, vol = 0.1, filterFreq = 1000, filterType = 'lowpass') {
+    if (!this.ctx) return;
+    const bufferSize = this.ctx.sampleRate * duration;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = filterType; filter.frequency.value = filterFreq;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol, this.ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+    source.connect(filter); filter.connect(g); g.connect(this.ctx.destination);
+    source.start();
+  }
+  // 音效方法
+  playClick() { this._osc('sine', 800, 0.1, 0.12); }
+  playDig() { this._noise(0.5, 0.08, 800, 'lowpass'); }
+  playBuild() {
+    this._osc('sine', 400, 0.15, 0.12);
+    setTimeout(() => this._osc('sine', 600, 0.15, 0.12), 100);
+    setTimeout(() => this._osc('sine', 800, 0.2, 0.12), 200);
+  }
+  playComplete() {
+    [523, 659, 784].forEach((f, i) => setTimeout(() => this._osc('sine', f, 0.15, 0.1), i * 80));
+  }
+  playEncourage() {
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this._osc('triangle', f, 0.2, 0.08), i * 100));
+  }
+  playBump() {
+    this._osc('sine', 200, 0.15, 0.15, 50);
+    setTimeout(() => this._osc('triangle', 300, 0.1, 0.08), 80);
+  }
+  playSplash() { this._noise(0.3, 0.12, 3000, 'highpass'); }
+  playCollide() { this._osc('square', 80, 0.15, 0.1); }
+  playSlip() {
+    if (!this.ctx) return;
+    for (let i = 0; i < 3; i++) setTimeout(() => this._osc('sawtooth', 150 + i * 50, 0.15, 0.06, 100), i * 150);
+  }
+  // 引擎声循环（柔和版：三角波 + 低通滤波 + 轻微颤音）
+  startEngine() {
+    if (!this.ctx || this.engineSource) return;
+    // 主振荡器：三角波（比锯齿波柔和很多）
+    this.engineSource = this.ctx.createOscillator();
+    this.engineSource.type = 'triangle';
+    this.engineSource.frequency.value = 55; // 更低频率，沉闷不刺耳
+    // 低通滤波器：截掉高频泛音，让声音更圆润
+    this.engineFilter = this.ctx.createBiquadFilter();
+    this.engineFilter.type = 'lowpass';
+    this.engineFilter.frequency.value = 160;
+    this.engineFilter.Q.value = 1;
+    // LFO 颤音：模拟引擎怠速的轻微波动
+    this.engineLFO = this.ctx.createOscillator();
+    this.engineLFO.type = 'sine';
+    this.engineLFO.frequency.value = 4; // 4Hz 慢速颤动
+    this.engineLFOGain = this.ctx.createGain();
+    this.engineLFOGain.gain.value = 3; // 频率波动 ±3Hz
+    this.engineLFO.connect(this.engineLFOGain);
+    this.engineLFOGain.connect(this.engineSource.frequency);
+    // 音量控制（渐入避免突然出声）
+    this.engineGain = this.ctx.createGain();
+    this.engineGain.gain.setValueAtTime(0, this.ctx.currentTime);
+    this.engineGain.gain.linearRampToValueAtTime(0.025, this.ctx.currentTime + 0.15);
+    // 连接：振荡器 → 滤波器 → 音量 → 输出
+    this.engineSource.connect(this.engineFilter);
+    this.engineFilter.connect(this.engineGain);
+    this.engineGain.connect(this.ctx.destination);
+    this.engineSource.start();
+    this.engineLFO.start();
+  }
+  stopEngine() {
+    if (this.engineSource) {
+      // 渐出避免突然消失
+      this.engineGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
+      this.engineSource.stop(this.ctx.currentTime + 0.12);
+      this.engineLFO.stop(this.ctx.currentTime + 0.12);
+      this.engineSource = null;
+      this.engineLFO = null;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 3. 纹理工厂（Graphics API 烘焙纹理）
+// ═══════════════════════════════════════════════════════════════
+function createTextures(scene) {
+  const C = CONFIG.C;
+  let g;
+
+  // 辅助：画可爱眼睛（带高光）
+  function drawEyes(g, x1, x2, y, r) {
+    g.fillStyle(C.white, 1);
+    g.fillCircle(x1, y, r); g.fillCircle(x2, y, r);
+    g.fillStyle(C.black, 1);
+    g.fillCircle(x1 + 1, y, r * 0.55); g.fillCircle(x2 + 1, y, r * 0.55);
+    g.fillStyle(C.white, 1);
+    g.fillCircle(x1 + 2, y - 1.5, r * 0.25); g.fillCircle(x2 + 2, y - 1.5, r * 0.25);
+  }
+  // 辅助：画腮红
+  function drawCheeks(g, x1, x2, y, r) {
+    g.fillStyle(0xFFCDD2, 0.55);
+    g.fillCircle(x1, y, r); g.fillCircle(x2, y, r);
+  }
+  // 辅助：画微笑
+  function drawSmile(g, cx, cy, r) {
+    g.lineStyle(2, C.black, 0.8);
+    g.beginPath(); g.arc(cx, cy, r, 0.25, Math.PI - 0.25); g.strokePath();
+  }
+
+  // --- 卡车车身（俯视，车头朝右，超级可爱版）---
+  g = scene.add.graphics();
+  // 阴影
+  g.fillStyle(0x000000, 0.08); g.fillRoundedRect(2, 14, 128, 52, 18);
+  // 车厢（圆润圆角矩形）
+  g.fillStyle(C.dirtD, 1); g.fillRoundedRect(0, 14, 82, 48, 14);
+  g.fillStyle(C.dirt, 0.6); g.fillRoundedRect(4, 18, 74, 40, 10);
+  // 车厢内壁纹路
+  g.lineStyle(2, C.dirtD, 0.5);
+  g.strokeRoundedRect(8, 22, 66, 32, 8);
+  // 驾驶室（更圆润的大圆角）
+  g.fillStyle(C.truckCab, 1); g.fillRoundedRect(76, 6, 52, 60, 16);
+  g.lineStyle(3, C.truckOutline, 1); g.strokeRoundedRect(76, 6, 52, 60, 16);
+  g.strokeRoundedRect(0, 14, 82, 48, 14);
+  // 挡风玻璃（大圆角，亮蓝色）
+  g.fillStyle(C.window, 0.85); g.fillRoundedRect(84, 14, 40, 22, 8);
+  g.fillStyle(C.white, 0.4); g.fillRoundedRect(86, 16, 16, 8, 4); // 高光
+  // 车顶小天线 + 小球
+  g.lineStyle(2, C.truckOutline, 1);
+  g.lineBetween(102, 6, 102, -2);
+  g.fillStyle(C.flower1, 1); g.fillCircle(102, -2, 4);
+  // 车轮（更圆更大，带轮毂盖）
+  const wheels = [[18, 6], [110, 6], [18, 64], [110, 64]];
+  wheels.forEach(([wx, wy]) => {
+    g.fillStyle(0x3E2723, 1); g.fillCircle(wx, wy, 11); // 轮胎
+    g.fillStyle(C.wheel, 1); g.fillCircle(wx, wy, 7);   // 轮毂
+    g.fillStyle(C.window, 0.6); g.fillCircle(wx, wy, 3); // 轮毂中心高光
+  });
+  // 大眼睛（带高光，超级可爱）
+  drawEyes(g, 96, 112, 40, 8);
+  // 腮红
+  drawCheeks(g, 88, 120, 50, 5);
+  // 微笑
+  drawSmile(g, 104, 50, 5);
+  g.generateTexture('truck_body', 128, 72); g.destroy();
+
+  // --- 货物方块（更圆润，带小表情）---
+  const blockTypes = [
+    { key: 'block_dirt', color: C.dirt, dark: C.dirtD },
+    { key: 'block_stone', color: C.stone, dark: C.stoneD },
+    { key: 'block_wood', color: C.wood, dark: C.woodD }
+  ];
+  blockTypes.forEach(b => {
+    g = scene.add.graphics();
+    g.fillStyle(b.dark, 0.2); g.fillRoundedRect(2, 2, 24, 20, 6); // 阴影
+    g.fillStyle(b.color, 1); g.fillRoundedRect(0, 0, 24, 20, 6);
+    g.lineStyle(2, b.dark, 0.6); g.strokeRoundedRect(0, 0, 24, 20, 6);
+    // 小高光
+    g.fillStyle(C.white, 0.3); g.fillRoundedRect(2, 2, 10, 5, 3);
+    // 小表情（点点眼睛）
+    g.fillStyle(b.dark, 0.7);
+    g.fillCircle(8, 12, 1.5); g.fillCircle(16, 12, 1.5);
+    g.generateTexture(b.key, 24, 20); g.destroy();
+  });
+
+  // --- 资源点（3 种，可爱风，带小表情）---
+  // 土堆：圆润小山 + 小花 + 表情
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.06); g.fillEllipse(42, 48, 76, 30); // 阴影
+  g.fillStyle(C.dirtD, 1); g.fillEllipse(40, 42, 72, 44);
+  g.fillStyle(C.dirt, 1); g.fillEllipse(40, 38, 62, 38);
+  g.fillStyle(C.dirtD, 0.3); g.fillEllipse(40, 33, 42, 22); // 顶部暗色
+  g.fillStyle(C.dirt, 0.8); g.fillEllipse(40, 32, 36, 18); // 亮部
+  // 小花在土堆顶部
+  g.fillStyle(C.flower1, 1);
+  g.fillCircle(30, 26, 4); g.fillCircle(26, 24, 3); g.fillCircle(34, 24, 3);
+  g.fillStyle(C.star, 1); g.fillCircle(30, 26, 2);
+  // 可爱表情
+  drawEyes(g, 33, 47, 42, 4);
+  drawSmile(g, 40, 46, 3);
+  drawCheeks(g, 28, 52, 45, 3);
+  g.generateTexture('pile_dirt', 80, 62); g.destroy();
+
+  // 石头堆：圆润石头 + 高光 + 表情
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.06); g.fillEllipse(42, 58, 76, 20);
+  // 大石头
+  g.fillStyle(C.stoneD, 1); g.fillCircle(42, 38, 24);
+  g.fillStyle(C.stone, 1); g.fillCircle(40, 35, 21);
+  g.fillStyle(C.white, 0.35); g.fillCircle(34, 28, 8); g.fillCircle(46, 30, 5);
+  // 小石头
+  g.fillStyle(C.stoneD, 1); g.fillCircle(20, 48, 10);
+  g.fillStyle(C.stone, 1); g.fillCircle(19, 46, 8);
+  g.fillStyle(C.white, 0.3); g.fillCircle(17, 43, 3);
+  g.fillStyle(C.stoneD, 1); g.fillCircle(62, 50, 8);
+  g.fillStyle(C.stone, 1); g.fillCircle(61, 48, 6);
+  // 大石头上的可爱表情
+  drawEyes(g, 35, 46, 36, 4);
+  drawSmile(g, 40, 40, 3);
+  drawCheeks(g, 30, 50, 39, 3);
+  g.generateTexture('pile_stone', 80, 62); g.destroy();
+
+  // 木材堆：可爱木桩 + 小鸟 + 表情
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.06); g.fillEllipse(42, 52, 72, 18);
+  // 底层木桩
+  g.fillStyle(C.woodD, 1); g.fillRoundedRect(8, 32, 64, 18, 9);
+  g.fillStyle(C.wood, 1); g.fillRoundedRect(10, 34, 60, 14, 7);
+  // 木纹环
+  g.lineStyle(2, C.woodD, 0.6);
+  g.strokeCircle(20, 41, 5); g.strokeCircle(20, 41, 2.5);
+  g.strokeCircle(60, 41, 5); g.strokeCircle(60, 41, 2.5);
+  // 上层木桩
+  g.fillStyle(C.woodD, 1); g.fillRoundedRect(14, 18, 52, 18, 9);
+  g.fillStyle(C.wood, 1); g.fillRoundedRect(16, 20, 48, 14, 7);
+  g.lineStyle(2, C.woodD, 0.6);
+  g.strokeCircle(26, 27, 5); g.strokeCircle(26, 27, 2.5);
+  g.strokeCircle(54, 27, 5); g.strokeCircle(54, 27, 2.5);
+  // 上层可爱表情
+  drawEyes(g, 30, 44, 27, 3);
+  drawSmile(g, 37, 29, 2.5);
+  g.generateTexture('pile_wood', 80, 56); g.destroy();
+
+  // --- 建筑（3 种 × 3 级，可爱风带表情）---
+  const buildTypes = [
+    { key: 'garden', base: C.garden, accent: C.gardenFlower, roof: null },
+    { key: 'stone_house', base: C.stone, accent: C.stoneD, roof: C.stoneD },
+    { key: 'wood_cabin', base: C.wood, accent: C.woodD, roof: C.woodD }
+  ];
+  const sizes = [80, 120, 160];
+  buildTypes.forEach(b => {
+    sizes.forEach((size, lv) => {
+      g = scene.add.graphics();
+      const half = size / 2;
+      if (b.key === 'garden') {
+        // 花园：圆形花坛 + 多彩花朵 + 篱笆
+        g.fillStyle(0x000000, 0.06); g.fillEllipse(half, size - 4, size - 8, 12);
+        // 花坛外圈（篱笆感）
+        g.fillStyle(b.accent, 1); g.fillCircle(half, half, half - 2);
+        g.fillStyle(b.base, 1); g.fillCircle(half, half, half - 8);
+        // 土壤
+        g.fillStyle(C.dirtD, 0.4); g.fillCircle(half, half, half - 14);
+        // 花朵（多彩，越高级越多越大）
+        const flowerCount = 4 + lv * 3;
+        const fColors = [C.flower1, C.flower2, C.flower3, C.gardenFlower];
+        for (let i = 0; i < flowerCount; i++) {
+          const angle = (i / flowerCount) * Math.PI * 2;
+          const r = (half - 16) * (0.4 + (i % 3) * 0.2);
+          const fx = half + Math.cos(angle) * r;
+          const fy = half + Math.sin(angle) * r;
+          const fr = 4 + lv * 1.5;
+          const fc = fColors[i % fColors.length];
+          // 花瓣
+          g.fillStyle(fc, 1);
+          g.fillCircle(fx, fy - fr, fr * 0.7);
+          g.fillCircle(fx - fr * 0.7, fy, fr * 0.7);
+          g.fillCircle(fx + fr * 0.7, fy, fr * 0.7);
+          g.fillCircle(fx, fy + fr * 0.7, fr * 0.7);
+          // 花心
+          g.fillStyle(C.star, 1); g.fillCircle(fx, fy, fr * 0.5);
+        }
+        // 中心大花
+        g.fillStyle(C.flower1, 1);
+        const cr = 6 + lv * 2;
+        g.fillCircle(half, half - cr, cr * 0.8);
+        g.fillCircle(half - cr * 0.8, half, cr * 0.8);
+        g.fillCircle(half + cr * 0.8, half, cr * 0.8);
+        g.fillCircle(half, half + cr * 0.8, cr * 0.8);
+        g.fillStyle(C.star, 1); g.fillCircle(half, half, cr * 0.6);
+      } else {
+        // 房屋：圆润墙体 + 圆角屋顶 + 可爱表情
+        const wallH = size * 0.58;
+        const roofH = size * 0.42;
+        // 阴影
+        g.fillStyle(0x000000, 0.06); g.fillRoundedRect(6, wallH + roofH - 4, size - 12, 8, 4);
+        // 墙体（圆角）
+        g.fillStyle(b.base, 1); g.fillRoundedRect(4, roofH - 2, size - 8, wallH, 10);
+        g.lineStyle(3, b.accent, 0.6); g.strokeRoundedRect(4, roofH - 2, size - 8, wallH, 10);
+        // 屋顶（圆角三角，更可爱）
+        g.fillStyle(b.roof, 1);
+        g.fillTriangle(0, roofH + 4, size, roofH + 4, half, 2);
+        g.lineStyle(3, b.accent, 0.6);
+        g.strokeTriangle(0, roofH + 4, size, roofH + 4, half, 2);
+        // 屋顶高光
+        g.fillStyle(C.white, 0.2);
+        g.fillTriangle(half - 6, roofH, half, 6, half + 2, roofH);
+        // 门（圆角拱门）
+        const doorW = size * 0.18, doorH = size * 0.28;
+        g.fillStyle(b.accent, 1);
+        g.fillRoundedRect(half - doorW / 2, size - doorH - 6, doorW, doorH, doorW / 2);
+        g.fillStyle(C.star, 1); g.fillCircle(half + doorW / 4, size - doorH / 2 - 6, 2); // 门把手
+        // 窗户（圆角，带十字格）
+        const winSize = size * 0.14;
+        const winY = roofH + size * 0.08;
+        g.fillStyle(C.window, 0.85);
+        g.fillRoundedRect(size * 0.12, winY, winSize, winSize, 4);
+        g.fillRoundedRect(size * 0.74, winY, winSize, winSize, 4);
+        g.lineStyle(2, b.accent, 0.5);
+        g.strokeRoundedRect(size * 0.12, winY, winSize, winSize, 4);
+        g.strokeRoundedRect(size * 0.74, winY, winSize, winSize, 4);
+        // 窗户高光
+        g.fillStyle(C.white, 0.4);
+        g.fillRoundedRect(size * 0.12 + 2, winY + 2, winSize * 0.4, winSize * 0.3, 2);
+        g.fillRoundedRect(size * 0.74 + 2, winY + 2, winSize * 0.4, winSize * 0.3, 2);
+        // 等级 2+ 增加中间窗户
+        if (lv >= 1) {
+          g.fillStyle(C.window, 0.85);
+          g.fillRoundedRect(half - winSize / 2, winY, winSize, winSize, 4);
+          g.lineStyle(2, b.accent, 0.5);
+          g.strokeRoundedRect(half - winSize / 2, winY, winSize, winSize, 4);
+        }
+        // 等级 2+ 增加烟囱
+        if (lv >= 2) {
+          g.fillStyle(b.accent, 1);
+          g.fillRoundedRect(size * 0.7, 6, size * 0.1, size * 0.14, 3);
+          // 烟（小圆圈）
+          g.fillStyle(C.cloud, 0.6);
+          g.fillCircle(size * 0.75, 2, 4);
+          g.fillCircle(size * 0.78, -4, 5);
+        }
+        // 可爱表情（窗户下方）
+        const faceY = roofH + size * 0.32;
+        const eyeR = 2 + lv * 0.5;
+        g.fillStyle(C.black, 0.7);
+        g.fillCircle(half - size * 0.1, faceY, eyeR);
+        g.fillCircle(half + size * 0.1, faceY, eyeR);
+        g.fillStyle(C.white, 0.8);
+        g.fillCircle(half - size * 0.1 + 1, faceY - 0.5, eyeR * 0.4);
+        g.fillCircle(half + size * 0.1 + 1, faceY - 0.5, eyeR * 0.4);
+        // 微笑
+        g.lineStyle(2, C.black, 0.6);
+        g.beginPath(); g.arc(half, faceY + 2, size * 0.06, 0.25, Math.PI - 0.25); g.strokePath();
+        // 腮红
+        g.fillStyle(0xFFCDD2, 0.5);
+        g.fillCircle(half - size * 0.16, faceY + 3, 3 + lv);
+        g.fillCircle(half + size * 0.16, faceY + 3, 3 + lv);
+      }
+      g.generateTexture(`${b.key}_${lv + 1}`, size, size); g.destroy();
+    });
+  });
+
+  // --- 障碍物（4 种，可爱不吓人）---
+  // 土坑：深色但带惊讶表情
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.08); g.fillEllipse(42, 36, 76, 40); // 阴影
+  g.fillStyle(C.potholeRim, 1); g.fillEllipse(40, 30, 72, 48);
+  g.fillStyle(C.pothole, 1); g.fillEllipse(40, 30, 56, 36);
+  g.fillStyle(C.black, 0.25); g.fillEllipse(40, 28, 42, 24);
+  // 惊讶表情（O 型嘴 + 大眼）
+  g.fillStyle(C.white, 0.7);
+  g.fillCircle(32, 28, 4); g.fillCircle(48, 28, 4);
+  g.fillStyle(C.black, 0.6);
+  g.fillCircle(32, 28, 2); g.fillCircle(48, 28, 2);
+  g.fillStyle(C.black, 0.4);
+  g.fillEllipse(40, 36, 5, 7); // O 嘴
+  g.generateTexture('obs_pothole', 80, 56); g.destroy();
+
+  // 水坑：明亮蓝色 + 波纹 + 小鱼
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.06); g.fillEllipse(52, 46, 96, 56);
+  g.fillStyle(C.puddleRim, 0.6); g.fillEllipse(50, 40, 92, 62);
+  g.fillStyle(C.puddle, 0.7); g.fillEllipse(50, 40, 76, 50);
+  // 水面波纹
+  g.lineStyle(2, C.white, 0.4);
+  g.strokeEllipse(50, 40, 50, 28);
+  g.strokeEllipse(45, 35, 28, 14);
+  // 高光
+  g.fillStyle(C.white, 0.5); g.fillEllipse(38, 30, 28, 10);
+  // 小鱼
+  g.fillStyle(C.flower1, 0.8);
+  g.fillCircle(60, 42, 5);
+  g.fillTriangle(65, 42, 70, 38, 70, 46); // 鱼尾
+  g.fillStyle(C.white, 0.6); g.fillCircle(58, 40, 1.5); // 鱼眼
+  g.generateTexture('obs_puddle', 100, 72); g.destroy();
+
+  // 石头：圆润大圆石 + 睡觉表情
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.08); g.fillEllipse(42, 64, 72, 16);
+  g.fillStyle(C.rockD, 1); g.fillCircle(40, 42, 36);
+  g.fillStyle(C.rock, 1); g.fillCircle(38, 38, 32);
+  // 高光
+  g.fillStyle(C.white, 0.4); g.fillCircle(30, 28, 10);
+  g.fillStyle(C.white, 0.2); g.fillCircle(48, 32, 6);
+  // 小石头
+  g.fillStyle(C.rockD, 1); g.fillCircle(68, 55, 8);
+  g.fillStyle(C.rock, 1); g.fillCircle(67, 53, 6);
+  // 睡觉表情（闭眼弧线 + Zz）
+  g.lineStyle(2, C.black, 0.5);
+  g.beginPath(); g.arc(30, 38, 4, 0.15, Math.PI - 0.15); g.strokePath(); // 左闭眼
+  g.beginPath(); g.arc(46, 38, 4, 0.15, Math.PI - 0.15); g.strokePath(); // 右闭眼
+  // Zz
+  g.fillStyle(C.black, 0.3);
+  g.fillCircle(56, 20, 2); g.fillCircle(62, 14, 3); g.fillCircle(70, 8, 4);
+  g.generateTexture('obs_rock', 80, 72); g.destroy();
+
+  // 泥地：可爱泥巴 + 气泡 + 表情
+  g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.08); g.fillEllipse(62, 52, 116, 52);
+  g.fillStyle(C.mudD, 0.7); g.fillEllipse(60, 40, 112, 72);
+  g.fillStyle(C.mud, 0.8); g.fillEllipse(60, 38, 96, 58);
+  // 泥巴纹理
+  g.fillStyle(C.mudD, 0.4);
+  g.fillCircle(30, 25, 10); g.fillCircle(85, 50, 12); g.fillCircle(50, 55, 8);
+  g.fillCircle(80, 25, 7);
+  // 气泡
+  g.fillStyle(C.white, 0.3);
+  g.fillCircle(40, 20, 5); g.fillCircle(75, 30, 4); g.fillCircle(55, 50, 3);
+  g.fillStyle(C.white, 0.5);
+  g.fillCircle(38, 18, 2); g.fillCircle(73, 28, 1.5);
+  // 可爱表情
+  drawEyes(g, 50, 68, 35, 4);
+  drawSmile(g, 59, 42, 3);
+  drawCheeks(g, 44, 74, 40, 3);
+  g.generateTexture('obs_mud', 120, 72); g.destroy();
+
+  // --- 装饰物（更鲜艳可爱）---
+  // 草丛（圆润蓬松）
+  for (let i = 1; i <= 2; i++) {
+    g = scene.add.graphics();
+    const baseColor = i === 1 ? C.grass3 : C.tree;
+    g.fillStyle(0x000000, 0.06); g.fillEllipse(25, 38, 40, 8);
+    g.fillStyle(baseColor, 1);
+    g.fillCircle(12, 28, 10); g.fillCircle(25, 22, 13); g.fillCircle(38, 28, 10);
+    g.fillStyle(C.grass2, 1);
+    g.fillCircle(18, 24, 7); g.fillCircle(32, 24, 7);
+    g.fillStyle(C.grass1, 0.6);
+    g.fillCircle(22, 20, 4); g.fillCircle(28, 20, 4);
+    // 小露珠
+    g.fillStyle(C.white, 0.5);
+    g.fillCircle(20, 22, 1.5); g.fillCircle(30, 22, 1.5);
+    g.generateTexture(`grass_${i}`, 50, 42); g.destroy();
+  }
+  // 花（大花瓣 + 高光）
+  [C.flower1, C.flower2, C.flower3].forEach((color, i) => {
+    g = scene.add.graphics();
+    // 茎和叶
+    g.fillStyle(C.grass3, 1); g.fillRoundedRect(23, 30, 4, 15, 2);
+    g.fillStyle(C.grass2, 1);
+    g.fillEllipse(18, 38, 10, 6); g.fillEllipse(32, 36, 8, 5);
+    // 花瓣（5片，更大更圆）
+    const petalR = 7;
+    for (let p = 0; p < 5; p++) {
+      const a = (p / 5) * Math.PI * 2 - Math.PI / 2;
+      const px = 25 + Math.cos(a) * 7;
+      const py = 18 + Math.sin(a) * 7;
+      g.fillStyle(color, 1); g.fillCircle(px, py, petalR);
+      g.fillStyle(C.white, 0.3); g.fillCircle(px - 1, py - 1, petalR * 0.4);
+    }
+    // 花心
+    g.fillStyle(C.star, 1); g.fillCircle(25, 18, 5);
+    g.fillStyle(C.starD, 0.5); g.fillCircle(25, 18, 3);
+    g.generateTexture(`flower_${i + 1}`, 50, 48); g.destroy();
+  });
+  // 树（蓬松圆冠 + 果实 + 表情）
+  for (let i = 1; i <= 2; i++) {
+    g = scene.add.graphics();
+    const r = 42 + i * 6;
+    // 阴影
+    g.fillStyle(0x000000, 0.08); g.fillEllipse(60, 108, 80, 14);
+    // 树冠（多层蓬松）
+    g.fillStyle(C.treeD, 1);
+    g.fillCircle(60, 60, r);
+    g.fillStyle(C.tree, 1);
+    g.fillCircle(55, 54, r - 5);
+    g.fillCircle(68, 58, r - 8);
+    g.fillCircle(50, 68, r - 12);
+    // 高光
+    g.fillStyle(C.grass1, 0.4);
+    g.fillCircle(45, 45, 12); g.fillCircle(65, 48, 8);
+    // 果实
+    g.fillStyle(C.flower1, 0.9);
+    g.fillCircle(35, 55, 4); g.fillCircle(72, 65, 4);
+    g.fillCircle(55, 75, 3);
+    g.fillStyle(C.flower3, 0.9);
+    g.fillCircle(68, 42, 3); g.fillCircle(42, 70, 3);
+    // 可爱表情
+    drawEyes(g, 50, 62, 58, 3);
+    drawSmile(g, 56, 60, 2.5);
+    g.generateTexture(`tree_${i}`, 120, 115); g.destroy();
+  }
+  // 云（更蓬松 + 微笑）
+  g = scene.add.graphics();
+  g.fillStyle(C.cloud, 0.95);
+  g.fillCircle(25, 32, 18); g.fillCircle(50, 22, 24); g.fillCircle(78, 28, 20);
+  g.fillCircle(38, 38, 16); g.fillCircle(62, 38, 16);
+  g.fillStyle(C.white, 0.6);
+  g.fillCircle(45, 18, 10); g.fillCircle(65, 22, 8);
+  // 可爱表情
+  drawEyes(g, 45, 60, 28, 2.5);
+  drawSmile(g, 52, 30, 3);
+  drawCheeks(g, 40, 65, 33, 2.5);
+  g.generateTexture('cloud_1', 120, 58); g.destroy();
+
+  // 星星奖励（更可爱，大眼睛大笑容）
+  g = scene.add.graphics();
+  // 星形阴影
+  const cx = 60, cy = 62, outerR = 48, innerR = 22;
+  const points = [];
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    points.push(new Phaser.Geom.Point(cx + Math.cos(a) * r, cy + Math.sin(a) * r));
+  }
+  g.fillStyle(0x000000, 0.1); g.fillPoints(points, true);
+  // 星形主体
+  g.fillStyle(C.star, 1); g.fillPoints(points, true);
+  g.lineStyle(4, C.starD, 1); g.strokePoints(points, true);
+  // 高光
+  g.fillStyle(C.white, 0.3); g.fillCircle(48, 48, 12);
+  // 大眼睛（带高光）
+  drawEyes(g, 48, 72, 56, 7);
+  // 大笑容
+  g.lineStyle(3, C.black, 1);
+  g.beginPath(); g.arc(cx, 66, 14, 0.2, Math.PI - 0.2); g.strokePath();
+  g.fillStyle(0xFF8A65, 0.8); g.fillCircle(cx, 66, 5); // 舌头
+  // 腮红
+  drawCheeks(g, 38, 82, 72, 6);
+  g.generateTexture('star', 120, 120); g.destroy();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 4. 主场景
+// ═══════════════════════════════════════════════════════════════
+let gameScene = null; // 全局引用
+let audio = new AudioManager();
+
+class MainScene extends Phaser.Scene {
+  constructor() { super('MainScene'); }
+
+  preload() {}
+
+  create() {
+    gameScene = this;
+    createTextures(this);
+    const C = CONFIG.C;
+
+    // --- 草地背景 ---
+    const bg = this.add.graphics();
+    bg.fillStyle(C.grass1, 1); bg.fillRect(0, 0, CONFIG.MAP_W, CONFIG.MAP_H);
+    // 草地纹理：随机深浅色块
+    for (let i = 0; i < 200; i++) {
+      const x = Phaser.Math.Between(0, CONFIG.MAP_W);
+      const y = Phaser.Math.Between(0, CONFIG.MAP_H);
+      const r = Phaser.Math.Between(15, 40);
+      bg.fillStyle(Math.random() > 0.5 ? C.grass2 : C.grass3, 0.3);
+      bg.fillCircle(x, y, r);
+    }
+    bg.generateTexture('grass_bg', CONFIG.MAP_W, CONFIG.MAP_H);
+    bg.destroy();
+    this.add.image(0, 0, 'grass_bg').setOrigin(0);
+
+    // --- 随机装饰物 ---
+    this.trees = []; // 记录树的位置用于碰撞
+    for (let i = 0; i < CONFIG.DECO_COUNT; i++) {
+      const x = Phaser.Math.Between(50, CONFIG.MAP_W - 50);
+      const y = Phaser.Math.Between(50, CONFIG.MAP_H - 50);
+      const types = ['grass_1', 'grass_2', 'flower_1', 'flower_2', 'flower_3', 'tree_1', 'tree_2'];
+      const tex = Phaser.Utils.Array.GetRandom(types);
+      const scale = Phaser.Math.FloatBetween(0.7, 1.3);
+      const deco = this.add.image(x, y, tex);
+      deco.setScale(scale);
+      deco.setDepth(y);
+      // 树木记录碰撞信息
+      if (tex.startsWith('tree_')) {
+        this.trees.push({ x, y, radius: 38 * scale });
+      }
+    }
+    // 云朵（在最顶层飘浮感）
+    for (let i = 0; i < 6; i++) {
+      const cloud = this.add.image(
+        Phaser.Math.Between(0, CONFIG.MAP_W),
+        Phaser.Math.Between(0, 200),
+        'cloud_1'
+      );
+      cloud.setAlpha(0.6).setDepth(-1);
+    }
+
+    // --- 游戏状态 ---
+    this.cargo = [];        // ['dirt','stone','wood',...]
+    this.resources = [];     // 资源点数组
+    this.buildings = [];     // 已建建筑
+    this.obstacles = [];     // 障碍物
+    this.nearbyResource = null;
+    this.truckState = { slowUntil: 0, stuckUntil: 0, speedMult: 1 };
+    this.effectCooldown = 0; // 效果冷却（防叠加）
+
+    // --- 生成资源点 ---
+    const resCount = Phaser.Math.Between(CONFIG.RES_INIT_MIN, CONFIG.RES_INIT_MAX);
+    for (let i = 0; i < resCount; i++) this.spawnResource();
+
+    // --- 生成障碍物 ---
+    const obsCount = Phaser.Math.Between(CONFIG.OBS_MIN, CONFIG.OBS_MAX);
+    for (let i = 0; i < obsCount; i++) this.spawnObstacle();
+
+    // --- 创建卡车 ---
+    this.truck = this.add.container(CONFIG.TRUCK_START_X, CONFIG.TRUCK_START_Y);
+    const truckBody = this.add.image(0, 0, 'truck_body');
+    truckBody.setOrigin(0.5, 0.5);
+    this.truck.add(truckBody);
+    this.truckBody = truckBody;
+    this.cargoBlocks = [];
+    this.truck.setDepth(10000);
+
+    // --- 相机 ---
+    this.cameras.main.setBounds(0, 0, CONFIG.MAP_W, CONFIG.MAP_H);
+    this.cameras.main.centerOn(CONFIG.TRUCK_START_X, CONFIG.TRUCK_START_Y);
+
+    // --- 资源定时刷新 ---
+    this.scheduleNextSpawn();
+
+    // --- 初始化按钮 ---
+    updateButtonStates();
+    updateCargoDisplay();
+
+    // --- 首次音频解锁 ---
+    this.input.once('pointerdown', () => audio.init());
+  }
+
+  update(time, delta) {
+    if (!this.truck) return;
+
+    // --- 卡车移动 ---
+    let dx = 0, dy = 0;
+    const isStuck = time < this.truckState.stuckUntil;
+    const isSlow = time < this.truckState.slowUntil;
+    const speed = CONFIG.TRUCK_SPEED * (isSlow ? CONFIG.PUDDLE_SLOW_RATIO : 1);
+
+    if (!isStuck) {
+      if (moveDir.left) dx -= speed;
+      if (moveDir.right) dx += speed;
+      if (moveDir.up) dy -= speed;
+      if (moveDir.down) dy += speed;
+    }
+
+    // 对角线归一化
+    if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+
+    this.truck.x += dx;
+    this.truck.y += dy;
+
+    // 地图边界
+    this.truck.x = Phaser.Math.Clamp(this.truck.x, CONFIG.BOUNDARY, CONFIG.MAP_W - CONFIG.BOUNDARY);
+    this.truck.y = Phaser.Math.Clamp(this.truck.y, CONFIG.BOUNDARY, CONFIG.MAP_H - CONFIG.BOUNDARY);
+
+    // --- 树木碰撞检测（卡车被树挡住，无法穿过）---
+    for (const tree of this.trees) {
+      const dist = Phaser.Math.Distance.Between(this.truck.x, this.truck.y, tree.x, tree.y);
+      const minDist = tree.radius + 18; // 树冠半径 + 卡车半宽
+      if (dist < minDist) {
+        // 将卡车推到树冠边缘外
+        const angle = Math.atan2(this.truck.y - tree.y, this.truck.x - tree.x);
+        this.truck.x = tree.x + Math.cos(angle) * minDist;
+        this.truck.y = tree.y + Math.sin(angle) * minDist;
+      }
+    }
+    // 树木推开后重新限制边界
+    this.truck.x = Phaser.Math.Clamp(this.truck.x, CONFIG.BOUNDARY, CONFIG.MAP_W - CONFIG.BOUNDARY);
+    this.truck.y = Phaser.Math.Clamp(this.truck.y, CONFIG.BOUNDARY, CONFIG.MAP_H - CONFIG.BOUNDARY);
+
+    // 卡车朝向
+    if (dx !== 0 || dy !== 0) {
+      this.truck.rotation = Math.atan2(dy, dx);
+    }
+
+    // --- 引擎声 ---
+    const moving = (dx !== 0 || dy !== 0);
+    if (moving && !isStuck) audio.startEngine();
+    else audio.stopEngine();
+
+    // --- 相机跟随 ---
+    const cam = this.cameras.main;
+    cam.scrollX = Phaser.Math.Linear(cam.scrollX, this.truck.x - CONFIG.VIEW_W / 2, CONFIG.CAMERA_LERP);
+    cam.scrollY = Phaser.Math.Linear(cam.scrollY, this.truck.y - CONFIG.VIEW_H / 2, CONFIG.CAMERA_LERP);
+
+    // --- 资源点检测 ---
+    this.nearbyResource = null;
+    let minDist = CONFIG.RES_COLLECT_DIST;
+    this.resources.forEach(r => {
+      if (!r.active) return;
+      const d = Phaser.Math.Distance.Between(this.truck.x, this.truck.y, r.x, r.y);
+      if (d < minDist) { minDist = d; this.nearbyResource = r; }
+    });
+
+    // --- 障碍物碰撞检测 ---
+    if (time > this.effectCooldown) {
+      for (const obs of this.obstacles) {
+        if (!obs.active || time < obs.cooldownUntil) continue;
+        const d = Phaser.Math.Distance.Between(this.truck.x, this.truck.y, obs.x, obs.y);
+        if (d < CONFIG.OBS_HIT_DIST) {
+          this.triggerObstacle(obs, time);
+          break;
+        }
+      }
+    }
+
+    // --- 更新按钮状态 ---
+    updateButtonStates();
+  }
+
+  // --- 生成资源点 ---
+  spawnResource() {
+    if (this.resources.filter(r => r.active).length >= CONFIG.RES_MAX) return;
+    const types = ['dirt', 'stone', 'wood'];
+    const type = Phaser.Utils.Array.GetRandom(types);
+    let x, y, tries = 0;
+    do {
+      x = Phaser.Math.Between(100, CONFIG.MAP_W - 100);
+      y = Phaser.Math.Between(100, CONFIG.MAP_H - 100);
+      tries++;
+    } while (this.isPositionOccupied(x, y, 120) && tries < 30);
+
+    const sprite = this.add.image(x, y, `pile_${type}`);
+    sprite.setDepth(y);
+    this.resources.push({
+      x, y, type, uses: CONFIG.RES_MAX_USES, active: true, sprite
+    });
+  }
+
+  // --- 生成障碍物 ---
+  spawnObstacle() {
+    const types = ['pothole', 'puddle', 'rock', 'mud'];
+    const type = Phaser.Utils.Array.GetRandom(types);
+    let x, y, tries = 0;
+    do {
+      x = Phaser.Math.Between(100, CONFIG.MAP_W - 100);
+      y = Phaser.Math.Between(100, CONFIG.MAP_H - 100);
+      tries++;
+    } while (this.isPositionOccupied(x, y, CONFIG.OBS_MIN_DIST) && tries < 30);
+
+    const sprite = this.add.image(x, y, `obs_${type}`);
+    sprite.setDepth(y);
+    this.obstacles.push({
+      x, y, type, active: true, cooldownUntil: 0, sprite
+    });
+  }
+
+  // --- 位置是否被占用 ---
+  isPositionOccupied(x, y, minDist) {
+    for (const r of this.resources) {
+      if (r.active && Phaser.Math.Distance.Between(x, y, r.x, r.y) < minDist) return true;
+    }
+    for (const o of this.obstacles) {
+      if (o.active && Phaser.Math.Distance.Between(x, y, o.x, o.y) < minDist) return true;
+    }
+    for (const b of this.buildings) {
+      if (Phaser.Math.Distance.Between(x, y, b.x, b.y) < minDist) return true;
+    }
+    // 避开树木
+    for (const t of this.trees) {
+      if (Phaser.Math.Distance.Between(x, y, t.x, t.y) < minDist) return true;
+    }
+    // 避开卡车起点附近
+    if (Phaser.Math.Distance.Between(x, y, CONFIG.TRUCK_START_X, CONFIG.TRUCK_START_Y) < 100) return true;
+    return false;
+  }
+
+  // --- 定时刷新资源 ---
+  scheduleNextSpawn() {
+    const delay = Phaser.Math.Between(CONFIG.RES_SPAWN_MIN, CONFIG.RES_SPAWN_MAX);
+    this.time.delayedCall(delay, () => {
+      this.spawnResource();
+      this.scheduleNextSpawn();
+    });
+  }
+
+  // --- 触发障碍物效果 ---
+  triggerObstacle(obs, time) {
+    const t = obs.type;
+    if (t === 'pothole') {
+      // 颠簸掉货
+      audio.playBump();
+      this.tweens.add({
+        targets: this.truck, y: this.truck.y - 15, duration: 100, yoyo: true
+      });
+      if (this.cargo.length > 0) {
+        const dropCount = Math.min(this.cargo.length, Phaser.Math.Between(CONFIG.POTHOLE_DROP_MIN, CONFIG.POTHOLE_DROP_MAX));
+        for (let i = 0; i < dropCount; i++) {
+          const dropped = this.cargo.pop();
+          this.spawnDropParticle(this.truck.x, this.truck.y, dropped);
+        }
+        updateCargoDisplay();
+      }
+      // 土坑消失
+      obs.active = false;
+      obs.sprite.destroy();
+      // 延时生成新障碍物
+      this.time.delayedCall(8000, () => this.spawnObstacle());
+      this.effectCooldown = time + 800;
+
+    } else if (t === 'puddle') {
+      audio.playSplash();
+      this.spawnSplashParticles(obs.x, obs.y);
+      this.truckState.slowUntil = time + CONFIG.PUDDLE_SLOW_TIME;
+      obs.cooldownUntil = time + CONFIG.PUDDLE_COOLDOWN;
+      this.effectCooldown = time + 500;
+
+    } else if (t === 'rock') {
+      audio.playCollide();
+      // 弹回
+      const angle = Math.atan2(this.truck.y - obs.y, this.truck.x - obs.x);
+      this.truck.x += Math.cos(angle) * CONFIG.ROCK_BOUNCE;
+      this.truck.y += Math.sin(angle) * CONFIG.ROCK_BOUNCE;
+      this.tweens.add({
+        targets: this.truck, scale: 0.9, duration: 80, yoyo: true
+      });
+      this.effectCooldown = time + 500;
+
+    } else if (t === 'mud') {
+      audio.playSlip();
+      this.truckState.stuckUntil = time + CONFIG.MUD_STUCK_TIME;
+      obs.cooldownUntil = time + CONFIG.MUD_COOLDOWN;
+      // 车轮打转动画（结束后复位）
+      this.tweens.add({
+        targets: this.truckBody, rotation: '+=0.5', duration: 200, repeat: 9,
+        onComplete: () => { this.truckBody.rotation = 0; }
+      });
+      this.effectCooldown = time + CONFIG.MUD_STUCK_TIME + 200;
+    }
+  }
+
+  // --- 掉货粒子 ---
+  spawnDropParticle(x, y, type) {
+    const block = this.add.image(x, y, `block_${type}`);
+    block.setDepth(10001);
+    this.tweens.add({
+      targets: block,
+      x: x + Phaser.Math.Between(-40, 40),
+      y: y + Phaser.Math.Between(20, 50),
+      scale: 0,
+      alpha: 0,
+      duration: 600,
+      onComplete: () => block.destroy()
+    });
+  }
+
+  // --- 溅水粒子 ---
+  spawnSplashParticles(x, y) {
+    for (let i = 0; i < 6; i++) {
+      const drop = this.add.circle(x, y, 4, 0x81D4FA);
+      drop.setDepth(10001);
+      const angle = (i / 6) * Math.PI * 2;
+      this.tweens.add({
+        targets: drop,
+        x: x + Math.cos(angle) * 30,
+        y: y + Math.sin(angle) * 20 - 20,
+        alpha: 0,
+        duration: 400,
+        onComplete: () => drop.destroy()
+      });
+    }
+  }
+
+  // --- 装载资源 ---
+  handleLoad() {
+    if (!this.nearbyResource || this.cargo.length >= CONFIG.MAX_CARGO) return;
+    audio.init();
+    audio.playClick();
+    audio.playDig();
+
+    const r = this.nearbyResource;
+    this.cargo.push(r.type);
+    r.uses--;
+
+    // 资源点缩小
+    const scale = r.uses / CONFIG.RES_MAX_USES;
+    this.tweens.add({
+      targets: r.sprite, scale: scale * 0.9 + 0.1, duration: 200
+    });
+
+    // 装载动画：从资源点飞到车厢
+    const block = this.add.image(r.x, r.y, `block_${r.type}`);
+    block.setDepth(10001);
+    this.tweens.add({
+      targets: block,
+      x: this.truck.x, y: this.truck.y,
+      scale: 0.5, alpha: 0.6,
+      duration: 400,
+      onComplete: () => {
+        block.destroy();
+        updateCargoDisplay();
+      }
+    });
+
+    // 资源点耗尽
+    if (r.uses <= 0) {
+      r.active = false;
+      this.tweens.add({
+        targets: r.sprite, alpha: 0, scale: 0, duration: 300,
+        onComplete: () => r.sprite.destroy()
+      });
+      this.nearbyResource = null;
+    }
+
+    updateCargoDisplay();
+  }
+
+  // --- 建造 ---
+  handleBuild() {
+    if (this.cargo.length === 0) return;
+    audio.init();
+    audio.playClick();
+    audio.playBuild();
+
+    // 统计主要资源类型
+    const counts = { dirt: 0, stone: 0, wood: 0 };
+    this.cargo.forEach(t => counts[t]++);
+    const mainType = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b);
+    const buildType = mainType === 'dirt' ? 'garden' : mainType === 'stone' ? 'stone_house' : 'wood_cabin';
+
+    // 检查附近是否有建筑
+    let nearby = this.buildings.find(b =>
+      Phaser.Math.Distance.Between(this.truck.x, this.truck.y, b.x, b.y) < CONFIG.BUILD_UPGRADE_DIST
+    );
+
+    if (nearby) {
+      // 升级
+      if (nearby.level < CONFIG.BUILD_LEVELS) {
+        nearby.level++;
+        nearby.sprite.setTexture(`${nearby.type}_${nearby.level}`);
+        // 弹出动画
+        this.tweens.add({
+          targets: nearby.sprite, scale: 1.3, duration: 150, yoyo: true
+        });
+      }
+    } else {
+      // 新建建筑
+      const sprite = this.add.image(this.truck.x, this.truck.y, `${buildType}_1`);
+      sprite.setDepth(this.truck.y);
+      sprite.setScale(0);
+      this.tweens.add({
+        targets: sprite, scale: 1, duration: 400, ease: 'Back.out'
+      });
+      this.buildings.push({ x: this.truck.x, y: this.truck.y, type: buildType, level: 1, sprite });
+    }
+
+    // 粒子效果
+    for (let i = 0; i < CONFIG.MAX_CARGO; i++) {
+      if (i >= this.cargo.length) break;
+      const p = this.add.circle(this.truck.x, this.truck.y, 6, 0xBCAAA4);
+      p.setDepth(10001);
+      const angle = (i / this.cargo.length) * Math.PI * 2;
+      this.tweens.add({
+        targets: p,
+        x: this.truck.x + Math.cos(angle) * 40,
+        y: this.truck.y + Math.sin(angle) * 40,
+        alpha: 0, scale: 0, duration: 500,
+        onComplete: () => p.destroy()
+      });
+    }
+
+    // 清空货物
+    this.cargo = [];
+    updateCargoDisplay();
+
+    // 星星弹窗 + 鼓励音
+    this.showStarPopup();
+    audio.playComplete();
+    setTimeout(() => audio.playEncourage(), 300);
+  }
+
+  // --- 星星弹窗 ---
+  showStarPopup() {
+    const cam = this.cameras.main;
+    const star = this.add.image(cam.scrollX + CONFIG.VIEW_W / 2, cam.scrollY + CONFIG.VIEW_H / 2, 'star');
+    star.setDepth(10002).setScale(0);
+    this.tweens.add({
+      targets: star, scale: 1.2, duration: 250, ease: 'Back.out',
+      onComplete: () => {
+        this.tweens.add({
+          targets: star, scale: 1.0, duration: 100,
+          onComplete: () => {
+            this.time.delayedCall(1700, () => {
+              this.tweens.add({
+                targets: star, scale: 0, alpha: 0, duration: 250,
+                onComplete: () => star.destroy()
+              });
+            });
+          }
+        });
+      }
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 5. 按钮状态控制
+// ═══════════════════════════════════════════════════════════════
+function updateButtonStates() {
+  if (!gameScene) return;
+  const btns = {
+    load: document.getElementById('btn-load'),
+    build: document.getElementById('btn-build'),
+    up: document.getElementById('btn-up'),
+    down: document.getElementById('btn-down'),
+    left: document.getElementById('btn-left'),
+    right: document.getElementById('btn-right')
+  };
+
+  const time = gameScene.time.now;
+  const isStuck = time < gameScene.truckState.stuckUntil;
+  const hasCargo = gameScene.cargo.length > 0;
+  const cargoFull = gameScene.cargo.length >= CONFIG.MAX_CARGO;
+  const nearResource = gameScene.nearbyResource !== null;
+
+  // 方向键：始终可用（陷车时仍亮但无法移动）
+  ['up', 'down', 'left', 'right'].forEach(k => {
+    btns[k].className = 'btn btn-dir enabled';
+  });
+
+  // 装载按钮：靠近资源点 + 未满
+  if (nearResource && !cargoFull) {
+    btns.load.className = 'btn btn-func enabled';
+    // 图标颜色提示资源类型
+    const type = gameScene.nearbyResource.type;
+    const colors = { dirt: '#8D6E63', stone: '#546E7A', wood: '#6D4C41' };
+    btns.load.style.color = colors[type] || '#BF360C';
+  } else {
+    btns.load.className = 'btn btn-func disabled';
+    btns.load.style.color = '#BF360C';
+  }
+
+  // 建造按钮：有货
+  if (hasCargo) {
+    btns.build.className = 'btn btn-func enabled';
+  } else {
+    btns.build.className = 'btn btn-func disabled';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 6. 货物显示
+// ═══════════════════════════════════════════════════════════════
+function updateCargoDisplay() {
+  const display = document.getElementById('cargo-display');
+  display.innerHTML = '';
+  for (let i = 0; i < CONFIG.MAX_CARGO; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'cargo-slot';
+    if (gameScene && gameScene.cargo[i]) {
+      slot.classList.add(gameScene.cargo[i]);
+    }
+    display.appendChild(slot);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 7. DOM 控制
+// ═══════════════════════════════════════════════════════════════
+const moveDir = { up: false, down: false, left: false, right: false };
+
+function initControls() {
+  // 方向键：按住持续移动
+  const dirMap = { 'btn-up': 'up', 'btn-down': 'down', 'btn-left': 'left', 'btn-right': 'right' };
+  Object.entries(dirMap).forEach(([id, dir]) => {
+    const btn = document.getElementById(id);
+    const press = (e) => {
+      e.preventDefault();
+      audio.init();
+      moveDir[dir] = true;
+    };
+    const release = (e) => {
+      e.preventDefault();
+      moveDir[dir] = false;
+    };
+    btn.addEventListener('pointerdown', press);
+    btn.addEventListener('pointerup', release);
+    btn.addEventListener('pointerleave', release);
+    btn.addEventListener('pointercancel', release);
+  });
+
+  // 装载按钮
+  document.getElementById('btn-load').addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    audio.init();
+    if (gameScene) gameScene.handleLoad();
+  });
+
+  // 建造按钮
+  document.getElementById('btn-build').addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    audio.init();
+    if (gameScene) gameScene.handleBuild();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 8. Phaser 游戏配置
+// ═══════════════════════════════════════════════════════════════
+window.addEventListener('load', () => {
+  initControls();
+  const game = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: 'game',
+    scale: {
+      mode: Phaser.Scale.FIT,
+      autoCenter: Phaser.Scale.CENTER_BOTH,
+      width: CONFIG.VIEW_W,
+      height: CONFIG.VIEW_H
+    },
+    scene: MainScene,
+    render: { antialias: true }
+  });
+});
+</script>
+</body>
+</html>
