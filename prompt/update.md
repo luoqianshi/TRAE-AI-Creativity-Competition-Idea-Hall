@@ -218,28 +218,63 @@ for demo in demos_data["demos"]:
 
 ---
 
-## 第四步（新增）：为新爬取的 Demo 生成截图
+## 第四步：为新爬取的 Demo 生成截图（增量爬取后必须执行）
 
-在爬取完新 Demo 附件后、渲染前端文件前，需要为新增的 `has_demo=True` 但尚无截图的项目自动生成缩略图。
+**重要**：每次增量爬取（Step 4 `crawl_missing_demos()`）完成后，**必须**立即执行截图生成（Step 4.5 `screenshot_new_demos()`）。截图是增量爬取流程的必要组成部分，不可跳过。如果截图步骤因环境问题被跳过，Agent 必须在后续手动补执行截图操作。
 
-### 4.0 截图策略
+### 4.0 截图前置条件：安装 Chrome/Chromium
 
-使用 Playwright + headless Chromium：
+截图依赖 Playwright + headless Chrome/Chromium。执行截图前，Agent 必须确认浏览器已安装：
+
+```bash
+# 方案一：安装 Google Chrome（推荐，稳定可靠）
+wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+dpkg -i /tmp/chrome.deb || apt-get install -f -y -qq
+
+# 方案二：通过 Playwright 安装 Chromium
+pip install playwright --break-system-packages
+python3 -m playwright install chromium
+```
+
+`_find_chrome()` 函数会按以下顺序自动查找浏览器：
+1. Playwright 管理的 Chromium（`/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome`）
+2. 系统 `google-chrome-stable`（`/usr/bin/google-chrome-stable`）
+3. 系统 `chromium` / `chromium-browser`
+
+### 4.1 截图策略
+
+使用 Playwright + headless Chrome/Chromium：
 - 视口尺寸：1280×800
 - 超时：15 秒（本地 HTML）/ 15 秒（外部 URL）
 - 并发：8 路页面同时截图
 - 格式：JPEG 截图后转换为 WebP（quality=75），减少文件体积
 - 跳过已存在的截图文件（增量原则）
 - 跳过 `localhost`/`127.0.0.1` 等不可达的外部 URL
-- **容错设计**：如果 Playwright 或 Chromium 未安装，截图步骤应优雅跳过，不影响整体更新流程
+- **容错设计**：如果 Playwright 或 Chromium 未安装，截图步骤会打印警告并跳过，不影响整体更新流程——但 Agent 必须在事后补装浏览器并重新执行截图
 
-### 4.0.1 实现位置
+### 4.2 实现位置
 
-`screenshot_new_demos()` 函数位于 `scripts/daily_update.py`，在 `crawl_missing_demos()` 之后、`render_demos_min_js()` 之前调用（Step 4.5）。
+`_find_chrome()` 和 `screenshot_new_demos()` 函数位于 `scripts/daily_update.py`，在 `crawl_missing_demos()` 之后、`render_demos_min_js()` 之前调用（Step 4.5）。
 
-### 4.0.2 截图后更新 demos.json
+### 4.3 截图后更新 demos.json
 
 截图完成后，将新生成的 `assets/screenshots/{topic_id}.webp` 路径写入对应记录的 `screenshot` 字段，并保存 `demos.json`。这样后续渲染步骤才能正确包含截图路径。
+
+### 4.4 补执行截图（如当日未执行）
+
+如果 `daily_update.py` 运行时 Chromium 不可用导致截图被跳过，Agent 可在安装浏览器后单独执行截图：
+
+```bash
+cd /workspace/TRAE-AI-Creativity-Competition-Idea-Hall
+python3 -c "
+import sys; sys.path.insert(0, 'scripts')
+from daily_update import screenshot_new_demos
+count = screenshot_new_demos()
+print(f'Screenshots generated: {count}')
+"
+```
+
+截图完成后需重新执行渲染步骤（Step 5）以更新 `demos.min.js` 中的截图路径。
 
 ---
 
@@ -558,5 +593,5 @@ git push origin main
 6. **去重**：飞书 6月18日表格实际有 2612 条（标题显示 2607），可能存在少量重复 topic_id，需去重处理。
 7. **跳过策略**：如果飞书 Wiki 中没有新增批次、且所有已有记录的审核状态均已正确标记，则本次更新可以只更新 `last_synced` 时间戳和 README 日期，无需重新爬取或渲染。
 8. **screenshot 字段保留（重要）**：`demos.json` 和 `demos.min.js` 中的 `screenshot` 字段记录了每个作品的截图路径。`daily_update.py` 在新增记录时必须包含 `'screenshot': None` 字段；`crawler_v2.py` 的 `render()` 方法在生成 `demos.min.js` 时必须包含 `"screenshot": d.get("screenshot")` 字段。**两处代码必须保持同步**，否则 `render()` 会覆盖 `render_demos_min_js()` 的正确输出，导致截图全部丢失。如果发现 `demos.min.js` 中截图全部为 `null`，请检查 `crawler_v2.py` 的 `render()` 方法是否包含 `screenshot` 字段。
-9. **增量更新后自动截图**：每次 `daily_update.py` 爬取到新 Demo 后，必须在渲染前调用 `screenshot_new_demos()` 为新增项目自动生成截图。截图步骤需具备容错能力（Playwright/Chromium 未安装时跳过，不影响主流程）。截图完成后需将路径写回 `demos.json` 再执行渲染，否则新增 Demo 不会有截图展示。
+9. **增量爬取后必须截图（重要）**：每次 `daily_update.py` 爬取到新 Demo 后，**必须**在渲染前调用 `screenshot_new_demos()` 为新增项目自动生成截图。截图步骤需具备容错能力（Playwright/Chromium 未安装时跳过，不影响主流程），但 **Agent 必须在事后补装浏览器并重新执行截图**。截图完成后需将路径写回 `demos.json` 再执行渲染，否则新增 Demo 不会有截图展示。如果当日 `daily_update.py` 运行时截图被跳过，Agent 应按第 4.4 节的说明补执行截图并重新渲染。
 10. **Git 提交需包含截图文件**：当有新截图生成时，`git add` 必须包含 `assets/screenshots/` 目录，否则新截图不会推送到远程仓库。

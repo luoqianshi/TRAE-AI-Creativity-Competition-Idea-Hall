@@ -469,6 +469,37 @@ def get_screenshot_target(demo):
     return None
 
 
+def _find_chrome():
+    """Find a usable Chrome/Chromium binary.
+
+    Search order:
+      1. Playwright-managed Chromium (ms-playwright cache)
+      2. System google-chrome-stable
+      3. System chromium / chromium-browser
+    Returns a Path or None.
+    """
+    import glob
+    import shutil
+
+    # 1. Playwright-managed Chromium
+    candidates = glob.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome')
+    if candidates:
+        return Path(candidates[0])
+
+    # 2. System google-chrome-stable
+    chrome = shutil.which('google-chrome-stable')
+    if chrome:
+        return Path(chrome)
+
+    # 3. System chromium / chromium-browser
+    for name in ('chromium', 'chromium-browser'):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+
+    return None
+
+
 def screenshot_new_demos():
     """Step 4.5: Generate screenshots for demos that have_demo but no screenshot.
 
@@ -481,33 +512,10 @@ def screenshot_new_demos():
         print("\n[Step 4.5] playwright not installed, skipping screenshot generation")
         return 0
 
-    CHROME_PATH = None
-    # 1. Try Playwright's bundled Chromium
-    import glob as _glob
-    for pattern in [
-        '/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome',
-        '/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome',
-    ]:
-        candidates = _glob.glob(pattern)
-        if candidates:
-            CHROME_PATH = candidates[0]
-            break
-    # 2. Try system-installed Google Chrome
-    if not CHROME_PATH:
-        for cmd in ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium']:
-            result = subprocess.run(['which', cmd], capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                CHROME_PATH = result.stdout.strip()
-                break
-    # 3. Try common paths
-    if not CHROME_PATH:
-        for p in ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
-                   '/usr/bin/chromium-browser', '/usr/bin/chromium']:
-            if Path(p).exists():
-                CHROME_PATH = p
-                break
-    if not CHROME_PATH:
-        print("\n[Step 4.5] No browser found (Chromium/Chrome), skipping screenshot generation")
+    CHROME_PATH = _find_chrome()
+    if CHROME_PATH is None:
+        print("\n[Step 4.5] No Chrome/Chromium found, skipping screenshot generation")
+        print("    Hint: install via 'apt install google-chrome-stable' or 'python3 -m playwright install chromium'")
         return 0
 
     SCREENSHOTS_DIR = PROJECT_ROOT / 'assets' / 'screenshots'
