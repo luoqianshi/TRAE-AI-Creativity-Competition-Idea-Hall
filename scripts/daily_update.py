@@ -338,12 +338,16 @@ def update_demos_json_approved(wiki_ids, new_approved_records):
             fixed_from_disk += 1
     
     # 3. Fix existing records that have demo files on disk but has_demo=False
+    #    Also collect approved records without demo that need crawling
     for r in demos_data['demos']:
         if r.get('approved') and not r.get('has_demo'):
             if ensure_demo_dir_has_record(demos_data, r['topic_id']):
                 fixed_from_disk += 1
                 if r['topic_id'] in needs_demo_crawl:
                     needs_demo_crawl.remove(r['topic_id'])
+            elif r['topic_id'] not in needs_demo_crawl:
+                # Record is approved but has no demo and no local file - needs crawl
+                needs_demo_crawl.append(r['topic_id'])
     
     active = [d for d in demos_data.get('demos', []) if not d.get('archived', False)]
     demos_data['total_count'] = len(active)
@@ -435,14 +439,14 @@ def crawl_missing_demos(topic_ids):
         for e in errors[:5]:
             print(f"  - {e}")
     
-    # Auto-generate screenshots for newly crawled demos
-    if updated > 0:
-        print(f"\n  [Auto-Screenshot] Generating screenshots for {updated} new demos...")
-        screenshot_count = screenshot_new_demos()
-        if screenshot_count > 0:
-            print(f"  [Auto-Screenshot] Generated {screenshot_count} screenshots")
-        else:
-            print(f"  [Auto-Screenshot] Skipped (Playwright/Chromium not available or no targets)")
+    # Auto-generate screenshots for all demos that need them
+    # (including newly crawled demos and any previously missed ones)
+    print(f"\n  [Auto-Screenshot] Checking for demos that need screenshots...")
+    screenshot_count = screenshot_new_demos()
+    if screenshot_count > 0:
+        print(f"  [Auto-Screenshot] Generated {screenshot_count} screenshots")
+    else:
+        print(f"  [Auto-Screenshot] No new screenshots needed (or Playwright/Chromium not available)")
     
     return updated
 
