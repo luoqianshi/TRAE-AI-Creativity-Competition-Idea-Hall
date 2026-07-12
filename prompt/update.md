@@ -583,6 +583,11 @@ git push origin main
 **状态**：已修复（2026-07-08）。
 
 
+### 自动记录问题（2026-07-12）
+
+- Update failed: No module named 'jinja2'
+
+
 ## 注意事项
 
 1. **增量更新原则**：只处理新增或变更的数据，已有数据不要重复爬取。判断依据是 `topic_id` 是否已在 `demos.json` 中存在。

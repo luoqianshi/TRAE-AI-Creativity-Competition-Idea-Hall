@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TableExtractor - 表格提取</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f7fa;
+    color: #303133;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(12px, 3vw, 24px);
+  }
+
+  /* 工作区：占可视面积 80%，不超出避免滚动条 */
+  .card {
+    width: 80vw;
+    max-width: 80vw;
+    height: 80vh;
+    max-height: 80vh;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+    padding: clamp(28px, 4vw, 56px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  h1 { font-size: clamp(26px, 4vw, 34px); color: #303133; }
+  .subtitle { color: #909399; font-size: clamp(14px, 2vw, 18px); margin-top: 8px; }
+
+  /* 拖拽区：flex 撑满卡片剩余空间，不锁宽高比 */
+  .dropzone {
+    position: relative;
+    width: 100%;
+    margin-top: 32px;
+    cursor: pointer;
+    transition: opacity 0.25s ease, max-height 0.3s ease, margin 0.3s ease;
+    overflow: hidden;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .dropzone.disabled { cursor: not-allowed; pointer-events: none; opacity: 0.55; }
+  /* hidden 必须在 disabled 之后，否则 opacity 被覆盖 */
+  .dropzone.hidden {
+    max-height: 0 !important;
+    margin-top: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    flex: 0 0 0 !important;
+  }
+
+  /* SVG 占满容器，矩形 stretch 到边缘，viewBox + preserveAspectRatio="none" 是关键 */
+  .dropzone svg.frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .dropzone .frame-wrap {
+    position: relative;
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .dropzone .frame-bg {
+    position: absolute;
+    inset: 0;
+    border-radius: 10px;
+    background: #fafbfc;
+  }
+  .dropzone.drag-over .frame-bg,
+  .dropzone:hover .frame-bg { background: #ecf5ff; }
+
+  .dropzone .content {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    text-align: center;
+  }
+
+  .dropzone .icon {
+    width: clamp(64px, 12vw, 96px);
+    height: clamp(64px, 12vw, 96px);
+    margin-bottom: 16px;
+    color: #c0c4cc;
+    transition: color 0.2s;
+  }
+  .dropzone:hover .icon,
+  .dropzone.drag-over .icon { color: #409eff; }
+
+  .dropzone .title {
+    font-size: clamp(18px, 3vw, 22px);
+    color: #303133;
+    margin-bottom: 6px;
+  }
+  .dropzone .hint {
+    font-size: clamp(14px, 2vw, 16px);
+    color: #909399;
+  }
+  .dropzone input[type="file"] { display: none; }
+
+  /* 文件列表 - 每个文件是一个独立进度条 */
+  .file-list {
+    margin-top: 20px;
+    display: none;
+    max-height: var(--file-list-dynamic-height, 35vh);
+    overflow: hidden;
+    padding-right: 0;
+    --file-item-height: 52px;
+    --file-item-gap: 8px;
+    --file-item-padding-y: 14px;
+    --file-item-padding-x: 16px;
+    --file-item-font-size: 15px;
+    --file-check-size: 22px;
+  }
+  .file-list.has-files { display: block; }
+
+  .file-item {
+    position: relative;
+    display: flex; align-items: center;
+    padding: var(--file-item-padding-y) var(--file-item-padding-x);
+    border-radius: 10px;
+    margin-bottom: var(--file-item-gap);
+    font-size: var(--file-item-font-size);
+    gap: 12px;
+    background: #f5f7fa;
+    overflow: hidden;
+    min-height: 0;
+    height: var(--file-item-height);
+    transition: box-shadow 0.2s ease;
+  }
+  .file-item:last-child { margin-bottom: 0; }
+  .file-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+
+  .file-item .progress-bg {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 0%;
+    background: linear-gradient(90deg, rgba(64,158,255,0.18), rgba(103,194,58,0.22));
+    transition: width 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    border-radius: 10px;
+    z-index: 0;
+  }
+  .file-item.done .progress-bg {
+    width: 100% !important;
+    background: linear-gradient(90deg, rgba(103,194,58,0.2), rgba(103,194,58,0.28));
+  }
+
+  .file-item .file-info {
+    position: relative; z-index: 1;
+    display: flex; align-items: center; width: 100%; gap: 10px;
+  }
+  .file-item .name {
+    color: #303133; flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 500;
+  }
+  .file-item .page-status {
+    color: #909399; font-size: 13px; flex-shrink: 0;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  .file-item.running .page-status { opacity: 1; color: #409eff; font-weight: 500; }
+  .file-item.done .page-status { opacity: 1; color: #67c23a; }
+
+  .file-item .check-icon {
+    position: relative; z-index: 1;
+    width: var(--file-check-size); height: var(--file-check-size); flex-shrink: 0;
+    opacity: 0; transform: scale(0.5);
+    transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .file-item.done .check-icon {
+    opacity: 1; transform: scale(1);
+  }
+  .file-list.compact .file-item .page-status,
+  .file-list.ultra-compact .file-item .name,
+  .file-list.ultra-compact .file-item .page-status {
+    display: none;
+  }
+  .file-list.ultra-compact .file-item .file-info {
+    justify-content: flex-end;
+  }
+  .file-list.ultra-compact .file-item .check-icon {
+    margin-left: auto;
+  }
+
+  .progress { display: none; margin-top: 16px; }
+  .progress.show {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .progress .status {
+    margin-top: 14px; font-size: 15px; color: #303133;
+    word-break: break-all; line-height: 1.5;
+  }
+  .progress .status.error { color: #f56c6c; }
+  .progress .status.done { color: #67c23a; }
+
+.log-panel {
+  margin-top: 12px;
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #1e1e2e;
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow: hidden;
+}
+.log-panel.show {
+  display: flex;
+  flex-direction: column;
+}
+.log-panel.compact {
+  padding: 10px 12px;
+}
+.log-panel.compact .log-toolbar {
+  margin-bottom: 6px;
+}
+.log-panel.ultra-compact {
+  padding: 8px 10px;
+}
+.log-panel.ultra-compact .log-toolbar {
+  margin-bottom: 4px;
+}
+.log-panel.ultra-compact .log-title {
+  font-size: 12px;
+}
+.log-panel.ultra-compact .log-copy-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.log-title {
+  font-size: 13px;
+  color: #bac2de;
+  font-weight: 600;
+}
+.log-copy-btn {
+  border: 1px solid #585b70;
+  background: transparent;
+  color: #cdd6f4;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.log-copy-btn:hover {
+  border-color: #89b4fa;
+  color: #89b4fa;
+}
+.log-copy-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.log-box {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #cdd6f4;
+}
+.log-box::-webkit-scrollbar { width: 5px; }
+.log-box::-webkit-scrollbar-track { background: transparent; }
+.log-box::-webkit-scrollbar-thumb { background: #585b70; border-radius: 3px; }
+.log-box .log-entry { white-space: pre-wrap; word-break: break-all; }
+.log-box .log-time { color: #89b4fa; }
+.log-box .log-delta { color: #a6adc8; font-size: 11px; }
+.log-box .log-msg { color: #cdd6f4; }
+
+  /* 操作按钮区：下载 + 再上传 */
+  .actions {
+    margin-top: auto;
+    padding-top: 24px;
+    display: none;
+    gap: 16px;
+    justify-content: flex-end;
+  }
+  .actions.show { display: flex; }
+  .actions a, .actions button {
+    flex: 1;
+    max-width: 260px;
+    text-align: center;
+    padding: 14px 20px;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+  }
+  /* 下载按钮：蓝色高亮 */
+  .actions a.download-btn {
+    background: #409eff;
+    color: #fff;
+    border-color: #409eff;
+    font-weight: 500;
+  }
+  .actions a.download-btn:hover {
+    background: #66b1ff;
+    border-color: #66b1ff;
+  }
+  /* 再上传按钮：白底 */
+  .actions button {
+    background: #fff;
+    color: #606266;
+    border: 1px solid #dcdfe6;
+  }
+  .actions button:hover {
+    color: #409eff;
+    border-color: #409eff;
+  }
+
+  @media (max-width: 768px) {
+    body { padding: 8px; align-items: flex-start; padding-top: 16px; }
+    .card { width: 100vw; max-width: 100vw; height: 92vh; max-height: 92vh; padding: 20px; }
+    h1 { font-size: 24px; }
+  }
+
+  @media (max-height: 760px) {
+    .card { padding: 18px; }
+    .dropzone { margin-top: 20px; }
+    .file-list {
+      --file-list-dynamic-height: 18vh;
+      margin-top: 12px;
+    }
+    .progress { margin-top: 10px; }
+    .progress .status {
+      margin-top: 8px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .log-panel {
+      margin-top: 8px;
+      padding: 10px 12px;
+    }
+    .log-toolbar {
+      margin-bottom: 6px;
+    }
+    .log-box {
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .actions {
+      padding-top: 14px;
+      gap: 10px;
+    }
+    .actions a, .actions button {
+      padding: 10px 14px;
+      font-size: 14px;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <header>
+      <h1>TableExtractor</h1>
+      <p class="subtitle">从文件中自动提取线框表格，导出为 Excel</p>
+    </header>
+
+    <div class="dropzone" id="dropzone">
+      <div class="frame-wrap">
+        <div class="frame-bg"></div>
+        <svg class="frame" viewBox="0 0 160 70" preserveAspectRatio="none" aria-hidden="true">
+          <rect id="frame-rect" x="0.5" y="0.5" width="159" height="69" rx="2" ry="2"
+                fill="none" stroke="#c0c4cc" stroke-width="0.5"
+                stroke-dasharray="3 2.4" vector-effect="non-scaling-stroke"/>
+        </svg>
+        <div class="content">
+          <!-- 表格 icon：5×4 网格 -->
+          <svg class="icon" viewBox="0 0 64 64" fill="none" stroke="currentColor"
+               stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="8" y="12" width="48" height="40" rx="3"/>
+            <line x1="8" y1="24" x2="56" y2="24"/>
+            <line x1="8" y1="36" x2="56" y2="36"/>
+            <line x1="8" y1="46" x2="56" y2="46"/>
+            <line x1="22" y1="12" x2="22" y2="52"/>
+            <line x1="40" y1="12" x2="40" y2="52"/>
+          </svg>
+          <div class="title">拖入文件，或点击选择</div>
+          <div class="hint">支持单个或多个 DWG / PDF 文件</div>
+        </div>
+      </div>
+      <input type="file" id="file-input" multiple accept=".dwg,.pdf">
+    </div>
+
+    <div class="file-list" id="file-list"></div>
+
+    <div class="progress" id="progress">
+      <div class="status" id="progress-status">准备中…</div>
+      <div class="log-panel" id="log-panel">
+        <div class="log-toolbar">
+          <div class="log-title">运行日志</div>
+          <button type="button" class="log-copy-btn" id="copy-log-btn">复制</button>
+        </div>
+        <div class="log-box" id="log-box"></div>
+      </div>
+    </div>
+
+    <div class="actions" id="actions">
+      <a class="download-btn" id="download-btn" href="#">下载 Excel</a>
+      <button id="reset-btn">再上传一批</button>
+    </div>
+  </div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const card = document.querySelector('.card');
+const frameRect = document.getElementById('frame-rect');
+const fileInput = document.getElementById('file-input');
+const fileList = document.getElementById('file-list');
+const progress = document.getElementById('progress');
+const progressStatus = document.getElementById('progress-status');
+const actions = document.getElementById('actions');
+const downloadBtn = document.getElementById('download-btn');
+const resetBtn = document.getElementById('reset-btn');
+const logPanel = document.getElementById('log-panel');
+const copyLogBtn = document.getElementById('copy-log-btn');
+
+let currentJobId = null;
+let pollTimer = null;
+let lastLogTime = null;
+let lastStatusIdx = 0;
+
+const logBox = document.getElementById('log-box');
+
+const LOG_PANEL_PREFERRED_HEIGHT = 180;
+const LOG_PANEL_MIN_HEIGHT = 128;
+const LOG_PANEL_EMERGENCY_HEIGHT = 88;
+
+function scheduleFileListLayout() {
+  window.requestAnimationFrame(layoutProgressLayout);
+}
+
+function getBaseFileListMaxHeight() {
+  const prevDynamic = fileList.style.getPropertyValue('--file-list-dynamic-height');
+  fileList.style.removeProperty('--file-list-dynamic-height');
+  const baseMax = parseFloat(window.getComputedStyle(fileList).maxHeight);
+  if (prevDynamic) fileList.style.setProperty('--file-list-dynamic-height', prevDynamic);
+  return Number.isFinite(baseMax) ? baseMax : 0;
+}
+
+function layoutFileList(availableOverride) {
+  const items = Array.from(fileList.querySelectorAll('.file-item'));
+  if (!items.length || !fileList.classList.contains('has-files')) return;
+
+  fileList.classList.remove('compact', 'ultra-compact');
+  fileList.style.removeProperty('height');
+  fileList.style.removeProperty('--file-item-height');
+  fileList.style.removeProperty('--file-item-gap');
+  fileList.style.removeProperty('--file-item-padding-y');
+  fileList.style.removeProperty('--file-item-padding-x');
+  fileList.style.removeProperty('--file-item-font-size');
+  fileList.style.removeProperty('--file-check-size');
+
+  const fallbackAvailable = getBaseFileListMaxHeight() || fileList.getBoundingClientRect().height;
+  const available = Math.max(
+    Math.floor(availableOverride != null ? availableOverride : fallbackAvailable),
+    0
+  );
+  if (!available) return;
+
+  const count = items.length;
+  const perItem = available / count;
+
+  let gap = 8;
+  let height = 52;
+  let padY = 14;
+  let padX = 16;
+  let fontSize = 15;
+  let checkSize = 22;
+
+  if (perItem < 58) {
+    fileList.classList.add('compact');
+    gap = 6;
+    height = Math.min(44, Math.max(30, Math.floor(perItem - gap)));
+    padY = Math.max(5, Math.min(10, Math.floor(height * 0.18)));
+    padX = 12;
+    fontSize = height < 38 ? 13 : 14;
+    checkSize = height < 38 ? 16 : 18;
+  }
+
+  if (perItem < 40) {
+    fileList.classList.remove('compact');
+    fileList.classList.add('ultra-compact');
+    gap = 4;
+    height = Math.min(32, Math.max(18, Math.floor(perItem - gap)));
+    padY = Math.max(2, Math.min(6, Math.floor(height * 0.14)));
+    padX = 8;
+    fontSize = 12;
+    checkSize = Math.max(12, Math.min(16, height - 6));
+  }
+
+  const totalGap = gap * Math.max(0, count - 1);
+  const fittedHeight = Math.max(16, Math.floor((available - totalGap) / count));
+  height = Math.min(height, fittedHeight);
+  const totalHeight = count * height + totalGap;
+
+  fileList.style.height = `${Math.min(available, totalHeight)}px`;
+  fileList.style.setProperty('--file-item-height', `${height}px`);
+  fileList.style.setProperty('--file-item-gap', `${gap}px`);
+  fileList.style.setProperty('--file-item-padding-y', `${padY}px`);
+  fileList.style.setProperty('--file-item-padding-x', `${padX}px`);
+  fileList.style.setProperty('--file-item-font-size', `${fontSize}px`);
+  fileList.style.setProperty('--file-check-size', `${checkSize}px`);
+}
+
+function layoutProgressLayout() {
+  if (!fileList.classList.contains('has-files')) return;
+
+  logPanel.classList.remove('compact', 'ultra-compact');
+  logPanel.style.removeProperty('height');
+
+  const baseFileListMax = getBaseFileListMaxHeight();
+  if (!progress.classList.contains('show') || !logPanel.classList.contains('show')) {
+    fileList.style.removeProperty('--file-list-dynamic-height');
+    layoutFileList(baseFileListMax);
+    return;
+  }
+
+  const cardRect = card.getBoundingClientRect();
+  const fileTop = fileList.getBoundingClientRect().top - cardRect.top;
+  const actionsTop = actions.classList.contains('show')
+    ? (actions.getBoundingClientRect().top - cardRect.top)
+    : (card.clientHeight - parseFloat(window.getComputedStyle(card).paddingBottom || '0'));
+  const stackAvailable = Math.max(0, actionsTop - fileTop);
+
+  const progressMarginTop = parseFloat(window.getComputedStyle(progress).marginTop) || 0;
+  const statusMarginTop = parseFloat(window.getComputedStyle(progressStatus).marginTop) || 0;
+  const statusBlockHeight = progressStatus.getBoundingClientRect().height + statusMarginTop;
+  const logMarginTop = parseFloat(window.getComputedStyle(logPanel).marginTop) || 0;
+  const resizableHeight = Math.max(0, stackAvailable - progressMarginTop - statusBlockHeight - logMarginTop);
+
+  const count = fileList.querySelectorAll('.file-item').length;
+  const desiredFileListHeight = Math.min(baseFileListMax, count * 52 + Math.max(0, count - 1) * 8);
+  const minFileListHeight = count * 18 + Math.max(0, count - 1) * 4;
+
+  let fileListTarget = desiredFileListHeight;
+  let logPanelTarget = Math.max(0, resizableHeight - fileListTarget);
+
+  if (resizableHeight < desiredFileListHeight + LOG_PANEL_MIN_HEIGHT) {
+    if (resizableHeight >= minFileListHeight + LOG_PANEL_MIN_HEIGHT) {
+      fileListTarget = resizableHeight - LOG_PANEL_MIN_HEIGHT;
+      logPanelTarget = LOG_PANEL_MIN_HEIGHT;
+    } else {
+      logPanelTarget = Math.max(
+        LOG_PANEL_EMERGENCY_HEIGHT,
+        Math.min(LOG_PANEL_MIN_HEIGHT, Math.floor(resizableHeight * 0.38))
+      );
+      fileListTarget = Math.max(0, resizableHeight - logPanelTarget);
+      logPanelTarget = Math.max(0, resizableHeight - fileListTarget);
+    }
+  } else if (logPanelTarget < LOG_PANEL_PREFERRED_HEIGHT) {
+    logPanelTarget = Math.max(LOG_PANEL_MIN_HEIGHT, logPanelTarget);
+    fileListTarget = Math.max(0, resizableHeight - logPanelTarget);
+  }
+
+  if (logPanelTarget <= 120) {
+    logPanel.classList.add('ultra-compact');
+  } else if (logPanelTarget <= 150) {
+    logPanel.classList.add('compact');
+  }
+
+  fileList.style.setProperty('--file-list-dynamic-height', `${Math.max(0, fileListTarget)}px`);
+  logPanel.style.height = `${Math.max(0, logPanelTarget)}px`;
+  layoutFileList(fileListTarget);
+}
+
+function getLogText() {
+  const entries = Array.from(logBox.querySelectorAll('.log-entry'));
+  return entries.map(entry => entry.textContent || '').join('\n');
+}
+
+function appendLog(text) {
+  const now = new Date();
+  const ts = now.toTimeString().slice(0, 8);
+  let deltaStr = '';
+  if (lastLogTime !== null) {
+    const delta = (now - lastLogTime) / 1000;
+    if (delta < 1) deltaStr = '+' + (delta * 1000).toFixed(0) + 'ms';
+    else deltaStr = '+' + delta.toFixed(1) + 's';
+  }
+  lastLogTime = now;
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = '<span class="log-time">' + ts + '</span>' +
+    (deltaStr ? ' <span class="log-delta">(' + deltaStr + ')</span>' : '') +
+    ' <span class="log-msg">' + text.replace(/</g, '&lt;') + '</span>';
+  logBox.appendChild(entry);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+async function copyLogText() {
+  const text = getLogText().trim();
+  if (!text) return;
+  const oldText = copyLogBtn.textContent;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    copyLogBtn.textContent = '已复制';
+  } catch (err) {
+    copyLogBtn.textContent = '复制失败';
+  }
+  setTimeout(() => {
+    copyLogBtn.textContent = oldText;
+  }, 1200);
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+let uploadedFiles = [];
+
+function renderFiles(files) {
+  uploadedFiles = files;
+  fileList.innerHTML = '';
+  if (!files.length) {
+    fileList.classList.remove('has-files', 'compact', 'ultra-compact');
+    fileList.style.removeProperty('--file-list-dynamic-height');
+    fileList.style.removeProperty('height');
+    logPanel.classList.remove('compact', 'ultra-compact');
+    logPanel.style.removeProperty('height');
+    return;
+  }
+  fileList.classList.add('has-files');
+  for (let idx = 0; idx < files.length; idx++) {
+    const f = files[idx];
+    const item = document.createElement('div');
+    item.className = 'file-item';
+    item.id = 'file-' + idx;
+
+    const bg = document.createElement('div');
+    bg.className = 'progress-bg';
+
+    const info = document.createElement('div');
+    info.className = 'file-info';
+
+    const name = document.createElement('span');
+    name.className = 'name'; name.textContent = f.name;
+
+    const pageStatus = document.createElement('span');
+    pageStatus.className = 'page-status';
+    pageStatus.id = 'page-status-' + idx;
+    pageStatus.textContent = '';
+
+    const checkIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    checkIcon.setAttribute('class', 'check-icon');
+    checkIcon.setAttribute('viewBox', '0 0 24 24');
+    checkIcon.setAttribute('fill', 'none');
+    checkIcon.setAttribute('stroke', '#67c23a');
+    checkIcon.setAttribute('stroke-width', '3');
+    checkIcon.setAttribute('stroke-linecap', 'round');
+    checkIcon.setAttribute('stroke-linejoin', 'round');
+    checkIcon.innerHTML = '<polyline points="20 6 9 17 4 12"></polyline>';
+
+    info.appendChild(name);
+    info.appendChild(pageStatus);
+    info.appendChild(checkIcon);
+
+    item.appendChild(bg);
+    item.appendChild(info);
+    fileList.appendChild(item);
+  }
+  scheduleFileListLayout();
+}
+
+function updateFileProgress(fileIdx, status, page, pages, pct, phase, tableIdx, tableCount) {
+  const item = document.getElementById('file-' + fileIdx);
+  if (!item) return;
+  const bg = item.querySelector('.progress-bg');
+  const ps = document.getElementById('page-status-' + fileIdx);
+
+  item.className = 'file-item ' + (status || '');
+
+  if (status === 'running') {
+    bg.style.width = (pct || 0) + '%';
+    if (phase === 'reading') {
+      ps.textContent = '第 ' + page + '/' + pages + ' 页 · 读取中';
+    } else if (phase === 'counting_done') {
+      ps.textContent = '第 ' + page + '/' + pages + ' 页 · 页面表格梳理';
+    } else if (phase === 'processing') {
+      ps.textContent = '第 ' + page + '/' + pages + ' 页 · ' + tableIdx + '/' + tableCount + ' 表';
+    } else if (phase === 'page_done') {
+      ps.textContent = '第 ' + page + '/' + pages + ' 页 · 完成';
+    } else if (pages > 0) {
+      ps.textContent = '第 ' + page + '/' + pages + ' 页';
+    }
+  } else if (status === 'done') {
+    bg.style.width = '100%';
+    ps.textContent = '完成';
+  }
+}
+
+function reset() {
+  currentJobId = null;
+  uploadedFiles = [];
+  fileInput.value = '';
+  fileList.innerHTML = '';
+  fileList.classList.remove('has-files');
+  fileList.classList.remove('compact', 'ultra-compact');
+  fileList.style.removeProperty('--file-list-dynamic-height');
+  progress.classList.remove('show');
+  logPanel.classList.remove('show');
+  logPanel.classList.remove('compact', 'ultra-compact');
+  logPanel.style.removeProperty('height');
+  logBox.innerHTML = '';
+  lastLogTime = null;
+  lastStatusIdx = 0;
+  progressStatus.className = 'status';
+  progressStatus.textContent = '准备中…';
+  actions.classList.remove('show');
+  downloadBtn.href = '#';
+  dropzone.classList.remove('disabled');
+  dropzone.classList.remove('hidden');
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  fileList.classList.remove('compact', 'ultra-compact');
+  fileList.style.removeProperty('--file-list-dynamic-height');
+  fileList.style.removeProperty('height');
+  fileList.style.removeProperty('--file-item-height');
+  fileList.style.removeProperty('--file-item-gap');
+  fileList.style.removeProperty('--file-item-padding-y');
+  fileList.style.removeProperty('--file-item-padding-x');
+  fileList.style.removeProperty('--file-item-font-size');
+  fileList.style.removeProperty('--file-check-size');
+}
+
+// hover 改虚线颜色
+dropzone.addEventListener('mouseenter', () => frameRect.setAttribute('stroke', '#409eff'));
+dropzone.addEventListener('mouseleave', () => {
+  if (!dropzone.classList.contains('drag-over')) frameRect.setAttribute('stroke', '#c0c4cc');
+});
+
+// 拖拽
+['dragenter', 'dragover'].forEach(evt => {
+  dropzone.addEventListener(evt, e => {
+    e.preventDefault(); e.stopPropagation();
+    if (!currentJobId) {
+      dropzone.classList.add('drag-over');
+      frameRect.setAttribute('stroke', '#409eff');
+    }
+  });
+});
+['dragleave', 'drop'].forEach(evt => {
+  dropzone.addEventListener(evt, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropzone.classList.remove('drag-over');
+    frameRect.setAttribute('stroke', '#c0c4cc');
+  });
+});
+dropzone.addEventListener('drop', e => {
+  if (currentJobId) return;
+  const files = Array.from(e.dataTransfer.files).filter(f => /\.(dwg|pdf)$/i.test(f.name));
+  if (!files.length) { alert('请拖入 DWG 或 PDF 文件'); return; }
+  handleFiles(files);
+});
+dropzone.addEventListener('click', e => {
+  if (e.target.tagName !== 'INPUT') fileInput.click();
+});
+fileInput.addEventListener('change', e => {
+  const files = Array.from(e.target.files).filter(f => /\.(dwg|pdf)$/i.test(f.name));
+  if (files.length) handleFiles(files);
+});
+resetBtn.addEventListener('click', reset);
+copyLogBtn.addEventListener('click', copyLogText);
+window.addEventListener('resize', scheduleFileListLayout);
+if (window.ResizeObserver) {
+  const layoutObserver = new ResizeObserver(() => scheduleFileListLayout());
+  layoutObserver.observe(card);
+  layoutObserver.observe(fileList);
+}
+
+async function handleFiles(files) {
+  if (currentJobId) return;
+  renderFiles(files);
+  dropzone.classList.add('disabled');
+  // 用户拖入文件后，隐藏拖拽框
+  setTimeout(() => dropzone.classList.add('hidden'), 200);
+  setTimeout(scheduleFileListLayout, 260);
+  progress.classList.add('show');
+  logBox.innerHTML = '';
+  logPanel.classList.add('show');
+  lastLogTime = null;
+  lastStatusIdx = 0;
+  progressStatus.textContent = '上传中…';
+
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+
+  let resp;
+  try {
+    resp = await fetch('/api/upload', { method: 'POST', body: fd });
+  } catch (err) {
+    progressStatus.className = 'status error';
+    progressStatus.textContent = '上传失败：' + err.message;
+    return;
+  }
+  if (!resp.ok) {
+    const j = await resp.json().catch(() => ({}));
+    progressStatus.className = 'status error';
+    progressStatus.textContent = j.error || '上传失败';
+    return;
+  }
+  const data = await resp.json();
+  currentJobId = data.job_id;
+  progressStatus.textContent = `已接收 ${data.files.length} 个文件，开始提取表格…`;
+
+  pollTimer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/status/' + currentJobId);
+      if (!r.ok) return;
+      const j = await r.json();
+
+      if (j.status === 'running') {
+        const fp = j.file_progress || [];
+        for (let i = 0; i < fp.length; i++) {
+          updateFileProgress(i, fp[i].status || '', fp[i].page || 0, fp[i].pages || 0,
+            fp[i].pct || 0, fp[i].phase || '', fp[i].table_idx || 0, fp[i].table_count || 0);
+        }
+
+        // 从后端 status_texts 队列同步日志
+        if (j.status_texts && j.status_texts.length > lastStatusIdx) {
+          for (let si = lastStatusIdx; si < j.status_texts.length; si++) {
+            const st = j.status_texts[si];
+            appendLog(st.text, st.ts);
+          }
+          lastStatusIdx = j.status_texts.length;
+        }
+
+        const curFile = j.current_file_index !== undefined ? j.current_file_index : -1;
+
+        if (curFile >= 0 && j.files && j.files[curFile]) {
+          const fn = j.files[curFile].name;
+          const cf = fp[curFile] || {};
+          if (cf.pages > 0) {
+            let phaseText = '';
+            if (cf.phase === 'reading') phaseText = '读取中';
+            else if (cf.phase === 'orienting') phaseText = '检测方向';
+            else if (cf.phase === 'rendering') phaseText = '渲染页面';
+            else if (cf.phase === 'detecting_lines') phaseText = '检测线段';
+            else if (cf.phase === 'counting_done') phaseText = '页面表格梳理';
+            else if (cf.phase === 'processing') phaseText = '处理第 ' + (cf.table_idx || 0) + '/' + (cf.table_count || 0) + ' 张表';
+            else if (cf.phase === 'page_done') phaseText = '页面处理完成';
+            progressStatus.textContent = `共 ${j.files.length} 个文件，正在处理第 ${curFile + 1} 个文件「${fn}」 — 第 ${cf.page}/${cf.pages} 页 · ${phaseText}`;
+          } else {
+            progressStatus.textContent = `共 ${j.files.length} 个文件，正在处理第 ${curFile + 1} 个文件「${fn}」`;
+          }
+        } else {
+          progressStatus.textContent = '准备处理…';
+        }
+
+      } else if (j.status === 'done') {
+        const fp = j.file_progress || [];
+        for (let i = 0; i < fp.length; i++) {
+          updateFileProgress(i, 'done', 0, 0, 100, '', 0, 0);
+        }
+        if (j.status_texts && j.status_texts.length > lastStatusIdx) {
+          for (let si = lastStatusIdx; si < j.status_texts.length; si++) {
+            const st = j.status_texts[si];
+            appendLog(st.text, st.ts);
+          }
+          lastStatusIdx = j.status_texts.length;
+        }
+        progressStatus.className = 'status done';
+        progressStatus.textContent = `完成！共 ${j.total_tables} 张表`;
+        clearInterval(pollTimer); pollTimer = null;
+        showDownloads(currentJobId);
+
+      } else if (j.status === 'failed') {
+        progressStatus.className = 'status error';
+        progressStatus.textContent = '失败：' + (j.error || '');
+        clearInterval(pollTimer); pollTimer = null;
+        actions.classList.add('show');
+      }
+    } catch (e) { /* 静默 */ }
+  }, 800);
+}
+
+function showDownloads(jobId) {
+  downloadBtn.href = '/api/download/' + jobId;
+  downloadBtn.download = 'tables_summary.xlsx';
+  actions.classList.add('show');
+}
+</script>
+</body>
+</html>

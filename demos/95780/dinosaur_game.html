@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>恐龙快打 - 复古街机网页版</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #111;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Arial', sans-serif;
+    overflow: hidden;
+  }
+  .game-wrapper {
+    background: #222;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 0 40px rgba(255,165,0,0.3);
+    border: 2px solid #ff8c00;
+  }
+  canvas {
+    display: block;
+    margin: 0 auto;
+    border-radius: 8px;
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+  }
+  .controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 15px;
+    color: #ffd700;
+    font-size: 14px;
+  }
+  .controls .keys {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .controls .keys kbd {
+    background: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #fff;
+  }
+  .controls button {
+    background: #ff8c00;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 20px;
+    color: #fff;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.2s;
+  }
+  .controls button:hover { background: #ffa500; }
+  .status {
+    display: flex;
+    gap: 20px;
+    font-size: 16px;
+    font-weight: bold;
+  }
+  .status span { color: #fff; }
+  .status .hp { color: #ff4444; }
+  .status .score-val { color: #ffd700; }
+  @media (max-width: 850px) {
+    .game-wrapper { padding: 10px; }
+    .controls { flex-direction: column; gap: 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="game-wrapper">
+  <canvas id="gameCanvas" width="800" height="500"></canvas>
+  <div class="controls">
+    <div class="keys">
+      <kbd>←</kbd> <kbd>→</kbd> 移动
+      <kbd>↑</kbd> 跳跃
+      <kbd>空格</kbd> 攻击
+      <kbd>Z</kbd> 必杀技
+    </div>
+    <div class="status">
+      <span>❤️ <span class="hp" id="hpDisplay">3</span></span>
+      <span>🏆 <span class="score-val" id="scoreDisplay">0</span></span>
+    </div>
+    <button id="restartBtn">重新开始</button>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const hpDisplay = document.getElementById('hpDisplay');
+const scoreDisplay = document.getElementById('scoreDisplay');
+
+// ---- Game Constants ----
+const GRAVITY = 0.6;
+const GROUND_Y = 430;
+const PLAYER_SPEED = 4;
+const ENEMY_SPEED = 1.2;
+
+// ---- Game State ----
+let gameOver = false;
+let score = 0;
+let keys = {};
+let enemies = [];
+let attacks = [];
+let particles = [];
+let spawnTimer = 0;
+let gameTime = 0;
+let comboTimer = 0;
+let comboCount = 0;
+let screenShake = 0;
+
+// ---- Player ----
+const player = {
+  x: 100, y: GROUND_Y, w: 40, h: 60,
+  vx: 0, vy: 0,
+  hp: 3, maxHp: 3,
+  onGround: true,
+  facing: 1,
+  attacking: false,
+  attackTimer: 0,
+  specialTimer: 0,
+  hitTimer: 0,
+  invincible: 0,
+  animFrame: 0,
+  animTimer: 0
+};
+
+function resetGame() {
+  gameOver = false;
+  score = 0;
+  enemies = [];
+  attacks = [];
+  particles = [];
+  spawnTimer = 0;
+  gameTime = 0;
+  comboTimer = 0;
+  comboCount = 0;
+  screenShake = 0;
+  player.x = 100;
+  player.y = GROUND_Y;
+  player.vx = 0;
+  player.vy = 0;
+  player.hp = 3;
+  player.onGround = true;
+  player.facing = 1;
+  player.attacking = false;
+  player.attackTimer = 0;
+  player.specialTimer = 0;
+  player.hitTimer = 0;
+  player.invincible = 0;
+  updateDisplay();
+}
+
+// ---- Enemy ----
+function spawnEnemy() {
+  const side = Math.random() > 0.5 ? 1 : -1;
+  const x = side === 1 ? 850 : -50;
+  const type = Math.random() > 0.6 ? 'big' : 'normal';
+  enemies.push({
+    x: x, y: GROUND_Y, w: type === 'big' ? 50 : 36, h: type === 'big' ? 70 : 56,
+    vx: 0, vy: 0,
+    hp: type === 'big' ? 3 : 1,
+    maxHp: type === 'big' ? 3 : 1,
+    onGround: true,
+    type: type,
+    hitTimer: 0,
+    attackCooldown: 0,
+    animFrame: 0,
+    animTimer: 0
+  });
+}
+
+// ---- Attack Projectile ----
+function createAttack(x, y, dir) {
+  attacks.push({
+    x: x, y: y - 20, w: 28, h: 12,
+    vx: dir * 10,
+    life: 40,
+    dir: dir
+  });
+}
+
+// ---- Particles ----
+function createParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: x, y: y,
+      vx: (Math.random() - 0.5) * 8,
+      vy: (Math.random() - 0.5) * 8 - 2,
+      life: 30 + Math.random() * 30,
+      maxLife: 60,
+      size: 3 + Math.random() * 5,
+      color: color
+    });
+  }
+}
+
+// ---- Input ----
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') e.preventDefault();
+});
+document.addEventListener('keyup', e => {
+  keys[e.key] = false;
+});
+
+// ---- Collision ----
+function rectCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ---- Update ----
+function update() {
+  if (gameOver) return;
+  gameTime++;
+
+  // Player movement
+  let moveX = 0;
+  if (keys['ArrowLeft'] || keys['a']) { moveX = -1; player.facing = -1; }
+  if (keys['ArrowRight'] || keys['d']) { moveX = 1; player.facing = 1; }
+
+  player.vx = moveX * PLAYER_SPEED;
+
+  // Jump
+  if ((keys['ArrowUp'] || keys['w']) && player.onGround) {
+    player.vy = -12;
+    player.onGround = false;
+  }
+
+  // Attack
+  if (keys[' '] && !player.attacking) {
+    player.attacking = true;
+    player.attackTimer = 15;
+    createAttack(player.x + player.facing * 30, player.y + 30, player.facing);
+    createParticles(player.x + player.facing * 30, player.y + 30, '#ff8c00', 5);
+  }
+
+  // Special (Z key)
+  if (keys['z'] && !player.specialTimer && player.hp > 0) {
+    player.specialTimer = 30;
+    // Circular attack
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      setTimeout(() => {
+        createAttack(
+          player.x + player.w/2 + Math.cos(angle) * 40,
+          player.y + 20 + Math.sin(angle) * 20,
+          Math.cos(angle) * 2
+        );
+      }, i * 30);
+    }
+    createParticles(player.x + player.w/2, player.y + 30, '#ff4444', 20);
+  }
+
+  if (player.attackTimer > 0) player.attackTimer--;
+  else player.attacking = false;
+
+  if (player.specialTimer > 0) player.specialTimer--;
+
+  // Physics
+  player.vy += GRAVITY;
+  player.x += player.vx;
+  player.y += player.vy;
+
+  if (player.y >= GROUND_Y) {
+    player.y = GROUND_Y;
+    player.vy = 0;
+    player.onGround = true;
+  }
+
+  // Boundaries
+  if (player.x < 0) player.x = 0;
+  if (player.x > 760) player.x = 760;
+
+  if (player.invincible > 0) player.invincible--;
+
+  // Animation
+  if (Math.abs(player.vx) > 0) {
+    player.animTimer++;
+    if (player.animTimer > 8) {
+      player.animFrame = (player.animFrame + 1) % 4;
+      player.animTimer = 0;
+    }
+  }
+
+  // Combo timer
+  if (comboTimer > 0) comboTimer--;
+  else comboCount = 0;
+
+  // ---- Enemies ----
+  spawnTimer++;
+  const spawnRate = Math.max(30, 90 - gameTime / 100);
+  if (spawnTimer > spawnRate && enemies.length < 8) {
+    spawnEnemy();
+    spawnTimer = 0;
+  }
+
+  enemies.forEach((enemy, ei) => {
+    // Move toward player
+    const dx = (player.x + player.w/2) - (enemy.x + enemy.w/2);
+    enemy.vx = Math.sign(dx) * ENEMY_SPEED;
+    
+    if (Math.random() < 0.01 && enemy.onGround) {
+      enemy.vy = -8;
+      enemy.onGround = false;
+    }
+
+    // Wrap around screen
+    if (enemy.x < -100) enemy.x = 850;
+    if (enemy.x > 850) enemy.x = -100;
+
+    enemy.vy += GRAVITY;
+    enemy.x += enemy.vx;
+    enemy.y += enemy.vy;
+
+    if (enemy.y >= GROUND_Y) {
+      enemy.y = GROUND_Y;
+      enemy.vy = 0;
+      enemy.onGround = true;
+    }
+
+    if (enemy.hitTimer > 0) enemy.hitTimer--;
+
+    // Enemy attack player
+    if (enemy.attackCooldown > 0) enemy.attackCooldown--;
+    if (Math.abs(dx) < 50 && Math.random() < 0.02 && enemy.attackCooldown === 0 && player.invincible === 0) {
+      // Enemy hits player
+      player.hp--;
+      player.invincible = 60;
+      player.hitTimer = 10;
+      screenShake = 10;
+      enemy.attackCooldown = 40;
+      createParticles(player.x + player.w/2, player.y + 30, '#ff0000', 10);
+      updateDisplay();
+      if (player.hp <= 0) {
+        gameOver = true;
+        createParticles(player.x + player.w/2, player.y + 30, '#ff4444', 40);
+      }
+    }
+  });
+
+  // ---- Attacks vs Enemies ----
+  attacks.forEach((att, ai) => {
+    att.x += att.vx;
+    att.life--;
+
+    enemies.forEach((enemy, ei) => {
+      if (rectCollide(att, enemy)) {
+        enemy.hp--;
+        enemy.hitTimer = 10;
+        enemy.vx = att.dir * 8;
+        createParticles(att.x, att.y, '#ffcc00', 8);
+        
+        // Score
+        comboCount++;
+        comboTimer = 60;
+        const bonus = Math.min(comboCount, 5);
+        score += 10 * bonus;
+        
+        if (enemy.hp <= 0) {
+          // Enemy defeated
+          createParticles(enemy.x + enemy.w/2, enemy.y + enemy.h/2, '#ff6600', 20);
+          enemies.splice(ei, 1);
+          score += 50;
+          screenShake = 5;
+        }
+        
+        att.life = 0;
+        updateDisplay();
+      }
+    });
+  });
+
+  // Cleanup
+  attacks = attacks.filter(a => a.life > 0);
+  enemies = enemies.filter(e => e.hp > 0);
+
+  // Particles
+  particles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.1;
+    p.life--;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  if (screenShake > 0) screenShake--;
+  updateDisplay();
+}
+
+// ---- Draw ----
+function draw() {
+  ctx.save();
+
+  // Screen shake
+  if (screenShake > 0) {
+    const sx = (Math.random() - 0.5) * screenShake;
+    const sy = (Math.random() - 0.5) * screenShake;
+    ctx.translate(sx, sy);
+  }
+
+  // Background - city street
+  const grad = ctx.createLinearGradient(0, 0, 0, 500);
+  grad.addColorStop(0, '#1a1a2e');
+  grad.addColorStop(0.4, '#16213e');
+  grad.addColorStop(0.7, '#0f3460');
+  grad.addColorStop(1, '#533483');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 800, 500);
+
+  // Buildings
+  ctx.fillStyle = '#0a0a1a';
+  for (let i = 0; i < 10; i++) {
+    const bx = (i * 90 + gameTime * 0.1) % 900 - 50;
+    const bh = 100 + Math.sin(i * 2.5) * 60;
+    ctx.fillRect(bx, GROUND_Y - bh - 50, 70, bh + 50);
+    // Windows
+    ctx.fillStyle = 'rgba(255,200,50,0.3)';
+    for (let wy = GROUND_Y - bh - 30; wy < GROUND_Y - 20; wy += 25) {
+      for (let wx = bx + 8; wx < bx + 60; wx += 20) {
+        if (Math.random() > 0.3) {
+          ctx.fillRect(wx, wy, 14, 16);
+        }
+      }
+    }
+    ctx.fillStyle = '#0a0a1a';
+  }
+
+  // Ground
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(0, GROUND_Y + 10, 800, 60);
+  ctx.fillStyle = '#444';
+  ctx.fillRect(0, GROUND_Y + 8, 800, 4);
+  // Road markings
+  for (let i = 0; i < 20; i++) {
+    const rx = (i * 45 + gameTime * 0.5) % 900 - 50;
+    ctx.fillStyle = '#666';
+    ctx.fillRect(rx, GROUND_Y + 30, 20, 3);
+  }
+
+  // ---- Player ----
+  if (player.hp > 0) {
+    ctx.save();
+    ctx.translate(player.x + player.w/2, player.y + 30);
+    if (player.facing < 0) ctx.scale(-1, 1);
+    
+    // Body
+    const bodyColor = player.hitTimer > 0 ? '#ff4444' : 
+                      player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0 ? '#ff8888' : '#ffcc00';
+    
+    // Legs animation
+    if (!player.onGround) {
+      // Jump pose
+      ctx.fillStyle = '#1a5276';
+      ctx.fillRect(-15, 10, 30, 20);
+      ctx.fillStyle = '#2e86c1';
+      ctx.fillRect(-12, 5, 24, 18);
+    } else if (Math.abs(player.vx) > 0) {
+      // Walk animation
+      const legOffset = Math.sin(player.animFrame * Math.PI / 2) * 5;
+      ctx.fillStyle = '#1a5276';
+      ctx.fillRect(-15, 5 + legOffset, 10, 25);
+      ctx.fillRect(5, 5 - legOffset, 10, 25);
+      ctx.fillStyle = '#2e86c1';
+      ctx.fillRect(-20, 0, 40, 15);
+    } else {
+      // Idle
+      ctx.fillStyle = '#1a5276';
+      ctx.fillRect(-15, 5, 30, 28);
+      ctx.fillStyle = '#2e86c1';
+      ctx.fillRect(-20, 0, 40, 15);
+    }
+    
+    // Head
+    ctx.fillStyle = '#f5cba7';
+    ctx.fillRect(-12, -22, 24, 24);
+    // Hair (Jack's look)
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(-14, -26, 28, 8);
+    ctx.fillRect(-16, -22, 32, 4);
+    // Eyes
+    ctx.fillStyle = '#000';
+    ctx.fillRect(-6, -12, 5, 5);
+    ctx.fillRect(2, -12, 5, 5);
+    // Bandana
+    ctx.fillStyle = '#e74c3c';
+    ctx.fillRect(-14, -16, 28, 4);
+    
+    // Arms
+    if (player.attacking) {
+      ctx.fillStyle = '#f5cba7';
+      ctx.fillRect(15, -5, 25, 8);
+      // Fist
+      ctx.fillStyle = '#e67e22';
+      ctx.beginPath();
+      ctx.arc(42, -1, 8, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#f5cba7';
+      ctx.fillRect(15, -2, 15, 6);
+    }
+    
+    ctx.restore();
+  }
+
+  // ---- Enemies ----
+  enemies.forEach(enemy => {
+    ctx.save();
+    ctx.translate(enemy.x + enemy.w/2, enemy.y + enemy.h/2);
+    
+    const hitFlash = enemy.hitTimer > 0;
+    
+    if (enemy.type === 'big') {
+      // Big thug
+      ctx.fillStyle = hitFlash ? '#fff' : '#8e44ad';
+      ctx.fillRect(-20, -25, 40, 50);
+      ctx.fillStyle = hitFlash ? '#fff' : '#6c3483';
+      ctx.fillRect(-22, -30, 44, 12);
+      ctx.fillStyle = hitFlash ? '#fff' : '#d5a6bd';
+      ctx.fillRect(-14, -38, 28, 18);
+      // Headband
+      ctx.fillStyle = hitFlash ? '#fff' : '#2c3e50';
+      ctx.fillRect(-16, -34, 32, 4);
+      // Eyes
+      ctx.fillStyle = hitFlash ? '#333' : '#ff0000';
+      ctx.fillRect(-8, -28, 6, 5);
+      ctx.fillRect(2, -28, 6, 5);
+    } else {
+      // Normal thug
+      ctx.fillStyle = hitFlash ? '#fff' : '#e67e22';
+      ctx.fillRect(-14, -20, 28, 40);
+      ctx.fillStyle = hitFlash ? '#fff' : '#d35400';
+      ctx.fillRect(-16, -24, 32, 8);
+      ctx.fillStyle = hitFlash ? '#fff' : '#f5cba7';
+      ctx.fillRect(-10, -32, 20, 16);
+      // Sunglasses
+      ctx.fillStyle = hitFlash ? '#333' : '#111';
+      ctx.fillRect(-12, -28, 24, 6);
+      // Jacket
+      ctx.fillStyle = hitFlash ? '#fff' : '#c0392b';
+      ctx.fillRect(-14, -8, 28, 28);
+    }
+    
+    // Health bar for big enemies
+    if (enemy.type === 'big') {
+      ctx.fillStyle = '#333';
+      ctx.fillRect(-20, -42, 40, 5);
+      ctx.fillStyle = '#e74c3c';
+      ctx.fillRect(-20, -42, 40 * (enemy.hp / enemy.maxHp), 5);
+    }
+    
+    ctx.restore();
+  });
+
+  // ---- Attacks ----
+  attacks.forEach(att => {
+    ctx.save();
+    ctx.fillStyle = '#ff8c00';
+    ctx.shadowColor = '#ff8c00';
+    ctx.shadowBlur = 15;
+    ctx.beginPath();
+    ctx.arc(att.x, att.y, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffd700';
+    ctx.beginPath();
+    ctx.arc(att.x, att.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // ---- Particles ----
+  particles.forEach(p => {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  });
+  ctx.globalAlpha = 1;
+
+  // ---- UI ----
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, 800, 40);
+  
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 16px Arial';
+  ctx.fillText('🦖 恐龙快打 - 复古街机', 10, 28);
+
+  // Combo display
+  if (comboCount > 1) {
+    ctx.fillStyle = '#ff4444';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${comboCount} 连击!`, 400, 80);
+    ctx.textAlign = 'left';
+  }
+
+  // Controls hint
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '12px Arial';
+  ctx.fillText('← → 移动 | ↑ 跳跃 | 空格 攻击 | Z 必杀技', 560, 28);
+
+  // Game Over
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 150, 800, 100);
+    ctx.fillStyle = '#ff4444';
+    ctx.font = 'bold 48px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', 400, 220);
+    ctx.fillStyle = '#ffd700';
+    ctx.font = '20px Arial';
+    ctx.fillText(`最终得分: ${score}`, 400, 260);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#aaa';
+    ctx.font = '16px Arial';
+    ctx.fillText('点击"重新开始"按钮继续', 320, 290);
+  }
+
+  ctx.restore();
+}
+
+function updateDisplay() {
+  hpDisplay.textContent = player.hp;
+  scoreDisplay.textContent = score;
+}
+
+// ---- Game Loop ----
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ---- Restart ----
+document.getElementById('restartBtn').addEventListener('click', resetGame);
+
+gameLoop();
+</script>
+</body>
+</html>

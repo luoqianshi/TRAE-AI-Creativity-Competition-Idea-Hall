@@ -1,0 +1,1 @@
+chrome.action.onClicked.addListener(e=>{e.id&&chrome.sidePanel.open({tabId:e.id})}),chrome.runtime.onInstalled.addListener(()=>{console.log(`抖音助手已安装`)});

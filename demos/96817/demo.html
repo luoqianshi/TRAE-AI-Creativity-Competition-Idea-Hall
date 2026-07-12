@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>魔方块境</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #0a0e1a;
+    overflow: hidden;
+    touch-action: none;
+    font-family: 'Courier New', Courier, monospace;
+  }
+  #gameCanvas {
+    display: block;
+    margin: 0 auto;
+    image-rendering: pixelated;
+  }
+  #uiLayer {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; display: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+/* ===================== 常量与配置 ===================== */
+const CANVAS_W = 960;
+const CANVAS_H = 640;
+const COLORS = {
+  W: '#e8eaf0', Y: '#facc15', G: '#4ade80',
+  B: '#60a5fa', O: '#fb923c', R: '#f87171',
+  bg: '#0a0e1a', panel: '#141b2d', cyan: '#00d4ff', pink: '#ff6b9d',
+  text: '#c8d4e0', grid: '#1e2a45'
+};
+const CUBE_COLORS = [COLORS.W, COLORS.Y, COLORS.G, COLORS.B, COLORS.O, COLORS.R];
+const FACE_NAMES = ['U', 'D', 'F', 'B', 'L', 'R'];
+const FACE_NAME_CN = ['顶(U)', '底(D)', '前(F)', '后(B)', '左(L)', '右(R)'];
+// 面索引: 0=U白, 1=D黄, 2=F绿, 3=B蓝, 4=L橙, 5=R红
+
+const STICKER = 32;
+const STICKER_GAP = 2;
+const FACE_BORDER = 3;
+const FACE_TOTAL = STICKER * 3 + STICKER_GAP * 2 + FACE_BORDER * 2; // ~106
+const FACE_GAP = 12;
+
+// 展开图布局 (cross net)
+//       [F]
+//   [L] [U] [R] [B]
+//       [D]
+const NET_LAYOUT = {
+  2: { x: 1, y: 0 }, // F
+  4: { x: 0, y: 1 }, // L
+  0: { x: 1, y: 1 }, // U
+  5: { x: 2, y: 1 }, // R
+  3: { x: 3, y: 1 }, // B
+  1: { x: 1, y: 2 }, // D
+};
+
+const SCENES = { TITLE: 0, TUTORIAL: 1, PUZZLE: 2, BATTLE: 3, CLEAR: 4, GAMEOVER: 5 };
+
+/* ===================== 全局状态 ===================== */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let scene = SCENES.TITLE;
+let lastTime = 0;
+let cube = []; // 6 faces x 9 stickers
+let selectedFace = -1;
+let moves = 0;
+let maxMoves = 15;
+let level = 1;
+let totalMoves = 0;
+let particles = [];
+let bullets = [];
+let player = { x: 0, y: 0, w: 16, h: 16, hp: 100, maxHp: 100, speed: 220, dashCd: 0, dashTime: 0, invincible: 0 };
+let battleTime = 0;
+let battleMaxTime = 10;
+let battleMode = 'A';
+let keys = {};
+let mouse = { x: 0, y: 0, down: false, startX: 0, startY: 0 };
+let touchStart = { x: 0, y: 0, face: -1 };
+let uiButtons = []; // clickable regions
+let animRotating = null; // { face, cw, t, dur }
+let msgTimer = 0;
+let msgText = '';
+let screenShake = 0;
+let hintAlpha = 1;
+let clearedLevels = 0;
+let bestHp = 100;
+
+/* ===================== 音频系统 (Web Audio API) ===================== */
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function beep(freq, dur, type = 'square', vol = 0.08) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function sfx(name) {
+  ensureAudio();
+  switch (name) {
+    case 'move': beep(320, 0.08, 'square', 0.06); break;
+    case 'select': beep(520, 0.12, 'sine', 0.07); break;
+    case 'rotate': beep(260, 0.15, 'sawtooth', 0.05); break;
+    case 'win':
+      [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.2, 'sine', 0.08), i * 120));
+      break;
+    case 'hit': beep(140, 0.25, 'sawtooth', 0.12); break;
+    case 'dash': beep(600, 0.18, 'sine', 0.06); break;
+    case 'battleStart':
+      [330, 392, 440, 523].forEach((f, i) => setTimeout(() => beep(f, 0.25, 'square', 0.07), i * 150));
+      break;
+    case 'clear':
+      [392, 440, 523, 659, 784].forEach((f, i) => setTimeout(() => beep(f, 0.3, 'sine', 0.09), i * 140));
+      break;
+    case 'hover': beep(880, 0.04, 'sine', 0.03); break;
+  }
+}
+
+/* ===================== 粒子系统 ===================== */
+function spawnParticles(x, y, color, count = 20) {
+  for (let i = 0; i < count; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const sp = 40 + Math.random() * 120;
+    particles.push({
+      x, y,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp,
+      life: 0.5 + Math.random() * 0.8,
+      maxLife: 1,
+      size: 2 + Math.random() * 4,
+      color,
+      gravity: 80 + Math.random() * 60
+    });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += p.gravity * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    const a = Math.max(0, p.life / (p.life + p.maxLife * 0.2));
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ===================== 魔方核心逻辑 ===================== */
+function createSolvedCube() {
+  cube = [];
+  for (let f = 0; f < 6; f++) {
+    cube.push(new Array(9).fill(f));
+  }
+}
+
+function rotateFaceCW(faceIdx) {
+  const f = cube[faceIdx];
+  cube[faceIdx] = [f[6], f[3], f[0], f[7], f[4], f[1], f[8], f[5], f[2]];
+}
+function rotateFaceCCW(faceIdx) {
+  const f = cube[faceIdx];
+  cube[faceIdx] = [f[2], f[5], f[8], f[1], f[4], f[7], f[0], f[3], f[6]];
+}
+
+function doMove(faceIdx, cw) {
+  const U = 0, D = 1, F = 2, B = 3, L = 4, R = 5;
+  let t;
+  if (cw) {
+    rotateFaceCW(faceIdx);
+    switch (faceIdx) {
+      case U:
+        t = [cube[F][0], cube[F][1], cube[F][2]];
+        cube[F][0] = cube[L][0]; cube[F][1] = cube[L][1]; cube[F][2] = cube[L][2];
+        cube[L][0] = cube[B][0]; cube[L][1] = cube[B][1]; cube[L][2] = cube[B][2];
+        cube[B][0] = cube[R][0]; cube[B][1] = cube[R][1]; cube[B][2] = cube[R][2];
+        cube[R][0] = t[0]; cube[R][1] = t[1]; cube[R][2] = t[2];
+        break;
+      case D:
+        t = [cube[F][6], cube[F][7], cube[F][8]];
+        cube[F][6] = cube[R][6]; cube[F][7] = cube[R][7]; cube[F][8] = cube[R][8];
+        cube[R][6] = cube[B][6]; cube[R][7] = cube[B][7]; cube[R][8] = cube[B][8];
+        cube[B][6] = cube[L][6]; cube[B][7] = cube[L][7]; cube[B][8] = cube[L][8];
+        cube[L][6] = t[0]; cube[L][7] = t[1]; cube[L][8] = t[2];
+        break;
+      case F:
+        t = [cube[U][6], cube[U][7], cube[U][8]];
+        cube[U][6] = cube[L][8]; cube[U][7] = cube[L][5]; cube[U][8] = cube[L][2];
+        cube[L][2] = cube[D][0]; cube[L][5] = cube[D][1]; cube[L][8] = cube[D][2];
+        cube[D][0] = cube[R][6]; cube[D][1] = cube[R][3]; cube[D][2] = cube[R][0];
+        cube[R][0] = t[0]; cube[R][3] = t[1]; cube[R][6] = t[2];
+        break;
+      case B:
+        t = [cube[U][0], cube[U][1], cube[U][2]];
+        cube[U][0] = cube[R][2]; cube[U][1] = cube[R][5]; cube[U][2] = cube[R][8];
+        cube[R][2] = cube[D][8]; cube[R][5] = cube[D][7]; cube[R][8] = cube[D][6];
+        cube[D][6] = cube[L][0]; cube[D][7] = cube[L][3]; cube[D][8] = cube[L][6];
+        cube[L][0] = t[2]; cube[L][3] = t[1]; cube[L][6] = t[0];
+        break;
+      case L:
+        t = [cube[U][0], cube[U][3], cube[U][6]];
+        cube[U][0] = cube[B][8]; cube[U][3] = cube[B][5]; cube[U][6] = cube[B][2];
+        cube[B][2] = cube[D][6]; cube[B][5] = cube[D][3]; cube[B][8] = cube[D][0];
+        cube[D][0] = cube[F][0]; cube[D][3] = cube[F][3]; cube[D][6] = cube[F][6];
+        cube[F][0] = t[0]; cube[F][3] = t[1]; cube[F][6] = t[2];
+        break;
+      case R:
+        t = [cube[U][2], cube[U][5], cube[U][8]];
+        cube[U][2] = cube[F][2]; cube[U][5] = cube[F][5]; cube[U][8] = cube[F][8];
+        cube[F][2] = cube[D][2]; cube[F][5] = cube[D][5]; cube[F][8] = cube[D][8];
+        cube[D][2] = cube[B][6]; cube[D][5] = cube[B][3]; cube[D][8] = cube[B][0];
+        cube[B][0] = t[2]; cube[B][3] = t[1]; cube[B][6] = t[0];
+        break;
+    }
+  } else {
+    rotateFaceCCW(faceIdx);
+    switch (faceIdx) {
+      case U:
+        t = [cube[F][0], cube[F][1], cube[F][2]];
+        cube[F][0] = cube[R][0]; cube[F][1] = cube[R][1]; cube[F][2] = cube[R][2];
+        cube[R][0] = cube[B][0]; cube[R][1] = cube[B][1]; cube[R][2] = cube[B][2];
+        cube[B][0] = cube[L][0]; cube[B][1] = cube[L][1]; cube[B][2] = cube[L][2];
+        cube[L][0] = t[0]; cube[L][1] = t[1]; cube[L][2] = t[2];
+        break;
+      case D:
+        t = [cube[F][6], cube[F][7], cube[F][8]];
+        cube[F][6] = cube[L][6]; cube[F][7] = cube[L][7]; cube[F][8] = cube[L][8];
+        cube[L][6] = cube[B][6]; cube[L][7] = cube[B][7]; cube[L][8] = cube[B][8];
+        cube[B][6] = cube[R][6]; cube[B][7] = cube[R][7]; cube[B][8] = cube[R][8];
+        cube[R][6] = t[0]; cube[R][7] = t[1]; cube[R][8] = t[2];
+        break;
+      case F:
+        t = [cube[U][6], cube[U][7], cube[U][8]];
+        cube[U][6] = cube[R][0]; cube[U][7] = cube[R][3]; cube[U][8] = cube[R][6];
+        cube[R][0] = cube[D][2]; cube[R][3] = cube[D][1]; cube[R][6] = cube[D][0];
+        cube[D][0] = cube[L][2]; cube[D][1] = cube[L][5]; cube[D][2] = cube[L][8];
+        cube[L][2] = t[2]; cube[L][5] = t[1]; cube[L][8] = t[0];
+        break;
+      case B:
+        t = [cube[U][0], cube[U][1], cube[U][2]];
+        cube[U][0] = cube[L][6]; cube[U][1] = cube[L][3]; cube[U][2] = cube[L][0];
+        cube[L][0] = cube[D][6]; cube[L][3] = cube[D][7]; cube[L][6] = cube[D][8];
+        cube[D][6] = cube[R][8]; cube[D][7] = cube[R][5]; cube[D][8] = cube[R][2];
+        cube[R][2] = t[0]; cube[R][5] = t[1]; cube[R][8] = t[2];
+        break;
+      case L:
+        t = [cube[U][0], cube[U][3], cube[U][6]];
+        cube[U][0] = cube[F][0]; cube[U][3] = cube[F][3]; cube[U][6] = cube[F][6];
+        cube[F][0] = cube[D][0]; cube[F][3] = cube[D][3]; cube[F][6] = cube[D][6];
+        cube[D][0] = cube[B][8]; cube[D][3] = cube[B][5]; cube[D][6] = cube[B][2];
+        cube[B][2] = t[2]; cube[B][5] = t[1]; cube[B][8] = t[0];
+        break;
+      case R:
+        t = [cube[U][2], cube[U][5], cube[U][8]];
+        cube[U][2] = cube[B][6]; cube[U][5] = cube[B][3]; cube[U][8] = cube[B][0];
+        cube[B][0] = cube[D][8]; cube[B][3] = cube[D][5]; cube[B][6] = cube[D][2];
+        cube[D][2] = cube[F][2]; cube[D][5] = cube[F][5]; cube[D][8] = cube[F][8];
+        cube[F][2] = t[0]; cube[F][5] = t[1]; cube[F][8] = t[2];
+        break;
+    }
+  }
+}
+
+function scrambleCube(movesCount) {
+  for (let i = 0; i < movesCount; i++) {
+    const f = Math.floor(Math.random() * 6);
+    const cw = Math.random() < 0.5;
+    doMove(f, cw);
+  }
+}
+
+function isCrossSolved() {
+  const d = cube[1];
+  return d[1] === 1 && d[3] === 1 && d[5] === 1 && d[7] === 1;
+}
+function isLayerSolved() {
+  return cube[1].every(c => c === 1);
+}
+function isCubeSolved() {
+  for (let f = 0; f < 6; f++) {
+    const c = cube[f][0];
+    for (let i = 1; i < 9; i++) if (cube[f][i] !== c) return false;
+  }
+  return true;
+}
+
+/* ===================== 坐标工具 ===================== */
+function getNetStart() {
+  const netW = 4 * FACE_TOTAL + 3 * FACE_GAP;
+  const netH = 3 * FACE_TOTAL + 2 * FACE_GAP;
+  return { x: (CANVAS_W - netW) / 2, y: (CANVAS_H - netH) / 2 + 20 };
+}
+function getFaceRect(faceIdx) {
+  const net = getNetStart();
+  const lo = NET_LAYOUT[faceIdx];
+  if (!lo) return null;
+  return {
+    x: net.x + lo.x * (FACE_TOTAL + FACE_GAP),
+    y: net.y + lo.y * (FACE_TOTAL + FACE_GAP),
+    w: FACE_TOTAL, h: FACE_TOTAL
+  };
+}
+function getStickerRect(faceIdx, sIdx) {
+  const fr = getFaceRect(faceIdx);
+  if (!fr) return null;
+  const row = Math.floor(sIdx / 3);
+  const col = sIdx % 3;
+  return {
+    x: fr.x + FACE_BORDER + col * (STICKER + STICKER_GAP),
+    y: fr.y + FACE_BORDER + row * (STICKER + STICKER_GAP),
+    w: STICKER, h: STICKER
+  };
+}
+function faceAt(mx, my) {
+  for (let f = 0; f < 6; f++) {
+    const r = getFaceRect(f);
+    if (r && mx >= r.x && mx < r.x + r.w && my >= r.y && my < r.y + r.h) return f;
+  }
+  return -1;
+}
+
+/* ===================== 输入处理 ===================== */
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  keys[e.code] = true;
+  if (scene === SCENES.TITLE && (e.key === 'Enter')) {
+    scene = SCENES.TUTORIAL; sfx('select');
+  }
+  if (scene === SCENES.PUZZLE) {
+    if (selectedFace >= 0) {
+      if (e.key === 'q' || e.key === 'Q') { tryRotate(selectedFace, false); }
+      if (e.key === 'e' || e.key === 'E') { tryRotate(selectedFace, true); }
+      // WASD 旋转相邻面
+      const adj = getAdjacentFace(selectedFace, e.key);
+      if (adj >= 0) tryRotate(adj, true);
+    }
+  }
+  if (scene === SCENES.BATTLE) {
+    if (e.code === 'Space') tryDash();
+  }
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; keys[e.code] = false; });
+
+function getAdjacentFace(sel, key) {
+  // 返回与选中面在指定方向相邻的面
+  const map = {
+    0: { w: 2, s: 3, a: 4, d: 5 }, // U: F,B,L,R
+    1: { w: 3, s: 2, a: 4, d: 5 }, // D: B,F,L,R (从下方视角)
+    2: { w: 0, s: 1, a: 4, d: 5 }, // F: U,D,L,R
+    3: { w: 1, s: 0, a: 5, d: 4 }, // B: D,U,R,L (从背面视角)
+    4: { w: 0, s: 1, a: 3, d: 2 }, // L: U,D,B,F
+    5: { w: 0, s: 1, a: 2, d: 3 }, // R: U,D,F,B
+  };
+  const dir = key.toLowerCase();
+  if (!map[sel]) return -1;
+  const fk = map[sel][dir];
+  return fk !== undefined ? fk : -1;
+}
+
+function getPointerPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = CANVAS_W / rect.width;
+  const scaleY = CANVAS_H / rect.height;
+  if (e.touches && e.touches.length > 0) {
+    return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
+  }
+  return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+}
+
+function tryRotate(faceIdx, cw) {
+  if (moves >= maxMoves) {
+    showMessage('步数耗尽！'); sfx('hit'); return;
+  }
+  doMove(faceIdx, cw);
+  moves++;
+  totalMoves++;
+  sfx('rotate');
+  checkPuzzleWin();
+}
+
+function checkPuzzleWin() {
+  let solved = false;
+  if (level === 1 && isCrossSolved()) solved = true;
+  if (level === 2 && isLayerSolved()) solved = true;
+  if (level === 3 && isCubeSolved()) solved = true;
+  if (solved) {
+    sfx('win');
+    const fr = getFaceRect(0);
+    if (fr) spawnParticles(fr.x + fr.w / 2, fr.y + fr.h / 2, COLORS.cyan, 40);
+    setTimeout(() => startBattle(), 800);
+  }
+}
+
+function tryDash() {
+  if (player.dashCd <= 0) {
+    player.dashTime = 0.25;
+    player.dashCd = 1.2;
+    player.invincible = 0.35;
+    sfx('dash');
+    spawnParticles(player.x, player.y, COLORS.cyan, 12);
+  }
+}
+
+canvas.addEventListener('mousedown', e => {
+  const p = getPointerPos(e);
+  mouse.x = p.x; mouse.y = p.y; mouse.down = true;
+  mouse.startX = p.x; mouse.startY = p.y;
+  handlePointerDown(p.x, p.y);
+});
+canvas.addEventListener('mousemove', e => {
+  const p = getPointerPos(e);
+  mouse.x = p.x; mouse.y = p.y;
+  if (scene === SCENES.PUZZLE && mouse.down && selectedFace >= 0) {
+    const dx = p.x - mouse.startX;
+    const dy = p.y - mouse.startY;
+    if (Math.abs(dx) > 40 || Math.abs(dy) > 40) {
+      // 拖拽旋转行/列
+      const fr = getFaceRect(selectedFace);
+      if (fr) {
+        const sx = mouse.startX - fr.x;
+        const sy = mouse.startY - fr.y;
+        const col = Math.floor((sx - FACE_BORDER) / (STICKER + STICKER_GAP));
+        const row = Math.floor((sy - FACE_BORDER) / (STICKER + STICKER_GAP));
+        if (col >= 0 && col < 3 && row >= 0 && row < 3) {
+          if (Math.abs(dx) > Math.abs(dy)) {
+            // 水平拖拽 -> 旋转行对应的层
+            tryDragRow(selectedFace, row, dx > 0);
+          } else {
+            // 垂直拖拽 -> 旋转列对应的层
+            tryDragCol(selectedFace, col, dy > 0);
+          }
+        }
+      }
+      mouse.down = false;
+    }
+  }
+});
+window.addEventListener('mouseup', () => { mouse.down = false; });
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const p = getPointerPos(e);
+  touchStart.x = p.x; touchStart.y = p.y;
+  touchStart.face = faceAt(p.x, p.y);
+  mouse.x = p.x; mouse.y = p.y;
+  handlePointerDown(p.x, p.y);
+}, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const p = getPointerPos(e);
+  mouse.x = p.x; mouse.y = p.y;
+  if (scene === SCENES.PUZZLE && touchStart.face >= 0) {
+    const dx = p.x - touchStart.x;
+    const dy = p.y - touchStart.y;
+    if (Math.abs(dx) > 50 || Math.abs(dy) > 50) {
+      const fr = getFaceRect(touchStart.face);
+      if (fr) {
+        const sx = touchStart.x - fr.x;
+        const sy = touchStart.y - fr.y;
+        const col = Math.floor((sx - FACE_BORDER) / (STICKER + STICKER_GAP));
+        const row = Math.floor((sy - FACE_BORDER) / (STICKER + STICKER_GAP));
+        if (col >= 0 && col < 3 && row >= 0 && row < 3) {
+          if (Math.abs(dx) > Math.abs(dy)) {
+            tryDragRow(touchStart.face, row, dx > 0);
+          } else {
+            tryDragCol(touchStart.face, col, dy > 0);
+          }
+        }
+      }
+      touchStart.face = -1;
+    }
+  }
+}, { passive: false });
+canvas.addEventListener('touchend', e => { e.preventDefault(); touchStart.face = -1; }, { passive: false });
+
+function handlePointerDown(mx, my) {
+  ensureAudio();
+  if (scene === SCENES.TITLE) {
+    scene = SCENES.TUTORIAL; sfx('select'); return;
+  }
+  if (scene === SCENES.TUTORIAL) {
+    // 检查按钮点击
+    for (const btn of uiButtons) {
+      if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+        if (btn.action === 'start') { startLevel(1); }
+      }
+    }
+    return;
+  }
+  if (scene === SCENES.PUZZLE) {
+    // 检查按钮
+    for (const btn of uiButtons) {
+      if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+        if (btn.action === 'cw') tryRotate(btn.face, true);
+        if (btn.action === 'ccw') tryRotate(btn.face, false);
+        if (btn.action === 'reset') { startLevel(level); }
+        if (btn.action === 'back') { scene = SCENES.TUTORIAL; }
+        return;
+      }
+    }
+    const f = faceAt(mx, my);
+    if (f >= 0) { selectedFace = f; sfx('select'); }
+    else { selectedFace = -1; }
+    return;
+  }
+  if (scene === SCENES.BATTLE) {
+    // 虚拟摇杆或冲刺按钮（移动端）
+    return;
+  }
+  if (scene === SCENES.CLEAR || scene === SCENES.GAMEOVER) {
+    for (const btn of uiButtons) {
+      if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+        if (btn.action === 'restart') { startLevel(1); totalMoves = 0; clearedLevels = 0; bestHp = 100; }
+        if (btn.action === 'next' && level < 3) { startLevel(level + 1); }
+        if (btn.action === 'menu') { scene = SCENES.TITLE; }
+        return;
+      }
+    }
+  }
+}
+
+function tryDragRow(faceIdx, row, right) {
+  // 水平拖拽：根据面和行确定旋转哪个面
+  // 简单映射：行的水平移动对应相邻面旋转
+  const map = {
+    0: [3, 5, 2, 4], // U: row0=B, row1=R, row2=F, row3=L (简化：用row直接映射)
+  };
+  // 简化实现：拖拽行就是旋转该行对应的"层"
+  // 在十字展开图中，水平拖拽 = 旋转U或D（取决于行所在的面和位置）
+  if (faceIdx === 0) {
+    // U面: row0->B顶行, row1->U中行(自身), row2->F顶行
+    if (row === 0) tryRotate(3, !right); // B
+    if (row === 2) tryRotate(2, right);  // F
+  } else if (faceIdx === 1) {
+    if (row === 0) tryRotate(2, !right);
+    if (row === 2) tryRotate(3, right);
+  } else if (faceIdx === 2) {
+    if (row === 0) tryRotate(0, right);
+    if (row === 2) tryRotate(1, !right);
+  } else if (faceIdx === 3) {
+    if (row === 0) tryRotate(0, !right);
+    if (row === 2) tryRotate(1, right);
+  } else if (faceIdx === 4) {
+    if (row === 0) tryRotate(0, right);
+    if (row === 2) tryRotate(1, !right);
+  } else if (faceIdx === 5) {
+    if (row === 0) tryRotate(0, !right);
+    if (row === 2) tryRotate(1, right);
+  }
+}
+
+function tryDragCol(faceIdx, col, down) {
+  if (faceIdx === 0) {
+    if (col === 0) tryRotate(4, !down);
+    if (col === 2) tryRotate(5, down);
+  } else if (faceIdx === 1) {
+    if (col === 0) tryRotate(4, down);
+    if (col === 2) tryRotate(5, !down);
+  } else if (faceIdx === 2) {
+    if (col === 0) tryRotate(4, down);
+    if (col === 2) tryRotate(5, !down);
+  } else if (faceIdx === 3) {
+    if (col === 0) tryRotate(5, down);
+    if (col === 2) tryRotate(4, !down);
+  } else if (faceIdx === 4) {
+    if (col === 0) tryRotate(3, down);
+    if (col === 2) tryRotate(2, !down);
+  } else if (faceIdx === 5) {
+    if (col === 0) tryRotate(2, down);
+    if (col === 2) tryRotate(3, !down);
+  }
+}
+
+/* ===================== 关卡与战斗 ===================== */
+function startLevel(lv) {
+  level = lv;
+  createSolvedCube();
+  if (lv === 1) {
+    maxMoves = 15;
+    // 打乱D十字附近
+    for (let i = 0; i < 8; i++) {
+      const faces = [0, 1, 2, 3, 4, 5];
+      doMove(faces[Math.floor(Math.random() * faces.length)], Math.random() < 0.5);
+    }
+    // 确保未解决
+    while (isCrossSolved()) {
+      doMove(1, true);
+    }
+    battleMode = 'A'; battleMaxTime = 10;
+  } else if (lv === 2) {
+    maxMoves = 20;
+    scrambleCube(15);
+    while (isLayerSolved()) doMove(1, true);
+    battleMode = 'B'; battleMaxTime = 15;
+  } else {
+    maxMoves = 50;
+    scrambleCube(25);
+    while (isCubeSolved()) doMove(0, true);
+    battleMode = 'C'; battleMaxTime = 20;
+  }
+  moves = 0;
+  selectedFace = -1;
+  scene = SCENES.PUZZLE;
+  showMessage(`关卡 ${lv} 开始！`);
+}
+
+function startBattle() {
+  scene = SCENES.BATTLE;
+  sfx('battleStart');
+  battleTime = battleMaxTime;
+  bullets = [];
+  player.x = CANVAS_W / 2;
+  player.y = CANVAS_H / 2 + 80;
+  player.hp = 100;
+  player.dashCd = 0;
+  player.dashTime = 0;
+  player.invincible = 1.0;
+}
+
+function updateBattle(dt) {
+  battleTime -= dt;
+  if (battleTime <= 0) {
+    battleTime = 0;
+    clearedLevels++;
+    if (level >= 3) {
+      scene = SCENES.CLEAR;
+      sfx('clear');
+      spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COLORS.pink, 60);
+    } else {
+      scene = SCENES.CLEAR;
+      sfx('win');
+      spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COLORS.cyan, 40);
+    }
+    return;
+  }
+
+  // 玩家移动
+  let spd = player.speed;
+  if (player.dashTime > 0) {
+    spd = player.speed * 2.2;
+    player.dashTime -= dt;
+  }
+  if (player.dashCd > 0) player.dashCd -= dt;
+  if (player.invincible > 0) player.invincible -= dt;
+
+  let mx = 0, my = 0;
+  if (keys['ArrowLeft'] || keys['a'] || keys['A']) mx -= 1;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) mx += 1;
+  if (keys['ArrowUp'] || keys['w'] || keys['W']) my -= 1;
+  if (keys['ArrowDown'] || keys['s'] || keys['S']) my += 1;
+  if (mx !== 0 || my !== 0) {
+    const len = Math.sqrt(mx * mx + my * my);
+    mx /= len; my /= len;
+  }
+  player.x += mx * spd * dt;
+  player.y += my * spd * dt;
+
+  // 边界限制
+  const margin = 40;
+  player.x = Math.max(margin, Math.min(CANVAS_W - margin, player.x));
+  player.y = Math.max(margin + 60, Math.min(CANVAS_H - margin, player.y));
+
+  // 生成弹幕
+  spawnBullets(dt);
+
+  // 更新弹幕
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    if (b.x < -20 || b.x > CANVAS_W + 20 || b.y < -20 || b.y > CANVAS_H + 20) {
+      bullets.splice(i, 1); continue;
+    }
+    // 碰撞检测
+    if (player.invincible <= 0) {
+      const dx = b.x - player.x;
+      const dy = b.y - player.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < b.r + player.w / 2) {
+        player.hp -= 10;
+        player.invincible = 0.6;
+        screenShake = 0.2;
+        sfx('hit');
+        spawnParticles(player.x, player.y, '#ff4444', 10);
+        bullets.splice(i, 1);
+        if (player.hp <= 0) {
+          player.hp = 0;
+          scene = SCENES.GAMEOVER;
+          sfx('hit');
+        }
+      }
+    }
+  }
+
+  // 更新HP记录
+  bestHp = Math.min(bestHp, player.hp);
+}
+
+let spawnAcc = 0;
+function spawnBullets(dt) {
+  spawnAcc += dt;
+  let interval = 0.35;
+  if (battleMode === 'B') interval = 0.25;
+  if (battleMode === 'C') interval = 0.18;
+
+  while (spawnAcc >= interval) {
+    spawnAcc -= interval;
+    if (battleMode === 'A' || battleMode === 'C') {
+      // 直线扫射
+      const side = Math.random() < 0.5 ? 'left' : 'right';
+      const y = 60 + Math.random() * (CANVAS_H - 120);
+      const spd = 180 + Math.random() * 120;
+      bullets.push({
+        x: side === 'left' ? -10 : CANVAS_W + 10,
+        y,
+        vx: side === 'left' ? spd : -spd,
+        vy: (Math.random() - 0.5) * 30,
+        r: 5 + Math.random() * 3,
+        color: Math.random() < 0.5 ? COLORS.pink : COLORS.cyan
+      });
+      if (battleMode === 'C') {
+        bullets.push({
+          x: side === 'left' ? -10 : CANVAS_W + 10,
+          y: y + 30,
+          vx: side === 'left' ? spd * 0.8 : -spd * 0.8,
+          vy: (Math.random() - 0.5) * 20,
+          r: 4 + Math.random() * 2,
+          color: COLORS.Y
+        });
+      }
+    }
+    if (battleMode === 'B' || battleMode === 'C') {
+      // 扇形散射
+      const cx = CANVAS_W / 2;
+      const count = battleMode === 'C' ? 5 : 7;
+      const baseAngle = Math.PI / 2 + (Math.random() - 0.5) * 0.4;
+      const spread = 1.2;
+      for (let i = 0; i < count; i++) {
+        const ang = baseAngle - spread / 2 + (spread / (count - 1)) * i;
+        const spd = 140 + Math.random() * 100;
+        bullets.push({
+          x: cx + (Math.random() - 0.5) * 40,
+          y: -10,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd,
+          r: 4 + Math.random() * 3,
+          color: Math.random() < 0.5 ? COLORS.R : COLORS.O
+        });
+      }
+    }
+  }
+}
+
+/* ===================== 渲染 ===================== */
+function resize() {
+  const aspect = CANVAS_W / CANVAS_H;
+  let w = window.innerWidth;
+  let h = window.innerHeight;
+  if (w / h > aspect) { w = h * aspect; } else { h = w / aspect; }
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  canvas.width = CANVAS_W;
+  canvas.height = CANVAS_H;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function drawRect(x, y, w, h, color, border = null) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x), Math.floor(y), Math.floor(w), Math.floor(h));
+  if (border) {
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(Math.floor(x) + 0.5, Math.floor(y) + 0.5, Math.floor(w) - 1, Math.floor(h) - 1);
+  }
+}
+function drawText(text, x, y, size, color, align = 'center', font = null) {
+  ctx.fillStyle = color;
+  ctx.font = font || `bold ${size}px 'Courier New', monospace`;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y);
+}
+function drawPixelText(text, x, y, size, color, align = 'center') {
+  ctx.imageSmoothingEnabled = false;
+  drawText(text, x, y, size, color, align);
+  ctx.imageSmoothingEnabled = true;
+}
+
+function drawButton(btn, hover) {
+  const col = hover ? COLORS.pink : COLORS.cyan;
+  drawRect(btn.x, btn.y, btn.w, btn.h, COLORS.panel, col);
+  drawText(btn.text, btn.x + btn.w / 2, btn.y + btn.h / 2, 18, col);
+}
+
+function getButtonHover() {
+  for (const btn of uiButtons) {
+    if (mouse.x >= btn.x && mouse.x <= btn.x + btn.w && mouse.y >= btn.y && mouse.y <= btn.y + btn.h) {
+      return btn;
+    }
+  }
+  return null;
+}
+
+function showMessage(text) {
+  msgText = text;
+  msgTimer = 2.0;
+}
+
+function drawCube() {
+  const net = getNetStart();
+  // 绘制网格背景
+  for (let f = 0; f < 6; f++) {
+    const fr = getFaceRect(f);
+    if (!fr) continue;
+    drawRect(fr.x, fr.y, fr.w, fr.h, COLORS.panel, f === selectedFace ? COLORS.cyan : '#2a3a55');
+    // 绘制贴纸
+    for (let s = 0; s < 9; s++) {
+      const sr = getStickerRect(f, s);
+      if (!sr) continue;
+      const colorIdx = cube[f][s];
+      drawRect(sr.x, sr.y, sr.w, sr.h, CUBE_COLORS[colorIdx], '#0a0e1a');
+    }
+    // 面标签
+    drawText(FACE_NAME_CN[f], fr.x + fr.w / 2, fr.y - 10, 12, '#5a7a9a');
+  }
+
+  // 选中面的旋转按钮
+  if (selectedFace >= 0) {
+    const fr = getFaceRect(selectedFace);
+    if (fr) {
+      const bx = fr.x + fr.w + 10;
+      const by = fr.y + fr.h / 2 - 35;
+      uiButtons.push({ x: bx, y: by, w: 44, h: 28, text: '↻', action: 'cw', face: selectedFace });
+      uiButtons.push({ x: bx, y: by + 34, w: 44, h: 28, text: '↺', action: 'ccw', face: selectedFace });
+    }
+  }
+}
+
+function drawPuzzleUI() {
+  // 顶部信息栏
+  drawRect(0, 0, CANVAS_W, 44, 'rgba(10,14,26,0.9)');
+  const levelNames = ['', 'D面十字', '底层角块', '完整还原'];
+  drawText(`关卡 ${level}：${levelNames[level]}`, 20, 22, 18, COLORS.cyan, 'left');
+  drawText(`步数: ${moves} / ${maxMoves}`, CANVAS_W / 2, 22, 18, moves >= maxMoves ? COLORS.pink : COLORS.text);
+  drawText(`总步数: ${totalMoves}`, CANVAS_W - 20, 22, 16, COLORS.text, 'right');
+
+  // 能量条
+  const barW = 200;
+  const barX = CANVAS_W / 2 - barW / 2;
+  const barY = 50;
+  const ratio = Math.max(0, 1 - moves / maxMoves);
+  drawRect(barX, barY, barW, 10, '#1e2a45');
+  drawRect(barX, barY, barW * ratio, 10, ratio > 0.3 ? COLORS.G : COLORS.pink);
+  drawText('能量', barX - 8, barY + 5, 11, COLORS.text, 'right');
+
+  // 提示文字
+  const hints = ['', '目标：将黄色面的十字对齐', '目标：还原底层所有角块', '目标：完整还原魔方'];
+  drawText(hints[level], CANVAS_W / 2, 78, 15, COLORS.Y, 'center');
+
+  // 操作提示
+  drawText('点击面选中 | Q/E旋转 | WASD旋转相邻面 | 拖拽滑动', CANVAS_W / 2, CANVAS_H - 18, 13, '#4a5a75');
+
+  // 底部按钮
+  uiButtons.push({ x: 16, y: CANVAS_H - 42, w: 72, h: 28, text: '重置', action: 'reset' });
+  uiButtons.push({ x: CANVAS_W - 88, y: CANVAS_H - 42, w: 72, h: 28, text: '返回', action: 'back' });
+}
+
+function drawTitle() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // 装饰方块
+  const t = performance.now() / 1000;
+  for (let i = 0; i < 20; i++) {
+    const x = (Math.sin(i * 1.3 + t * 0.5) * 0.5 + 0.5) * CANVAS_W;
+    const y = (Math.cos(i * 2.1 + t * 0.3) * 0.5 + 0.5) * CANVAS_H;
+    const s = 4 + Math.sin(i + t) * 2;
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(0,212,255,0.15)' : 'rgba(255,107,157,0.12)';
+    ctx.fillRect(x, y, s, s);
+  }
+
+  drawText('魔方块境', CANVAS_W / 2, CANVAS_H / 2 - 60, 64, COLORS.cyan);
+  drawText('2D像素风解密RPG Demo', CANVAS_W / 2, CANVAS_H / 2 + 10, 20, COLORS.pink);
+  drawText('按 Enter 或点击屏幕开始', CANVAS_W / 2, CANVAS_H / 2 + 80, 18, COLORS.text);
+  drawText('v1.0 Demo', CANVAS_W / 2, CANVAS_H - 30, 14, '#3a4a60');
+}
+
+function drawTutorial() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  drawText('操作教学', CANVAS_W / 2, 60, 36, COLORS.cyan);
+
+  const lines = [
+    '【解谜模式】',
+    '鼠标点击某个面进行选中',
+    '按 Q / E 旋转选中面（逆时针 / 顺时针）',
+    '按 WASD 旋转相邻的四个面',
+    '也可以在选中面上拖拽来旋转行/列',
+    '',
+    '【弹幕战斗】',
+    'WASD 或方向键移动「核之魂」',
+    '空格键冲刺（短暂无敌+加速）',
+    '躲避弹幕，存活到时间结束',
+    '',
+    '【目标】',
+    '还原魔方的指定部分后进入弹幕战',
+    '共3关，难度逐步提升',
+  ];
+
+  let y = 130;
+  for (const line of lines) {
+    const col = line.startsWith('【') ? COLORS.pink : COLORS.text;
+    const sz = line.startsWith('【') ? 20 : 17;
+    drawText(line, CANVAS_W / 2, y, sz, col);
+    y += 32;
+  }
+
+  uiButtons = [{ x: CANVAS_W / 2 - 70, y: CANVAS_H - 90, w: 140, h: 42, text: '开始游戏', action: 'start' }];
+  const hover = getButtonHover();
+  for (const btn of uiButtons) drawButton(btn, hover === btn);
+}
+
+function drawBattle() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // 战斗区域边框
+  drawRect(30, 80, CANVAS_W - 60, CANVAS_H - 120, 'rgba(20,27,45,0.6)', COLORS.cyan);
+
+  // 弹幕
+  for (const b of bullets) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = b.color;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // 玩家
+  const px = player.x - player.w / 2;
+  const py = player.y - player.h / 2;
+  if (player.invincible > 0 && Math.floor(performance.now() / 60) % 2 === 0) {
+    // 闪烁
+  } else {
+    drawRect(px, py, player.w, player.h, COLORS.cyan, '#fff');
+    // 核之魂 内部装饰
+    drawRect(px + 4, py + 4, player.w - 8, player.h - 8, '#0a0e1a');
+    drawRect(px + 6, py + 6, player.w - 12, player.h - 12, COLORS.cyan);
+  }
+
+  // UI
+  drawRect(0, 0, CANVAS_W, 40, 'rgba(10,14,26,0.9)');
+  drawText(`关卡 ${level} 弹幕战`, 20, 20, 18, COLORS.cyan, 'left');
+  drawText(`剩余时间: ${battleTime.toFixed(1)}s`, CANVAS_W / 2, 20, 20, COLORS.text);
+
+  // HP条
+  const hpW = 160;
+  const hpX = CANVAS_W - 20 - hpW;
+  drawRect(hpX, 10, hpW, 16, '#1e2a45');
+  const hpRatio = player.hp / player.maxHp;
+  drawRect(hpX, 10, hpW * hpRatio, 16, hpRatio > 0.3 ? COLORS.G : COLORS.pink);
+  drawText(`HP ${player.hp}`, hpX + hpW / 2, 19, 13, '#fff');
+
+  // 冲刺提示
+  if (player.dashCd <= 0) {
+    drawText('空格冲刺', CANVAS_W / 2, CANVAS_H - 20, 14, COLORS.cyan);
+  }
+}
+
+function drawClear() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  const isFinal = level >= 3;
+  drawText(isFinal ? '通关！' : `关卡 ${level} 完成！`, CANVAS_W / 2, 100, 48, COLORS.cyan);
+
+  const rating = computeRating();
+  drawText(`评级: ${rating.rank}`, CANVAS_W / 2, 180, 56, rating.color);
+  drawText(rating.label, CANVAS_W / 2, 230, 18, COLORS.text);
+
+  const statsY = 300;
+  drawText(`总步数: ${totalMoves}`, CANVAS_W / 2, statsY, 20, COLORS.text);
+  drawText(`剩余HP: ${player.hp}`, CANVAS_W / 2, statsY + 40, 20, COLORS.text);
+  drawText(`弹幕存活: ${battleMaxTime}秒`, CANVAS_W / 2, statsY + 80, 20, COLORS.text);
+
+  uiButtons = [];
+  if (!isFinal) {
+    uiButtons.push({ x: CANVAS_W / 2 - 150, y: CANVAS_H - 100, w: 130, h: 42, text: '下一关', action: 'next' });
+    uiButtons.push({ x: CANVAS_W / 2 + 20, y: CANVAS_H - 100, w: 130, h: 42, text: '再玩一次', action: 'restart' });
+  } else {
+    uiButtons.push({ x: CANVAS_W / 2 - 70, y: CANVAS_H - 100, w: 140, h: 42, text: '再玩一次', action: 'restart' });
+    uiButtons.push({ x: CANVAS_W / 2 - 70, y: CANVAS_H - 50, w: 140, h: 36, text: '返回标题', action: 'menu' });
+  }
+
+  const hover = getButtonHover();
+  for (const btn of uiButtons) drawButton(btn, hover === btn);
+
+  drawParticles();
+}
+
+function drawGameOver() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  drawText('战斗失败', CANVAS_W / 2, CANVAS_H / 2 - 60, 48, COLORS.pink);
+  drawText('核之魂已被弹幕吞噬...', CANVAS_W / 2, CANVAS_H / 2, 20, COLORS.text);
+  drawText(`存活时间: ${(battleMaxTime - battleTime).toFixed(1)} / ${battleMaxTime} 秒`, CANVAS_W / 2, CANVAS_H / 2 + 40, 18, COLORS.text);
+
+  uiButtons = [
+    { x: CANVAS_W / 2 - 70, y: CANVAS_H / 2 + 100, w: 140, h: 42, text: '重新挑战', action: 'restart' },
+    { x: CANVAS_W / 2 - 70, y: CANVAS_H / 2 + 150, w: 140, h: 36, text: '返回标题', action: 'menu' }
+  ];
+  const hover = getButtonHover();
+  for (const btn of uiButtons) drawButton(btn, hover === btn);
+}
+
+function computeRating() {
+  // 根据总步数和HP评级
+  let score = 0;
+  score += Math.max(0, player.hp);
+  if (totalMoves < 30) score += 50;
+  else if (totalMoves < 50) score += 30;
+  else if (totalMoves < 80) score += 15;
+
+  if (score >= 130) return { rank: 'S', color: '#ffd700', label: '完美！魔方大师！' };
+  if (score >= 100) return { rank: 'A', color: '#4ade80', label: '优秀！技艺高超！' };
+  if (score >= 70) return { rank: 'B', color: '#60a5fa', label: '良好！还有进步空间' };
+  return { rank: 'C', color: '#fb923c', label: '及格！继续练习吧' };
+}
+
+/* ===================== 主循环 ===================== */
+function loop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  // 屏幕震动
+  let sx = 0, sy = 0;
+  if (screenShake > 0) {
+    sx = (Math.random() - 0.5) * 10;
+    sy = (Math.random() - 0.5) * 10;
+    screenShake -= dt;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  uiButtons = [];
+
+  if (scene === SCENES.TITLE) {
+    drawTitle();
+  } else if (scene === SCENES.TUTORIAL) {
+    drawTutorial();
+  } else if (scene === SCENES.PUZZLE) {
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    drawCube();
+    drawPuzzleUI();
+    const hover = getButtonHover();
+    for (const btn of uiButtons) {
+      if (btn.action === 'cw' || btn.action === 'ccw') {
+        drawButton(btn, hover === btn);
+      } else {
+        drawButton(btn, hover === btn);
+      }
+    }
+  } else if (scene === SCENES.BATTLE) {
+    updateBattle(dt);
+    drawBattle();
+  } else if (scene === SCENES.CLEAR) {
+    drawClear();
+  } else if (scene === SCENES.GAMEOVER) {
+    drawGameOver();
+  }
+
+  // 消息
+  if (msgTimer > 0) {
+    msgTimer -= dt;
+    const a = Math.min(1, msgTimer * 2);
+    ctx.fillStyle = `rgba(0,0,0,${a * 0.7})`;
+    ctx.fillRect(0, CANVAS_H / 2 - 30, CANVAS_W, 60);
+    ctx.fillStyle = `rgba(0,212,255,${a})`;
+    ctx.font = "bold 22px 'Courier New', monospace";
+    ctx.textAlign = 'center';
+    ctx.fillText(msgText, CANVAS_W / 2, CANVAS_H / 2);
+  }
+
+  updateParticles(dt);
+  drawParticles();
+
+  ctx.restore();
+
+  requestAnimationFrame(loop);
+}
+
+/* ===================== 启动 ===================== */
+showMessage('欢迎来到魔方块境');
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

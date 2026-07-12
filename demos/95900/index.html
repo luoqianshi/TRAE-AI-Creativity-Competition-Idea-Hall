@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>2K Ultimate Team</title>
+<link rel="stylesheet" href="/css/style.css">
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+<div class="bg-gradient"></div>
+<div class="bg-blur"></div>
+<div class="bg-shapes">
+  <div class="bg-shape"></div>
+  <div class="bg-shape"></div>
+  <div class="bg-shape"></div>
+</div>
+<div class="container">
+<div id="notification" class="notification hidden"></div>
+<div id="syncIndicator" class="sync-indicator hidden"></div>
+<div id="loginSection" class="card login-card">
+<div class="card-content">
+<h1>2K Ultimate Team</h1>
+<p style="text-align:center;color:#94a3b8;margin-bottom:1rem;font-size:.9rem">创建房间 · 好友加入 · 轮流选秀</p>
+<div class="form-group" style="margin-bottom:.8rem"><label for="nickname">你的昵称</label><input type="text" id="nickname" placeholder="输入昵称"></div>
+<div class="input-row">
+  <div class="form-group"><label for="roomIdInput">房间号（4位数字）</label><input type="text" id="roomIdInput" placeholder="留空=创建" maxlength="4" pattern="[0-9]*" inputmode="numeric"></div>
+  <button class="btn btn-primary" onclick="joinRoom()">进入</button>
+</div>
+<div style="margin-top:.8rem"><label style="font-size:.75rem;font-weight:600;color:#64748b">可用房间 <button class="btn btn-sm btn-gray" onclick="loadRoomList()" style="font-size:.6rem;padding:.2rem .6rem;margin-left:.3rem">刷新</button></label><div id="roomList" style="max-height:140px;overflow-y:auto;font-size:.75rem;border:1px solid #e2e8f0;border-radius:8px;padding:.4rem;background:rgba(255,255,255,.6);color:#334155"></div></div>
+</div></div>
+<div id="lobbySection" class="card hidden">
+<h2>房间大厅</h2>
+<div class="room-info"><p style="margin-bottom:.3rem;font-size:.85rem">房间号：</p><code id="displayRoomId" style="cursor:pointer" onclick="copyRoomId()">----</code><button class="btn-copy" onclick="copyRoomId()" style="margin-left:.3rem">复制</button></div>
+<h3 style="text-align:center;font-size:1rem;color:#e2e8f0">等待选秀开始...</h3>
+<div class="waiting-pulse">
+  <div class="pulse-dot"></div>
+  <div class="pulse-dot"></div>
+  <div class="pulse-dot"></div>
+  <div class="pulse-dot"></div>
+</div>
+<div class="user-grid" id="waitingUserGrid"></div>
+<p style="text-align:center;color:#94a3b8;font-size:.8rem" id="waitingMsg"></p>
+<div id="nonOwnerActions" style="text-align:center;margin-top:.5rem"><button class="btn btn-gray" onclick="leaveRoomAction()">离开房间</button></div>
+<div id="ownerPanel" class="hidden" style="margin-top:.8rem;border-top:1px solid rgba(255,255,255,.1);padding-top:.6rem">
+<h3 style="color:#e2e8f0;font-size:.95rem">房主设置</h3>
+<div class="form-group"><label>选秀顺序（按钮调整）</label><div class="order-list" id="orderList"></div></div>
+<div style="display:flex;gap:.6rem;flex-wrap:wrap">
+<div class="form-group" style="flex:1;min-width:180px"><label for="rosterSize">每队人数</label><input type="number" id="rosterSize" value="8" min="1" max="15"></div>
+<div class="form-group" style="flex:1;min-width:180px"><label>导入球员数据</label><label class="file-area" for="fileInput">点击上传 Excel/CSV 文件</label><input type="file" id="fileInput" accept=".xlsx,.xls,.csv"><span id="fileStatus" style="font-size:.7rem;color:#27ae60"></span><textarea id="csvTextarea" rows="3" placeholder="或粘贴CSV..." style="margin-top:.15rem;font-size:.7rem"></textarea></div>
+</div>
+<div class="form-group" style="margin-top:.3rem"><label for="banEnabled" style="display:flex;align-items:center;gap:.3rem;cursor:pointer"><input type="checkbox" id="banEnabled" style="width:auto"> 开启Ban人功能</label></div>
+<div class="form-group" style="margin-top:.5rem"><label for="historyInput">导入上轮已选球员（粘贴JSON）</label><textarea id="historyInput" rows="2" placeholder="粘贴上轮导出数据..." style="font-size:.65rem"></textarea><span class="history-info" id="historyInfo"></span></div>
+<div style="display:flex;gap:.3rem"><button class="btn btn-success" onclick="startDraft()" style="flex:1">开始选秀</button><button class="btn btn-danger" onclick="disbandRoom()">解散房间</button><button class="btn btn-gray" onclick="leaveRoomAction()">离开房间</button></div>
+</div>
+<div style="margin-top:.8rem;border-top:1px solid rgba(255,255,255,.1);padding-top:.5rem"><label style="font-size:.75rem;font-weight:600;color:#cbd5e1">聊天</label><div class="chat-container"><div class="chat-box" id="chatBoxLobby"></div><div class="chat-input-row"><input type="text" id="chatInputLobby" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChat('Lobby')"><button class="btn btn-sm btn-primary" onclick="sendChat('Lobby')">发送</button></div></div></div>
+</div>
+<div id="draftSection" class="card hidden" style="padding:0">
+<div class="draft-header">
+  <div class="status-bar"><strong>房间: <code id="draftRoomId"></code></strong><span style="font-weight:700;color:#93c5fd">我的球队: <span id="myTeamName">---</span></span><span style="font-weight:600;color:#0078d7;font-size:.85rem" id="totalTimeDisplay"></span><div><button class="btn btn-primary btn-sm" onclick="exportDraft()">导出</button><button class="btn btn-gray btn-sm" id="voiceToggle" onclick="toggleVoice()">🔊 语音</button><button class="btn btn-danger btn-sm" onclick="leaveRoomAction()">离开</button></div></div>
+  <div id="turnBanner" class="banner waiting">等待选秀开始...</div>
+  <div id="banPanel" class="confirm-bar hidden" style="background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.4)"><span style="color:#f87171">Ban人阶段</span></div>
+<div id="confirmBar" class="confirm-bar hidden"><span style="color:#e2e8f0">已选：</span><span style="font-weight:700;font-size:1rem;color:#fbbf24" id="selectedPlayerName"></span><button class="btn btn-success btn-lg" onclick="confirmPick()">确认选择</button><button class="btn btn-gray" onclick="cancelPreSelect()">取消</button></div>
+  <div id="pickError" class="error-msg hidden"></div>
+</div>
+<div id="exportArea" class="export-area hidden"><strong>选秀结果JSON</strong><textarea id="exportData" readonly rows="4"></textarea><button class="btn btn-primary btn-sm" onclick="copyExport()">复制</button><button class="btn btn-gray btn-sm" onclick="document.getElementById('exportArea').classList.add('hidden')">关闭</button></div>
+<div class="draft-main">
+  <div class="draft-left">
+    <div class="info-bar">
+      <div class="pos-stats"><div class="title"><span id="posStatsTeamName">我的球队</span> 位置统计</div><div class="pos-bars" id="posBars"></div></div>
+      <div class="ai-suggest-wrap"><div class="title">ty建议 <button class="ai-suggest-btn" onclick="askAiSuggest()">询问ty</button></div><div class="ai-suggest-box" id="aiSuggestBox">点击按钮获取ty选人建议</div></div>
+    </div>
+    <div class="players-section">
+      <h2>可选球员 (<span id="playerCount">0</span>)</h2>
+      <div class="table-wrapper"><table><thead id="playerTableHead"><tr><th>姓名</th><th id="th_pos">位置</th><th id="th_ovr">总评</th><th id="th_a1">内线</th><th id="th_a2">中投</th><th id="th_a3">三分</th><th id="th_a4">禁区防守</th><th id="th_a5">外线防守</th><th id="th_a6">组织</th><th id="th_a7">篮板</th><th id="th_a8">运动能力</th></tr></thead><tbody id="playerTableBody"></tbody></table></div>
+    </div>
+  </div>
+  <div class="draft-right">
+    <div class="teams-section"><h2>球队阵容</h2><div id="teamsContainer"></div><div id="bannedList"></div></div>
+    <div class="tactics-section"><h2>战术板 <button class="btn btn-xs btn-primary" onclick="toggleTacticsPanel()">设置</button></h2><div id="tacticsContainer"></div></div>
+    <div class="chat-section"><h2>聊天</h2><div class="chat-container"><div class="chat-box" id="chatBoxDraft"></div><div class="chat-input-row"><input type="text" id="chatInputDraft" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChat('Draft')"><button class="btn btn-sm btn-primary" onclick="sendChat('Draft')">发送</button></div></div></div>
+  </div>
+</div>
+<div class="draft-footer"><button class="btn btn-warning" onclick="undoPick()">撤销</button></div>
+</div>
+</div>
+<div id="tacticsPanel" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header"><h3>设置战术板</h3><button class="close-btn" onclick="toggleTacticsPanel()">×</button></div>
+    <div class="modal-body">
+      <div class="tactic-row"><label>进攻侧重</label><select id="tacticOffense" onchange="updateTactics()"><option value="强攻篮下">强攻篮下</option><option value="向禁区喂球">向禁区喂球</option><option value="为投手拉开空间">为投手拉开空间</option><option value="挡拆战术进攻">挡拆战术进攻</option><option value="明星带动进攻">明星带动进攻</option></select></div>
+      <div class="tactic-row"><label>进攻节奏</label><select id="tacticPace" onchange="updateTactics()"><option value="中等节奏">中等节奏</option><option value="耐心进攻">耐心进攻</option><option value="任意投篮">任意投篮</option><option value="无偏好">无偏好</option></select></div>
+      <div class="tactic-row"><label>进攻篮板</label><select id="tacticOffReb" onchange="updateTactics()"><option value="冲抢进攻篮板">冲抢进攻篮板</option><option value="部分冲抢，部分回防">部分冲抢，部分回防</option><option value="限制攻防转换">限制攻防转换</option><option value="无偏好">无偏好</option></select></div>
+      <div class="tactic-row"><label>防守侧重</label><select id="tacticDefense" onchange="updateTactics()"><option value="保护内线">保护内线</option><option value="限制外线">限制外线</option><option value="无偏好">无偏好</option></select></div>
+      <div class="tactic-row"><label>防守侵略性</label><select id="tacticDefAgg" onchange="updateTactics()"><option value="进行对抗性防守">进行对抗性防守</option><option value="无偏好">无偏好</option></select></div>
+      <div class="tactic-row"><label>防守篮板</label><select id="tacticDefReb" onchange="updateTactics()"><option value="冲抢防守篮板">冲抢防守篮板</option><option value="部分冲抢，部分跑位">部分冲抢，部分跑位</option><option value="发动攻防转换">发动攻防转换</option><option value="无偏好">无偏好</option></select></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-primary" onclick="saveTactics()">保存</button><button class="btn btn-gray" onclick="toggleTacticsPanel()">取消</button></div>
+  </div>
+</div>
+<script>const socket = io();</script>
+<script src="/js/00-state.js"></script>
+<script src="/js/01-config.js"></script>
+<script src="/js/02-utils.js"></script>
+<script src="/js/03-socket.js"></script>
+<script src="/js/04-actions.js"></script>
+<script src="/js/05-render.js"></script>
+<script src="/js/06-filter.js"></script>
+<script src="/js/07-blink.js"></script>
+<script src="/js/08-rooms.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  var savedName = localStorage.getItem('draft_nickname');
+  if (!savedName) { savedName = '玩家' + Math.floor(Math.random() * 900 + 100); localStorage.setItem('draft_nickname', savedName); }
+  document.getElementById('nickname').value = savedName;
+  document.getElementById('fileInput').addEventListener('change', handleFile);
+  document.getElementById('roomIdInput').addEventListener('input', function() { this.value = this.value.replace(/[^0-9]/g, '').slice(0, 4); });
+  document.getElementById('historyInput').addEventListener('input', function() { try { var d = JSON.parse(this.value); if (Array.isArray(d)) { previousPicksData = d; document.getElementById('historyInfo').textContent = '已加载 ' + d.length + ' 名球员记录'; } } catch (e) { previousPicksData = []; document.getElementById('historyInfo').textContent = ''; } });
+  updateFilterHeaders();
+  originalTitle = document.title;
+});
+
+function showRanking() {
+  socket.emit('getRanking');
+}
+
+function closeRanking() {
+  document.getElementById('rankingModal').classList.add('hidden');
+  document.getElementById('importPanel').classList.add('hidden');
+}
+
+function toggleImportPanel() {
+  var panel = document.getElementById('importPanel');
+  panel.classList.toggle('hidden');
+}
+
+function cancelImport() {
+  document.getElementById('importPanel').classList.add('hidden');
+  document.getElementById('importInput').value = '';
+}
+
+function importPlayerStats() {
+  var input = document.getElementById('importInput').value.trim();
+  if (!input) {
+    alert('请输入要导入的数据');
+    return;
+  }
+  try {
+    var data = JSON.parse(input);
+    socket.emit('importPlayerStats', data);
+    document.getElementById('importInput').value = '';
+    document.getElementById('importPanel').classList.add('hidden');
+  } catch (e) {
+    alert('JSON格式错误');
+  }
+}
+</script>
+
+<button onclick="showRanking()" style="position:fixed;bottom:1.5rem;left:1.5rem;z-index:998;padding:.6rem 1.2rem;font-size:.85rem;font-weight:600;border:none;border-radius:10px;background:rgba(255,255,255,.8);backdrop-filter:blur(10px);color:#0078d7;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.08);transition:all .3s;border:1px solid rgba(0,120,215,.2)">🏆 球员排行</button>
+
+<div id="rankingModal" class="hidden" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.4);backdrop-filter:blur(4px);z-index:1000;display:flex;justify-content:center;align-items:center;padding:1rem">
+  <div style="background:rgba(255,255,255,.95);backdrop-filter:blur(20px);border-radius:16px;padding:1.5rem;width:100%;max-width:600px;max-height:80vh;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.15);border:1px solid rgba(0,0,0,.1)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h2 style="font-size:1.3rem;color:#334155;margin:0">🏆 球员选择排行榜</h2>
+      <div style="display:flex;gap:.5rem">
+        <button onclick="toggleImportPanel()" style="padding:.4rem .8rem;font-size:.85rem;border:none;border-radius:8px;background:#0078d7;color:white;cursor:pointer;transition:all .2s">手工导入</button>
+        <button onclick="closeRanking()" style="padding:.4rem .8rem;font-size:.85rem;border:none;border-radius:8px;background:#f1f5f9;color:#64748b;cursor:pointer;transition:all .2s">关闭</button>
+      </div>
+    </div>
+    <div id="importPanel" class="hidden" style="margin-bottom:1rem;padding:.8rem;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0">
+      <textarea id="importInput" rows="4" placeholder="粘贴选秀导出的JSON数据..." style="width:100%;font-size:.75rem;padding:.5rem;border:1px solid #cbd5e1;border-radius:8px;resize:none;font-family:monospace"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.5rem">
+        <button onclick="cancelImport()" style="padding:.3rem .6rem;font-size:.75rem;border:none;border-radius:6px;background:#f1f5f9;color:#64748b;cursor:pointer">取消</button>
+        <button onclick="importPlayerStats()" style="padding:.3rem .6rem;font-size:.75rem;border:none;border-radius:6px;background:#0078d7;color:white;cursor:pointer">确认导入</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;max-height:calc(80vh - 120px)">
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+        <thead>
+          <tr style="background:rgba(0,120,215,.06);position:sticky;top:0">
+            <th style="padding:.6rem .8rem;text-align:center;width:50px;border-bottom:2px solid rgba(0,120,215,.3);color:#0078d7">排名</th>
+            <th style="padding:.6rem .8rem;text-align:left;border-bottom:2px solid rgba(0,120,215,.3);color:#0078d7">球员姓名</th>
+            <th style="padding:.6rem .8rem;text-align:center;width:70px;border-bottom:2px solid rgba(0,120,215,.3);color:#0078d7">位置</th>
+            <th style="padding:.6rem .8rem;text-align:center;width:80px;border-bottom:2px solid rgba(0,120,215,.3);color:#0078d7">总评</th>
+            <th style="padding:.6rem .8rem;text-align:center;width:80px;border-bottom:2px solid rgba(0,120,215,.3);color:#0078d7">选择次数</th>
+          </tr>
+        </thead>
+        <tbody id="rankingList"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</body>
+</html>
