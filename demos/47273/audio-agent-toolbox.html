@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eidoth · Audio Agent for MCP</title>
+<style>
+/* ========== RESET & BASE ========== */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  /* DAW colors */
+  --daw-bg:#1a1a1e;
+  --track-header:#2a2a2e;
+  --clip-area:#222226;
+  --ruler-bg:#1e1e22;
+  --transport-bg:#28282c;
+  --transport-border:#333;
+  --daw-text:#999;
+  --daw-text-bright:#bbb;
+  --daw-blue:#4a9eff;
+
+  /* Track accent colors */
+  --accent-master:#777;
+  --accent-vocal:#c45c3e;
+  --accent-harmony:#3e9b8f;
+  --accent-synth:#b89a3e;
+  --accent-bass:#5e8c4a;
+  --accent-drums:#4a6e9b;
+  --accent-reverb:#777;
+
+  /* Plugin window colors */
+  --plugin-bg:#f5f0e8;
+  --plugin-titlebar:#e8e0d0;
+  --plugin-border:#bbb;
+  --plugin-text:#333;
+  --plugin-text-muted:#666;
+
+  /* Eidoth panel colors */
+  --eidoth-bg:rgba(22,22,30,0.95);
+  --eidoth-border:rgba(100,100,160,0.25);
+  --eidoth-accent:#7c5bf5;
+  --eidoth-fg:#e2e0ec;
+  --eidoth-muted:#8888a0;
+  --eidoth-separator:rgba(100,100,160,0.15);
+
+  /* Fonts */
+  --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif;
+  --font-mono:'Cascadia Code','Fira Code','Consolas',monospace;
+}
+html,body{height:100%;overflow:hidden;background:var(--daw-bg);color:var(--daw-text);font-family:var(--font-ui);font-size:14px;line-height:1.6}
+
+/* ========== LAYER 1: DAW BACKGROUND ========== */
+.daw{position:fixed;inset:0;display:flex;flex-direction:column;z-index:0}
+
+/* Transport Bar */
+.transport{
+  height:36px;min-height:36px;
+  background:var(--transport-bg);
+  border-bottom:1px solid var(--transport-border);
+  display:flex;align-items:center;
+  padding:0 16px;gap:16px;
+  z-index:1;
+}
+.transport-btns{display:flex;gap:6px;align-items:center}
+.transport-btn{
+  width:24px;height:24px;
+  background:#444;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  cursor:default;
+}
+.btn-play{width:0;height:0;border-left:8px solid #ccc;border-top:5px solid transparent;border-bottom:5px solid transparent;margin-left:2px}
+.btn-stop{width:8px;height:8px;background:#ccc;border-radius:1px}
+.transport-center{flex:1;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--daw-text);letter-spacing:.5px}
+.transport-center .bpm{color:var(--daw-text-bright);margin-right:14px}
+.transport-right{display:flex;align-items:center}
+.eidoth-pill{
+  padding:3px 12px;
+  background:var(--eidoth-accent);
+  color:#fff;font-size:10px;font-weight:600;
+  border-radius:10px;letter-spacing:.5px;
+  cursor:default;
+}
+
+/* Session View */
+.session-view{flex:1;display:flex;overflow:hidden}
+
+/* Track Headers */
+.track-headers{
+  width:180px;min-width:180px;
+  background:var(--track-header);
+  border-right:1px solid rgba(255,255,255,.06);
+  display:flex;flex-direction:column;
+}
+.track-header{
+  height:48px;min-height:48px;
+  display:flex;align-items:center;
+  border-left:3px solid var(--accent-color,#777);
+  padding:0 10px;gap:6px;
+  border-bottom:1px solid rgba(255,255,255,.04);
+}
+.track-header.master{height:28px;min-height:28px;background:rgba(255,255,255,.04);font-size:10px}
+.track-header .track-name{flex:1;font-size:11px;color:var(--daw-text-bright);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track-header .track-btns{display:flex;gap:3px}
+.track-btn{
+  width:16px;height:14px;
+  background:#444;border-radius:2px;
+  font-size:7px;color:#888;
+  display:flex;align-items:center;justify-content:center;
+  cursor:default;
+  font-weight:700;
+}
+
+/* Clip Area */
+.clip-area{
+  flex:1;position:relative;
+  background:var(--clip-area);
+  overflow:hidden;
+}
+
+/* Timeline Ruler */
+.timeline-ruler{
+  height:24px;min-height:24px;
+  background:var(--ruler-bg);
+  border-bottom:1px solid rgba(255,255,255,.06);
+  position:relative;
+  display:flex;
+}
+.ruler-mark{
+  flex:1;
+  display:flex;align-items:flex-end;
+  justify-content:center;
+  font-size:9px;color:var(--daw-text);
+  padding-bottom:3px;
+  position:relative;
+}
+.ruler-mark::after{
+  content:'';position:absolute;
+  bottom:0;width:1px;height:6px;
+  background:rgba(255,255,255,.15);
+}
+
+/* Clip Slots */
+.clip-slots{flex:1;position:relative}
+.clip-row{
+  height:48px;
+  border-bottom:1px solid rgba(255,255,255,.03);
+  position:relative;
+}
+.clip-row.master-row{height:28px}
+.clip-slot{
+  position:absolute;
+  top:4px;bottom:4px;
+  border-radius:3px;
+  display:flex;align-items:center;
+  padding:0 8px;
+  overflow:hidden;
+  cursor:default;
+}
+.clip-slot .clip-label{
+  font-size:9px;color:rgba(255,255,255,.85);
+  white-space:nowrap;position:relative;z-index:1;
+}
+.clip-waveform{
+  position:absolute;inset:0;
+  border-radius:3px;overflow:hidden;
+}
+.clip-waveform-inner{
+  position:absolute;inset:0;
+  opacity:.35;
+}
+
+/* Playhead */
+.playhead{
+  position:absolute;
+  top:0;bottom:0;
+  width:1px;
+  background:var(--daw-blue);
+  z-index:10;
+  left:45%;
+}
+
+/* Watermark */
+.watermark{
+  position:fixed;
+  bottom:58px;left:16px;
+  font-size:10px;color:#444;
+  z-index:1;letter-spacing:.3px;
+}
+
+/* ========== LAYER 2: VST3 PLUGIN WINDOW ========== */
+.plugin-window{
+  position:absolute;
+  top:15%;left:25%;
+  width:420px;
+  background:var(--plugin-bg);
+  border:1px solid var(--plugin-border);
+  border-radius:6px;
+  box-shadow:0 8px 32px rgba(0,0,0,.5);
+  z-index:20;
+  opacity:0;
+  transform:translateY(10px);
+  animation:pluginFadeIn 600ms 400ms ease-out forwards;
+}
+@keyframes pluginFadeIn{
+  to{opacity:1;transform:translateY(0)}
+}
+
+.plugin-titlebar{
+  height:28px;min-height:28px;
+  background:var(--plugin-titlebar);
+  border-radius:5px 5px 0 0;
+  display:flex;align-items:center;
+  padding:0 10px;
+  border-bottom:1px solid #d0c8b8;
+}
+.plugin-titlebar .plugin-name{
+  flex:1;font-size:11px;font-weight:600;color:var(--plugin-text);
+}
+.plugin-titlebar .close-btn{
+  width:16px;height:16px;
+  font-size:12px;color:#999;
+  display:flex;align-items:center;justify-content:center;
+  cursor:default;border-radius:50%;
+  background:transparent;
+}
+.plugin-titlebar .close-btn:hover{background:rgba(0,0,0,.1)}
+
+.plugin-content{padding:16px 12px 12px}
+
+/* Band controls row */
+.band-row{
+  display:flex;gap:8px;
+  margin-bottom:12px;
+}
+.band-section{
+  flex:1;
+  display:flex;flex-direction:column;
+  align-items:center;gap:4px;
+}
+.band-section.active .band-label{color:#c45c3e}
+.band-label{
+  font-size:9px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.8px;
+  color:var(--plugin-text-muted);
+}
+.band-indicator{
+  width:4px;height:4px;border-radius:50%;
+  background:#aaa;margin-top:-2px;
+}
+.band-section.active .band-indicator{background:#c45c3e}
+
+/* Knob containers */
+.plugin-knob-row{display:flex;justify-content:center;gap:6px}
+.plugin-knob-wrap{display:flex;flex-direction:column;align-items:center;gap:2px}
+.plugin-knob-label{font-size:8px;color:var(--plugin-text-muted)}
+.plugin-knob-val{font-size:9px;color:var(--plugin-text);font-family:var(--font-mono);font-weight:600}
+
+/* Plugin parameter readout */
+.plugin-readout{
+  margin-top:12px;
+  background:#1a1a1e;
+  border-radius:4px;
+  padding:10px 12px;
+  font-family:var(--font-mono);
+  font-size:10px;
+  line-height:1.7;
+  color:#aaa;
+}
+.plugin-readout .param-name{color:#888}
+.plugin-readout .param-val{color:#b8c890}
+.plugin-readout .param-val.dyn{color:#e8a060}
+
+/* ========== LAYER 3: EIDOTH CHAT PANEL ========== */
+.eidoth-panel{
+  position:absolute;
+  top:8%;right:20px;
+  width:400px;height:75vh;
+  background:var(--eidoth-bg);
+  backdrop-filter:blur(16px);
+  -webkit-backdrop-filter:blur(16px);
+  border:1px solid var(--eidoth-border);
+  border-radius:12px;
+  box-shadow:0 12px 48px rgba(0,0,0,.6);
+  z-index:30;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  opacity:0;
+  transform:translateX(40px);
+  animation:eidothSlideIn 800ms cubic-bezier(.16,1,.3,1) forwards;
+}
+@keyframes eidothSlideIn{
+  to{opacity:1;transform:translateX(0)}
+}
+
+.eidoth-titlebar{
+  height:36px;min-height:36px;
+  display:flex;align-items:center;
+  padding:0 14px;
+  border-bottom:1px solid var(--eidoth-separator);
+}
+.eidoth-titlebar .left{display:flex;align-items:center;gap:8px}
+.eidoth-dot{width:8px;height:8px;border-radius:50%;background:var(--eidoth-accent)}
+.eidoth-titlebar .title{font-size:13px;font-weight:700;color:var(--eidoth-fg)}
+.eidoth-titlebar .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.eidoth-titlebar .tag{font-size:10px;color:var(--eidoth-muted)}
+.eidoth-titlebar .close{font-size:14px;color:#666;cursor:default}
+
+/* Chat messages */
+.chat-messages{
+  flex:1;overflow-y:auto;
+  padding:12px 14px;
+  display:flex;flex-direction:column;
+  gap:10px;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(100,100,160,.2) transparent;
+}
+.chat-messages::-webkit-scrollbar{width:4px}
+.chat-messages::-webkit-scrollbar-track{background:transparent}
+.chat-messages::-webkit-scrollbar-thumb{background:rgba(100,100,160,.3);border-radius:2px}
+
+/* Message wrapper */
+.msg-wrap{
+  display:flex;flex-direction:column;gap:4px;
+  opacity:0;transform:translateY(8px);
+}
+.msg-wrap.visible{opacity:1;transform:translateY(0);transition:opacity .4s ease,transform .4s ease}
+
+.msg-role{
+  font-size:9px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.6px;
+  padding-left:2px;
+}
+.msg-role.user{color:#6ba3ff}
+.msg-role.tool{color:#a08be8}
+.msg-role.agent{color:var(--eidoth-accent)}
+
+.msg-bubble{
+  padding:10px 12px;
+  border-radius:8px;
+  font-size:12.5px;
+  line-height:1.65;
+  color:var(--eidoth-fg);
+}
+.msg-bubble.user-bubble{
+  background:rgba(59,91,219,.25);
+  border:1px solid rgba(59,91,219,.15);
+}
+.msg-bubble.tool-bubble{
+  background:rgba(15,15,30,.8);
+  border:1px solid rgba(100,100,160,.12);
+  font-family:var(--font-mono);
+  font-size:11px;
+  line-height:1.7;
+  white-space:pre-wrap;
+  color:#b0b8cc;
+}
+.msg-bubble.agent-bubble{
+  background:rgba(60,60,90,.5);
+  border:1px solid rgba(100,100,160,.1);
+}
+
+/* Status bar */
+.eidoth-status{
+  padding:8px 14px;
+  border-top:1px solid var(--eidoth-separator);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.status-left{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--eidoth-muted)}
+.status-dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--eidoth-accent);
+  animation:pulse 2s infinite;
+}
+@keyframes pulse{
+  0%,100%{opacity:1;transform:scale(1)}
+  50%{opacity:.4;transform:scale(.8)}
+}
+.reset-btn{
+  font-size:9px;color:var(--eidoth-muted);
+  background:rgba(100,100,160,.12);
+  border:1px solid rgba(100,100,160,.15);
+  padding:3px 10px;border-radius:4px;
+  cursor:pointer;
+  transition:background .2s;
+}
+.reset-btn:hover{background:rgba(100,100,160,.25)}
+
+/* ========== LAYER 4: MIXER FADERS ========== */
+.mixer-faders{
+  position:fixed;bottom:0;left:0;right:0;
+  height:60px;background:rgba(20,20,28,.95);
+  z-index:5;display:flex;align-items:stretch;
+  border-top:1px solid #333;
+  padding:0 12px;gap:0;
+}
+.fader-track{
+  flex:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:4px;
+  max-width:120px;min-width:60px;
+  padding:4px 8px;
+  border-right:1px solid rgba(255,255,255,.04);
+}
+.fader-track:last-child{border-right:none}
+.fader-label{font-size:9px;color:var(--daw-text);white-space:nowrap;letter-spacing:.3px}
+.fader-groove{
+  width:6px;flex:1;max-height:32px;
+  background:#111;border-radius:3px;
+  position:relative;overflow:hidden;
+}
+.fader-fill{
+  position:absolute;bottom:0;left:0;right:0;
+  border-radius:3px;
+  background:linear-gradient(to top,#00cc66 0%,#aaaa00 60%,#ff6600 85%,#ff2200 100%);
+  transition:height .15s ease;
+}
+.fader-db{
+  font-size:8px;font-family:var(--font-mono);
+  color:var(--daw-text-dim,var(--daw-text));opacity:.7
+}
+</style>
+</head>
+<body>
+
+<!-- ========== DAW BACKGROUND ========== -->
+<div class="daw">
+  <!-- Transport Bar -->
+  <div class="transport">
+    <div class="transport-btns">
+      <div class="transport-btn"><div class="btn-play"></div></div>
+      <div class="transport-btn"><div class="btn-stop"></div></div>
+    </div>
+    <div class="transport-center">
+      <span class="bpm">128.0 BPM</span>
+      <span>037:1:1:17</span>
+    </div>
+    <div class="transport-right">
+      <div class="eidoth-pill">Eidoth</div>
+    </div>
+  </div>
+
+  <!-- Session View -->
+  <div class="session-view">
+    <!-- Track Headers -->
+    <div class="track-headers">
+      <div class="track-header master" style="--accent-color:var(--accent-master)">
+        <span class="track-name">Master</span>
+      </div>
+      <div class="track-header" style="--accent-color:var(--accent-vocal)">
+        <span class="track-name">人声主轨</span>
+        <div class="track-btns"><div class="track-btn">M</div><div class="track-btn">S</div><div class="track-btn">R</div></div>
+      </div>
+      <div class="track-header" style="--accent-color:var(--accent-harmony)">
+        <span class="track-name">和声</span>
+        <div class="track-btns"><div class="track-btn">M</div><div class="track-btn">S</div><div class="track-btn">R</div></div>
+      </div>
+      <div class="track-header" style="--accent-color:var(--accent-synth)">
+        <span class="track-name">Synth Pad</span>
+        <div class="track-btns"><div class="track-btn">M</div><div class="track-btn">S</div><div class="track-btn">R</div></div>
+      </div>
+      <div class="track-header" style="--accent-color:var(--accent-bass)">
+        <span class="track-name">Bass DI</span>
+        <div class="track-btns"><div class="track-btn">M</div><div class="track-btn">S</div><div class="track-btn">R</div></div>
+      </div>
+      <div class="track-header" style="--accent-color:var(--accent-drums)">
+        <span class="track-name">Drums Overhead</span>
+        <div class="track-btns"><div class="track-btn">M</div><div class="track-btn">S</div><div class="track-btn">R</div></div>
+      </div>
+      <div class="track-header" style="--accent-color:var(--accent-reverb)">
+        <span class="track-name">Reverb</span>
+        <div class="track-btns"><div class="track-btn">M</div><div class="track-btn">S</div><div class="track-btn">R</div></div>
+      </div>
+    </div>
+
+    <!-- Clip Area -->
+    <div class="clip-area">
+      <!-- Timeline Ruler -->
+      <div class="timeline-ruler">
+        <div class="ruler-mark">1</div>
+        <div class="ruler-mark">2</div>
+        <div class="ruler-mark">3</div>
+        <div class="ruler-mark">4</div>
+        <div class="ruler-mark">5</div>
+        <div class="ruler-mark">6</div>
+        <div class="ruler-mark">7</div>
+        <div class="ruler-mark">8</div>
+        <div class="ruler-mark">9</div>
+        <div class="ruler-mark">10</div>
+        <div class="ruler-mark">11</div>
+        <div class="ruler-mark">12</div>
+        <div class="ruler-mark">13</div>
+        <div class="ruler-mark">14</div>
+        <div class="ruler-mark">15</div>
+        <div class="ruler-mark">16</div>
+      </div>
+
+      <!-- Clip Slots -->
+      <div class="clip-slots" id="clipSlots">
+        <!-- Playhead -->
+        <div class="playhead"></div>
+
+        <!-- Master row (empty - return tracks) -->
+        <div class="clip-row master-row"></div>
+
+        <!-- Vocal track clips -->
+        <div class="clip-row">
+          <div class="clip-slot" style="left:5%;width:55%;background:rgba(196,92,62,.45)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf1"></div></div>
+            <span class="clip-label">主歌 A</span>
+          </div>
+          <div class="clip-slot" style="left:62%;width:32%;background:rgba(196,92,62,.4)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf2"></div></div>
+            <span class="clip-label">导歌</span>
+          </div>
+        </div>
+
+        <!-- Harmony track clips -->
+        <div class="clip-row">
+          <div class="clip-slot" style="left:15%;width:40%;background:rgba(62,155,143,.4)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf3"></div></div>
+            <span class="clip-label">和声 1</span>
+          </div>
+        </div>
+
+        <!-- Synth Pad track clips -->
+        <div class="clip-row">
+          <div class="clip-slot" style="left:2%;width:68%;background:rgba(184,154,62,.35)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf4"></div></div>
+            <span class="clip-label">Pad A</span>
+          </div>
+          <div class="clip-slot" style="left:72%;width:25%;background:rgba(184,154,62,.3)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf5"></div></div>
+            <span class="clip-label">Fill</span>
+          </div>
+        </div>
+
+        <!-- Bass track clips -->
+        <div class="clip-row">
+          <div class="clip-slot" style="left:8%;width:50%;background:rgba(94,140,74,.4)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf6"></div></div>
+            <span class="clip-label">Bass A</span>
+          </div>
+          <div class="clip-slot" style="left:60%;width:36%;background:rgba(94,140,74,.35)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf7"></div></div>
+            <span class="clip-label">Bass B</span>
+          </div>
+        </div>
+
+        <!-- Drums track clips -->
+        <div class="clip-row">
+          <div class="clip-slot" style="left:0%;width:35%;background:rgba(74,110,155,.4)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf8"></div></div>
+            <span class="clip-label">Beat 1</span>
+          </div>
+          <div class="clip-slot" style="left:36%;width:34%;background:rgba(74,110,155,.35)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf9"></div></div>
+            <span class="clip-label">Beat 2</span>
+          </div>
+          <div class="clip-slot" style="left:72%;width:27%;background:rgba(74,110,155,.4)">
+            <div class="clip-waveform"><div class="clip-waveform-inner" id="wf10"></div></div>
+            <span class="clip-label">Beat 3</span>
+          </div>
+        </div>
+
+        <!-- Reverb return (empty) -->
+        <div class="clip-row"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Watermark -->
+<div class="watermark">Eidoth · Audio Agent for MCP</div>
+
+<!-- ========== LAYER 2: VST3 PLUGIN WINDOW ========== -->
+<div class="plugin-window" id="pluginWindow">
+  <div class="plugin-titlebar">
+    <span class="plugin-name">Vocal EQ</span>
+    <div class="close-btn">×</div>
+  </div>
+  <div class="plugin-content">
+    <!-- 5-Band EQ -->
+    <div class="band-row">
+      <!-- Band: ON/OFF (Bypass) -->
+      <div class="band-section">
+        <div class="band-label">Bypass</div>
+        <div class="band-indicator" style="background:#888"></div>
+        <div class="plugin-knob-row" style="margin-top:6px">
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="bypass" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">BYPASS</span>
+          </div>
+        </div>
+      </div>
+      <!-- Band: LOW -->
+      <div class="band-section">
+        <div class="band-label">Low</div>
+        <div class="band-indicator"></div>
+        <div class="plugin-knob-row" style="margin-top:6px">
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="low_gain" data-val="2.0" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Gain</span>
+            <span class="plugin-knob-val" data-val-label="low_gain">+2.0</span>
+          </div>
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="low_freq" data-val="180" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Freq</span>
+            <span class="plugin-knob-val" data-val-label="low_freq">180</span>
+          </div>
+        </div>
+      </div>
+      <!-- Band: LOW MID -->
+      <div class="band-section">
+        <div class="band-label">Low Mid</div>
+        <div class="band-indicator"></div>
+        <div class="plugin-knob-row" style="margin-top:6px">
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="lm_gain" data-val="-1.5" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Gain</span>
+            <span class="plugin-knob-val" data-val-label="lm_gain">-1.5</span>
+          </div>
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="lm_freq" data-val="1200" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Freq</span>
+            <span class="plugin-knob-val" data-val-label="lm_freq">1.2k</span>
+          </div>
+        </div>
+      </div>
+      <!-- Band: HIGH MID (active) -->
+      <div class="band-section active">
+        <div class="band-label">Hi Mid</div>
+        <div class="band-indicator"></div>
+        <div class="plugin-knob-row" style="margin-top:6px">
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="hm_gain" data-val="-4.0" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Gain</span>
+            <span class="plugin-knob-val" data-val-label="hm_gain">-4.0</span>
+          </div>
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="hm_freq" data-val="4500" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Freq</span>
+            <span class="plugin-knob-val" data-val-label="hm_freq">4.5k</span>
+          </div>
+        </div>
+      </div>
+      <!-- Band: HIGH -->
+      <div class="band-section">
+        <div class="band-label">High</div>
+        <div class="band-indicator"></div>
+        <div class="plugin-knob-row" style="margin-top:6px">
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="high_gain" data-val="1.0" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Gain</span>
+            <span class="plugin-knob-val" data-val-label="high_gain">+1.0</span>
+          </div>
+          <div class="plugin-knob-wrap">
+            <canvas class="plugin-knob-canvas" data-param="high_freq" data-val="8000" width="60" height="60" style="width:30px;height:30px"></canvas>
+            <span class="plugin-knob-label">Freq</span>
+            <span class="plugin-knob-val" data-val-label="high_freq">8k</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Parameter Readout -->
+    <div class="plugin-readout" id="pluginReadout">
+      <div><span class="param-name">Input Gain:</span> <span class="param-val" data-readout="input_gain">0.50</span></div>
+      <div><span class="param-name">Output Gain:</span> <span class="param-val" data-readout="output_gain">0.50</span></div>
+      <div><span class="param-name">High Pass:</span> <span class="param-val" data-readout="highpass">OFF</span></div>
+      <div><span class="param-name">Low:</span> <span class="param-val" data-readout="low">+2.0dB @ 180Hz</span></div>
+      <div><span class="param-name">Low Mid:</span> <span class="param-val" data-readout="lowmid">-1.5dB @ 1.2kHz</span></div>
+      <div><span class="param-name">High Mid:</span> <span class="param-val dyn" data-readout="highmid">-4.0dB @ 4.5kHz [DYN]</span></div>
+      <div><span class="param-name">High:</span> <span class="param-val" data-readout="high">+1.0dB @ 8kHz</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== LAYER 3: EIDOTH CHAT PANEL ========== -->
+<div class="eidoth-panel" id="eidothPanel">
+  <!-- Title bar -->
+  <div class="eidoth-titlebar">
+    <div class="left">
+      <div class="eidoth-dot"></div>
+      <span class="title">Eidoth</span>
+    </div>
+    <div class="right">
+      <span class="tag">MCP · Audio Skill</span>
+      <span class="close">×</span>
+    </div>
+  </div>
+
+  <!-- Chat messages -->
+  <div class="chat-messages" id="chatMessages">
+    <!-- Message 1: User -->
+    <div class="msg-wrap" data-delay="0">
+      <span class="msg-role user">用户</span>
+      <div class="msg-bubble user-bubble">这版人声录得挺好的，但感觉高频有点扎，像歌手离话筒太近了那种齿音感，低频也没太撑起来，整条人声有点"浮"在伴奏上面，你感觉呢？</div>
+    </div>
+
+    <!-- Message 2: Tool call -->
+    <div class="msg-wrap" data-delay="1200">
+      <span class="msg-role tool">工具调用</span>
+      <div class="msg-bubble tool-bubble">🎤 listen_audio --track vocals --duration 4s
+
+📊 分析结果：
+  高频 4-8kHz 能量偏高 (+3.2dB)
+  齿音频率 6.5kHz 有明显尖峰
+  低频 100-250Hz 能量不足 (-2.8dB)
+  动态范围: 良好，瞬态清晰
+  素材评估: 人声素质不错，混音空间充足</div>
+    </div>
+
+    <!-- Message 3: Agent reply -->
+    <div class="msg-wrap" data-delay="3200">
+      <span class="msg-role agent">Eidoth</span>
+      <div class="msg-bubble agent-bubble">听了，确实是近讲效应那种感觉。齿音在 6.5kHz 位置很明显，高频整体亮了大概 3dB 多，听觉上会有那种"咝咝"的金属感。低频确实薄了，人声少了那个"坐在伴奏里"的感觉。
+
+我想可以这样试试：先挂一个 De-Esser 把 6.5kHz 的齿音压下去，然后高频整体收 1.5dB 左右——不是要暗，是要把那种"扎"的感觉磨掉，保留空气感。低频 200Hz 附近提 2dB，给人声一个"底盘"。压缩比松到 2.5:1，让动态更自然。
+
+这版素材底子好，调完应该会很舒服。你觉得这个方向对吗？</div>
+    </div>
+
+    <!-- Message 4: User -->
+    <div class="msg-wrap" data-delay="6400">
+      <span class="msg-role user">用户</span>
+      <div class="msg-bubble user-bubble">嗯方向对了，但高频别收太多，我觉得那种亮亮的感觉是这首歌的风格，就收 1dB 差不多了。低频 2dB 可以，De-Esser 一定要挂，齿音确实烦。压缩 2.5 可以。
+
+来，先按这个调一轮，我听完再说。</div>
+    </div>
+
+    <!-- Message 5: Tool call -->
+    <div class="msg-wrap" data-delay="8800" data-trigger-params="true">
+      <span class="msg-role tool">工具调用</span>
+      <div class="msg-bubble tool-bubble">⚙️ set_plugin_params
+  track: vocals
+  params:
+    de-esser: ON (freq 6.5kHz, depth -6dB)
+    eq_high_shelf: -1.0dB
+    eq_low: +2.0dB @ 200Hz
+    comp_ratio: 2.5:1
+    comp_threshold: -16dB
+✅ 参数已写入，正在实时生效</div>
+    </div>
+
+    <!-- Message 6: Agent reply -->
+    <div class="msg-wrap" data-delay="10400">
+      <span class="msg-role agent">Eidoth</span>
+      <div class="msg-bubble agent-bubble">调好了。De-Esser 在 6.5kHz 压了 6dB，齿音应该干净了。高频只收了 1dB，亮度还在但那种"扎"的感觉应该没了。低频补上去了，你听听人声是不是更"坐得住"了。
+
+来听听这一版，看看感觉对不对。</div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="eidoth-status">
+    <div class="status-left">
+      <div class="status-dot"></div>
+      <span>Agent 已就绪</span>
+    </div>
+    <button class="reset-btn" id="resetBtn">重置演示</button>
+  </div>
+</div>
+
+<!-- ========== LAYER 4: MIXER FADERS ========== -->
+<div class="mixer-faders" id="mixerFaders">
+  <div class="fader-track" data-track="master" style="--ch-color:var(--accent-master)">
+    <div class="fader-label">Master</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.7"></div></div>
+    <div class="fader-db">0.0</div>
+  </div>
+  <div class="fader-track" data-track="vocal" style="--ch-color:var(--accent-vocal)">
+    <div class="fader-label">人声</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.65"></div></div>
+    <div class="fader-db">-2.1</div>
+  </div>
+  <div class="fader-track" data-track="harmony" style="--ch-color:var(--accent-harmony)">
+    <div class="fader-label">和声</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.55"></div></div>
+    <div class="fader-db">-4.5</div>
+  </div>
+  <div class="fader-track" data-track="synth" style="--ch-color:var(--accent-synth)">
+    <div class="fader-label">Synth</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.6"></div></div>
+    <div class="fader-db">-3.2</div>
+  </div>
+  <div class="fader-track" data-track="bass" style="--ch-color:var(--accent-bass)">
+    <div class="fader-label">Bass</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.7"></div></div>
+    <div class="fader-db">-1.8</div>
+  </div>
+  <div class="fader-track" data-track="drums" style="--ch-color:var(--accent-drums)">
+    <div class="fader-label">Drums</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.75"></div></div>
+    <div class="fader-db">-0.9</div>
+  </div>
+  <div class="fader-track" data-track="reverb" style="--ch-color:var(--accent-reverb)">
+    <div class="fader-label">Reverb</div>
+    <div class="fader-groove"><div class="fader-fill" data-level="0.4"></div></div>
+    <div class="fader-db">-8.0</div>
+  </div>
+</div>
+
+<script>
+/* ==========================================================
+   AUDIO AGENT TOOLBOX - ALL LOGIC
+   ========================================================== */
+
+(function() {
+  'use strict';
+
+  // ---- Waveform patterns for clips ----
+  function generateWaveformCSS(id, seed) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let bg = '';
+    const rng = mulberry32(seed);
+    for (let i = 0; i < 40; i++) {
+      const x = (i / 40) * 100;
+      const w = 1.5;
+      const h = 20 + rng() * 60;
+      bg += `linear-gradient(rgba(255,255,255,.4) ${h}%, transparent ${h}%) ${x}% 0%/${w}% 100% no-repeat,`;
+    }
+    el.style.background = bg.slice(0, -1);
+  }
+
+  function mulberry32(a) {
+    return function() {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+  }
+
+  for (let i = 1; i <= 10; i++) generateWaveformCSS('wf' + i, i * 137 + 42);
+
+  // ---- Draw small knob on canvas (enhanced for animation) ----
+  var pluginKnobHighlight = {}; // track which knobs are animating
+
+  function drawPluginKnob(canvas, value, highlight) {
+    var ctx = canvas.getContext('2d');
+    var s = canvas.width;
+    var cx = s / 2, cy = s / 2, r = s * 0.36;
+    ctx.clearRect(0, 0, s, s);
+
+    // Highlight glow behind knob when animating
+    if (highlight) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(196,92,62,.25)';
+      ctx.fill();
+    }
+
+    // Knob body
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = highlight ? '#666' : '#555';
+    ctx.fill();
+
+    // Inner ring
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.7, 0, Math.PI * 2);
+    ctx.fillStyle = highlight ? '#555' : '#4a4a4a';
+    ctx.fill();
+
+    // Pointer
+    var angle = -Math.PI * 0.75 + value * Math.PI * 1.5;
+    var px = cx + Math.cos(angle) * r * 0.75;
+    var py = cy + Math.sin(angle) * r * 0.75;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(px, py);
+    ctx.strokeStyle = highlight ? '#ff8866' : '#ccc';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Highlight
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.2, cy - r * 0.2, r * 0.25, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.08)';
+    ctx.fill();
+  }
+
+  // Initial plugin knob values (normalized 0..1)
+  var pluginKnobValues = {
+    bypass: 0.3,
+    low_gain: 0.65,
+    low_freq: 0.4,
+    lm_gain: 0.35,
+    lm_freq: 0.55,
+    hm_gain: 0.2,
+    hm_freq: 0.65,
+    high_gain: 0.58,
+    high_freq: 0.72
+  };
+
+  var pluginKnobTargets = {};
+
+  document.querySelectorAll('.plugin-knob-canvas').forEach(function(c) {
+    var param = c.dataset.param;
+    var val = pluginKnobValues[param] || 0.5;
+    drawPluginKnob(c, val);
+    pluginKnobTargets[param] = val;
+  });
+
+  // ---- Fader animation ----
+  var faderFills = document.querySelectorAll('.fader-fill');
+  var faderLevels = [];
+  faderFills.forEach(function(f) {
+    faderLevels.push(parseFloat(f.dataset.level));
+  });
+
+  // ---- Chat message animation ----
+  function animateMessages() {
+    var wraps = document.querySelectorAll('.msg-wrap');
+    wraps.forEach(function(w) {
+      var delay = parseInt(w.dataset.delay) || 0;
+      setTimeout(function() {
+        w.classList.add('visible');
+      }, 600 + delay);
+    });
+  }
+  animateMessages();
+
+  // ---- Parameter update trigger ----
+  var paramsApplied = false;
+
+  function applyParamsUpdate() {
+    if (paramsApplied) return;
+    paramsApplied = true;
+
+    // Update plugin readout — EQ values change
+    var readouts = {
+      low: '+2.0dB @ 200Hz',
+      lowmid: '-1.5dB @ 1.2kHz',
+      highmid: '-1.0dB @ 4.5kHz [DYN]',
+      high: '-1.0dB @ 8kHz'
+    };
+    // Stagger readout text updates to match knob animation
+    var readoutDelays = { low: 600, lowmid: 0, highmid: 300, high: 800 };
+    Object.keys(readoutDelays).forEach(function(key) {
+      setTimeout(function() {
+        var el = document.querySelector('[data-readout="' + key + '"]');
+        if (el) el.textContent = readouts[key];
+      }, readoutDelays[key]);
+    });
+
+    // Update plugin knob values — staggered with highlight animation
+    // Each EQ band knob rotates visibly to its new position
+    var knobUpdates = [
+      { param: 'hm_gain',  target: 0.55, delay: 0 },    // Hi Mid gain: -4.0 → -1.0
+      { param: 'hm_freq',  target: 0.62, delay: 100 },   // Hi Mid freq stays similar
+      { param: 'high_gain', target: 0.48, delay: 600 },   // High gain: +1.0 → -1.0
+      { param: 'high_freq', target: 0.74, delay: 650 },  // High freq stays similar
+      { param: 'low_gain',  target: 0.7,  delay: 400 },  // Low gain: +2.0 → +2.0 (slight nudge)
+      { param: 'low_freq',  target: 0.45, delay: 450 },  // Low freq: 180 → 200Hz
+      { param: 'lm_gain',  target: 0.38, delay: 200 },   // Low Mid: slight nudge
+      { param: 'bypass',    target: 0.15, delay: 0 }       // Power: stays ON
+    ];
+    knobUpdates.forEach(function(u) {
+      setTimeout(function() {
+        pluginKnobTargets[u.param] = u.target;
+        pluginKnobHighlight[u.param] = true;
+        // Update the knob's displayed value label
+        var valEl = document.querySelector('[data-val-label="' + u.param + '"]');
+        if (valEl) {
+          var valMap = {
+            hm_gain: '-1.0', high_gain: '-1.0',
+            low_gain: '+2.0', low_freq: '200',
+            hm_freq: '4.5k', high_freq: '8k',
+            lm_gain: '-1.5', bypass: 'ON'
+          };
+          if (valMap[u.param]) valEl.textContent = valMap[u.param];
+        }
+        // Remove highlight after animation completes
+        setTimeout(function() {
+          delete pluginKnobHighlight[u.param];
+        }, 1100);
+      }, u.delay);
+    });
+
+    // Briefly boost vocal fader to show activity
+    if (faderLevels[1] !== undefined) {
+      var origLevel = faderLevels[1];
+      faderLevels[1] = Math.min(1, origLevel + 0.08);
+      setTimeout(function() { faderLevels[1] = origLevel; }, 2000);
+    }
+  }
+
+  // Auto-trigger when message 5 appears (data-delay=8800 + base 600 = ~9400)
+  setTimeout(function() {
+    applyParamsUpdate();
+  }, 9600);
+
+  // ---- Reset button ----
+  document.getElementById('resetBtn').addEventListener('click', function() {
+    paramsApplied = false;
+
+    // Hide all messages
+    document.querySelectorAll('.msg-wrap').forEach(function(w) {
+      w.classList.remove('visible');
+    });
+
+    // Reset plugin readout
+    var origReadouts = {
+      low: '+2.0dB @ 180Hz',
+      lowmid: '-1.5dB @ 1.2kHz',
+      highmid: '-4.0dB @ 4.5kHz [DYN]',
+      high: '+1.0dB @ 8kHz'
+    };
+    Object.keys(origReadouts).forEach(function(key) {
+      var el = document.querySelector('[data-readout="' + key + '"]');
+      if (el) el.textContent = origReadouts[key];
+    });
+
+    // Reset plugin knobs
+    pluginKnobTargets.hm_gain = 0.2;
+    pluginKnobTargets.high_gain = 0.58;
+    pluginKnobTargets.low_gain = 0.65;
+    pluginKnobTargets.low_freq = 0.4;
+    pluginKnobTargets.lm_gain = 0.35;
+    pluginKnobTargets.hm_freq = 0.65;
+    pluginKnobTargets.high_freq = 0.72;
+    pluginKnobTargets.bypass = 0.3;
+
+    // Reset knob value labels
+    var origLabels = {
+      hm_gain: '-4.0', high_gain: '+1.0',
+      low_gain: '+2.0', low_freq: '180',
+      hm_freq: '4.5k', high_freq: '8k',
+      lm_gain: '-1.5'
+    };
+    Object.keys(origLabels).forEach(function(k) {
+      var el = document.querySelector('[data-val-label="' + k + '"]');
+      if (el) el.textContent = origLabels[k];
+    });
+
+    // Re-trigger chat + params after delay
+    setTimeout(function() {
+      animateMessages();
+    }, 500);
+    setTimeout(function() {
+      applyParamsUpdate();
+    }, 9600);
+  });
+
+  // ---- Animation loop ----
+  var lastTime = 0;
+  var faderTime = 0;
+
+  function animate(time) {
+    requestAnimationFrame(animate);
+    var dt = Math.min((time - lastTime) / 1000, 0.05);
+    lastTime = time;
+    faderTime += dt;
+
+    // Animate plugin knobs (with highlight support)
+    Object.keys(pluginKnobTargets).forEach(function(key) {
+      var diff = pluginKnobTargets[key] - pluginKnobValues[key];
+      if (Math.abs(diff) > 0.001) {
+        pluginKnobValues[key] += diff * 0.08;
+      } else {
+        pluginKnobValues[key] = pluginKnobTargets[key];
+      }
+      var canvas = document.querySelector('.plugin-knob-canvas[data-param="' + key + '"]');
+      if (canvas) drawPluginKnob(canvas, pluginKnobValues[key], !!pluginKnobHighlight[key]);
+    });
+
+    // Animate faders (subtle level fluctuation)
+    faderFills.forEach(function(f, i) {
+      var base = faderLevels[i];
+      var noise = 0.02 * Math.sin(faderTime * 4 + i * 2.3) + 0.015 * Math.sin(faderTime * 7 + i * 1.7);
+      var level = Math.max(0.05, Math.min(1, base + noise));
+      f.style.height = (level * 100) + '%';
+    });
+  }
+
+  requestAnimationFrame(animate);
+
+})();
+</script>
+
+</body>
+</html>

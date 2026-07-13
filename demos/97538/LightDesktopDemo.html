@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LightDesktop - 桌面模式管理演示</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;user-select:none}
+body{width:100vw;height:100vh;overflow:hidden;font-family:'Microsoft YaHei UI','Segoe UI',sans-serif}
+
+/* ══════════ 桌面背景 ══════════ */
+#desktop{position:absolute;inset:0;overflow:hidden;
+  background:linear-gradient(135deg,#0a1628 0%,#0f2847 30%,#1a4a7a 60%,#0d3460 100%)}
+#desktop::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 30% 20%,rgba(40,120,200,.12) 0%,transparent 60%),
+             radial-gradient(ellipse at 70% 80%,rgba(20,80,160,.08) 0%,transparent 50%)}
+
+/* ══════════ 桌面图标 ══════════ */
+.icon-grid{position:absolute;top:12px;left:12px;display:grid;
+  grid-template-columns:repeat(auto-fill,82px);gap:2px;z-index:1}
+.desk-icon{width:82px;height:90px;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:4px;border-radius:4px;cursor:default;
+  transition:all .4s cubic-bezier(.4,0,.2,1);position:relative}
+.desk-icon:hover{background:rgba(255,255,255,.08)}
+.desk-icon:hover .icon-img{filter:brightness(1.1)}
+.desk-icon .icon-img{width:48px;height:48px;display:flex;align-items:center;justify-content:center;
+  transition:all .4s cubic-bezier(.4,0,.2,1);filter:drop-shadow(0 2px 4px rgba(0,0,0,.5))}
+.desk-icon .icon-img svg{width:48px;height:48px}
+.desk-icon .label{color:#fff;font-size:11.5px;text-shadow:0 1px 3px rgba(0,0,0,.8);
+  text-align:center;max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  line-height:1.3}
+.desk-icon.hidden-mode{opacity:0;transform:scale(.3);pointer-events:none;position:absolute;width:0;height:0;overflow:hidden}
+
+/* ══════════ 模式切换条 ══════════ */
+#bar-zone{position:fixed;top:0;left:50%;transform:translateX(-50%);width:1000px;height:30px;z-index:1000}
+#mode-bar{position:fixed;top:2px;left:50%;transform:translateX(-50%) translateY(-14px);z-index:999;
+  opacity:0;pointer-events:none;transition:opacity .3s ease,transform .3s ease;padding:0}
+#mode-bar.visible{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+
+/* 面板容器 */
+.bar-panel{position:relative;display:flex;gap:20px;align-items:center;
+  padding:14px 28px;border-radius:16px;background:rgba(7,7,11,.94);
+  border:1.5px solid rgba(38,100,150,255)}
+
+/* 霓虹管：conic-gradient 旋转 + 多层 bloom */
+.neon-tube{position:absolute;inset:-3px;border-radius:18px;z-index:0;overflow:visible}
+.neon-tube::before{content:'';position:absolute;inset:0;border-radius:18px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    #0028ff,#00ffdc,#ffff00,#ff7800,#b400ff,#0028ff);
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;padding:3px;
+  animation:neonSpin 6s linear infinite}
+/* Bloom 层 - 远距柔光 */
+.neon-tube::after{content:'';position:absolute;inset:-14px;border-radius:28px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    rgba(0,40,255,.15),rgba(0,255,220,.12),rgba(255,255,0,.1),rgba(255,120,0,.12),rgba(180,0,255,.13),rgba(0,40,255,.15));
+  filter:blur(18px);animation:neonSpin 6s linear infinite;z-index:-1}
+@keyframes neonSpin{to{--neon-angle:360deg}}
+@property --neon-angle{syntax:'<angle>';initial-value:0deg;inherits:false}
+
+/* 额外 bloom 层 */
+.bloom-1{position:absolute;inset:-8px;border-radius:24px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    rgba(0,40,255,.08),rgba(0,255,220,.06),rgba(255,255,0,.05),rgba(255,120,0,.06),rgba(180,0,255,.07),rgba(0,40,255,.08));
+  filter:blur(10px);animation:neonSpin 6s linear infinite;pointer-events:none}
+.bloom-2{position:absolute;inset:-22px;border-radius:34px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    rgba(0,40,255,.04),rgba(0,255,220,.03),rgba(255,255,0,.025),rgba(255,120,0,.03),rgba(180,0,255,.035),rgba(0,40,255,.04));
+  filter:blur(28px);animation:neonSpin 6s linear infinite;pointer-events:none}
+
+/* 内层渐变覆盖 */
+.bar-inner-fill{position:absolute;inset:2px;border-radius:13px;
+  background:radial-gradient(circle at 50% 35%,#1a1a2e,#050509);z-index:0}
+
+/* ── 键帽按钮 ── */
+.keycap{width:76px;height:76px;border-radius:14px;cursor:pointer;position:relative;z-index:1;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px;
+  background:#07070b;
+  transition:transform .13s ease,box-shadow .15s ease;overflow:visible}
+/* 键帽内层深色填充 */
+.keycap .kc-inner{position:absolute;inset:2px;border-radius:11px;
+  background:radial-gradient(ellipse at 50% 35%,#1c1c32 0%,#0a0a12 60%,#050509 100%);z-index:0}
+/* 键帽霓虹管：conic-gradient 旋转边框 */
+.keycap .kc-neon{position:absolute;inset:-2px;border-radius:15px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    #0028ff,#00ffdc,#ffff00,#ff7800,#b400ff,#0028ff);
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;padding:2px;
+  animation:neonSpin 6s linear infinite;z-index:-1;opacity:.75}
+/* 键帽 bloom 柔光 */
+.keycap .kc-b1{position:absolute;inset:-7px;border-radius:20px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    rgba(0,40,255,.1),rgba(0,255,220,.08),rgba(255,255,0,.06),rgba(255,120,0,.08),rgba(180,0,255,.09),rgba(0,40,255,.1));
+  filter:blur(8px);animation:neonSpin 6s linear infinite;z-index:-2;pointer-events:none}
+.keycap .kc-b2{position:absolute;inset:-14px;border-radius:26px;
+  background:conic-gradient(from var(--neon-angle,0deg),
+    rgba(0,40,255,.04),rgba(0,255,220,.03),rgba(255,255,0,.025),rgba(255,120,0,.03),rgba(180,0,255,.035),rgba(0,40,255,.04));
+  filter:blur(16px);animation:neonSpin 6s linear infinite;z-index:-3;pointer-events:none}
+.keycap:hover{transform:translateY(-5px) scale(1.03);
+  box-shadow:0 8px 24px rgba(0,80,200,.12),0 0 12px rgba(100,180,255,.06)}
+.keycap:active{transform:translateY(3px) scale(.95)}
+.keycap .cap-icon{position:relative;z-index:1;width:36px;height:36px;
+  display:flex;align-items:center;justify-content:center}
+.keycap .cap-icon svg{width:32px;height:32px;filter:drop-shadow(0 0 5px rgba(255,255,255,.25))}
+.keycap .cap-label{position:relative;z-index:1;color:rgba(235,255,255,.88);font-size:10px;
+  font-weight:700;letter-spacing:.5px;margin-top:1px}
+/* 当前模式白色内环 */
+.keycap.current::after{content:'';position:absolute;inset:4px;border-radius:10px;
+  border:1.5px solid rgba(255,255,255,.3);pointer-events:none;z-index:3}
+.keycap.add-btn .cap-icon svg{filter:drop-shadow(0 0 8px rgba(255,255,255,.4))}
+
+/* ══════════ 右键菜单 (Fluent) ══════════ */
+#ctx-menu{position:fixed;z-index:2000;min-width:230px;background:#fff;border-radius:10px;
+  box-shadow:0 8px 32px rgba(0,0,0,.18),0 1px 3px rgba(0,0,0,.06);
+  padding:5px 0;opacity:0;pointer-events:none;transform:scale(.96) translateY(-4px);
+  transition:opacity .12s,transform .12s}
+#ctx-menu.show{opacity:1;pointer-events:auto;transform:scale(1) translateY(0)}
+.ctx-item{padding:8px 18px;font-size:13.5px;color:#1e1e1e;cursor:pointer;display:flex;
+  align-items:center;gap:10px;transition:background .08s}
+.ctx-item:hover{background:#f5f5f5}
+.ctx-item .ck{width:18px;height:18px;border:1.5px solid #aaa;border-radius:3px;
+  display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0}
+.ctx-item .ck.on{border-color:#0078D4;background:#0078D4;color:#fff}
+.ctx-sep{height:1px;background:#ebebeb;margin:4px 14px}
+
+/* ══════════ 弹窗 ══════════ */
+.dlg-overlay{position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.22);
+  display:flex;align-items:flex-start;justify-content:center;padding-top:80px;
+  opacity:0;pointer-events:none;transition:opacity .18s}
+.dlg-overlay.show{opacity:1;pointer-events:auto}
+.dlg{background:#fff;border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,.2);
+  padding:28px 32px;min-width:440px;transform:translateY(-8px);transition:transform .2s}
+.dlg-overlay.show .dlg{transform:translateY(0)}
+.dlg h3{font-size:15px;font-weight:600;color:#1e1e1e;margin-bottom:18px}
+.dlg label{display:block;font-size:13px;color:#555;margin-bottom:5px}
+.dlg input[type=text]{width:100%;padding:8px 12px;border:1.5px solid #d0d0d0;border-radius:6px;
+  font-size:14px;outline:none;transition:border .12s;font-family:inherit}
+.dlg input[type=text]:focus{border-color:#0078D4}
+.icon-picker{display:flex;gap:10px;margin:14px 0 10px}
+.icon-opt{width:52px;height:52px;border-radius:10px;border:2px solid #e5e5e5;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  background:#fafafa;transition:all .12s;font-size:26px}
+.icon-opt:hover{background:#f0f0f0}
+.icon-opt.sel{border-color:#0078D4;background:#e8f2fc}
+.dlg-btns{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+.btn{padding:8px 24px;border-radius:6px;font-size:13px;cursor:pointer;border:none;
+  transition:background .1s,transform .08s;font-family:inherit}
+.btn-p{background:#0078D4;color:#fff}.btn-p:hover{background:#106EBE}.btn-p:active{background:#005A9E;transform:scale(.97)}
+.btn-s{background:#fff;color:#333;border:1.5px solid #ccc}.btn-s:hover{background:#f5f5f5}
+
+/* ══════════ 提示气泡 ══════════ */
+#tip{position:fixed;right:24px;bottom:76px;z-index:5000;width:310px;
+  background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.16);
+  padding:18px 20px 14px;animation:bIn .45s ease .6s both}
+@keyframes bIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+#tip h4{font-size:13.5px;color:#1e1e1e;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+#tip .tc{font-size:12px;color:#555;line-height:1.75}
+#tip .tc b{color:#0078D4;font-weight:600}
+#tipX{position:absolute;top:10px;right:12px;width:22px;height:22px;border:none;
+  background:none;cursor:pointer;font-size:14px;color:#999;border-radius:4px;
+  display:flex;align-items:center;justify-content:center}
+#tipX:hover{background:#f0f0f0;color:#333}
+.badge{display:inline-block;background:#0078D4;color:#fff;font-size:9px;padding:1px 7px;border-radius:8px}
+
+/* ══════════ 任务栏 ══════════ */
+#taskbar{position:fixed;bottom:0;left:0;right:0;height:48px;z-index:500;
+  background:rgba(28,28,28,.88);backdrop-filter:blur(30px);
+  display:flex;align-items:center;justify-content:center;gap:2px;
+  border-top:1px solid rgba(255,255,255,.05)}
+.tb-i{width:42px;height:40px;display:flex;align-items:center;justify-content:center;
+  border-radius:5px;cursor:pointer;transition:background .1s;position:relative}
+.tb-i:hover{background:rgba(255,255,255,.07)}
+.tb-i svg{width:22px;height:22px}
+.tb-i.act::after{content:'';position:absolute;bottom:1px;left:50%;transform:translateX(-50%);
+  width:16px;height:3px;background:#0078D4;border-radius:2px}
+#tb-clock{position:absolute;right:16px;color:rgba(255,255,255,.65);font-size:12px;
+  display:flex;flex-direction:column;align-items:flex-end;line-height:1.35}
+
+/* ══════════ Toast ══════════ */
+#toast{position:fixed;top:56px;left:50%;transform:translateX(-50%) translateY(-16px);
+  z-index:4000;background:#fff;color:#1e1e1e;padding:10px 26px;border-radius:8px;
+  box-shadow:0 4px 20px rgba(0,0,0,.13);font-size:13px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;white-space:nowrap}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div id="desktop"><div class="icon-grid" id="iconGrid"></div></div>
+<div id="bar-zone"></div>
+<div id="mode-bar"><div class="bar-panel" id="barPanel"></div></div>
+<div id="ctx-menu"></div>
+
+<div class="dlg-overlay" id="addDlg">
+  <div class="dlg">
+    <h3>新增模式</h3>
+    <label>模式名称</label>
+    <input type="text" id="nmInput" maxlength="4" placeholder="输入名称（最多4字）">
+    <label style="margin-top:12px">选择图标</label>
+    <div class="icon-picker" id="iconPicker"></div>
+    <div class="dlg-btns">
+      <button class="btn btn-s" onclick="closeAdd()">取消</button>
+      <button class="btn btn-p" onclick="confirmAdd()">确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="tip">
+  <button id="tipX" onclick="closeTip()">&#10005;</button>
+  <h4>LightDesktop 操作指南 <span class="badge">Demo</span></h4>
+  <div class="tc">
+    <b>&#9650;</b> 鼠标移到屏幕<b>顶部中央</b>唤出切换条<br>
+    <b>&#9654;</b> 点击键帽<b>切换模式</b>，图标自动整理<br>
+    <b>&#9654;</b> 点 <b>+</b> 键帽<b>新增自定义模式</b><br>
+    <b>&#9654;</b> 切换条上<b>右键</b>打开功能菜单<br>
+    <b>&#9654;</b> 菜单含一键分类、纯净模式、灯效开关
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="taskbar">
+  <div class="tb-i act" title="文件资源管理器"><svg viewBox="0 0 48 48"><rect x="6" y="10" width="36" height="28" rx="3" fill="#F5BA42"/><rect x="6" y="10" width="18" height="8" rx="2" fill="#E5A530"/><rect x="8" y="18" width="32" height="18" rx="2" fill="#FFD666"/></svg></div>
+  <div class="tb-i" title="Edge"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="#0078D4"/><path d="M14 28c0-8 6-14 14-14 4 0 7 2 9 5-3-1-6 0-8 2s-3 5-3 8c0 2 1 4 2 5-6-1-14-1-14-6z" fill="#50E6FF"/><path d="M26 14c6 0 11 4 13 9-2 4-6 6-10 6-3 0-5-1-7-3 3 0 6-2 7-5s0-6-3-7z" fill="#fff" opacity=".7"/></svg></div>
+  <div class="tb-i" title="VS Code"><svg viewBox="0 0 48 48"><path d="M34 6l-16 12L8 10 4 14v20l4 4 10-8 16 12 10-6V12z" fill="#0078D4"/><path d="M34 6l-16 12L8 10 4 14v20l4 4 10-8 16 12 10-6V12z" fill="url(#vsG)" opacity=".3"/><path d="M18 18l-6 6 6 6M30 18l6 6-6 6" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg></div>
+  <div class="tb-i" title="终端"><svg viewBox="0 0 48 48"><rect x="6" y="8" width="36" height="32" rx="4" fill="#1e1e1e"/><rect x="6" y="8" width="36" height="8" rx="4" fill="#333"/><text x="12" y="30" fill="#0f0" font-size="12" font-family="monospace">&gt;_</text></svg></div>
+  <div id="tb-clock"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  SVG 图标库
+// ═══════════════════════════════════════════════════════
+const SVG = {
+  // 此电脑
+  thispc: `<svg viewBox="0 0 48 48"><rect x="4" y="6" width="30" height="22" rx="2" fill="#2d2d30" stroke="#555" stroke-width="1.5"/><rect x="6" y="8" width="26" height="18" rx="1" fill="#0078D4"/><rect x="14" y="28" width="10" height="4" fill="#555"/><rect x="10" y="32" width="18" height="3" rx="1" fill="#666"/><rect x="36" y="10" width="8" height="28" rx="2" fill="#2d2d30" stroke="#555" stroke-width="1"/><circle cx="40" cy="16" r="1.5" fill="#444"/><rect x="38" y="20" width="4" height="1" rx=".5" fill="#444"/><rect x="38" y="23" width="4" height="1" rx=".5" fill="#444"/></svg>`,
+  // 回收站
+  recycle: `<svg viewBox="0 0 48 48"><path d="M14 16h20l-2 26H16z" fill="#5a5a5e" opacity=".7"/><rect x="12" y="12" width="24" height="4" rx="1" fill="#727278"/><rect x="20" y="8" width="8" height="4" rx="1" fill="#727278"/><line x1="20" y1="20" x2="20" y2="38" stroke="#888" stroke-width="1.5"/><line x1="24" y1="20" x2="24" y2="38" stroke="#888" stroke-width="1.5"/><line x1="28" y1="20" x2="28" y2="38" stroke="#888" stroke-width="1.5"/></svg>`,
+  // Chrome
+  chrome: `<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="#4285F4"/><path d="M24 4a20 20 0 0 1 17.3 10H24a10 10 0 0 0-8.7 5L6.7 14A20 20 0 0 1 24 4z" fill="#EA4335"/><path d="M6.7 14l8.6 5a10 10 0 0 0 0 10L6.7 34A20 20 0 0 1 4 24a20 20 0 0 1 2.7-10z" fill="#34A853"/><path d="M24 44a20 20 0 0 1-17.3-10l8.6-5a10 10 0 0 0 8.7 5v10z" fill="#FBBC05"/><path d="M41.3 14A20 20 0 0 1 44 24a20 20 0 0 1-2.7 10H24a10 10 0 0 0 8.7-5l-8.7-5h17.3z" fill="#4285F4" opacity=".8"/><circle cx="24" cy="24" r="8" fill="#fff"/><circle cx="24" cy="24" r="6" fill="#4285F4"/></svg>`,
+  // Word
+  word: `<svg viewBox="0 0 48 48"><rect x="8" y="4" width="32" height="40" rx="3" fill="#2B579A"/><rect x="12" y="8" width="24" height="32" rx="1" fill="#fff"/><text x="24" y="32" text-anchor="middle" font-size="22" font-weight="bold" fill="#2B579A" font-family="Segoe UI">W</text></svg>`,
+  // Excel
+  excel: `<svg viewBox="0 0 48 48"><rect x="8" y="4" width="32" height="40" rx="3" fill="#217346"/><rect x="12" y="8" width="24" height="32" rx="1" fill="#fff"/><text x="24" y="32" text-anchor="middle" font-size="22" font-weight="bold" fill="#217346" font-family="Segoe UI">X</text></svg>`,
+  // PPT
+  ppt: `<svg viewBox="0 0 48 48"><rect x="8" y="4" width="32" height="40" rx="3" fill="#D24726"/><rect x="12" y="8" width="24" height="32" rx="1" fill="#fff"/><text x="24" y="32" text-anchor="middle" font-size="22" font-weight="bold" fill="#D24726" font-family="Segoe UI">P</text></svg>`,
+  // Steam
+  steam: `<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="#1b2838"/><circle cx="24" cy="20" r="8" fill="none" stroke="#c7d5e0" stroke-width="2"/><circle cx="24" cy="20" r="3" fill="#c7d5e0"/><path d="M16 36c0-6 4-10 8-12" stroke="#c7d5e0" stroke-width="2" fill="none"/><circle cx="32" cy="28" r="5" fill="none" stroke="#c7d5e0" stroke-width="2"/><circle cx="32" cy="28" r="2" fill="#c7d5e0"/></svg>`,
+  // 哔哩哔哩
+  bilibili: `<svg viewBox="0 0 48 48"><rect x="4" y="12" width="40" height="28" rx="6" fill="#FB7299"/><rect x="8" y="16" width="32" height="20" rx="3" fill="#fff"/><circle cx="18" cy="26" r="3" fill="#FB7299"/><circle cx="30" cy="26" r="3" fill="#FB7299"/><path d="M12 12l6-6M36 12l-6-6" stroke="#FB7299" stroke-width="2.5" stroke-linecap="round"/></svg>`,
+  // WeChat
+  wechat: `<svg viewBox="0 0 48 48"><ellipse cx="20" cy="22" rx="14" ry="12" fill="#07C160"/><ellipse cx="30" cy="28" rx="12" ry="10" fill="#07C160" opacity=".8"/><circle cx="16" cy="20" r="2" fill="#fff"/><circle cx="24" cy="20" r="2" fill="#fff"/><circle cx="27" cy="27" r="1.5" fill="#fff"/><circle cx="33" cy="27" r="1.5" fill="#fff"/></svg>`,
+  // QQ
+  qq: `<svg viewBox="0 0 48 48"><ellipse cx="24" cy="28" rx="14" ry="16" fill="#12B7F5"/><ellipse cx="24" cy="22" rx="12" ry="10" fill="#12B7F5"/><ellipse cx="19" cy="20" r="3" fill="#fff"/><ellipse cx="29" cy="20" r="3" fill="#fff"/><circle cx="19" cy="20" r="1.5" fill="#333"/><circle cx="29" cy="20" r="1.5" fill="#333"/><path d="M20 26q4 3 8 0" stroke="#333" stroke-width="1.5" fill="none"/><path d="M14 36q10 8 20 0" fill="#F5A623"/></svg>`,
+  // Notepad
+  notepad: `<svg viewBox="0 0 48 48"><rect x="10" y="4" width="28" height="40" rx="2" fill="#f0f0f0" stroke="#ccc" stroke-width="1"/><rect x="10" y="4" width="28" height="6" fill="#5498ff"/><line x1="14" y1="16" x2="34" y2="16" stroke="#ddd" stroke-width="1"/><line x1="14" y1="22" x2="34" y2="22" stroke="#ddd" stroke-width="1"/><line x1="14" y1="28" x2="30" y2="28" stroke="#ddd" stroke-width="1"/><line x1="14" y1="34" x2="28" y2="34" stroke="#ddd" stroke-width="1"/></svg>`,
+  // PotPlayer
+  potplayer: `<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="#333"/><circle cx="24" cy="24" r="18" fill="#2a2a2a" stroke="#555" stroke-width="1"/><polygon points="20,16 36,24 20,32" fill="#39C5BB"/></svg>`,
+  // 爱奇艺
+  iqiyi: `<svg viewBox="0 0 48 48"><rect x="6" y="8" width="36" height="32" rx="4" fill="#00BE06"/><polygon points="20,16 34,24 20,32" fill="#fff"/></svg>`,
+  // Netflix
+  netflix: `<svg viewBox="0 0 48 48"><rect x="8" y="4" width="32" height="40" rx="2" fill="#141414"/><text x="24" y="34" text-anchor="middle" font-size="24" font-weight="900" fill="#E50914" font-family="Arial">N</text></svg>`,
+  // Notion
+  notion: `<svg viewBox="0 0 48 48"><rect x="8" y="4" width="32" height="40" rx="3" fill="#fff" stroke="#e0e0e0" stroke-width="1.5"/><text x="24" y="33" text-anchor="middle" font-size="24" font-weight="bold" fill="#333" font-family="Georgia">N</text></svg>`,
+  // VS Code desktop
+  vscode: `<svg viewBox="0 0 48 48"><path d="M34 6l-16 12L8 10 4 14v20l4 4 10-8 16 12 10-6V12z" fill="#0078D4"/><path d="M18 18l-6 6 6 6M30 18l6 6-6 6" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`,
+  // 英雄联盟
+  lol: `<svg viewBox="0 0 48 48"><polygon points="24,4 44,16 44,32 24,44 4,32 4,16" fill="#C8AA6E" stroke="#785A2E" stroke-width="1.5"/><text x="24" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#0AC8B9" font-family="Arial">LoL</text></svg>`,
+  // Minecraft
+  minecraft: `<svg viewBox="0 0 48 48"><rect x="6" y="6" width="36" height="36" fill="#6B8C42"/><rect x="6" y="6" width="18" height="18" fill="#7BA64E"/><rect x="24" y="24" width="18" height="18" fill="#5C7A35"/><rect x="6" y="24" width="12" height="12" fill="#8B6B42"/><rect x="30" y="6" width="12" height="12" fill="#8B6B42"/><rect x="18" y="18" width="12" height="12" fill="#9E9E9E"/></svg>`,
+  // Anki
+  anki: `<svg viewBox="0 0 48 48"><rect x="8" y="6" width="32" height="36" rx="4" fill="#5CBCD2"/><text x="24" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#fff" font-family="Arial">A</text></svg>`,
+  // 文件夹
+  folder: `<svg viewBox="0 0 48 48"><path d="M4 14h40v26a4 4 0 01-4 4H8a4 4 0 01-4-4z" fill="#F5BA42"/><path d="M4 10a4 4 0 014-4h12l4 4h20a4 4 0 014 4H4z" fill="#E5A530"/></svg>`,
+  // 模式键帽图标 (简化白色线条)
+  modeWork: `<svg viewBox="0 0 32 32"><rect x="4" y="6" width="18" height="13" rx="1.5" fill="none" stroke="#fff" stroke-width="1.6"/><rect x="9" y="19" width="8" height="2.5" fill="none" stroke="#fff" stroke-width="1.2"/><rect x="7" y="21.5" width="12" height="1.5" rx=".5" fill="none" stroke="#fff" stroke-width="1"/><rect x="24" y="8" width="5" height="16" rx="1" fill="none" stroke="#fff" stroke-width="1.2"/></svg>`,
+  modeGame: `<svg viewBox="0 0 32 32"><rect x="4" y="10" width="24" height="14" rx="4" fill="none" stroke="#fff" stroke-width="1.6"/><circle cx="11" cy="17" r="3" fill="none" stroke="#fff" stroke-width="1.2"/><line x1="11" y1="14" x2="11" y2="20" stroke="#fff" stroke-width="1"/><line x1="8" y1="17" x2="14" y2="17" stroke="#fff" stroke-width="1"/><circle cx="22" cy="15" r="1.2" fill="#fff"/><circle cx="25" cy="18" r="1.2" fill="#fff"/></svg>`,
+  modeMovie: `<svg viewBox="0 0 32 32"><polygon points="13,11 23,17 13,23" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+  modeStudy: `<svg viewBox="0 0 32 32"><path d="M7 8h8a2 2 0 012 2v16M7 8v18a2 2 0 002 2h14a2 2 0 002-2V10a2 2 0 00-2-2H15" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M11 13h10M11 17h8M11 21h6" stroke="#fff" stroke-width="1" opacity=".7"/></svg>`,
+  addIcon: `<svg viewBox="0 0 32 32"><line x1="16" y1="8" x2="16" y2="24" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/><line x1="8" y1="16" x2="24" y2="16" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>`,
+};
+
+// ═══════════════════════════════════════════════════════
+//  数据
+// ═══════════════════════════════════════════════════════
+const MODES = [
+  { id:'work',  name:'工作', svgKey:'modeWork' },
+  { id:'game',  name:'游戏', svgKey:'modeGame' },
+  { id:'movie', name:'影视', svgKey:'modeMovie' },
+  { id:'study', name:'学习', svgKey:'modeStudy' },
+];
+
+const ICONS = [
+  // 系统
+  { name:'此电脑',     svgKey:'thispc',   mode:'system', sys:true },
+  { name:'回收站',     svgKey:'recycle',  mode:'system', sys:true },
+  { name:'文件',       svgKey:'folder',   mode:'system', sys:true },
+  // 工作
+  { name:'Word',       svgKey:'word',     mode:'work' },
+  { name:'Excel',      svgKey:'excel',    mode:'work' },
+  { name:'PPT',        svgKey:'ppt',      mode:'work' },
+  { name:'Notepad',    svgKey:'notepad',  mode:'work' },
+  // 游戏
+  { name:'Steam',      svgKey:'steam',    mode:'game' },
+  { name:'英雄联盟',   svgKey:'lol',      mode:'game' },
+  { name:'Minecraft',  svgKey:'minecraft',mode:'game' },
+  // 影视
+  { name:'哔哩哔哩',   svgKey:'bilibili', mode:'movie' },
+  { name:'爱奇艺',     svgKey:'iqiyi',    mode:'movie' },
+  { name:'Netflix',    svgKey:'netflix',  mode:'movie' },
+  { name:'PotPlayer',  svgKey:'potplayer',mode:'movie' },
+  // 学习
+  { name:'Chrome',     svgKey:'chrome',   mode:'study' },
+  { name:'Notion',     svgKey:'notion',   mode:'study' },
+  { name:'Anki',       svgKey:'anki',     mode:'study' },
+  // 社交（系统级）
+  { name:'微信',       svgKey:'wechat',   mode:'system', sys:true },
+  { name:'QQ',         svgKey:'qq',       mode:'system', sys:true },
+  { name:'VS Code',    svgKey:'vscode',   mode:'system', sys:true },
+];
+
+const PICK_ICONS = [
+  { emoji:'\u{1F3A4}', label:'唱歌' },
+  { emoji:'\u{1F3AC}', label:'剪辑' },
+  { emoji:'\u{1F33F}', label:'休息' },
+  { emoji:'\u2615',     label:'休闲' },
+  { emoji:'\u{1F3B5}', label:'音乐' },
+];
+
+let currentMode = '';
+let customModes = [];
+let allModes = () => [...MODES, ...customModes];
+
+// ═══════════════════════════════════════════════════════
+//  桌面图标渲染
+// ═══════════════════════════════════════════════════════
+const grid = document.getElementById('iconGrid');
+
+function renderIcons() {
+  grid.innerHTML = '';
+  ICONS.forEach((ic, i) => {
+    const el = document.createElement('div');
+    el.className = 'desk-icon';
+    el.dataset.mode = ic.mode;
+    el.dataset.idx = i;
+    el.innerHTML = `<div class="icon-img">${SVG[ic.svgKey] || ''}</div><span class="label">${ic.name}</span>`;
+    grid.appendChild(el);
+  });
+  applyFilter();
+}
+
+function applyFilter() {
+  document.querySelectorAll('.desk-icon').forEach(el => {
+    const m = el.dataset.mode;
+    if (currentMode === '' || m === currentMode || m === 'system') {
+      el.classList.remove('hidden-mode');
+    } else {
+      el.classList.add('hidden-mode');
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  模式切换条
+// ═══════════════════════════════════════════════════════
+const barZone = document.getElementById('bar-zone');
+const modeBar = document.getElementById('mode-bar');
+const barPanel = document.getElementById('barPanel');
+let barVisible = false, barTimer = null;
+
+function buildBar() {
+  barPanel.querySelectorAll('.keycap').forEach(e => e.remove());
+  allModes().forEach(m => {
+    const cap = document.createElement('div');
+    cap.className = 'keycap' + (currentMode === m.id ? ' current' : '');
+    cap.innerHTML = `<div class="kc-neon"></div><div class="kc-b1"></div><div class="kc-b2"></div><div class="kc-inner"></div><div class="cap-icon">${SVG[m.svgKey]||''}</div><span class="cap-label">${m.name}</span>`;
+    cap.title = `切换到「${m.name}」模式`;
+    cap.onclick = () => switchMode(m.id);
+    barPanel.appendChild(cap);
+  });
+  const add = document.createElement('div');
+  add.className = 'keycap add-btn';
+  add.innerHTML = `<div class="kc-neon"></div><div class="kc-b1"></div><div class="kc-b2"></div><div class="kc-inner"></div><div class="cap-icon">${SVG.addIcon}</div>`;
+  add.title = '新增模式';
+  add.onclick = e => { e.stopPropagation(); openAdd(); };
+  barPanel.appendChild(add);
+}
+
+function showBar() {
+  if (barVisible) return;
+  barVisible = true;
+  clearTimeout(barTimer);
+  buildBar();
+  modeBar.classList.add('visible');
+}
+function hideBar() {
+  barTimer = setTimeout(() => { barVisible = false; modeBar.classList.remove('visible'); }, 280);
+}
+
+barZone.addEventListener('mouseenter', showBar);
+modeBar.addEventListener('mouseenter', () => clearTimeout(barTimer));
+modeBar.addEventListener('mouseleave', hideBar);
+barZone.addEventListener('mouseleave', () => setTimeout(() => { if (!modeBar.matches(':hover')) hideBar(); }, 60));
+modeBar.addEventListener('contextmenu', e => { e.preventDefault(); showCtx(e.clientX, e.clientY); });
+
+// ═══════════════════════════════════════════════════════
+//  模式切换
+// ═══════════════════════════════════════════════════════
+function switchMode(id) {
+  if (currentMode === id) { currentMode = ''; toast('已显示全部图标'); }
+  else { const m = allModes().find(x=>x.id===id); currentMode = id; toast(`已切换到「${m?m.name:id}」模式`); }
+  applyFilter(); buildBar();
+  setTimeout(arrange, 80);
+}
+
+// ═══════════════════════════════════════════════════════
+//  一键整理
+// ═══════════════════════════════════════════════════════
+function arrange() {
+  const vis = [...document.querySelectorAll('.desk-icon:not(.hidden-mode)')];
+  vis.forEach((el, i) => el.style.order = i);
+  toast('图标已自动整理');
+}
+
+// ═══════════════════════════════════════════════════════
+//  一键分类
+// ═══════════════════════════════════════════════════════
+function classify() {
+  currentMode = '';
+  document.querySelectorAll('.desk-icon').forEach(el => el.classList.add('hidden-mode'));
+  buildBar();
+  toast('桌面图标已全部分类整理');
+}
+
+// ═══════════════════════════════════════════════════════
+//  右键菜单
+// ═══════════════════════════════════════════════════════
+const ctxEl = document.getElementById('ctx-menu');
+const ctxData = [
+  { l:'一键分类桌面图标', fn: classify },
+  { l:'一键释放桌面图标', fn: () => { currentMode=''; applyFilter(); buildBar(); toast('已释放所有图标'); }},
+  { l:'手动分类逐个分配', fn: () => toast('手动分类面板（演示版暂不可用）') },
+  { l:'桌面格子拖拽整理', fn: () => toast('格子拖拽（演示版暂不可用）') },
+  { sep:1 },
+  { l:'纯净模式', fn: () => {
+    if (currentMode==='__pure__') { currentMode=''; applyFilter(); buildBar(); toast('退出纯净模式'); }
+    else { currentMode='__pure__'; document.querySelectorAll('.desk-icon').forEach(e=>e.classList.add('hidden-mode')); buildBar(); toast('已进入纯净模式'); }
+  }},
+  { sep:1 },
+  { l:'开机自启动', ck:true, on:true, fn: function(){ this.on=!this.on; toast(this.on?'已开启自启动':'已关闭自启动'); }},
+  { l:'在任务栏显示图标', ck:true, on:true, fn: function(){ this.on=!this.on; toast(this.on?'已显示任务栏图标':'已隐藏'); }},
+  { l:'霓虹灯效', ck:true, on:true, fn: function(){
+    this.on=!this.on;
+    document.querySelectorAll('.neon-tube,.bloom-1,.bloom-2').forEach(e => e.style.display = this.on?'':'none');
+    toast(this.on?'霓虹灯效已开启':'霓虹灯效已关闭');
+  }},
+  { sep:1 },
+  { l:'模式管理...', fn: () => toast('模式管理弹窗（演示版暂不可用）') },
+  { sep:1 },
+  { l:'退出程序', fn: () => toast('演示版无法退出 :)') },
+];
+
+function showCtx(x, y) {
+  ctxEl.innerHTML = '';
+  ctxData.forEach(it => {
+    if (it.sep) { ctxEl.appendChild(Object.assign(document.createElement('div'),{className:'ctx-sep'})); return; }
+    const d = document.createElement('div');
+    d.className = 'ctx-item';
+    let h = '';
+    if (it.ck) h += `<span class="ck ${it.on?'on':''}">${it.on?'✓':''}</span>`;
+    h += it.l;
+    d.innerHTML = h;
+    d.onclick = () => { it.fn.call(it); hideCtx(); };
+    ctxEl.appendChild(d);
+  });
+  if (x + 250 > innerWidth) x = innerWidth - 258;
+  if (y + ctxEl.scrollHeight > innerHeight) y = innerHeight - ctxEl.scrollHeight - 8;
+  ctxEl.style.left = x+'px'; ctxEl.style.top = y+'px';
+  ctxEl.classList.add('show');
+}
+function hideCtx() { ctxEl.classList.remove('show'); }
+document.addEventListener('click', e => { if (!ctxEl.contains(e.target)) hideCtx(); });
+document.addEventListener('contextmenu', e => {
+  if (e.target.closest('.dlg-overlay') || e.target.closest('#ctx-menu') || e.target.closest('#tip')) return;
+  e.preventDefault(); showCtx(e.clientX, e.clientY);
+});
+
+// ═══════════════════════════════════════════════════════
+//  新增模式弹窗
+// ═══════════════════════════════════════════════════════
+const addDlg = document.getElementById('addDlg');
+const picker = document.getElementById('iconPicker');
+let selIcon = -1;
+
+function openAdd() {
+  document.getElementById('nmInput').value = '';
+  selIcon = -1;
+  picker.innerHTML = '';
+  PICK_ICONS.forEach((ic,i) => {
+    const d = document.createElement('div');
+    d.className = 'icon-opt';
+    d.textContent = ic.emoji;
+    d.title = ic.label;
+    d.onclick = () => { selIcon=i; picker.querySelectorAll('.icon-opt').forEach(e=>e.classList.remove('sel')); d.classList.add('sel'); };
+    picker.appendChild(d);
+  });
+  addDlg.classList.add('show');
+  setTimeout(() => document.getElementById('nmInput').focus(), 180);
+}
+function closeAdd() { addDlg.classList.remove('show'); }
+function confirmAdd() {
+  const nm = document.getElementById('nmInput').value.trim();
+  if (!nm) { toast('请输入模式名称'); return; }
+  if (allModes().some(m=>m.name===nm)) { toast('模式名称已存在'); return; }
+  const ic = selIcon>=0 ? PICK_ICONS[selIcon] : {emoji:'\u{1F535}',label:nm};
+  customModes.push({ id:'c_'+Date.now(), name:nm, svgKey:'modeWork' });
+  for (let i=0;i<3;i++) ICONS.push({ name:nm+(i+1), svgKey:'folder', mode:'c_'+Date.now() });
+  closeAdd(); renderIcons(); buildBar();
+  toast(`已新增「${nm}」模式`);
+}
+addDlg.addEventListener('click', e => { if (e.target===addDlg) closeAdd(); });
+
+// ═══════════════════════════════════════════════════════
+//  提示气泡 / Toast / 时钟
+// ═══════════════════════════════════════════════════════
+function closeTip() {
+  const t = document.getElementById('tip');
+  if (!t) return;
+  t.style.transition='opacity .25s,transform .25s'; t.style.opacity='0'; t.style.transform='translateY(14px)';
+  setTimeout(()=>t.remove(),250);
+}
+let toastTmr;
+function toast(m) {
+  const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(toastTmr); toastTmr=setTimeout(()=>t.classList.remove('show'),2200);
+}
+function clock() {
+  const n=new Date(), h=String(n.getHours()).padStart(2,'0'), m=String(n.getMinutes()).padStart(2,'0');
+  const d=`${n.getFullYear()}/${String(n.getMonth()+1).padStart(2,'0')}/${String(n.getDate()).padStart(2,'0')}`;
+  document.getElementById('tb-clock').innerHTML=`<span>${h}:${m}</span><span style="font-size:11px">${d}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════
+//  初始化
+// ═══════════════════════════════════════════════════════
+renderIcons(); buildBar(); clock(); setInterval(clock,30000);
+setTimeout(() => { showBar(); setTimeout(hideBar,3500); }, 600);
+</script>
+</body>
+</html>

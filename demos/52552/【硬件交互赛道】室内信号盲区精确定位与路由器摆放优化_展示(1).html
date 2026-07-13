@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>室内信号盲区定位 | 行走采集 · 热力图生成 · 路由器优化</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{font-family:'Noto Sans SC',sans-serif}
+html{scroll-behavior:smooth}
+.mono{font-family:'JetBrains Mono',monospace}
+
+/* 蓝图HUD主题 */
+.blueprint-bg{
+  background:#040d1a;
+  background-image:
+    linear-gradient(rgba(0,255,200,0.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,255,200,0.03) 1px,transparent 1px);
+  background-size:40px 40px;
+}
+.hud-border{
+  border:1px solid rgba(0,255,200,0.15);
+  box-shadow:0 0 15px rgba(0,255,200,0.05),inset 0 0 15px rgba(0,255,200,0.02);
+}
+.hud-card{
+  background:rgba(0,255,200,0.03);
+  border:1px solid rgba(0,255,200,0.12);
+  backdrop-filter:blur(8px);
+}
+.hud-card-bright{
+  background:rgba(0,255,200,0.06);
+  border:1px solid rgba(0,255,200,0.25);
+}
+.glow-text{text-shadow:0 0 20px rgba(0,255,200,0.3)}
+.glow-text-cyan{text-shadow:0 0 20px rgba(0,200,255,0.3)}
+
+/* 信号条动画 */
+@keyframes signalPulse{
+  0%,100%{opacity:0.4;height:8px}
+  50%{opacity:1;height:20px}
+}
+.signal-bar{animation:signalPulse 1.5s ease-in-out infinite}
+
+/* 扫描线 */
+@keyframes hScan{
+  0%{left:0;opacity:1}
+  100%{left:100%;opacity:0}
+}
+.h-scan{animation:hScan 3s linear infinite}
+
+/* 网格呼吸 */
+@keyframes gridBreathe{
+  0%,100%{opacity:0.03}
+  50%{opacity:0.06}
+}
+
+/* 淡入 */
+.fade-up{opacity:0;transform:translateY(20px);transition:all .6s ease}
+.fade-up.visible{opacity:1;transform:translateY(0)}
+
+/* 信号强度指示 */
+.sig-excellent{color:#00ffc8}
+.sig-good{color:#7dff64}
+.sig-fair{color:#ffd000}
+.sig-poor{color:#ff6b35}
+.sig-none{color:#ff3355}
+
+/* 标记闪烁 */
+@keyframes markerBlink{
+  0%,100%{box-shadow:0 0 4px rgba(0,255,200,0.5)}
+  50%{box-shadow:0 0 16px rgba(0,255,200,0.9),0 0 30px rgba(0,255,200,0.3)}
+}
+.marker-blink{animation:markerBlink 1.5s ease-in-out infinite}
+
+/* 热力图颜色过渡 */
+.heat-gradient{
+  background:linear-gradient(90deg,#ff3355,#ff6b35,#ffd000,#7dff64,#00ffc8);
+}
+
+/* 十字准星 */
+.crosshair::before,.crosshair::after{
+  content:'';position:absolute;background:rgba(0,255,200,0.3);
+}
+.crosshair::before{width:1px;height:100%;left:50%;top:0}
+.crosshair::after{height:1px;width:100%;top:50%;left:0}
+
+/* 角标装饰 */
+.corner-deco{position:relative}
+.corner-deco::before,.corner-deco::after{
+  content:'';position:absolute;width:12px;height:12px;
+  border-color:rgba(0,255,200,0.4);border-style:solid;
+}
+.corner-deco::before{top:-1px;left:-1px;border-width:2px 0 0 2px}
+.corner-deco::after{bottom:-1px;right:-1px;border-width:0 2px 2px 0}
+
+/* 数据闪烁 */
+@keyframes dataFlicker{
+  0%,95%{opacity:1}
+  96%{opacity:0.3}
+  97%{opacity:1}
+  98%{opacity:0.5}
+  99%{opacity:1}
+}
+.data-flicker{animation:dataFlicker 4s linear infinite}
+</style>
+</head>
+<body class="blueprint-bg text-slate-200">
+
+<!-- ========== HERO ========== -->
+<section class="relative min-h-screen flex items-center justify-center overflow-hidden">
+  <!-- HUD Canvas 背景 -->
+  <canvas id="hudCanvas" class="absolute inset-0"></canvas>
+
+  <!-- 角标 -->
+  <div class="absolute top-6 left-6 text-xs mono text-[#00ffc8]/40">
+    SYS::SIGNAL_SCANNER v2.4<br>
+    MODE::ACTIVE_SCAN<br>
+    <span class="data-flicker">STATUS: ONLINE</span>
+  </div>
+  <div class="absolute top-6 right-6 text-xs mono text-[#00ffc8]/40 text-right">
+    <span class="data-flicker">LAT: 39.9042</span><br>
+    <span class="data-flicker">LON: 116.4074</span><br>
+    FREQ: 2.4/5.0 GHz
+  </div>
+
+  <div class="relative z-10 text-center px-6 max-w-4xl mx-auto">
+    <div class="mb-6 inline-flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-[#00ffc8] animate-pulse"></span>
+      <span class="mono text-[#00ffc8] text-sm tracking-widest">HARDWARE INTERACTION TRACK</span>
+    </div>
+    <h1 class="text-4xl md:text-6xl font-bold mb-6 leading-tight mono">
+      <span class="text-white">我的手机信号</span><br>
+      <span class="sig-none">总在这里断</span>
+    </h1>
+    <p class="text-lg md:text-xl text-[#00ffc8]/80 mb-4 max-w-2xl mx-auto leading-relaxed glow-text">
+      室内信号盲区精确定位 & 路由器摆放优化
+    </p>
+    <p class="text-[#00ffc8]/40 mb-10 max-w-xl mx-auto mono text-sm">
+      行走采集信号强度 → 生成热力图 → AI 推荐最优摆放位置
+    </p>
+    <div class="flex flex-col sm:flex-row gap-4 justify-center">
+      <button onclick="document.getElementById('demo').scrollIntoView({behavior:'smooth'})"
+              class="group px-8 py-4 rounded-lg bg-[#00ffc8]/10 border border-[#00ffc8]/40 text-[#00ffc8] font-semibold text-lg hover:bg-[#00ffc8]/20 transition-all mono tracking-wider">
+        <span class="group-hover:glow-text">▶ 开始扫描</span>
+      </button>
+      <button onclick="document.getElementById('principle').scrollIntoView({behavior:'smooth'})"
+              class="px-8 py-4 rounded-lg hud-border text-slate-300 font-semibold text-lg hover:bg-[#00ffc8]/5 transition-colors">
+        技术原理
+      </button>
+    </div>
+
+    <!-- 实时信号模拟 -->
+    <div class="mt-12 flex justify-center items-end gap-1.5">
+      <div class="signal-bar w-2 rounded-full bg-[#00ffc8]" style="animation-delay:0s"></div>
+      <div class="signal-bar w-2 rounded-full bg-[#00ffc8]" style="animation-delay:0.15s"></div>
+      <div class="signal-bar w-2 rounded-full bg-[#00ffc8]" style="animation-delay:0.3s"></div>
+      <div class="signal-bar w-2 rounded-full bg-[#ffd000]" style="animation-delay:0.45s"></div>
+      <div class="signal-bar w-2 rounded-full bg-[#ff3355]" style="animation-delay:0.6s"></div>
+    </div>
+  </div>
+
+  <div class="absolute bottom-8 left-1/2 -translate-x-1/2 animate-bounce">
+    <svg class="w-5 h-5 text-[#00ffc8]/30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+  </div>
+</section>
+
+<!-- ========== 痛点区 ========== -->
+<section class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4 mono">SIGNAL <span class="sig-none">DEAD ZONE</span> MAP</h2>
+      <p class="text-[#00ffc8]/50 max-w-xl mx-auto">每个家庭/办公室都有信号盲区，但没人知道它精确在哪里</p>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="hud-card rounded-xl p-6 fade-up corner-deco">
+        <div class="flex items-start gap-4">
+          <div class="w-12 h-12 rounded-lg bg-[#ff3355]/10 border border-[#ff3355]/20 flex items-center justify-center mono text-[#ff3355] text-xl shrink-0">🚫</div>
+          <div>
+            <h3 class="font-bold mb-2 sig-none text-lg">卫生间永远是 0 格</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">承重墙+金属管道双重屏蔽，手机信号和WiFi同时阵亡。蹲厕所刷不了视频，这是最朴素的痛苦。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-card rounded-xl p-6 fade-up corner-deco" style="transition-delay:.1s">
+        <div class="flex items-start gap-4">
+          <div class="w-12 h-12 rounded-lg bg-[#ff6b35]/10 border border-[#ff6b35]/20 flex items-center justify-center mono text-[#ff6b35] text-xl shrink-0">⚡</div>
+          <div>
+            <h3 class="font-bold mb-2 sig-poor text-lg">路由器搬了三次还是差</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">放客厅不行、放卧室不行、放走廊还是不行。网上说"放高处"，放高了信号反而更差。缺乏科学依据。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-card rounded-xl p-6 fade-up corner-deco" style="transition-delay:.2s">
+        <div class="flex items-start gap-4">
+          <div class="w-12 h-12 rounded-lg bg-[#ffd000]/10 border border-[#ffd000]/20 flex items-center justify-center mono text-[#ffd000] text-xl shrink-0">📱</div>
+          <div>
+            <h3 class="font-bold mb-2 sig-fair text-lg">信号格数不准，看不懂</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">手机显示3格，但视频照样卡顿。信号格数是粗粒度显示，不同手机的标准还不一样，根本没法做精确判断。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-card rounded-xl p-6 fade-up corner-deco" style="transition-delay:.3s">
+        <div class="flex items-start gap-4">
+          <div class="w-12 h-12 rounded-lg bg-[#00ffc8]/10 border border-[#00ffc8]/20 flex items-center justify-center mono text-[#00ffc8] text-xl shrink-0">🏠</div>
+          <div>
+            <h3 class="font-bold mb-2 sig-excellent text-lg">租房无法改布线</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">最有效的方案是穿墙布线或安装AP面板，但房东不同意打孔。唯一能做的就是优化路由器摆放——但摆哪里最好？</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 核心交互 Demo ========== -->
+<section id="demo" class="py-24 px-6">
+  <div class="max-w-5xl mx-auto">
+    <div class="text-center mb-12">
+      <div class="inline-flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-[#00ffc8] animate-pulse"></span>
+        <span class="mono text-[#00ffc8] text-sm tracking-widest">INTERACTIVE DEMO</span>
+      </div>
+      <h2 class="text-3xl md:text-4xl font-bold mb-4 mono">HEATMAP <span class="text-[#00ffc8]">GENERATOR</span></h2>
+      <p class="text-[#00ffc8]/50">点击户型图任意位置，模拟行走采集信号 → 生成覆盖热力图 → 获得摆放建议</p>
+    </div>
+
+    <div class="hud-card rounded-2xl p-6 md:p-8">
+      <!-- 操作面板 -->
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+        <div class="flex items-center gap-3">
+          <span class="mono text-xs text-[#00ffc8]/60">ROUTER POSITION:</span>
+          <button onclick="setRouterPreset('corner')" id="rp-corner" class="px-3 py-1.5 rounded mono text-xs hud-card hover:bg-[#00ffc8]/10 transition-colors text-slate-300">角落</button>
+          <button onclick="setRouterPreset('center')" id="rp-center" class="px-3 py-1.5 rounded mono text-xs hud-card hover:bg-[#00ffc8]/10 transition-colors text-slate-300">中央</button>
+          <button onclick="setRouterPreset('high')" id="rp-high" class="px-3 py-1.5 rounded mono text-xs hud-card hover:bg-[#00ffc8]/10 transition-colors text-slate-300">高位</button>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="mono text-xs text-[#00ffc8]/60">SAMPLES: <span id="sampleCount" class="text-[#00ffc8]">0</span></span>
+          <button onclick="startAutoScan()" class="px-4 py-1.5 rounded mono text-xs bg-[#00ffc8]/10 border border-[#00ffc8]/30 text-[#00ffc8] hover:bg-[#00ffc8]/20 transition-colors">AUTO SCAN</button>
+          <button onclick="resetCanvas()" class="px-4 py-1.5 rounded mono text-xs hud-card text-slate-400 hover:bg-[#00ffc8]/10 transition-colors">RESET</button>
+        </div>
+      </div>
+
+      <!-- Canvas 区域 -->
+      <div class="relative hud-border rounded-xl overflow-hidden" style="aspect-ratio:16/10">
+        <canvas id="floorCanvas" class="w-full h-full cursor-crosshair"></canvas>
+        <!-- HUD 叠加信息 -->
+        <div class="absolute top-3 left-3 mono text-xs text-[#00ffc8]/50 space-y-1">
+          <div>FLOORPLAN: 80m² · 3BED</div>
+          <div>WALLS: <span class="text-[#ff6b35]">concrete</span></div>
+          <div>SCANNING: <span id="scanStatus" class="data-flicker text-[#00ffc8]">IDLE</span></div>
+        </div>
+        <div class="absolute top-3 right-3 mono text-xs text-right text-[#00ffc8]/50 space-y-1">
+          <div>AVG RSSI: <span id="avgRssi" class="text-[#00ffc8]">--</span> dBm</div>
+          <div>COVERAGE: <span id="coverage" class="text-[#00ffc8]">--</span>%</div>
+        </div>
+        <!-- 图例 -->
+        <div class="absolute bottom-3 left-3 flex items-center gap-2">
+          <div class="heat-gradient h-3 w-32 rounded-sm"></div>
+          <div class="flex justify-between mono text-[9px] text-[#00ffc8]/40 w-32">
+            <span>-80</span><span>-60</span><span>-40</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 实时数据面板 -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+        <div class="hud-card rounded-lg p-4 text-center">
+          <div class="mono text-xs text-[#00ffc8]/40 mb-1">MAX RSSI</div>
+          <div id="maxRssi" class="mono text-2xl sig-excellent font-bold">--</div>
+          <div class="mono text-xs text-slate-500">dBm</div>
+        </div>
+        <div class="hud-card rounded-lg p-4 text-center">
+          <div class="mono text-xs text-[#00ffc8]/40 mb-1">MIN RSSI</div>
+          <div id="minRssi" class="mono text-2xl sig-none font-bold">--</div>
+          <div class="mono text-xs text-slate-500">dBm</div>
+        </div>
+        <div class="hud-card rounded-lg p-4 text-center">
+          <div class="mono text-xs text-[#00ffc8]/40 mb-1">DEAD ZONES</div>
+          <div id="deadZones" class="mono text-2xl sig-poor font-bold">--</div>
+          <div class="mono text-xs text-slate-500">区域</div>
+        </div>
+        <div class="hud-card rounded-lg p-4 text-center">
+          <div class="mono text-xs text-[#00ffc8]/40 mb-1">OPTIMIZATION</div>
+          <div id="optimScore" class="mono text-2xl sig-fair font-bold">--</div>
+          <div class="mono text-xs text-slate-500">潜力提升</div>
+        </div>
+      </div>
+
+      <!-- 摆放建议 -->
+      <div id="suggestionBox" class="hidden mt-6 hud-card-bright rounded-xl p-5">
+        <h4 class="mono text-sm text-[#00ffc8] mb-3 flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-[#00ffc8]"></span>
+          ROUTER PLACEMENT OPTIMIZATION
+        </h4>
+        <div id="suggestionContent" class="text-sm text-slate-300 leading-relaxed space-y-2"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 信号科普区 ========== -->
+<section class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4 mono">SIGNAL <span class="text-[#00ffc8]">ANATOMY</span></h2>
+      <p class="text-[#00ffc8]/50">理解信号传播的底层规律，才能科学优化</p>
+    </div>
+
+    <!-- 信号等级标尺 -->
+    <div class="hud-card rounded-2xl p-8 mb-12">
+      <h3 class="mono text-sm text-[#00ffc8]/60 mb-6">WiFi 信号强度等级 (RSSI)</h3>
+      <div class="space-y-4">
+        <div class="flex items-center gap-4">
+          <div class="w-16 mono text-xs text-right sig-excellent">-30 dBm</div>
+          <div class="flex-1 h-4 rounded-full bg-[#00ffc8]/20 overflow-hidden"><div class="h-full bg-[#00ffc8] rounded-full" style="width:95%"></div></div>
+          <div class="w-24 mono text-xs sig-excellent">极佳</div>
+          <div class="flex-1 text-xs text-slate-500">路由器旁边，几乎无损耗</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="w-16 mono text-xs text-right sig-good">-50 dBm</div>
+          <div class="flex-1 h-4 rounded-full bg-[#7dff64]/20 overflow-hidden"><div class="h-full bg-[#7dff64] rounded-full" style="width:80%"></div></div>
+          <div class="w-24 mono text-xs sig-good">优秀</div>
+          <div class="flex-1 text-xs text-slate-500">同一房间无遮挡，日常使用流畅</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="w-16 mono text-xs text-right sig-fair">-65 dBm</div>
+          <div class="flex-1 h-4 rounded-full bg-[#ffd000]/20 overflow-hidden"><div class="h-full bg-[#ffd000] rounded-full" style="width:60%"></div></div>
+          <div class="w-24 mono text-xs sig-fair">一般</div>
+          <div class="flex-1 text-xs text-slate-500">隔一面墙，可用但速度下降</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="w-16 mono text-xs text-right sig-poor">-75 dBm</div>
+          <div class="flex-1 h-4 rounded-full bg-[#ff6b35]/20 overflow-hidden"><div class="h-full bg-[#ff6b35] rounded-full" style="width:40%"></div></div>
+          <div class="w-24 mono text-xs sig-poor">较差</div>
+          <div class="flex-1 text-xs text-slate-500">隔两面墙或远处，频繁断连</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="w-16 mono text-xs text-right sig-none">-85 dBm</div>
+          <div class="flex-1 h-4 rounded-full bg-[#ff3355]/20 overflow-hidden"><div class="h-full bg-[#ff3355] rounded-full" style="width:15%"></div></div>
+          <div class="w-24 mono text-xs sig-none">极差</div>
+          <div class="flex-1 text-xs text-slate-500">几乎无法连接，盲区</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 衰减因素 -->
+    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div class="hud-card rounded-xl p-6 text-center fade-up">
+        <div class="text-4xl mb-4">🧱</div>
+        <h3 class="font-bold mb-2 mono text-sm text-[#ff6b35]">CONCRETE WALL</h3>
+        <p class="text-xs text-slate-400 mb-2">承重混凝土墙</p>
+        <div class="mono text-2xl sig-poor font-bold">-15~25 dB</div>
+        <p class="text-xs text-slate-500 mt-2">一面承重墙信号衰减近半</p>
+      </div>
+      <div class="hud-card rounded-xl p-6 text-center fade-up" style="transition-delay:.1s">
+        <div class="text-4xl mb-4">🪟</div>
+        <h3 class="font-bold mb-2 mono text-sm text-[#ffd000]">GLASS / DRYWALL</h3>
+        <p class="text-xs text-slate-400 mb-2">玻璃 / 石膏板隔墙</p>
+        <div class="mono text-2xl sig-fair font-bold">-3~6 dB</div>
+        <p class="text-xs text-slate-500 mt-2">轻质墙体影响较小</p>
+      </div>
+      <div class="hud-card rounded-xl p-6 text-center fade-up" style="transition-delay:.2s">
+        <div class="text-4xl mb-4">💧</div>
+        <h3 class="font-bold mb-2 mono text-sm text-[#ff6b35]">WATER / METAL</h3>
+        <p class="text-xs text-slate-400 mb-2">水管 / 金属物体</p>
+        <div class="mono text-2xl sig-poor font-bold">-10~20 dB</div>
+        <p class="text-xs text-slate-500 mt-2">卫生间信号差的主因</p>
+      </div>
+      <div class="hud-card rounded-xl p-6 text-center fade-up" style="transition-delay:.3s">
+        <div class="text-4xl mb-4">📏</div>
+        <h3 class="font-bold mb-2 mono text-sm text-[#00ffc8]">DISTANCE</h3>
+        <p class="text-xs text-slate-400 mb-2">自由空间路径损耗</p>
+        <div class="mono text-2xl sig-good font-bold">-6 dB/倍距</div>
+        <p class="text-xs text-slate-500 mt-2">距离每翻倍，信号减半</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 技术原理 ========== -->
+<section id="principle" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4 mono">TECH <span class="text-[#00ffc8]">STACK</span></h2>
+      <p class="text-[#00ffc8]/50">从信号采集到热力图生成，三层技术架构</p>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-8">
+      <div class="hud-card rounded-2xl p-8 text-center fade-up corner-deco">
+        <div class="w-20 h-20 rounded-full border-2 border-[#00ffc8]/30 mx-auto flex items-center justify-center text-3xl mb-6">📡</div>
+        <h3 class="text-xl font-bold mb-3 mono text-[#00ffc8]">信号采集层</h3>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          利用 Android/iOS 系统API读取 WiFi RSSI（接收信号强度指示）和蜂窝信号 dBm 值，配合手机加速度计和陀螺仪实现步态检测，将信号数据与空间位置关联。
+        </p>
+        <div class="mt-4 mono text-xs text-[#00ffc8]/40 space-y-1">
+          <div>WiFiManager.startScan()</div>
+          <div>CoreLocation.RSSI</div>
+          <div>Accelerometer.stepDetect()</div>
+        </div>
+      </div>
+
+      <div class="hud-card rounded-2xl p-8 text-center fade-up corner-deco" style="transition-delay:.15s">
+        <div class="w-20 h-20 rounded-full border-2 border-[#00c8ff]/30 mx-auto flex items-center justify-center text-3xl mb-6">🗺️</div>
+        <h3 class="text-xl font-bold mb-3 mono text-[#00c8ff] glow-text-cyan">热力图生成</h3>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          基于采集的稀疏信号点，使用 IDW（反距离加权插值）算法生成连续的信号强度热力图。同时识别墙体位置，在插值时加入墙体衰减因子，使热力图更贴合实际信号分布。
+        </p>
+        <div class="mt-4 mono text-xs text-[#00c8ff]/40 space-y-1">
+          <div>IDW Interpolation</div>
+          <div>Wall Attenuation Model</div>
+          <div>Canvas2D Heatmap Render</div>
+        </div>
+      </div>
+
+      <div class="hud-card rounded-2xl p-8 text-center fade-up corner-deco" style="transition-delay:.3s">
+        <div class="w-20 h-20 rounded-full border-2 border-[#7dff64]/30 mx-auto flex items-center justify-center text-3xl mb-6">🤖</div>
+        <h3 class="text-xl font-bold mb-3 mono text-[#7dff64]">摆放优化引擎</h3>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          基于信号传播模型（Free-Space Path Loss + 墙体衰减），在户型图上遍历可行的路由器摆放候选位置，计算每个位置的预期覆盖率，推荐全局最优摆放方案。
+        </p>
+        <div class="mt-4 mono text-xs text-[#7dff64]/40 space-y-1">
+          <div>FSPL Model: P(d)=P0-20log(d)</div>
+          <div>Candidate Grid Search</div>
+          <div>Coverage Optimization</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 流程 -->
+    <div class="mt-12 hud-card rounded-2xl p-8">
+      <h3 class="mono text-sm text-[#00ffc8]/60 mb-6 text-center">DATA PIPELINE</h3>
+      <div class="flex flex-wrap justify-center items-center gap-3 text-sm mono">
+        <div class="px-4 py-2 rounded-lg bg-[#00ffc8]/10 border border-[#00ffc8]/30 text-[#00ffc8]">行走采集</div>
+        <span class="text-[#00ffc8]/30">→</span>
+        <div class="px-4 py-2 rounded-lg bg-[#00ffc8]/10 border border-[#00ffc8]/30 text-[#00ffc8]">RSSI 记录</div>
+        <span class="text-[#00ffc8]/30">→</span>
+        <div class="px-4 py-2 rounded-lg bg-[#00c8ff]/10 border border-[#00c8ff]/30 text-[#00c8ff]">墙体识别</div>
+        <span class="text-[#00ffc8]/30">→</span>
+        <div class="px-4 py-2 rounded-lg bg-[#00c8ff]/10 border border-[#00c8ff]/30 text-[#00c8ff]">IDW 插值</div>
+        <span class="text-[#00ffc8]/30">→</span>
+        <div class="px-4 py-2 rounded-lg bg-[#ff6b35]/10 border border-[#ff6b35]/30 text-[#ff6b35]">热力图渲染</div>
+        <span class="text-[#00ffc8]/30">→</span>
+        <div class="px-4 py-2 rounded-lg bg-[#7dff64]/10 border border-[#7dff64]/30 text-[#7dff64]">最优摆放推荐</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 使用场景 ========== -->
+<section class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4 mono">WHO <span class="text-[#00ffc8]">NEEDS THIS</span></h2>
+    </div>
+    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div class="hud-card rounded-xl p-6 text-center fade-up">
+        <div class="text-4xl mb-4">🏠</div>
+        <h3 class="font-bold mb-2 text-sm">租房年轻人</h3>
+        <p class="text-xs text-slate-400">无法改布线，只能靠调整路由器位置改善信号</p>
+      </div>
+      <div class="hud-card rounded-xl p-6 text-center fade-up" style="transition-delay:.1s">
+        <div class="text-4xl mb-4">👨‍👩‍👧</div>
+        <h3 class="font-bold mb-2 text-sm">大户型家庭</h3>
+        <p class="text-xs text-slate-400">复式/跃层信号死角多，需要精准定位覆盖</p>
+      </div>
+      <div class="hud-card rounded-xl p-6 text-center fade-up" style="transition-delay:.2s">
+        <div class="text-4xl mb-4">☕</div>
+        <h3 class="font-bold mb-2 text-sm">小商业空间</h3>
+        <p class="text-xs text-slate-400">咖啡馆/工作室需要为客户提供稳定的WiFi</p>
+      </div>
+      <div class="hud-card rounded-xl p-6 text-center fade-up" style="transition-delay:.3s">
+        <div class="text-4xl mb-4">🔧</div>
+        <h3 class="font-bold mb-2 text-sm">网络调试人员</h3>
+        <p class="text-xs text-slate-400">快速出具专业信号覆盖报告，提升服务专业性</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Footer ========== -->
+<footer class="py-12 px-6 border-t border-[#00ffc8]/10">
+  <div class="max-w-4xl mx-auto text-center">
+    <h3 class="text-2xl font-bold mb-3 mono text-[#00ffc8] glow-text">
+      5 分钟行走 = 3 个月试错
+    </h3>
+    <p class="text-slate-500 mb-4 mono text-sm">TraeAI 创意大赛 · 硬件交互赛道</p>
+    <p class="text-slate-600 text-xs mono">WiFi RSSI 采集 · IDW 插值热力图 · FSPL 传播模型 · 路由器摆放优化</p>
+  </div>
+</footer>
+
+<script>
+// ========== Hero Canvas HUD 动画 ==========
+const hudC = document.getElementById('hudCanvas');
+const hudCtx = hudC.getContext('2d');
+function resizeHud(){hudC.width=hudC.offsetWidth;hudC.height=hudC.offsetHeight}
+resizeHud(); window.addEventListener('resize',resizeHud);
+
+let hudT = 0;
+function drawHud(){
+  hudCtx.clearRect(0,0,hudC.width,hudC.height);
+  hudT += 0.01;
+
+  // 雷达扫描效果
+  const cx = hudC.width * 0.8, cy = hudC.height * 0.3, r = Math.min(hudC.width,hudC.height) * 0.25;
+  // 圆环
+  for(let i=1;i<=3;i++){
+    hudCtx.beginPath();
+    hudCtx.arc(cx,cy,r*i/3,0,Math.PI*2);
+    hudCtx.strokeStyle = `rgba(0,255,200,${0.06})`;
+    hudCtx.lineWidth=1;
+    hudCtx.stroke();
+  }
+  // 十字
+  hudCtx.beginPath();hudCtx.moveTo(cx-r,cy);hudCtx.lineTo(cx+r,cy);
+  hudCtx.moveTo(cx,cy-r);hudCtx.lineTo(cx,cy+r);
+  hudCtx.strokeStyle='rgba(0,255,200,0.04)';hudCtx.stroke();
+
+  // 扫描线
+  const angle = hudT * 1.5;
+  hudCtx.beginPath();
+  hudCtx.moveTo(cx,cy);
+  hudCtx.lineTo(cx+Math.cos(angle)*r, cy+Math.sin(angle)*r);
+  hudCtx.strokeStyle='rgba(0,255,200,0.15)';hudCtx.lineWidth=1;hudCtx.stroke();
+
+  // 扫描扇形
+  hudCtx.beginPath();
+  hudCtx.moveTo(cx,cy);
+  hudCtx.arc(cx,cy,r,angle-0.5,angle,false);
+  hudCtx.closePath();
+  const grad = hudCtx.createConicalGradient?null:hudCtx.createRadialGradient(cx,cy,0,cx,cy,r);
+  if(grad){
+    grad.addColorStop(0,'rgba(0,255,200,0.05)');
+    grad.addColorStop(1,'rgba(0,255,200,0)');
+    hudCtx.fillStyle=grad;hudCtx.fill();
+  }
+
+  // 随机数据点闪烁
+  for(let i=0;i<5;i++){
+    const px = cx + (Math.random()-0.5)*r*2;
+    const py = cy + (Math.random()-0.5)*r*2;
+    if(Math.hypot(px-cx,py-cy) < r){
+      hudCtx.beginPath();hudCtx.arc(px,py,1.5,0,Math.PI*2);
+      hudCtx.fillStyle='rgba(0,255,200,0.3)';hudCtx.fill();
+    }
+  }
+
+  requestAnimationFrame(drawHud);
+}
+drawHud();
+
+// ========== 户型图 & 信号热力图 ==========
+const fc = document.getElementById('floorCanvas');
+const fctx = fc.getContext('2d');
+let cw, ch;
+
+// 户型定义（比例坐标 0-1）
+const rooms = [
+  {name:'客厅', x:0.02, y:0.02, w:0.44, h:0.56, walls:[{x1:0,y1:0,x2:0.46,y2:0},{x1:0,y1:0,x2:0,y2:0.58},{x1:0.46,y1:0,x2:0.46,y2:0.58}]},
+  {name:'主卧', x:0.50, y:0.02, w:0.48, h:0.34, walls:[{x1:0.48,y1:0,x2:1,y2:0},{x1:1,y1:0,x2:1,y2:0.36},{x1:0.48,y1:0,x2:0.48,y2:0.36}]},
+  {name:'次卧', x:0.50, y:0.40, w:0.48, h:0.22, walls:[{x1:0.48,y1:0.38,x2:1,y2:0.38},{x1:0.48,y1:0.38,x2:0.48,y2:0.62},{x1:1,y1:0.38,x2:1,y2:0.62}]},
+  {name:'卫生间', x:0.50, y:0.66, w:0.22, h:0.32, walls:[{x1:0.48,y1:0.64,x2:0.72,y2:0.64},{x1:0.48,y1:0.64,x2:0.48,y2:1},{x1:0.72,y1:0.64,x2:0.72,y2:1},{x1:0.48,y1:1,x2:0.72,y2:1}]},
+  {name:'厨房', x:0.02, y:0.62, w:0.44, h:0.36, walls:[{x1:0,y1:0.6,x2:0.46,y2:0.6},{x1:0,y1:0.6,x2:0,y2:1},{x1:0.46,y1:0.6,x2:0.46,y2:1},{x1:0,y1:1,x2:0.46,y2:1}]},
+  {name:'阳台', x:0.76, y:0.66, w:0.22, h:0.32, walls:[{x1:0.74,y1:0.64,x2:1,y2:0.64},{x1:0.74,y1:0.64,x2:0.74,y2:1},{x1:1,y1:0.64,x2:1,y2:1},{x1:0.74,y1:1,x2:1,y2:1}]}
+];
+
+// 路由器位置（比例坐标）
+let router = { x: 0.23, y: 0.29 };
+let samples = [];
+let autoScanInterval = null;
+let isAutoScanning = false;
+
+function resizeFloor(){
+  const rect = fc.parentElement.getBoundingClientRect();
+  fc.width = rect.width;
+  fc.height = rect.height;
+  cw = fc.width;
+  ch = fc.height;
+  drawFloor();
+}
+
+function drawFloor(){
+  fctx.clearRect(0,0,cw,ch);
+
+  // 背景
+  fctx.fillStyle = 'rgba(0,10,25,0.9)';
+  fctx.fillRect(0,0,cw,ch);
+
+  // 房间填充
+  rooms.forEach(r => {
+    fctx.fillStyle = 'rgba(0,255,200,0.02)';
+    fctx.fillRect(r.x*cw, r.y*ch, r.w*cw, r.h*ch);
+  });
+
+  // 墙体
+  fctx.strokeStyle = 'rgba(0,255,200,0.35)';
+  fctx.lineWidth = 3;
+  rooms.forEach(r => {
+    r.walls.forEach(w => {
+      fctx.beginPath();
+      fctx.moveTo(w.x1*cw, w.y1*ch);
+      fctx.lineTo(w.x2*cw, w.y2*ch);
+      fctx.stroke();
+    });
+  });
+
+  // 房间名
+  fctx.font = '11px "JetBrains Mono"';
+  fctx.fillStyle = 'rgba(0,255,200,0.2)';
+  rooms.forEach(r => {
+    fctx.fillText(r.name, (r.x + r.w/2)*cw - fctx.measureText(r.name).width/2, (r.y + r.h/2)*ch);
+  });
+
+  // 热力图
+  if(samples.length > 2){
+    drawHeatmap();
+  }
+
+  // 采样点
+  samples.forEach(s => {
+    fctx.beginPath();
+    fctx.arc(s.x*cw, s.y*ch, 3, 0, Math.PI*2);
+    const c = rssiColor(s.rssi);
+    fctx.fillStyle = c;
+    fctx.fill();
+    // 十字标记
+    fctx.strokeStyle = c;
+    fctx.lineWidth = 0.5;
+    fctx.beginPath();
+    fctx.moveTo(s.x*cw-6, s.y*ch); fctx.lineTo(s.x*cw+6, s.y*ch);
+    fctx.moveTo(s.x*cw, s.y*ch-6); fctx.lineTo(s.x*cw, s.y*ch+6);
+    fctx.stroke();
+  });
+
+  // 路由器
+  fctx.beginPath();
+  fctx.arc(router.x*cw, router.y*ch, 10, 0, Math.PI*2);
+  fctx.fillStyle = 'rgba(0,255,200,0.15)';
+  fctx.fill();
+  fctx.strokeStyle = '#00ffc8';
+  fctx.lineWidth = 2;
+  fctx.stroke();
+  // 天线
+  fctx.beginPath();
+  fctx.moveTo(router.x*cw, router.y*ch-10);
+  fctx.lineTo(router.x*cw-4, router.y*ch-18);
+  fctx.moveTo(router.x*cw, router.y*ch-10);
+  fctx.lineTo(router.x*cw+4, router.y*ch-18);
+  fctx.strokeStyle = '#00ffc8';
+  fctx.lineWidth = 1.5;
+  fctx.stroke();
+  // 标签
+  fctx.font = '9px "JetBrains Mono"';
+  fctx.fillStyle = '#00ffc8';
+  fctx.fillText('ROUTER', router.x*cw + 14, router.y*ch + 3);
+}
+
+function drawHeatmap(){
+  const step = 8;
+  const imageData = fctx.createImageData(cw, ch);
+
+  for(let px=0; px<cw; px+=step){
+    for(let py=0; py<ch; py+=step){
+      const nx = px/cw, ny = py/ch;
+      let rssi = calcRssi(nx, ny);
+      const [r,g,b] = rssiToRGB(rssi);
+      for(let dx=0; dx<step && px+dx<cw; dx++){
+        for(let dy=0; dy<step && py+dy<ch; dy++){
+          const idx = ((py+dy)*cw + (px+dx))*4;
+          imageData.data[idx] = r;
+          imageData.data[idx+1] = g;
+          imageData.data[idx+2] = b;
+          imageData.data[idx+3] = 50;
+        }
+      }
+    }
+  }
+  fctx.putImageData(imageData, 0, 0);
+}
+
+function calcRssi(nx, ny){
+  // 基于路由器距离 + 墙体衰减计算信号
+  const dx = nx - router.x;
+  const dy = ny - router.y;
+  const dist = Math.sqrt(dx*dx + dy*dy) * 20; // 模拟米
+
+  let baseRssi = -30 - 20 * Math.log10(Math.max(0.5, dist));
+
+  // 墙体衰减（简化：计算穿墙数量）
+  let wallCount = countWallsBetween(router.x, router.y, nx, ny);
+  baseRssi -= wallCount * 12;
+
+  // IDW 插值修正（如果有采样点）
+  if(samples.length > 3){
+    let weightSum = 0, valSum = 0;
+    samples.forEach(s => {
+      const sd = Math.sqrt((s.x-nx)**2 + (s.y-ny)**2);
+      if(sd < 0.01) sd = 0.01;
+      const w = 1 / (sd * sd);
+      weightSum += w;
+      valSum += w * s.rssi;
+    });
+    const idwRssi = valSum / weightSum;
+    baseRssi = baseRssi * 0.3 + idwRssi * 0.7; // 混合模型+插值
+  }
+
+  return Math.max(-90, Math.min(-30, baseRssi));
+}
+
+function countWallsBetween(x1,y1,x2,y2){
+  let count = 0;
+  rooms.forEach(r => {
+    r.walls.forEach(w => {
+      if(w.x1 === w.x2){
+        // 竖墙
+        const wx = w.x1;
+        if((x1 < wx && x2 > wx) || (x1 > wx && x2 < wx)){
+          const t = (wx - x1) / (x2 - x1);
+          const wy = y1 + t * (y2 - y1);
+          if(wy >= w.y1 && wy <= w.y2) count++;
+        }
+      } else if(w.y1 === w.y2){
+        // 横墙
+        const wy = w.y1;
+        if((y1 < wy && y2 > wy) || (y1 > wy && y2 < wy)){
+          const t = (wy - y1) / (y2 - y1);
+          const wx = x1 + t * (x2 - x1);
+          if(wx >= w.x1 && wx <= w.x2) count++;
+        }
+      }
+    });
+  });
+  return count;
+}
+
+function rssiColor(rssi){
+  if(rssi > -50) return '#00ffc8';
+  if(rssi > -60) return '#7dff64';
+  if(rssi > -70) return '#ffd000';
+  if(rssi > -80) return '#ff6b35';
+  return '#ff3355';
+}
+
+function rssiToRGB(rssi){
+  rssi = Math.max(-90, Math.min(-30, rssi));
+  const t = (rssi + 90) / 60; // 0~1
+  let r,g,b;
+  if(t < 0.25){r=255;g=51+t*4*154;b=85-t*4*85}
+  else if(t < 0.5){const u=(t-0.25)*4;r=255-u*166;g=205+u*50;b=0}
+  else if(t < 0.75){const u=(t-0.5)*4;r=89-u*89;g=255;b=0}
+  else{const u=(t-0.75)*4;r=0;g=255-u*55;b=u*200}
+  return [Math.round(r),Math.round(g),Math.round(b)];
+}
+
+// 点击采集
+fc.addEventListener('click', e => {
+  if(isAutoScanning) return;
+  const rect = fc.getBoundingClientRect();
+  const nx = (e.clientX - rect.left) / rect.width;
+  const ny = (e.clientY - rect.top) / rect.height;
+
+  const rssi = calcRssi(nx, ny);
+  samples.push({ x: nx, y: ny, rssi: rssi });
+  updateStats();
+  drawFloor();
+});
+
+function updateStats(){
+  document.getElementById('sampleCount').textContent = samples.length;
+  if(samples.length === 0){
+    ['maxRssi','minRssi','avgRssi','coverage','deadZones','optimScore'].forEach(id => {
+      document.getElementById(id).textContent = '--';
+    });
+    document.getElementById('suggestionBox').classList.add('hidden');
+    return;
+  }
+
+  const rssis = samples.map(s => s.rssi);
+  const max = Math.max(...rssis);
+  const min = Math.min(...rssis);
+  const avg = rssis.reduce((a,b)=>a+b,0)/rssis.length;
+  const below70 = rssis.filter(r=>r<-70).length;
+  const dead = rssis.filter(r=>r<-80).length;
+  const cov = Math.round((1 - below70/rssis.length) * 100);
+
+  document.getElementById('maxRssi').textContent = max.toFixed(0);
+  document.getElementById('maxRssi').className = `mono text-2xl ${rssiColor(max)} font-bold`;
+  document.getElementById('minRssi').textContent = min.toFixed(0);
+  document.getElementById('minRssi').className = `mono text-2xl ${rssiColor(min)} font-bold`;
+  document.getElementById('avgRssi').textContent = avg.toFixed(0);
+  document.getElementById('coverage').textContent = cov;
+  document.getElementById('deadZones').textContent = dead;
+  document.getElementById('optimScore').textContent = Math.min(95, Math.round((1 - cov/100) * 60 + dead * 5 + 15)) + '%';
+
+  // 建议
+  if(samples.length >= 5){
+    document.getElementById('suggestionBox').classList.remove('hidden');
+    const suggestions = [];
+    if(dead > 0) suggestions.push(`<div class="flex items-start gap-2"><span class="text-[#ff3355] shrink-0">⚠</span><span>检测到 <strong>${dead}</strong> 个盲区采样点（信号低于 -80 dBm），主要集中在卫生间方向。建议将路由器向盲区反方向移动，利用墙壁反射增强覆盖。</span></div>`);
+    if(cov < 70) suggestions.push(`<div class="flex items-start gap-2"><span class="text-[#ff6b35] shrink-0">⚡</span><span>当前覆盖率仅 <strong>${cov}%</strong>，低于推荐值 85%。建议将路由器移至户型中心偏高的位置（如客厅电视柜上方），避免放在角落或地面。</span></div>`);
+    if(avg < -65) suggestions.push(`<div class="flex items-start gap-2"><span class="text-[#ffd000] shrink-0">📍</span><span>平均信号强度 <strong>${avg.toFixed(0)} dBm</strong>，偏低。检查路由器是否被金属物体遮挡，建议天线朝上放置、远离微波炉和冰箱。</span></div>`);
+    if(cov >= 85 && dead === 0) suggestions.push(`<div class="flex items-start gap-2"><span class="text-[#00ffc8] shrink-0">✅</span><span>当前信号覆盖良好（<strong>${cov}%</strong>），无盲区。如仍有局部弱信号，可考虑增加一个 WiFi Mesh 节点扩展覆盖。</span></div>`);
+    suggestions.push(`<div class="flex items-start gap-2"><span class="text-[#00ffc8] shrink-0">💡</span><span>通用建议：路由器放置在房屋中心位置、离地1.2-1.5米高处、远离金属物体和大功率电器，可提升覆盖约 <strong>15-25%</strong>。</span></div>`);
+    document.getElementById('suggestionContent').innerHTML = suggestions.join('');
+  }
+}
+
+// 路由器预设
+function setRouterPreset(preset){
+  if(preset==='corner') router = {x:0.23,y:0.29};
+  else if(preset==='center') router = {x:0.48,y:0.45};
+  else router = {x:0.24,y:0.15};
+  // 重新计算采样点的rssi
+  samples = [];
+  updateStats();
+  drawFloor();
+}
+
+// 自动扫描
+function startAutoScan(){
+  if(isAutoScanning) return;
+  isAutoScanning = true;
+  document.getElementById('scanStatus').textContent = 'SCANNING';
+  document.getElementById('scanStatus').classList.add('text-[#ff6b35]');
+
+  samples = [];
+  let idx = 0;
+  const gridPoints = [];
+  for(let gx=0.05;gx<0.95;gx+=0.08){
+    for(let gy=0.05;gy<0.95;gy+=0.08){
+      if(isInsideRoom(gx,gy)) gridPoints.push({x:gx,y:gy});
+    }
+  }
+
+  autoScanInterval = setInterval(()=>{
+    if(idx >= gridPoints.length){
+      clearInterval(autoScanInterval);
+      isAutoScanning = false;
+      document.getElementById('scanStatus').textContent = 'COMPLETE';
+      document.getElementById('scanStatus').classList.remove('text-[#ff6b35]');
+      document.getElementById('scanStatus').classList.add('text-[#00ffc8]');
+      updateStats();
+      drawFloor();
+      return;
+    }
+    const p = gridPoints[idx];
+    const rssi = calcRssi(p.x, p.y);
+    samples.push({x:p.x, y:p.y, rssi:rssi + (Math.random()-0.5)*6}); // 加点噪声
+    document.getElementById('sampleCount').textContent = samples.length;
+    drawFloor();
+    idx++;
+  }, 60);
+}
+
+function isInsideRoom(nx,ny){
+  return rooms.some(r => nx>=r.x && nx<=r.x+r.w && ny>=r.y && ny<=r.y+r.h);
+}
+
+function resetCanvas(){
+  if(autoScanInterval) clearInterval(autoScanInterval);
+  isAutoScanning = false;
+  samples = [];
+  document.getElementById('scanStatus').textContent = 'IDLE';
+  document.getElementById('scanStatus').className = 'data-flicker text-[#00ffc8]';
+  updateStats();
+  drawFloor();
+}
+
+// 初始化
+resizeFloor();
+window.addEventListener('resize', resizeFloor);
+
+// Intersection Observer
+const obs = new IntersectionObserver((entries)=>{
+  entries.forEach(e=>{if(e.isIntersecting)e.target.classList.add('visible')});
+},{threshold:0.1});
+document.querySelectorAll('.fade-up').forEach(el=>obs.observe(el));
+</script>
+</body>
+</html>

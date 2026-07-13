@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>赛博枪战 - Cyber Gunfight</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a0f;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #gameCanvas {
+            display: block;
+            margin: 0 auto;
+            background: #0d1117;
+        }
+
+        #uiLayer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .hud {
+            position: absolute;
+            color: #00ffff;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        #score {
+            top: 20px;
+            left: 20px;
+        }
+
+        #life {
+            top: 50px;
+            left: 20px;
+        }
+
+        #wave {
+            top: 20px;
+            right: 20px;
+        }
+
+        .menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: auto;
+            background: rgba(13, 17, 23, 0.9);
+            border: 2px solid #00ffff;
+            padding: 40px 60px;
+            border-radius: 10px;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.3);
+        }
+
+        .menu h1 {
+            color: #00ffff;
+            font-size: 48px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(0, 255, 255, 0.8);
+            font-family: 'Courier New', monospace;
+        }
+
+        .menu p {
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .menu button {
+            background: transparent;
+            border: 2px solid #00ffff;
+            color: #00ffff;
+            padding: 12px 40px;
+            font-size: 20px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.3s;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .menu button:hover {
+            background: #00ffff;
+            color: #0a0a0f;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.8);
+        }
+
+        .game-over {
+            display: none;
+        }
+
+        .game-over h2 {
+            color: #ff3366;
+            font-size: 42px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 20px rgba(255, 51, 102, 0.8);
+        }
+
+        .game-over .final-score {
+            color: #00ffff;
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+
+        .heart {
+            color: #ff3366;
+            font-size: 20px;
+        }
+
+        .empty-heart {
+            color: #333;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="uiLayer">
+        <div class="hud" id="score">Score: 0</div>
+        <div class="hud" id="life">Life: <span class="heart">♥</span><span class="heart">♥</span><span class="heart">♥</span><span class="heart">♥</span><span class="heart">♥</span></div>
+        <div class="hud" id="wave">Wave: 1</div>
+
+        <div class="menu" id="startMenu">
+            <h1>CYBER GUNFIGHT</h1>
+            <p>WASD - 移动 | 鼠标/空格 - 射击</p>
+            <button onclick="startGame()">开始游戏</button>
+        </div>
+
+        <div class="menu game-over" id="gameOverMenu">
+            <h2>GAME OVER</h2>
+            <div class="final-score">最终得分: <span id="finalScore">0</span></div>
+            <button onclick="restartGame()">重新开始</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        const LOGICAL_WIDTH = 800;
+        const LOGICAL_HEIGHT = 600;
+        
+        let gameRunning = false;
+        let score = 0;
+        let life = 5;
+        let wave = 1;
+        let monstersKilledInWave = 0;
+        let monstersPerWave = 10;
+        
+        let lastTime = 0;
+        let shootCooldown = 0;
+        const SHOOT_CD = 200;
+        
+        let mouseX = LOGICAL_WIDTH / 2;
+        let mouseY = LOGICAL_HEIGHT / 2;
+        
+        const keys = {};
+        
+        const player = {
+            x: LOGICAL_WIDTH / 2,
+            y: LOGICAL_HEIGHT / 2,
+            width: 20,
+            height: 20,
+            speed: 250,
+            angle: 0
+        };
+        
+        let bullets = [];
+        let monsters = [];
+        let particles = [];
+        
+        const MONSTER_BASE_SPEED = 80;
+        const MONSTER_SPAWN_INTERVAL = 1500;
+        let lastMonsterSpawn = 0;
+        
+        function resizeCanvas() {
+            const containerWidth = window.innerWidth;
+            const containerHeight = window.innerHeight;
+            
+            const scaleX = containerWidth / LOGICAL_WIDTH;
+            const scaleY = containerHeight / LOGICAL_HEIGHT;
+            const scale = Math.min(scaleX, scaleY);
+            
+            canvas.width = LOGICAL_WIDTH;
+            canvas.height = LOGICAL_HEIGHT;
+            canvas.style.width = (LOGICAL_WIDTH * scale) + 'px';
+            canvas.style.height = (LOGICAL_HEIGHT * scale) + 'px';
+            canvas.style.marginTop = ((containerHeight - LOGICAL_HEIGHT * scale) / 2) + 'px';
+        }
+        
+        function handleMouseMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = LOGICAL_WIDTH / rect.width;
+            const scaleY = LOGICAL_HEIGHT / rect.height;
+            mouseX = (e.clientX - rect.left) * scaleX;
+            mouseY = (e.clientY - rect.top) * scaleY;
+        }
+        
+        function handleKeyDown(e) {
+            keys[e.code] = true;
+            if (e.code === 'Space') {
+                e.preventDefault();
+                shoot();
+            }
+        }
+        
+        function handleKeyUp(e) {
+            keys[e.code] = false;
+        }
+        
+        function handleMouseDown(e) {
+            if (e.button === 0) {
+                shoot();
+            }
+        }
+        
+        function shoot() {
+            if (!gameRunning || shootCooldown > 0) return;
+            
+            shootCooldown = SHOOT_CD;
+            
+            const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+            bullets.push({
+                x: player.x + Math.cos(angle) * 15,
+                y: player.y + Math.sin(angle) * 15,
+                dx: Math.cos(angle) * 500,
+                dy: Math.sin(angle) * 500,
+                radius: 4,
+                lifetime: 1000
+            });
+            
+            createMuzzleFlash(player.x + Math.cos(angle) * 15, player.y + Math.sin(angle) * 15);
+        }
+        
+        function createMuzzleFlash(x, y) {
+            for (let i = 0; i < 5; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    dx: (Math.random() - 0.5) * 200,
+                    dy: (Math.random() - 0.5) * 200,
+                    life: 50,
+                    color: '#ffff00',
+                    size: Math.random() * 4 + 2
+                });
+            }
+        }
+        
+        function createHitParticles(x, y, color) {
+            for (let i = 0; i < 8; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    dx: (Math.random() - 0.5) * 300,
+                    dy: (Math.random() - 0.5) * 300,
+                    life: 100,
+                    color: color,
+                    size: Math.random() * 5 + 2
+                });
+            }
+        }
+        
+        function spawnMonster() {
+            const edge = Math.floor(Math.random() * 4);
+            let x, y;
+            
+            switch (edge) {
+                case 0:
+                    x = Math.random() * LOGICAL_WIDTH;
+                    y = -20;
+                    break;
+                case 1:
+                    x = LOGICAL_WIDTH + 20;
+                    y = Math.random() * LOGICAL_HEIGHT;
+                    break;
+                case 2:
+                    x = Math.random() * LOGICAL_WIDTH;
+                    y = LOGICAL_HEIGHT + 20;
+                    break;
+                case 3:
+                    x = -20;
+                    y = Math.random() * LOGICAL_HEIGHT;
+                    break;
+            }
+            
+            const speed = MONSTER_BASE_SPEED + (wave * 10);
+            
+            monsters.push({
+                x: x,
+                y: y,
+                speed: speed,
+                size: 25,
+                color: Math.random() > 0.5 ? '#ff3366' : '#9900ff',
+                health: 1 + Math.floor(wave / 3)
+            });
+        }
+        
+        function updatePlayer(deltaTime) {
+            const deltaSec = deltaTime / 1000;
+            let dx = 0, dy = 0;
+            
+            if (keys['KeyW']) dy -= player.speed * deltaSec;
+            if (keys['KeyS']) dy += player.speed * deltaSec;
+            if (keys['KeyA']) dx -= player.speed * deltaSec;
+            if (keys['KeyD']) dx += player.speed * deltaSec;
+            
+            if (dx !== 0 || dy !== 0) {
+                const length = Math.sqrt(dx * dx + dy * dy);
+                dx /= length;
+                dy /= length;
+                dx *= player.speed * deltaSec;
+                dy *= player.speed * deltaSec;
+            }
+            
+            player.x = Math.max(player.width / 2, Math.min(LOGICAL_WIDTH - player.width / 2, player.x + dx));
+            player.y = Math.max(player.height / 2, Math.min(LOGICAL_HEIGHT - player.height / 2, player.y + dy));
+            
+            player.angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+        }
+        
+        function updateBullets(deltaTime) {
+            const deltaSec = deltaTime / 1000;
+            
+            bullets = bullets.filter(bullet => {
+                bullet.x += bullet.dx * deltaSec;
+                bullet.y += bullet.dy * deltaSec;
+                bullet.lifetime -= deltaTime;
+                
+                return bullet.lifetime > 0 &&
+                       bullet.x > 0 && bullet.x < LOGICAL_WIDTH &&
+                       bullet.y > 0 && bullet.y < LOGICAL_HEIGHT;
+            });
+        }
+        
+        function updateMonsters(deltaTime) {
+            const deltaSec = deltaTime / 1000;
+            
+            monsters = monsters.filter(monster => {
+                const dx = player.x - monster.x;
+                const dy = player.y - monster.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < (monster.size / 2 + player.width / 2)) {
+                    life--;
+                    updateLifeUI();
+                    createHitParticles(player.x, player.y, '#ff3366');
+                    if (life <= 0) {
+                        gameOver();
+                    }
+                    return false;
+                }
+                
+                const speed = monster.speed * deltaSec;
+                monster.x += (dx / distance) * speed;
+                monster.y += (dy / distance) * speed;
+                
+                return true;
+            });
+        }
+        
+        function updateParticles(deltaTime) {
+            const deltaSec = deltaTime / 1000;
+            
+            particles = particles.filter(p => {
+                p.x += p.dx * deltaSec;
+                p.y += p.dy * deltaSec;
+                p.life -= deltaTime;
+                p.size *= 0.95;
+                return p.life > 0;
+            });
+        }
+        
+        function checkCollisions() {
+            bullets.forEach((bullet, bulletIndex) => {
+                monsters.forEach((monster, monsterIndex) => {
+                    const dx = bullet.x - monster.x;
+                    const dy = bullet.y - monster.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < bullet.radius + monster.size / 2) {
+                        bullets.splice(bulletIndex, 1);
+                        monster.health--;
+                        
+                        if (monster.health <= 0) {
+                            monsters.splice(monsterIndex, 1);
+                            score += 10;
+                            monstersKilledInWave++;
+                            updateScoreUI();
+                            createHitParticles(monster.x, monster.y, monster.color);
+                            
+                            if (monstersKilledInWave >= monstersPerWave) {
+                                nextWave();
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        
+        function nextWave() {
+            wave++;
+            monstersKilledInWave = 0;
+            monstersPerWave = Math.floor(10 + wave * 2);
+            updateWaveUI();
+            
+            for (let i = 0; i < 10; i++) {
+                particles.push({
+                    x: LOGICAL_WIDTH / 2,
+                    y: LOGICAL_HEIGHT / 2,
+                    dx: (Math.random() - 0.5) * 500,
+                    dy: (Math.random() - 0.5) * 500,
+                    life: 500,
+                    color: '#00ffff',
+                    size: Math.random() * 10 + 5
+                });
+            }
+        }
+        
+        function updateScoreUI() {
+            document.getElementById('score').textContent = 'Score: ' + score;
+        }
+        
+        function updateLifeUI() {
+            const lifeEl = document.getElementById('life');
+            let hearts = '';
+            for (let i = 0; i < 5; i++) {
+                if (i < life) {
+                    hearts += '<span class="heart">♥</span>';
+                } else {
+                    hearts += '<span class="empty-heart">♥</span>';
+                }
+            }
+            lifeEl.innerHTML = 'Life: ' + hearts;
+        }
+        
+        function updateWaveUI() {
+            document.getElementById('wave').textContent = 'Wave: ' + wave;
+        }
+        
+        function renderGrid() {
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.1)';
+            ctx.lineWidth = 1;
+            
+            const gridSize = 40;
+            
+            for (let x = 0; x <= LOGICAL_WIDTH; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, LOGICAL_HEIGHT);
+                ctx.stroke();
+            }
+            
+            for (let y = 0; y <= LOGICAL_HEIGHT; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(LOGICAL_WIDTH, y);
+                ctx.stroke();
+            }
+        }
+        
+        function renderPlayer() {
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            ctx.rotate(player.angle);
+            
+            ctx.fillStyle = '#00ffff';
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 15;
+            
+            ctx.beginPath();
+            ctx.moveTo(15, 0);
+            ctx.lineTo(-10, -12);
+            ctx.lineTo(-8, 0);
+            ctx.lineTo(-10, 12);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.fillStyle = '#0a0a0f';
+            ctx.beginPath();
+            ctx.moveTo(8, 0);
+            ctx.lineTo(-5, -6);
+            ctx.lineTo(-3, 0);
+            ctx.lineTo(-5, 6);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(5, -3, 3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+        
+        function renderBullets() {
+            bullets.forEach(bullet => {
+                ctx.save();
+                ctx.fillStyle = '#ffff00';
+                ctx.shadowColor = '#ffff00';
+                ctx.shadowBlur = 10;
+                
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            });
+        }
+        
+        function renderMonsters() {
+            monsters.forEach(monster => {
+                ctx.save();
+                ctx.translate(monster.x, monster.y);
+                
+                ctx.fillStyle = monster.color;
+                ctx.shadowColor = monster.color;
+                ctx.shadowBlur = 10;
+                
+                ctx.beginPath();
+                ctx.arc(0, 0, monster.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(-6, -3, 5, 0, Math.PI * 2);
+                ctx.arc(6, -3, 5, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#000000';
+                ctx.beginPath();
+                ctx.arc(-6, -3, 2, 0, Math.PI * 2);
+                ctx.arc(6, -3, 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.moveTo(-5, 5);
+                ctx.lineTo(0, 10);
+                ctx.lineTo(5, 5);
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            });
+        }
+        
+        function renderParticles() {
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.life / 100;
+                ctx.fillStyle = p.color;
+                ctx.shadowColor = p.color;
+                ctx.shadowBlur = 5;
+                
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            });
+        }
+        
+        function render() {
+            ctx.fillStyle = '#0d1117';
+            ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+            
+            renderGrid();
+            renderParticles();
+            renderBullets();
+            renderMonsters();
+            renderPlayer();
+        }
+        
+        function gameLoop(currentTime) {
+            if (!gameRunning) return;
+            
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+            
+            if (shootCooldown > 0) {
+                shootCooldown -= deltaTime;
+            }
+            
+            const now = Date.now();
+            if (now - lastMonsterSpawn > MONSTER_SPAWN_INTERVAL / (1 + wave * 0.1)) {
+                if (monsters.length < 10 + wave) {
+                    spawnMonster();
+                    lastMonsterSpawn = now;
+                }
+            }
+            
+            updatePlayer(deltaTime);
+            updateBullets(deltaTime);
+            updateMonsters(deltaTime);
+            updateParticles(deltaTime);
+            checkCollisions();
+            
+            render();
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function startGame() {
+            document.getElementById('startMenu').style.display = 'none';
+            document.getElementById('gameOverMenu').style.display = 'none';
+            
+            score = 0;
+            life = 5;
+            wave = 1;
+            monstersKilledInWave = 0;
+            monstersPerWave = 10;
+            
+            player.x = LOGICAL_WIDTH / 2;
+            player.y = LOGICAL_HEIGHT / 2;
+            
+            bullets = [];
+            monsters = [];
+            particles = [];
+            
+            updateScoreUI();
+            updateLifeUI();
+            updateWaveUI();
+            
+            gameRunning = true;
+            lastTime = performance.now();
+            lastMonsterSpawn = Date.now();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('gameOverMenu').style.display = 'block';
+        }
+        
+        function restartGame() {
+            startGame();
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        window.addEventListener('mousedown', handleMouseDown);
+        
+        window.addEventListener('contextmenu', e => e.preventDefault());
+        
+        resizeCanvas();
+    </script>
+</body>
+</html>

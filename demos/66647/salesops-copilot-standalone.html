@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<!--
+  SalesOps Copilot · 销售履约智能体 —— 参赛单文件独立应用
+  ============================================================
+  说明：这是一个独立单文件 HTML，浏览器双击打开即可运行，无需 npm、无需构建、无需联网。
+  全程使用本地 Mock 数据，不调用任何生产 API，无需登录/数据库，不发起任何外部写入（external_write = false）。
+
+  文件结构（自上而下）：
+    1) <head>   元信息 + 内联样式 <style>
+    2) <body>   三区工作台结构（顶栏 / 首屏条 / 左输入·对话 / 右履约流程 / 底三栏 / 状态栏）
+    3) <script> 内联逻辑：Mock 数据 + 场景路由 + 流程编排 + 审计日志
+
+  三个演示场景（点击按钮或在输入框输入关键词）：
+    1) 正常履约：库存充足，政策通过，生成本地订单草稿。
+    2) 库存不足：提示缺口并给出拆单建议，草稿挂起。
+    3) 异常回查：状态不明确 → 回查本地台账 → 确认无外部写入 → 状态更新。
+  每条路径都显示 external_write = false。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SalesOps Copilot · 销售履约智能体 Demo</title>
+  <meta name="description" content="本地可运行的企业销售履约智能体演示，全程 Mock 数据，无外部写入。" />
+
+  <!-- ============================================================ -->
+  <!-- 1) 样式：企业工作台风格（克制、清晰），系统字体保证离线可用    -->
+  <!-- ============================================================ -->
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-2: #fbfbfd;
+      --ink: #0b1220;
+      --ink-2: #3b4658;
+      --ink-3: #6b7689;
+      --muted: #9aa3b2;
+      --line: #e6e8ee;
+      --line-2: #eef0f4;
+      --accent: #2747e8;
+      --accent-soft: #eaeefe;
+      --accent-ink: #1b2c8c;
+      --ok: #0e9f6e;
+      --ok-soft: #e4f6ee;
+      --warn: #b76a00;
+      --warn-soft: #fbf0dd;
+      --danger: #d43a3a;
+      --danger-soft: #fbe7e7;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px -14px rgba(16,24,40,.12);
+      /* 系统字体栈：完全离线可用，无外部字体请求 */
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "SFMono-Regular", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      background: var(--bg); color: var(--ink);
+      font-family: var(--font); font-size: 14px; line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    #app { display: grid; grid-template-rows: auto auto 1fr auto auto; height: 100vh; max-height: 100vh; }
+
+    /* ---------- 顶栏 ---------- */
+    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 22px; background: var(--surface); border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; }
+    .brand-mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #fff; background: #15233f; box-shadow: 0 1px 2px rgba(16,24,40,.18); }
+    .brand-mark svg { width: 18px; height: 18px; }
+    .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+    .brand-text b { font-size: 14.5px; font-weight: 700; letter-spacing: -.01em; }
+    .brand-text span { font-size: 11.5px; color: var(--ink-3); }
+    .topbar-meta { display: flex; align-items: center; gap: 8px; }
+    .badge-mock { font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); padding: 5px 9px; border-radius: 6px; }
+    .badge-ewrite { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ok); background: var(--ok-soft); padding: 5px 10px; border-radius: 6px; border: 1px solid #c7e8d6; }
+    .badge-ewrite.small { font-size: 10px; padding: 3px 7px; }
+
+    /* ---------- 首屏定位条 ---------- */
+    .intro-strip { display: flex; align-items: center; gap: 16px; padding: 9px 22px; background: var(--ink); color: #c7cdda; font-size: 12.5px; border-bottom: 1px solid #1c2538; overflow-x: auto; white-space: nowrap; }
+    .intro-strip .intro-label { color: #fff; font-weight: 700; letter-spacing: -.005em; flex: none; }
+    .intro-strip .intro-sep { color: #3a465e; flex: none; }
+    .intro-strip .intro-flow { font-family: var(--mono); font-size: 11.5px; color: #9aa6bd; flex: none; }
+    .intro-strip .intro-flow b { color: #6fe0b0; font-weight: 600; }
+    .intro-strip .intro-spacer { flex: 1; min-width: 20px; }
+    .intro-strip .intro-flag { font-family: var(--mono); font-size: 10.5px; color: #6fe0b0; background: rgba(14,159,110,.16); border: 1px solid rgba(14,159,110,.32); padding: 3px 8px; border-radius: 5px; flex: none; }
+
+    /* ---------- 工作区 ---------- */
+    .workspace { display: grid; grid-template-columns: minmax(360px,1fr) minmax(340px,.9fr); gap: 14px; padding: 14px; min-height: 0; overflow: hidden; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-2); }
+    .panel-head.sm { padding: 11px 14px; }
+    .panel-head h2 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+    .panel-head h3 { margin: 0; font-size: 13.5px; font-weight: 700; }
+    .panel-head.sm h3 { font-size: 13px; }
+    .panel-sub { font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); }
+
+    /* 左：对话区 */
+    .panel-left .chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: var(--surface-2); }
+    .msg { max-width: 88%; padding: 10px 13px; border-radius: 10px; font-size: 13px; line-height: 1.55; border: 1px solid var(--line-2); background: var(--surface); animation: msgIn .28s cubic-bezier(.2,.7,.2,1); }
+    @keyframes msgIn { from { opacity: 0; transform: translateY(6px); } }
+    .msg p { margin: 0; }
+    .msg-tag { display: inline-block; font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .08em; color: var(--ink-3); margin-bottom: 4px; }
+    .msg-user { align-self: flex-end; background: var(--ink); color: #e6eaf2; border-color: var(--ink); }
+    .msg-user .msg-tag { color: #8a93a6; }
+    .msg-agent { align-self: flex-start; border-left: 3px solid var(--accent); }
+    .msg-agent .msg-tag { color: var(--accent-ink); }
+    .msg-warn { align-self: flex-start; border-left: 3px solid var(--warn); background: var(--warn-soft); }
+    .msg-warn .msg-tag { color: var(--warn); }
+    .msg-danger { align-self: flex-start; border-left: 3px solid var(--danger); background: var(--danger-soft); }
+    .msg-danger .msg-tag { color: var(--danger); }
+    .msg-ok { align-self: flex-start; border-left: 3px solid var(--ok); background: var(--ok-soft); }
+    .msg-ok .msg-tag { color: var(--ok); }
+    .msg .kv-inline { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); margin-top: 6px; }
+    .msg .kv-inline b { color: var(--ink); }
+
+    .quick { display: flex; flex-wrap: wrap; gap: 7px; padding: 11px 14px; border-top: 1px solid var(--line-2); }
+    .chip-btn { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); padding: 6px 11px; border-radius: 999px; cursor: pointer; transition: .15s; font-family: var(--font); }
+    .chip-btn:hover { border-color: var(--ink-3); color: var(--ink); }
+    .chip-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .chip-btn.ghost { color: var(--ink-3); margin-left: auto; }
+    .chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    .chip-dot.ok { background: var(--ok); }
+    .chip-dot.warn { background: var(--warn); }
+    .chip-dot.danger { background: var(--danger); }
+
+    .input-bar { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--surface); }
+    #requirement-input { flex: 1; font-family: var(--font); font-size: 13.5px; padding: 10px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); outline: none; transition: .15s; background: var(--surface-2); color: var(--ink); }
+    #requirement-input:focus { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px var(--accent-soft); }
+    #requirement-input:disabled { opacity: .6; }
+    .btn-primary { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font); font-size: 13.5px; font-weight: 600; color: #fff; background: var(--ink); border: none; padding: 10px 16px; border-radius: var(--radius-sm); cursor: pointer; transition: .15s; }
+    .btn-primary:hover:not(:disabled) { background: #1b2336; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* 右：履约流程步骤 */
+    .panel-right .steps { list-style: none; margin: 0; padding: 12px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+    .step { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 12px 13px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface); transition: .2s; }
+    .step-body { min-width: 0; }
+    .step-no { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--muted); width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--line); }
+    .step-body h3 { margin: 0; font-size: 13.5px; font-weight: 700; }
+    .step-body p { margin: 2px 0 0; font-size: 11.5px; color: var(--ink-3); }
+    .step-state { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--ink-3); padding: 4px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); white-space: nowrap; text-align: right; flex: none; }
+    .step.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .step.active .step-no { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .step.active .step-state { color: var(--accent-ink); background: var(--accent-soft); border-color: #c7d2fb; }
+    .step.done .step-no { background: var(--ok); color: #fff; border-color: var(--ok); }
+    .step.done .step-state { color: var(--ok); background: var(--ok-soft); border-color: #c7e8d6; }
+    .step.warn .step-no { background: var(--warn); color: #fff; border-color: var(--warn); }
+    .step.warn .step-state { color: var(--warn); background: var(--warn-soft); border-color: #f0d6a8; }
+    .step.danger .step-no { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .step.danger .step-state { color: var(--danger); background: var(--danger-soft); border-color: #f3c4c4; }
+    .step .step-spin { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; margin-right: 2px; vertical-align: -1px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---------- 底部结果三栏 ---------- */
+    .results { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; padding: 0 14px 14px; min-height: 0; max-height: 30vh; }
+    .result-panel .result-body { flex: 1; overflow-y: auto; padding: 13px 15px; font-size: 12.5px; }
+    .placeholder { margin: 0; color: var(--muted); font-size: 12px; }
+
+    /* 库存结果行 */
+    .inv-sku { font-family: var(--mono); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+    .inv-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line-2); align-items: center; }
+    .inv-row:last-child { border-bottom: none; }
+    .inv-row .wh { color: var(--ink-2); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .inv-row .qty { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .inv-total { display: flex; justify-content: space-between; margin-top: 9px; padding: 9px 11px; border-radius: var(--radius-sm); background: var(--bg); font-size: 12px; }
+    .inv-total.demand-met { background: var(--ok-soft); color: var(--ok); }
+    .inv-total.demand-miss { background: var(--warn-soft); color: var(--warn); }
+    .inv-total b { font-family: var(--mono); }
+    .tag-mini { font-size: 10px; font-weight: 600; font-family: var(--mono); padding: 2px 6px; border-radius: 4px; }
+    .tag-mini.ok { color: var(--ok); background: var(--ok-soft); }
+    .tag-mini.warn { color: var(--warn); background: var(--warn-soft); }
+
+    /* 订单草稿 */
+    .od-row { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 14px; font-size: 12.5px; padding: 4px 0; }
+    .od-row dt { color: var(--ink-3); font-weight: 500; }
+    .od-row dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+    .od-row dd.mono { font-family: var(--mono); font-weight: 500; }
+    .od-note { margin-top: 10px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 11.5px; line-height: 1.5; }
+    .od-note.held { background: var(--warn-soft); color: var(--warn); }
+    .od-note.ok { background: var(--ok-soft); color: var(--ok); }
+
+    /* 审计日志 */
+    .log-body { font-family: var(--mono); font-size: 11.5px; }
+    .log-line { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line-2); align-items: baseline; }
+    .log-line:last-child { border-bottom: none; }
+    .log-ts { color: var(--muted); white-space: nowrap; }
+    .log-msg { color: var(--ink-2); word-break: break-word; min-width: 0; }
+    .log-msg b { color: var(--ink); }
+    .log-ew { color: var(--ok); font-weight: 600; white-space: nowrap; }
+    .log-line.warn .log-msg { color: var(--warn); }
+    .log-line.danger .log-msg { color: var(--danger); }
+
+    /* ---------- 状态栏 ---------- */
+    .statusbar { display: flex; align-items: center; gap: 18px; padding: 8px 22px; background: var(--ink); color: #aab2c4; font-family: var(--mono); font-size: 11px; overflow-x: auto; white-space: nowrap; }
+    .statusbar b { color: #e6eaf2; font-weight: 600; }
+    .statusbar .spacer { flex: 1; min-width: 12px; }
+    .statusbar .badge-ewrite { background: rgba(14,159,110,.18); border-color: rgba(14,159,110,.4); color: #6fe0b0; }
+
+    /* ---------- 响应式 ---------- */
+    @media (max-width: 960px) {
+      #app { height: auto; max-height: none; min-height: 100vh; }
+      .workspace { grid-template-columns: 1fr; overflow: visible; }
+      .panel-left .chat { min-height: 240px; }
+      .results { grid-template-columns: 1fr; max-height: none; }
+      .result-panel .result-body { max-height: 280px; }
+    }
+    @media (max-width: 640px) {
+      body { font-size: 13.5px; }
+      .topbar { padding: 10px 14px; gap: 10px; flex-wrap: wrap; }
+      .brand-text span { display: none; }
+      .topbar-meta .badge-mock { display: none; }
+      .intro-strip { padding: 8px 14px; gap: 10px; font-size: 11.5px; flex-wrap: wrap; white-space: normal; }
+      .intro-strip .intro-sep { display: none; }
+      .intro-strip .intro-flow { white-space: normal; }
+      .intro-strip .intro-spacer { display: none; }
+      .workspace { padding: 10px; gap: 10px; }
+      .results { padding: 0 10px 10px; gap: 10px; }
+      .panel-head { padding: 11px 13px; }
+      .step { padding: 11px 11px; gap: 10px; }
+      .step-body h3 { font-size: 13px; }
+      .step-body p { font-size: 11px; }
+      .statusbar { gap: 14px; padding: 8px 14px; font-size: 10.5px; }
+      .statusbar .hide-sm { display: none; }
+      .msg { max-width: 92%; font-size: 12.5px; }
+      .input-bar { padding: 10px; }
+      #requirement-input { font-size: 13px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+
+<body>
+<div id="app">
+  <!-- ===================== 顶栏 ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M4 7h7M4 12h11M4 17h7" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <circle cx="18" cy="12" r="3" stroke="currentColor" stroke-width="2" />
+        </svg>
+      </span>
+      <div class="brand-text">
+        <b>SalesOps Copilot</b>
+        <span>销售履约智能体 · Local Demo</span>
+      </div>
+    </div>
+    <div class="topbar-meta">
+      <span class="badge-mock">LOCAL MOCK DATA</span>
+      <span class="badge-ewrite" id="global-ewrite">external_write = false</span>
+    </div>
+  </header>
+
+  <!-- ===================== 首屏定位条 ===================== -->
+  <div class="intro-strip" role="banner">
+    <span class="intro-label">销售履约智能体</span>
+    <span class="intro-sep">|</span>
+    <span class="intro-flow">一句话需求 <b>→</b> 库存查询 <b>→</b> 政策校验 <b>→</b> 订单草稿 <b>→</b> 异常回查</span>
+    <span class="intro-spacer"></span>
+    <span class="intro-flag">本地 Mock · 无外部写入</span>
+  </div>
+
+  <!-- ===================== 工作区：左输入·对话 + 右履约流程 ===================== -->
+  <main class="workspace">
+    <!-- 左：销售需求与对话 -->
+    <section class="panel panel-left" aria-label="销售需求与对话">
+      <div class="panel-head">
+        <h2>销售需求</h2>
+        <span class="panel-sub">一句话输入 · 智能体编排履约</span>
+      </div>
+      <div class="chat" id="chat" role="log" aria-live="polite">
+        <div class="msg msg-system">
+          <span class="msg-tag">SYSTEM</span>
+          <p>已就绪。所有数据来自本地 Mock，不会发起任何外部写入。选择下方场景或直接输入需求开始演示。</p>
+        </div>
+      </div>
+      <div class="quick" role="group" aria-label="快捷场景">
+        <button class="chip-btn" data-scenario="normal"><span class="chip-dot ok"></span>场景 1 · 正常履约</button>
+        <button class="chip-btn" data-scenario="shortage"><span class="chip-dot warn"></span>场景 2 · 库存不足</button>
+        <button class="chip-btn" data-scenario="review"><span class="chip-dot danger"></span>场景 3 · 异常回查</button>
+        <button class="chip-btn ghost" id="reset-btn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" width="14" height="14"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          重置
+        </button>
+      </div>
+      <form class="input-bar" id="input-form" autocomplete="off">
+        <input id="requirement-input" type="text" placeholder="例：华南经销商要 50 台 75 吋 4K 电视，本周发货" aria-label="销售需求输入" />
+        <button type="submit" class="btn-primary" id="send-btn">
+          发送
+          <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
+    </section>
+
+    <!-- 右：履约流程 -->
+    <section class="panel panel-right" aria-label="履约流程">
+      <div class="panel-head">
+        <h2>履约流程</h2>
+        <span class="badge-ewrite small">external_write = false</span>
+      </div>
+      <ol class="steps" id="steps">
+        <li class="step" data-step="intent">
+          <span class="step-no">01</span>
+          <div class="step-body"><h3>意图解析</h3><p>抽取客户、品类、数量、渠道与交期</p></div>
+          <span class="step-state">待命</span>
+        </li>
+        <li class="step" data-step="inventory">
+          <span class="step-no">02</span>
+          <div class="step-body"><h3>库存查询</h3><p>多仓可用量核对</p></div>
+          <span class="step-state">待命</span>
+        </li>
+        <li class="step" data-step="policy">
+          <span class="step-no">03</span>
+          <div class="step-body"><h3>政策校验</h3><p>指导价 · 返点 · 账期 · 授信</p></div>
+          <span class="step-state">待命</span>
+        </li>
+        <li class="step" data-step="order">
+          <span class="step-no">04</span>
+          <div class="step-body"><h3>订单草稿</h3><p>本地结构化草稿（不提交）</p></div>
+          <span class="step-state">待命</span>
+        </li>
+        <li class="step" data-step="review">
+          <span class="step-no">05</span>
+          <div class="step-body"><h3>异常回查</h3><p>反向扫描风险与状态</p></div>
+          <span class="step-state">待命</span>
+        </li>
+      </ol>
+    </section>
+  </main>
+
+  <!-- ===================== 底部：库存结果 · 订单草稿 · 审计日志 ===================== -->
+  <section class="results" aria-label="履约结果">
+    <div class="panel result-panel">
+      <div class="panel-head sm"><h3>库存结果</h3><span class="panel-sub" id="inv-status">—</span></div>
+      <div class="result-body" id="inventory-out"><p class="placeholder">运行场景后显示多仓可用量核对结果。</p></div>
+    </div>
+    <div class="panel result-panel">
+      <div class="panel-head sm"><h3>订单草稿</h3><span class="badge-ewrite small">external_write = false</span></div>
+      <div class="result-body" id="order-out"><p class="placeholder">运行场景后生成本地订单草稿。</p></div>
+    </div>
+    <div class="panel result-panel">
+      <div class="panel-head sm"><h3>审计日志</h3><span class="panel-sub" id="log-count">0 条</span></div>
+      <div class="result-body log-body" id="audit-out"><p class="placeholder">全程操作留痕，可复核。</p></div>
+    </div>
+  </section>
+
+  <!-- ===================== 状态栏 ===================== -->
+  <footer class="statusbar">
+    <span>status: <b id="run-status">idle</b></span>
+    <span class="hide-sm">runtime: <b>local · in-memory</b></span>
+    <span class="hide-sm">data: <b>mock</b></span>
+    <span class="spacer"></span>
+    <span class="badge-ewrite">external_write = false</span>
+  </footer>
+</div>
+
+<!-- ============================================================ -->
+<!-- 2) 逻辑：Mock 数据 + 场景路由 + 流程编排 + 审计日志            -->
+<!--    全程本地，无 import、无外部请求、无外部写入                -->
+<!-- ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Mock 数据（虚构，仅用于演示） ---------- */
+  // 全部为本地 Mock 数据，不包含任何真实客户、价格、库存、渠道明细。
+  var SKU = {
+    code: "TV-75-4K-DEMO",
+    name: "75 吋 4K 智能电视（演示样例）",
+    guidePrice: 4280 // 演示用指导价（Mock）
+  };
+  // 多仓可用量（Mock）
+  var INVENTORY = {
+    warehouses: [
+      { code: "WH-SOUTH", name: "华南仓", available: 60 },
+      { code: "WH-EAST", name: "华东仓", available: 50 },
+      { code: "WH-NORTH", name: "华北仓", available: 24 }
+    ]
+  };
+  // 渠道政策（Mock）
+  var POLICY = {
+    channels: {
+      dealer: {
+        label: "经销商",
+        minPrice: 4150,    // 底价
+        rebate: 0.02,      // 2% 返点
+        creditTermDays: 30,// 账期
+        creditLimit: 300000,    // 授信额度
+        creditUsed: 120000      // 已用授信
+      }
+    }
+  };
+  // 三场景预设（Mock）
+  var SCENARIOS = {
+    normal: {
+      id: "normal", label: "正常履约", demand: 50, region: "华南", channel: "dealer",
+      leadTime: "本周内（T+5）",
+      utterance: "华南某经销商要 50 台 75 吋 4K 电视，走经销商渠道，希望本周内发货。"
+    },
+    shortage: {
+      id: "shortage", label: "库存不足", demand: 200, region: "华南", channel: "dealer",
+      leadTime: "本周内（T+5）",
+      utterance: "华南经销商急单要 200 台 75 吋 4K 电视，本周内必须发货。"
+    },
+    review: {
+      id: "review", label: "异常回查", demand: 30, region: "华南", channel: "dealer",
+      leadTime: "本周内（T+5）",
+      utterance: "刚提交的那笔 30 台电视订单，系统显示状态不明确，帮我回查一下到底有没有提交成功。"
+    }
+  };
+  // 关键字 → 场景路由（自由文本输入时使用）
+  var ROUTING = [
+    { id: "shortage", keywords: ["不足", "缺货", "不够", "急单", "超量", "200", "拆单"] },
+    { id: "review", keywords: ["回查", "状态不明确", "异常", "有没有提交", "到底", "未确认", "没成功"] }
+  ];
+
+  // 计算库存满足情况（纯本地计算）
+  function evaluateInventory(demand) {
+    var total = 0;
+    for (var i = 0; i < INVENTORY.warehouses.length; i++) total += INVENTORY.warehouses[i].available;
+    var met = total >= demand;
+    var allocation = [];
+    var remaining = demand;
+    for (var j = 0; j < INVENTORY.warehouses.length; j++) {
+      var w = INVENTORY.warehouses[j];
+      if (remaining <= 0) { allocation.push({ code: w.code, name: w.name, available: w.available, allocate: 0 }); continue; }
+      var take = Math.min(w.available, remaining);
+      allocation.push({ code: w.code, name: w.name, available: w.available, allocate: take });
+      remaining -= take;
+    }
+    return { demand: demand, total: total, met: met, shortfall: met ? 0 : demand - total, allocation: allocation };
+  }
+  // 计算政策校验（纯本地计算）
+  function evaluatePolicy(demand, channelKey) {
+    var ch = (POLICY.channels[channelKey] || POLICY.channels.dealer);
+    var unit = SKU.guidePrice;
+    var amount = unit * demand;
+    var breaksFloor = unit < ch.minPrice;
+    var rebateAmount = Math.round(amount * ch.rebate);
+    var creditAvailable = ch.creditLimit - ch.creditUsed;
+    var creditOk = amount <= creditAvailable;
+    return {
+      channel: ch.label, unit: unit, amount: amount, breaksFloor: breaksFloor,
+      rebateRate: ch.rebate, rebateAmount: rebateAmount, creditTermDays: ch.creditTermDays,
+      creditAvailable: creditAvailable, creditOk: creditOk
+    };
+  }
+
+  /* ---------- DOM 引用 ---------- */
+  var $ = function (sel) { return document.querySelector(sel); };
+  var chat = $("#chat"), stepsEl = $("#steps"), input = $("#requirement-input"),
+      form = $("#input-form"), sendBtn = $("#send-btn"), resetBtn = $("#reset-btn"),
+      invOut = $("#inventory-out"), invStatus = $("#inv-status"), orderOut = $("#order-out"),
+      auditOut = $("#audit-out"), logCount = $("#log-count"), runStatus = $("#run-status");
+
+  /* ---------- 运行状态 ---------- */
+  var state = { running: false, logs: [], seq: 0 };
+
+  /* ---------- 工具函数 ---------- */
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function nowTs() {
+    var d = new Date(), p = function (n) { return String(n).padStart(2, "0"); };
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+  function money(n) { return "¥" + n.toLocaleString("zh-CN"); }
+
+  /* ---------- 对话区 ---------- */
+  function addMessage(type, tag, html) {
+    var el = document.createElement("div");
+    el.className = "msg msg-" + type;
+    el.innerHTML = '<span class="msg-tag">' + tag + "</span>" + html;
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+    return el;
+  }
+
+  /* ---------- 流程步骤控制 ---------- */
+  var STEP_ORDER = ["intent", "inventory", "policy", "order", "review"];
+  function getStepEl(name) { return stepsEl.querySelector('[data-step="' + name + '"]'); }
+  function setStep(name, status, label) {
+    var el = getStepEl(name);
+    if (!el) return;
+    el.classList.remove("active", "done", "warn", "danger");
+    if (status) el.classList.add(status);
+    var stateEl = el.querySelector(".step-state");
+    if (status === "active") {
+      stateEl.innerHTML = '<span class="step-spin"></span>' + (label || "处理中");
+    } else {
+      stateEl.textContent = label || (status === "done" ? "完成" : "待命");
+    }
+  }
+  function resetSteps() { STEP_ORDER.forEach(function (s) { setStep(s, "", "待命"); }); }
+
+  /* ---------- 审计日志 ---------- */
+  function addLog(message, level) {
+    state.seq += 1;
+    state.logs.push({ seq: state.seq, ts: nowTs(), message: message, level: level || "info", ew: "external_write=false" });
+    renderLogs();
+  }
+  function renderLogs() {
+    if (!state.logs.length) {
+      auditOut.innerHTML = '<p class="placeholder">全程操作留痕，可复核。</p>';
+      logCount.textContent = "0 条";
+      return;
+    }
+    auditOut.innerHTML = state.logs.map(function (l) {
+      return '<div class="log-line ' + (l.level === "info" ? "" : l.level) + '">' +
+        '<span class="log-ts">' + l.ts + "</span>" +
+        '<span class="log-msg">' + l.message + "</span>" +
+        '<span class="log-ew">' + l.ew + "</span></div>";
+    }).join("");
+    logCount.textContent = state.logs.length + " 条";
+    auditOut.scrollTop = auditOut.scrollHeight;
+  }
+
+  /* ---------- 底部面板渲染 ---------- */
+  function renderInventory(inv) {
+    var rows = inv.allocation.map(function (w) {
+      return '<div class="inv-row">' +
+        '<span class="wh">' + w.name + ' <span style="color:var(--muted)">(' + w.code + ')</span></span>' +
+        '<span class="qty">' + w.available + " 台</span>" +
+        '<span class="tag-mini ' + (w.allocate > 0 ? "ok" : "") + '">拟分配 ' + w.allocate + "</span></div>";
+    }).join("");
+    var totalCls = inv.met ? "demand-met" : "demand-miss";
+    var totalTxt = inv.met
+      ? "需求 " + inv.demand + " 台 · 可用 " + inv.total + " 台 · 充足"
+      : "需求 " + inv.demand + " 台 · 可用 " + inv.total + " 台 · 缺口 " + inv.shortfall + " 台";
+    invStatus.textContent = inv.met ? "充足" : "不足";
+    invOut.innerHTML = '<div class="inv-sku">' + SKU.code + " · " + SKU.name + "</div>" + rows +
+      '<div class="inv-total ' + totalCls + '"><span>' + totalTxt + "</span></div>";
+  }
+  function renderOrderDraft(opts) {
+    var status = opts.status, statusLevel = opts.statusLevel, note = opts.note;
+    var noteCls = statusLevel === "held" ? "held" : "ok";
+    orderOut.innerHTML =
+      '<dl class="od-row">' +
+        "<dt>草稿编号</dt><dd class=\"mono\">" + opts.draftNo + "</dd>" +
+        "<dt>SKU</dt><dd class=\"mono\">" + SKU.code + "</dd>" +
+        "<dt>数量 / 单价</dt><dd class=\"mono\">" + opts.demand + " 台 · " + money(opts.unit) + "</dd>" +
+        "<dt>订单金额</dt><dd>" + money(opts.amount) + ' <span style="color:var(--ink-3);font-weight:500">（Mock）</span></dd>' +
+        "<dt>返点</dt><dd class=\"mono\">" + (opts.rebateRate * 100) + "% ≈ " + money(opts.rebateAmount) + "</dd>" +
+        "<dt>渠道 / 仓库</dt><dd>" + opts.channel + " · " + opts.warehouse + "</dd>" +
+        "<dt>建议交期</dt><dd class=\"mono\">" + opts.leadTime + "</dd>" +
+        "<dt>草稿状态</dt><dd><span class=\"tag-mini " + (statusLevel === "held" ? "warn" : "ok") + "\">" + status + "</span></dd>" +
+      "</dl>" +
+      '<div class="od-note ' + noteCls + '">' + note + "</div>";
+  }
+  function clearPanels() {
+    invStatus.textContent = "—";
+    invOut.innerHTML = '<p class="placeholder">运行场景后显示多仓可用量核对结果。</p>';
+    orderOut.innerHTML = '<p class="placeholder">运行场景后生成本地订单草稿。</p>';
+  }
+
+  /* ---------- 场景执行器 ---------- */
+  function runScenario(scenarioId, utterance) {
+    if (state.running) return;
+    var sc = SCENARIOS[scenarioId];
+    if (!sc) return;
+    setRunning(true);
+    resetSteps();
+    clearPanels();
+    addMessage("user", "YOU", "<p>" + (utterance || sc.utterance) + "</p>");
+    addLog("接收需求：" + sc.label + "（demand=" + sc.demand + "）", "info");
+
+    var p = sleep(350);
+    if (scenarioId === "normal") p = p.then(function () { return runNormal(sc); });
+    else if (scenarioId === "shortage") p = p.then(function () { return runShortage(sc); });
+    else if (scenarioId === "review") p = p.then(function () { return runReview(sc); });
+    p.then(function () { setRunning(false); });
+  }
+
+  // 场景 1：正常履约
+  function runNormal(sc) {
+    setStep("intent", "active", "解析中");
+    return sleep(600).then(function () {
+      setStep("intent", "done", "完成");
+      addMessage("agent", "AGENT",
+        "<p>已解析意图：区域 <b>" + sc.region + "</b>、渠道 <b>" + sc.label + "</b>、需求 <b>" + sc.demand + " 台</b>、交期 <b>" + sc.leadTime + "</b>。开始履约编排。</p>");
+      addLog("意图解析完成：实体与约束抽取成功", "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("inventory", "active", "查询中");
+      return sleep(700);
+    }).then(function () {
+      var inv = evaluateInventory(sc.demand);
+      renderInventory(inv);
+      setStep("inventory", "done", "充足");
+      addMessage("ok", "INVENTORY", "<p>多仓可用量核对完成，合计 <b>" + inv.total + " 台</b>，满足需求 <b>" + sc.demand + " 台</b>。</p>");
+      addLog("库存查询完成：可用 " + inv.total + " 台 ≥ 需求 " + inv.demand + " 台", "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("policy", "active", "校验中");
+      return sleep(700);
+    }).then(function () {
+      var pol = evaluatePolicy(sc.demand, sc.channel);
+      setStep("policy", "done", "通过");
+      addMessage("ok", "POLICY",
+        "<p>政策校验通过：未破底价 · 返点 " + (pol.rebateRate * 100) + "% · 账期 " + pol.creditTermDays + " 天 · 授信充足。</p>" +
+        '<div class="kv-inline">订单金额 <b>' + money(pol.amount) + "</b> · 返点 <b>" + money(pol.rebateAmount) + "</b></div>");
+      addLog("政策校验通过：返点 " + (pol.rebateRate * 100) + "%，授信余额 " + money(pol.creditAvailable), "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("order", "active", "生成草稿");
+      return sleep(700);
+    }).then(function () {
+      var draftNo = "DRAFT-LOCAL-" + String(Date.now()).slice(-6);
+      var pol2 = evaluatePolicy(sc.demand, sc.channel);
+      renderOrderDraft({
+        draftNo: draftNo, demand: sc.demand, unit: pol2.unit, amount: pol2.amount,
+        rebateRate: pol2.rebateRate, rebateAmount: pol2.rebateAmount, channel: pol2.channel,
+        warehouse: "华南仓优先", leadTime: "T+5 日", status: "本地草稿 · 待复核", statusLevel: "ok",
+        note: "草稿仅写入本地内存，未提交任何外部系统。external_write = false。"
+      });
+      setStep("order", "done", "已生成");
+      addMessage("agent", "ORDER", "<p>已生成本地订单草稿 <b>" + draftNo + "</b>，等待人工复核后落地。</p>");
+      addLog("订单草稿生成：" + draftNo + "（仅本地，未提交）", "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("review", "active", "扫描中");
+      return sleep(700);
+    }).then(function () {
+      setStep("review", "done", "无风险");
+      addMessage("ok", "REVIEW", "<p>异常回查完成：未发现库存、价格或授信风险。整条路径 <b>external_write = false</b>，无任何外部写入。</p>");
+      addLog("异常回查完成：无风险，全程 external_write=false", "info");
+    });
+  }
+
+  // 场景 2：库存不足
+  function runShortage(sc) {
+    setStep("intent", "active", "解析中");
+    return sleep(600).then(function () {
+      setStep("intent", "done", "完成");
+      addMessage("agent", "AGENT",
+        "<p>已解析意图：区域 <b>" + sc.region + "</b>、急单需求 <b>" + sc.demand + " 台</b>、交期 <b>" + sc.leadTime + "</b>。</p>");
+      addLog("意图解析完成：识别为急单", "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("inventory", "active", "查询中");
+      return sleep(700);
+    }).then(function () {
+      var inv = evaluateInventory(sc.demand);
+      renderInventory(inv);
+      setStep("inventory", "warn", "不足");
+      addMessage("warn", "INVENTORY",
+        "<p>库存不足：合计可用 <b>" + inv.total + " 台</b>，需求 <b>" + inv.demand + " 台</b>，缺口 <b>" + inv.shortfall + " 台</b>。</p>");
+      addLog("库存不足：可用 " + inv.total + " 台 < 需求 " + inv.demand + " 台，缺口 " + inv.shortfall + " 台", "warn");
+      return sleep(300);
+    }).then(function () {
+      setStep("policy", "active", "校验中");
+      return sleep(600);
+    }).then(function () {
+      var inv2 = evaluateInventory(sc.demand);
+      var pol = evaluatePolicy(Math.min(inv2.total, sc.demand), sc.channel);
+      setStep("policy", "done", "通过（按可满足量）");
+      addLog("政策校验完成：可满足部分量通过，未破底价", "info");
+      // 拆单建议：本次先发可用量，余量挂起等待补货
+      var firstBatch = inv2.total, backorder = sc.demand - inv2.total;
+      setStep("order", "active", "生成拆单建议");
+      return sleep(700).then(function () {
+        var draftNo = "DRAFT-LOCAL-" + String(Date.now()).slice(-6);
+        renderOrderDraft({
+          draftNo: draftNo, demand: firstBatch, unit: pol.unit, amount: pol.unit * firstBatch,
+          rebateRate: pol.rebateRate, rebateAmount: Math.round(pol.unit * firstBatch * pol.rebateRate),
+          channel: pol.channel, warehouse: "华南仓 + 华东仓 + 华北仓",
+          leadTime: "首批 T+5 · 尾款待补货", status: "草稿挂起 · 待确认", statusLevel: "held",
+          note: "建议拆单：首批发 " + firstBatch + " 台，尾单 " + backorder + " 台等待补货确认。草稿未提交外部，external_write = false。"
+        });
+        setStep("order", "warn", "挂起");
+        addMessage("warn", "ORDER",
+          "<p>建议拆单：首批可发 <b>" + firstBatch + " 台</b>，尾单 <b>" + backorder + " 台</b> 等待补货确认。草稿已挂起，等待你确认是否拆单或改期。</p>");
+        addLog("生成拆单建议：首批 " + firstBatch + " 台，尾单 " + backorder + " 台挂起（仅本地）", "warn");
+        return sleep(300);
+      }).then(function () {
+        setStep("review", "active", "扫描中");
+        return sleep(700);
+      }).then(function () {
+        setStep("review", "warn", "2 项提示");
+        addMessage("warn", "REVIEW",
+          "<p>异常回查发现 2 项提示：① 跨仓调拨可能影响交期；② 尾单需补货后二次确认。整条路径 <b>external_write = false</b>，未提交任何订单。</p>");
+        addLog("异常回查：2 项风险提示，草稿挂起等待确认，external_write=false", "warn");
+      });
+    });
+  }
+
+  // 场景 3：异常回查
+  function runReview(sc) {
+    setStep("intent", "active", "解析中");
+    return sleep(600).then(function () {
+      setStep("intent", "done", "完成");
+      addMessage("agent", "AGENT", "<p>识别为<b>状态回查</b>请求：需要核对该笔需求对应的提交状态。</p>");
+      addLog("意图解析完成：进入异常回查模式", "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("inventory", "active", "查询中");
+      return sleep(550);
+    }).then(function () {
+      var inv = evaluateInventory(sc.demand);
+      renderInventory(inv);
+      setStep("inventory", "done", "充足");
+      addLog("库存查询完成：可用 " + inv.total + " 台", "info");
+      return sleep(300);
+    }).then(function () {
+      setStep("policy", "active", "校验中");
+      return sleep(550);
+    }).then(function () {
+      var pol = evaluatePolicy(sc.demand, sc.channel);
+      var draftNo = "DRAFT-LOCAL-882310"; // 提到本层作用域，供后续 .then 闭包访问
+      setStep("policy", "done", "通过");
+      addLog("政策校验完成：通过", "info");
+      // 订单草稿：查到本地存在一笔状态不明的草稿
+      setStep("order", "active", "核对本地台账");
+      return sleep(800).then(function () {
+        addMessage("danger", "ORDER",
+          "<p>在本地的内存草稿台账中查到 <b>" + draftNo + "</b>，提交状态标记为 <b>「不明确」</b>。需要进入回查确认是否发生过外部写入。</p>");
+        addLog("查到本地草稿 " + draftNo + "，提交状态=不明确，进入回查", "danger");
+        return sleep(300);
+      }).then(function () {
+        // 异常回查：核对本地提交台账，确认无外部写入，更新状态
+        setStep("review", "active", "回查中");
+        addMessage("agent", "REVIEW", "<p>正在核对本地的提交台账与外部写入开关……</p>");
+        return sleep(1000);
+      }).then(function () {
+        setStep("order", "done", "已核对");
+        setStep("review", "done", "已更新");
+        renderOrderDraft({
+          draftNo: draftNo, demand: sc.demand, unit: pol.unit, amount: pol.amount,
+          rebateRate: pol.rebateRate, rebateAmount: pol.rebateAmount, channel: pol.channel,
+          warehouse: "华南仓优先", leadTime: "T+5 日",
+          status: "本地待确认 · 无外部写入", statusLevel: "ok",
+          note: "回查结论：本地的内存台账中无任何外部提交记录，external_write = false。状态由「不明确」更新为「本地待确认」，可安全继续。"
+        });
+        addMessage("ok", "REVIEW",
+          "<p>回查完成：本地的提交台账显示 <b>未发生过任何外部写入</b>。草稿状态由「不明确」更新为「<b>本地待确认</b>」，可安全继续履约。</p>");
+        addLog("回查完成：无外部写入记录，状态更新为「本地待确认」，external_write=false", "info");
+      });
+    });
+  }
+
+  /* ---------- 关键字路由 ---------- */
+  function detectScenario(text) {
+    var t = text.trim();
+    if (!t) return "normal";
+    for (var i = 0; i < ROUTING.length; i++) {
+      var r = ROUTING[i];
+      for (var j = 0; j < r.keywords.length; j++) {
+        if (t.indexOf(r.keywords[j]) >= 0) return r.id;
+      }
+    }
+    return "normal";
+  }
+
+  /* ---------- 运行态切换 ---------- */
+  function setRunning(v) {
+    state.running = v;
+    sendBtn.disabled = v;
+    input.disabled = v;
+    var btns = document.querySelectorAll(".chip-btn[data-scenario]");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = v;
+    runStatus.textContent = v ? "running" : "idle";
+    runStatus.style.color = v ? "#6fe0b0" : "";
+  }
+
+  /* ---------- 重置 ---------- */
+  function resetAll() {
+    if (state.running) return;
+    chat.innerHTML = '<div class="msg msg-system"><span class="msg-tag">SYSTEM</span><p>已重置。所有数据来自本地 Mock，不会发起任何外部写入。选择下方场景或直接输入需求开始演示。</p></div>';
+    resetSteps();
+    clearPanels();
+    state.logs = [];
+    state.seq = 0;
+    renderLogs();
+    input.value = "";
+    addLog("会话已重置，内存数据已清空", "info");
+  }
+
+  /* ---------- 事件绑定 ---------- */
+  var scenarioBtns = document.querySelectorAll(".chip-btn[data-scenario]");
+  for (var i = 0; i < scenarioBtns.length; i++) {
+    (function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.dataset.scenario;
+        var sc = SCENARIOS[id];
+        runScenario(id, sc.utterance);
+      });
+    })(scenarioBtns[i]);
+  }
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (state.running) return;
+    var text = input.value.trim();
+    if (!text) return;
+    runScenario(detectScenario(text), text);
+  });
+  resetBtn.addEventListener("click", resetAll);
+
+  /* ---------- 初始化 ---------- */
+  addLog("演示环境就绪：本地 Mock，external_write=false", "info");
+})();
+</script>
+</body>
+</html>

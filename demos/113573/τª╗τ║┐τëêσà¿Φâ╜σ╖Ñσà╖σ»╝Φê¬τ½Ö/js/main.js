@@ -1,0 +1,967 @@
+const DEFAULT_TOOLS_DATA = {
+  "categories": [
+    {
+      "id": "design",
+      "name": "设计工具",
+      "icon": "🎨",
+      "subcategories": [
+        { "id": "graphic", "name": "平面设计" },
+        { "id": "3d", "name": "3D渲染" },
+        { "id": "ui", "name": "UI样机" },
+        { "id": "materials", "name": "素材资源" },
+        { "id": "image", "name": "图片处理" }
+      ]
+    },
+    {
+      "id": "programming",
+      "name": "编程工具",
+      "icon": "💻",
+      "subcategories": [
+        { "id": "editor", "name": "代码编辑" },
+        { "id": "runtime", "name": "在线运行" },
+        { "id": "api", "name": "接口测试" },
+        { "id": "docs", "name": "开发文档" },
+        { "id": "server", "name": "服务器工具" },
+        { "id": "efficiency", "name": "效率工具" }
+      ]
+    },
+    {
+      "id": "ai",
+      "name": "AI工具",
+      "icon": "🤖",
+      "subcategories": [
+        { "id": "chat", "name": "AI对话" },
+        { "id": "art", "name": "AI绘画" },
+        { "id": "video", "name": "AI视频" },
+        { "id": "office", "name": "AI办公" },
+        { "id": "code", "name": "AI编程" },
+        { "id": "materials", "name": "AI素材" }
+      ]
+    },
+    {
+      "id": "office",
+      "name": "办公工具",
+      "icon": "📋",
+      "subcategories": [
+        { "id": "document", "name": "文档处理" },
+        { "id": "convert", "name": "格式转换" },
+        { "id": "spreadsheet", "name": "表格工具" },
+        { "id": "mindmap", "name": "思维导图" },
+        { "id": "materials", "name": "素材工具" },
+        { "id": "life", "name": "生活办公" }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "id": "1",
+      "name": "稿定设计",
+      "description": "在线海报、logo、排版快速设计，新手零基础可用",
+      "url": "https://www.gaoding.com",
+      "category": "design",
+      "subcategory": "graphic",
+      "tags": ["海报", "logo", "排版", "设计模板"]
+    },
+    {
+      "id": "2",
+      "name": "创客贴",
+      "description": "电商海报、新媒体配图、短视频封面设计模板库",
+      "url": "https://www.chuangkit.com",
+      "category": "design",
+      "subcategory": "graphic",
+      "tags": ["电商海报", "新媒体", "封面设计"]
+    },
+    {
+      "id": "3",
+      "name": "Canva可画",
+      "description": "全球通用轻量化设计平台，海量免费模板、字体、素材",
+      "url": "https://www.canva.cn",
+      "category": "design",
+      "subcategory": "graphic",
+      "tags": ["设计平台", "模板", "字体", "素材"]
+    },
+    {
+      "id": "4",
+      "name": "字由",
+      "description": "免费商用字体大全，一键安装、一键切换字体",
+      "url": "https://www.hellofont.cn",
+      "category": "design",
+      "subcategory": "graphic",
+      "tags": ["字体", "免费商用", "字体管理"]
+    },
+    {
+      "id": "5",
+      "name": "酷家乐",
+      "description": "室内设计、户型建模、3D渲染可视化工具",
+      "url": "https://www.kujiale.com",
+      "category": "design",
+      "subcategory": "3d",
+      "tags": ["室内设计", "3D建模", "渲染"]
+    },
+    {
+      "id": "6",
+      "name": "iMockup",
+      "description": "APP界面3D样机、页面展示样机生成工具",
+      "url": "https://www.imockup.net",
+      "category": "design",
+      "subcategory": "3d",
+      "tags": ["3D样机", "APP展示", "界面设计"]
+    },
+    {
+      "id": "7",
+      "name": "模模搭",
+      "description": "轻量化3D场景搭建、虚拟空间设计工具",
+      "url": "https://www.momoda3d.com",
+      "category": "design",
+      "subcategory": "3d",
+      "tags": ["3D场景", "虚拟空间", "场景搭建"]
+    },
+    {
+      "id": "8",
+      "name": "MockUPhone",
+      "description": "免费设备样机套壳，手机、电脑界面展示制作",
+      "url": "https://mockuphone.com",
+      "category": "design",
+      "subcategory": "ui",
+      "tags": ["设备样机", "界面展示", "套壳"]
+    },
+    {
+      "id": "9",
+      "name": "Pexels Mockup",
+      "description": "高清免费UI样机、产品展示素材",
+      "url": "https://www.pexels.com/search/mockup/",
+      "category": "design",
+      "subcategory": "ui",
+      "tags": ["UI样机", "产品展示", "素材"]
+    },
+    {
+      "id": "10",
+      "name": "即时设计",
+      "description": "在线UI协作、原型设计、组件库共享平台",
+      "url": "https://js.design",
+      "category": "design",
+      "subcategory": "ui",
+      "tags": ["UI设计", "原型", "协作"]
+    },
+    {
+      "id": "11",
+      "name": "Pexels",
+      "description": "无版权高清图片、视频素材，商用免费",
+      "url": "https://www.pexels.com",
+      "category": "design",
+      "subcategory": "materials",
+      "tags": ["图片素材", "视频素材", "无版权"]
+    },
+    {
+      "id": "12",
+      "name": "Unsplash",
+      "description": "高端质感高清摄影素材，设计配图首选",
+      "url": "https://unsplash.com",
+      "category": "design",
+      "subcategory": "materials",
+      "tags": ["摄影素材", "高清", "设计配图"]
+    },
+    {
+      "id": "13",
+      "name": "千库网",
+      "description": "免抠png、图标、装饰素材大全",
+      "url": "https://www.58pic.com",
+      "category": "design",
+      "subcategory": "materials",
+      "tags": ["免抠素材", "图标", "装饰素材"]
+    },
+    {
+      "id": "14",
+      "name": "觅元素",
+      "description": "高清免抠素材、设计边框、特效元素资源库",
+      "url": "https://www.51yuansu.com",
+      "category": "design",
+      "subcategory": "materials",
+      "tags": ["免抠素材", "边框", "特效"]
+    },
+    {
+      "id": "15",
+      "name": "美图网页版",
+      "description": "图片修图、调色、裁剪、拼图轻量化工具",
+      "url": "https://xiuxiu.web.meitu.com",
+      "category": "design",
+      "subcategory": "image",
+      "tags": ["修图", "调色", "裁剪", "拼图"]
+    },
+    {
+      "id": "16",
+      "name": "Remove.bg",
+      "description": "一键智能抠图，无背景图片生成",
+      "url": "https://www.remove.bg",
+      "category": "design",
+      "subcategory": "image",
+      "tags": ["抠图", "智能", "无背景"]
+    },
+    {
+      "id": "17",
+      "name": "Tinypng",
+      "description": "图片无损压缩，不降低画质、缩小文件体积",
+      "url": "https://tinypng.com",
+      "category": "design",
+      "subcategory": "image",
+      "tags": ["图片压缩", "无损", "优化"]
+    },
+    {
+      "id": "18",
+      "name": "VS Code在线版",
+      "description": "轻量化在线代码编辑、调试工具",
+      "url": "https://vscode.dev",
+      "category": "programming",
+      "subcategory": "editor",
+      "tags": ["代码编辑", "在线IDE", "调试"]
+    },
+    {
+      "id": "19",
+      "name": "RunJS",
+      "description": "前端JS、HTML、CSS在线实时运行预览",
+      "url": "https://runjs.app",
+      "category": "programming",
+      "subcategory": "runtime",
+      "tags": ["代码运行", "实时预览", "前端"]
+    },
+    {
+      "id": "20",
+      "name": "CodePen",
+      "description": "前端代码演示、案例分享、在线调试平台",
+      "url": "https://codepen.io",
+      "category": "programming",
+      "subcategory": "runtime",
+      "tags": ["代码演示", "前端", "社区"]
+    },
+    {
+      "id": "21",
+      "name": "JSFiddle",
+      "description": "前端代码在线运行、测试、分享工具",
+      "url": "https://jsfiddle.net",
+      "category": "programming",
+      "subcategory": "runtime",
+      "tags": ["代码运行", "测试", "分享"]
+    },
+    {
+      "id": "22",
+      "name": "GitHub",
+      "description": "全球最大开源代码仓库、项目托管平台",
+      "url": "https://github.com",
+      "category": "programming",
+      "subcategory": "efficiency",
+      "tags": ["开源", "代码托管", "版本控制"]
+    },
+    {
+      "id": "23",
+      "name": "Gitee",
+      "description": "国内开源代码托管、项目协作平台，访问稳定",
+      "url": "https://gitee.com",
+      "category": "programming",
+      "subcategory": "efficiency",
+      "tags": ["开源", "代码托管", "国内"]
+    },
+    {
+      "id": "24",
+      "name": "Stack Overflow",
+      "description": "编程问题答疑、技术问题检索平台",
+      "url": "https://stackoverflow.com",
+      "category": "programming",
+      "subcategory": "efficiency",
+      "tags": ["技术问答", "编程", "检索"]
+    },
+    {
+      "id": "25",
+      "name": "LeetCode",
+      "description": "算法刷题、编程面试刷题平台",
+      "url": "https://leetcode.cn",
+      "category": "programming",
+      "subcategory": "efficiency",
+      "tags": ["算法", "刷题", "面试"]
+    },
+    {
+      "id": "26",
+      "name": "Apifox",
+      "description": "接口调试、文档生成、Mock数据一体化工具",
+      "url": "https://www.apifox.cn",
+      "category": "programming",
+      "subcategory": "api",
+      "tags": ["接口调试", "API", "Mock"]
+    },
+    {
+      "id": "27",
+      "name": "Postman网页版",
+      "description": "API接口测试、请求调试工具",
+      "url": "https://www.postman.com",
+      "category": "programming",
+      "subcategory": "api",
+      "tags": ["API测试", "接口调试"]
+    },
+    {
+      "id": "28",
+      "name": "宝塔面板官网",
+      "description": "服务器可视化运维、环境搭建工具",
+      "url": "https://www.bt.cn",
+      "category": "programming",
+      "subcategory": "server",
+      "tags": ["服务器", "运维", "可视化"]
+    },
+    {
+      "id": "29",
+      "name": "Linux命令大全",
+      "description": "Linux运维命令查询、实操教程库",
+      "url": "https://www.linuxcool.com",
+      "category": "programming",
+      "subcategory": "server",
+      "tags": ["Linux", "命令", "运维"]
+    },
+    {
+      "id": "30",
+      "name": "MDN Web文档",
+      "description": "前端官方权威开发文档，精准易懂",
+      "url": "https://developer.mozilla.org/zh-CN",
+      "category": "programming",
+      "subcategory": "docs",
+      "tags": ["前端文档", "权威", "教程"]
+    },
+    {
+      "id": "31",
+      "name": "菜鸟教程",
+      "description": "零基础编程入门、全语种实操教程",
+      "url": "https://www.runoob.com",
+      "category": "programming",
+      "subcategory": "docs",
+      "tags": ["编程入门", "教程", "全语种"]
+    },
+    {
+      "id": "32",
+      "name": "W3School",
+      "description": "前端基础语法、案例实操文档",
+      "url": "https://www.w3school.com.cn",
+      "category": "programming",
+      "subcategory": "docs",
+      "tags": ["前端基础", "语法", "案例"]
+    },
+    {
+      "id": "33",
+      "name": "豆包AI",
+      "description": "国内免费全能对话模型，写作、答疑、策划全能适配",
+      "url": "https://www.doubao.com",
+      "category": "ai",
+      "subcategory": "chat",
+      "tags": ["AI对话", "写作", "答疑"]
+    },
+    {
+      "id": "34",
+      "name": "文心一言",
+      "description": "百度大模型，文案创作、逻辑梳理、内容生成",
+      "url": "https://yiyan.baidu.com",
+      "category": "ai",
+      "subcategory": "chat",
+      "tags": ["AI对话", "文案", "内容生成"]
+    },
+    {
+      "id": "35",
+      "name": "通义千问",
+      "description": "阿里大模型，长文本处理、办公辅助能力突出",
+      "url": "https://tongyi.aliyun.com",
+      "category": "ai",
+      "subcategory": "chat",
+      "tags": ["AI对话", "长文本", "办公辅助"]
+    },
+    {
+      "id": "36",
+      "name": "DeepSeek",
+      "description": "专业代码、逻辑推理、技术答疑AI模型",
+      "url": "https://www.deepseek.com",
+      "category": "ai",
+      "subcategory": "chat",
+      "tags": ["AI对话", "代码", "技术"]
+    },
+    {
+      "id": "37",
+      "name": "即梦AI",
+      "description": "国内免费AI绘画，风景、人物、商业海报生成",
+      "url": "https://dream.alibaba.com",
+      "category": "ai",
+      "subcategory": "art",
+      "tags": ["AI绘画", "免费", "商业海报"]
+    },
+    {
+      "id": "38",
+      "name": "Midjourney",
+      "description": "高端质感AI绘画，艺术风、写实风创作",
+      "url": "https://www.midjourney.com",
+      "category": "ai",
+      "subcategory": "art",
+      "tags": ["AI绘画", "艺术", "写实"]
+    },
+    {
+      "id": "39",
+      "name": "Stable Diffusion",
+      "description": "开源本地AI绘画模型，自定义参数生成",
+      "url": "https://stablediffusionweb.com",
+      "category": "ai",
+      "subcategory": "art",
+      "tags": ["AI绘画", "开源", "本地"]
+    },
+    {
+      "id": "40",
+      "name": "无界版图",
+      "description": "AI绘画、图片扩图、素材生成工具",
+      "url": "https://www.wujiebt.com",
+      "category": "ai",
+      "subcategory": "art",
+      "tags": ["AI绘画", "图片扩图", "素材"]
+    },
+    {
+      "id": "41",
+      "name": "剪映AI",
+      "description": "AI字幕、AI抠像、视频一键剪辑、特效生成",
+      "url": "https://www.capcut.cn",
+      "category": "ai",
+      "subcategory": "video",
+      "tags": ["视频剪辑", "AI字幕", "特效"]
+    },
+    {
+      "id": "42",
+      "name": "Runway",
+      "description": "AI视频生成、视频修复、画面补帧工具",
+      "url": "https://runwayml.com",
+      "category": "ai",
+      "subcategory": "video",
+      "tags": ["AI视频", "视频修复", "补帧"]
+    },
+    {
+      "id": "43",
+      "name": "讯飞听见",
+      "description": "AI语音转文字、录音转写、字幕生成",
+      "url": "https://www.iflyrec.com",
+      "category": "ai",
+      "subcategory": "video",
+      "tags": ["语音转文字", "录音转写", "字幕"]
+    },
+    {
+      "id": "44",
+      "name": "Cursor",
+      "description": "AI智能代码编辑器，代码生成、查错、重构全能",
+      "url": "https://www.cursor.com",
+      "category": "ai",
+      "subcategory": "code",
+      "tags": ["AI编程", "代码编辑", "重构"]
+    },
+    {
+      "id": "45",
+      "name": "CodeGeeX",
+      "description": "国产AI编程助手，多语种代码生成、解释",
+      "url": "https://codegeex.cn",
+      "category": "ai",
+      "subcategory": "code",
+      "tags": ["AI编程", "代码生成", "多语种"]
+    },
+    {
+      "id": "46",
+      "name": "Aider",
+      "description": "终端AI结对编程、代码辅助工具",
+      "url": "https://aider.chat",
+      "category": "ai",
+      "subcategory": "code",
+      "tags": ["AI编程", "终端", "结对编程"]
+    },
+    {
+      "id": "47",
+      "name": "Hackerman.AI",
+      "description": "代码片段生成、编程学习辅助工具",
+      "url": "https://hackerman.ai",
+      "category": "ai",
+      "subcategory": "code",
+      "tags": ["AI编程", "代码生成", "学习"]
+    },
+    {
+      "id": "48",
+      "name": "TopAI.tools",
+      "description": "2026年实时更新，22000+AI工具全分类检索",
+      "url": "https://www.topai.tools",
+      "category": "ai",
+      "subcategory": "materials",
+      "tags": ["AI导航", "工具检索", "分类"]
+    },
+    {
+      "id": "49",
+      "name": "ToolAI",
+      "description": "AI应用索引、工具测评、场景化AI工具推荐",
+      "url": "https://www.toolai.top",
+      "category": "ai",
+      "subcategory": "materials",
+      "tags": ["AI导航", "测评", "推荐"]
+    },
+    {
+      "id": "50",
+      "name": "AI365导航",
+      "description": "跨境+国内AI工具一站式聚合平台",
+      "url": "https://www.ai365导航.com",
+      "category": "ai",
+      "subcategory": "materials",
+      "tags": ["AI导航", "跨境", "聚合"]
+    },
+    {
+      "id": "51",
+      "name": "WPS网页版",
+      "description": "Word/Excel/PPT在线编辑、保存、导出",
+      "url": "https://www.wps.cn",
+      "category": "office",
+      "subcategory": "document",
+      "tags": ["文档编辑", "Word", "Excel", "PPT"]
+    },
+    {
+      "id": "52",
+      "name": "石墨文档",
+      "description": "多人在线协作、实时编辑、云端文档存储",
+      "url": "https://shimo.im",
+      "category": "office",
+      "subcategory": "document",
+      "tags": ["协作", "文档", "实时编辑"]
+    },
+    {
+      "id": "53",
+      "name": "腾讯文档",
+      "description": "轻量化在线办公、团队协作、模板中心",
+      "url": "https://docs.qq.com",
+      "category": "office",
+      "subcategory": "document",
+      "tags": ["协作", "文档", "模板"]
+    },
+    {
+      "id": "54",
+      "name": "迅捷在线转换",
+      "description": "PDF、图片、视频、文档全格式互转",
+      "url": "https://www.xunjiepdf.com",
+      "category": "office",
+      "subcategory": "convert",
+      "tags": ["格式转换", "PDF", "视频"]
+    },
+    {
+      "id": "55",
+      "name": "ILovePDF",
+      "description": "PDF压缩、拆分、合并、转换免费工具",
+      "url": "https://www.ilovepdf.com",
+      "category": "office",
+      "subcategory": "convert",
+      "tags": ["PDF", "压缩", "转换"]
+    },
+    {
+      "id": "56",
+      "name": "在线格式工厂",
+      "description": "音视频、图片、文档批量转换",
+      "url": "https://www.ofoct.com",
+      "category": "office",
+      "subcategory": "convert",
+      "tags": ["格式转换", "批量", "音视频"]
+    },
+    {
+      "id": "57",
+      "name": "ProcessOn",
+      "description": "思维导图、流程图、组织结构图在线制作",
+      "url": "https://www.processon.com",
+      "category": "office",
+      "subcategory": "mindmap",
+      "tags": ["思维导图", "流程图", "协作"]
+    },
+    {
+      "id": "58",
+      "name": "幕布",
+      "description": "大纲笔记、结构化整理、一键生成思维导图",
+      "url": "https://mubu.com",
+      "category": "office",
+      "subcategory": "mindmap",
+      "tags": ["大纲笔记", "思维导图", "结构化"]
+    },
+    {
+      "id": "59",
+      "name": "草料二维码",
+      "description": "二维码生成、美化、批量制作工具",
+      "url": "https://cli.im",
+      "category": "office",
+      "subcategory": "materials",
+      "tags": ["二维码", "生成", "美化"]
+    },
+    {
+      "id": "60",
+      "name": "在线字数统计",
+      "description": "文本字数、字符数、空格一键统计",
+      "url": "https://www.zihao.cn",
+      "category": "office",
+      "subcategory": "life",
+      "tags": ["字数统计", "文本", "工具"]
+    },
+    {
+      "id": "61",
+      "name": "文本去重工具",
+      "description": "批量文本去重、排版纠错",
+      "url": "https://www.quchong.com",
+      "category": "office",
+      "subcategory": "life",
+      "tags": ["文本去重", "排版", "纠错"]
+    },
+    {
+      "id": "62",
+      "name": "JSON在线格式化",
+      "description": "代码格式化、校验、解析工具",
+      "url": "https://www.json.cn",
+      "category": "office",
+      "subcategory": "life",
+      "tags": ["JSON", "格式化", "校验"]
+    }
+  ]
+};
+
+let toolsData = JSON.parse(JSON.stringify(DEFAULT_TOOLS_DATA));
+let favorites = [];
+let currentCategory = null;
+let currentSubcategory = null;
+let deleteTargetId = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadCustomData();
+    loadFavorites();
+    initSearch();
+    renderHomePage();
+    initCategorySelect();
+});
+
+function loadCustomData() {
+    const saved = localStorage.getItem('customToolsData');
+    if (saved) {
+        try {
+            const customData = JSON.parse(saved);
+            if (customData.tools && customData.tools.length > 0) {
+                toolsData = customData;
+            }
+        } catch (e) {
+            console.error('加载自定义数据失败:', e);
+        }
+    }
+}
+
+function saveCustomData() {
+    localStorage.setItem('customToolsData', JSON.stringify(toolsData));
+}
+
+function loadFavorites() {
+    const saved = localStorage.getItem('toolFavorites');
+    if (saved) {
+        favorites = JSON.parse(saved);
+    }
+}
+
+function saveFavorites() {
+    localStorage.setItem('toolFavorites', JSON.stringify(favorites));
+}
+
+function initSearch() {
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', (e) => {
+        const keyword = e.target.value.trim();
+        if (keyword) {
+            performSearch(keyword);
+        } else {
+            goHome();
+        }
+    });
+}
+
+function performSearch(keyword) {
+    const results = toolsData.tools.filter(tool => {
+        const searchText = keyword.toLowerCase();
+        return tool.name.toLowerCase().includes(searchText) ||
+               tool.description.toLowerCase().includes(searchText) ||
+               tool.tags.some(tag => tag.toLowerCase().includes(searchText)) ||
+               getCategoryName(tool.category).toLowerCase().includes(searchText) ||
+               getSubcategoryName(tool.category, tool.subcategory).toLowerCase().includes(searchText);
+    });
+
+    showPage('searchPage');
+    document.getElementById('searchKeyword').textContent = `「${keyword}」`;
+    renderToolsGrid('searchResultsGrid', results);
+}
+
+function getCategoryName(categoryId) {
+    const category = toolsData.categories.find(c => c.id === categoryId);
+    return category ? category.name : '';
+}
+
+function getSubcategoryName(categoryId, subcategoryId) {
+    const category = toolsData.categories.find(c => c.id === categoryId);
+    if (!category) return '';
+    const subcategory = category.subcategories.find(s => s.id === subcategoryId);
+    return subcategory ? subcategory.name : '';
+}
+
+function getCategoryToolCount(categoryId) {
+    return toolsData.tools.filter(t => t.category === categoryId).length;
+}
+
+function renderHomePage() {
+    showPage('homePage');
+    renderCategoriesGrid();
+    renderHotTools();
+}
+
+function renderCategoriesGrid() {
+    const grid = document.getElementById('categoriesGrid');
+    grid.innerHTML = toolsData.categories.map(category => `
+        <div class="category-card" onclick="showCategory('${category.id}')">
+            <div class="category-icon">${category.icon}</div>
+            <div class="category-name">${category.name}</div>
+            <div class="category-count">${getCategoryToolCount(category.id)} 个工具</div>
+        </div>
+    `).join('');
+}
+
+function renderHotTools() {
+    const hotTools = toolsData.tools.slice(0, 8);
+    renderToolsGrid('hotToolsGrid', hotTools);
+}
+
+function showCategory(categoryId) {
+    currentCategory = categoryId;
+    currentSubcategory = null;
+    
+    const category = toolsData.categories.find(c => c.id === categoryId);
+    if (!category) return;
+
+    showPage('categoryPage');
+    document.getElementById('currentCategoryName').textContent = category.name;
+    document.getElementById('categoryTitle').textContent = category.icon + ' ' + category.name;
+    
+    renderSubcategoryTabs(category);
+    renderCategoryTools();
+}
+
+function renderSubcategoryTabs(category) {
+    const tabsContainer = document.getElementById('subcategoryTabs');
+    tabsContainer.innerHTML = `
+        <button class="subcategory-tab ${!currentSubcategory ? 'active' : ''}" onclick="filterSubcategory(null)">全部</button>
+        ${category.subcategories.map(sub => `
+            <button class="subcategory-tab ${currentSubcategory === sub.id ? 'active' : ''}" onclick="filterSubcategory('${sub.id}')">${sub.name}</button>
+        `).join('')}
+    `;
+}
+
+function filterSubcategory(subcategoryId) {
+    currentSubcategory = subcategoryId;
+    const category = toolsData.categories.find(c => c.id === currentCategory);
+    renderSubcategoryTabs(category);
+    renderCategoryTools();
+}
+
+function renderCategoryTools() {
+    let tools = toolsData.tools.filter(t => t.category === currentCategory);
+    if (currentSubcategory) {
+        tools = tools.filter(t => t.subcategory === currentSubcategory);
+    }
+    renderToolsGrid('categoryToolsGrid', tools);
+}
+
+function renderToolsGrid(containerId, tools) {
+    const container = document.getElementById(containerId);
+    
+    if (!tools || tools.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🔍</div>
+                <div class="empty-state-text">暂无相关工具</div>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = tools.map(tool => {
+        const isFavorite = favorites.includes(tool.id);
+        const category = toolsData.categories.find(c => c.id === tool.category);
+        const subcategory = category ? category.subcategories.find(s => s.id === tool.subcategory) : null;
+        
+        return `
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-name">${tool.name}</div>
+                    <button class="favorite-btn ${isFavorite ? 'active' : ''}" onclick="toggleFavorite('${tool.id}', this)">★</button>
+                </div>
+                <div class="tool-description">${tool.description || '暂无简介'}</div>
+                <div class="tool-tags">
+                    ${tool.tags ? tool.tags.map(tag => `<span class="tag">${tag}</span>`).join('') : ''}
+                    ${subcategory ? `<span class="tag">${subcategory.name}</span>` : ''}
+                </div>
+                <div class="tool-actions">
+                    <button class="visit-btn" onclick="visitTool('${tool.url}')">访问</button>
+                    <button class="edit-btn" onclick="openEditModal('${tool.id}')">编辑</button>
+                    <button class="delete-btn" onclick="openDeleteModal('${tool.id}')">删除</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function visitTool(url) {
+    window.open(url, '_blank');
+}
+
+function toggleFavorite(toolId, btn) {
+    const index = favorites.indexOf(toolId);
+    if (index > -1) {
+        favorites.splice(index, 1);
+        btn.classList.remove('active');
+    } else {
+        favorites.push(toolId);
+        btn.classList.add('active');
+    }
+    saveFavorites();
+}
+
+function showFavorites() {
+    const favoriteTools = toolsData.tools.filter(t => favorites.includes(t.id));
+    showPage('favoritesPage');
+    renderToolsGrid('favoritesGrid', favoriteTools);
+}
+
+function showPage(pageId) {
+    ['homePage', 'categoryPage', 'searchPage', 'favoritesPage'].forEach(id => {
+        document.getElementById(id).style.display = id === pageId ? 'block' : 'none';
+    });
+}
+
+function goHome() {
+    document.getElementById('searchInput').value = '';
+    renderHomePage();
+}
+
+function initCategorySelect() {
+    const select = document.getElementById('toolCategory');
+    select.innerHTML = '<option value="">请选择分类</option>' + 
+        toolsData.categories.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
+    
+    select.addEventListener('change', (e) => {
+        updateSubcategorySelect(e.target.value);
+    });
+}
+
+function updateSubcategorySelect(categoryId) {
+    const select = document.getElementById('toolSubcategory');
+    select.innerHTML = '<option value="">请选择二级分类</option>';
+    
+    if (!categoryId) return;
+    
+    const category = toolsData.categories.find(c => c.id === categoryId);
+    if (category) {
+        select.innerHTML += category.subcategories.map(s => 
+            `<option value="${s.id}">${s.name}</option>`
+        ).join('');
+    }
+}
+
+function openAddModal() {
+    document.getElementById('modalTitle').textContent = '新增工具';
+    document.getElementById('toolForm').reset();
+    document.getElementById('toolId').value = '';
+    updateSubcategorySelect('');
+    document.getElementById('addModal').classList.add('active');
+}
+
+function openEditModal(toolId) {
+    const tool = toolsData.tools.find(t => t.id === toolId);
+    if (!tool) return;
+    
+    document.getElementById('modalTitle').textContent = '编辑工具';
+    document.getElementById('toolId').value = tool.id;
+    document.getElementById('toolName').value = tool.name;
+    document.getElementById('toolUrl').value = tool.url;
+    document.getElementById('toolCategory').value = tool.category;
+    updateSubcategorySelect(tool.category);
+    document.getElementById('toolSubcategory').value = tool.subcategory || '';
+    document.getElementById('toolDescription').value = tool.description || '';
+    document.getElementById('toolTags').value = tool.tags ? tool.tags.join(',') : '';
+    document.getElementById('addModal').classList.add('active');
+}
+
+function closeAddModal() {
+    document.getElementById('addModal').classList.remove('active');
+}
+
+function openDeleteModal(toolId) {
+    deleteTargetId = toolId;
+    document.getElementById('deleteModal').classList.add('active');
+}
+
+function closeDeleteModal() {
+    deleteTargetId = null;
+    document.getElementById('deleteModal').classList.remove('active');
+}
+
+function confirmDelete() {
+    if (!deleteTargetId) return;
+    
+    toolsData.tools = toolsData.tools.filter(t => t.id !== deleteTargetId);
+    
+    const favIndex = favorites.indexOf(deleteTargetId);
+    if (favIndex > -1) {
+        favorites.splice(favIndex, 1);
+        saveFavorites();
+    }
+    
+    saveCustomData();
+    closeDeleteModal();
+    
+    if (document.getElementById('homePage').style.display === 'block') {
+        renderHomePage();
+    } else if (document.getElementById('categoryPage').style.display === 'block') {
+        renderCategoryTools();
+    } else if (document.getElementById('searchPage').style.display === 'block') {
+        const keyword = document.getElementById('searchKeyword').textContent.replace(/「|」/g, '');
+        performSearch(keyword);
+    } else if (document.getElementById('favoritesPage').style.display === 'block') {
+        showFavorites();
+    }
+}
+
+document.getElementById('toolForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    
+    const id = document.getElementById('toolId').value;
+    const name = document.getElementById('toolName').value;
+    const url = document.getElementById('toolUrl').value;
+    const category = document.getElementById('toolCategory').value;
+    const subcategory = document.getElementById('toolSubcategory').value;
+    const description = document.getElementById('toolDescription').value;
+    const tags = document.getElementById('toolTags').value.split(',').map(t => t.trim()).filter(t => t);
+    
+    if (id) {
+        const tool = toolsData.tools.find(t => t.id === id);
+        if (tool) {
+            tool.name = name;
+            tool.url = url;
+            tool.category = category;
+            tool.subcategory = subcategory;
+            tool.description = description;
+            tool.tags = tags;
+        }
+    } else {
+        const newId = Date.now().toString();
+        toolsData.tools.push({
+            id: newId,
+            name,
+            url,
+            category,
+            subcategory,
+            description,
+            tags
+        });
+    }
+    
+    saveCustomData();
+    closeAddModal();
+    
+    if (document.getElementById('homePage').style.display === 'block') {
+        renderHomePage();
+    } else if (document.getElementById('categoryPage').style.display === 'block') {
+        renderCategoryTools();
+    }
+});

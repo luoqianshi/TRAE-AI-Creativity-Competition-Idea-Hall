@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <title>现实液化 - 手势水波交互</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        overflow: hidden;
+        background: #000;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+      }
+      #video {
+        position: fixed;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .tip {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #fff;
+        background: rgba(0, 0, 0, 0.6);
+        padding: 8px 16px;
+        border-radius: 99px;
+        font-size: 14px;
+        z-index: 9;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tip">正在加载手部模型，请允许摄像头权限</div>
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="glCanvas"></canvas>
+
+    <!-- MediaPipe Hands CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+
+    <script>
+      const canvas = document.getElementById("glCanvas");
+      const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
+      const video = document.getElementById("video");
+      let width, height, halfW, halfH;
+      let videoTexture = null;
+      let videoTextureReady = false;
+      let videoReady = false;
+
+      // ===================== WebGL 着色器 =====================
+      // 顶点着色器
+      const vertexShaderSource = `
+            attribute vec2 a_Pos;
+            attribute vec2 a_TexCoord;
+            varying vec2 v_TexCoord;
+            void main() {
+                gl_Position = vec4(a_Pos, 0.0, 1.0);
+                v_TexCoord = a_TexCoord;
+            }
+        `;
+
+      // 物理模拟着色器：9-tap各向同性卷积 + Verlet积分 + 非线性衰减 + 噪声
+      const physicsFragmentSource = `
+            precision mediump float;
+            uniform sampler2D u_Curr;
+            uniform sampler2D u_Prev;
+            uniform vec2 u_TexSize;
+            uniform float u_Damping;
+            uniform float u_Time;
+            uniform vec4 u_Touch[10];
+            varying vec2 v_TexCoord;
+
+            float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+
+            void main(){
+                vec2 uv = v_TexCoord;
+                vec2 px = 1.0 / u_TexSize;
+                // 9-tap 各向同性卷积
+                float avg = 0.0;
+                avg += texture2D(u_Curr, uv + vec2(-px.x,0.0)).r * 0.2;
+                avg += texture2D(u_Curr, uv + vec2(px.x,0.0)).r * 0.2;
+                avg += texture2D(u_Curr, uv + vec2(0.0,-px.y)).r * 0.2;
+                avg += texture2D(u_Curr, uv + vec2(0.0,px.y)).r * 0.2;
+                avg += texture2D(u_Curr, uv + vec2(-px.x,-px.y)).r * 0.05;
+                avg += texture2D(u_Curr, uv + vec2(px.x,-px.y)).r * 0.05;
+                avg += texture2D(u_Curr, uv + vec2(-px.x,px.y)).r * 0.05;
+                avg += texture2D(u_Curr, uv + vec2(px.x,px.y)).r * 0.05;
+
+                float prevVal = texture2D(u_Prev, uv).r;
+                float val = avg * 2.0 - prevVal;
+
+                // 非线性衰减
+                float absV = abs(val);
+                float ampFactor = 1.0 - smoothstep(0.0, 0.08, absV) * 0.006;
+                val *= u_Damping * ampFactor;
+
+                // 指尖扰动注入
+                for(int i=0;i<10;i++){
+                    vec4 touch = u_Touch[i];
+                    if(touch.w < 0.5) continue;
+                    float dist = distance(uv, touch.xy);
+                    if(dist < touch.z){
+                        val += touch.w * (1.0 - dist / touch.z);
+                    }
+                }
+
+                // 环境微小噪声
+                val += (hash(uv + fract(u_Time)) - 0.5) * 0.0003;
+
+                gl_FragColor = vec4(val, texture2D(u_Curr, uv).r, prevVal, 1.0);
+            }
+        `;
+
+      // 最终渲染着色器：摄像头纹理 + 水波折射、色散、高光
+      const renderFragmentSource = `
+            precision mediump float;
+            uniform sampler2D u_Video;
+            uniform sampler2D u_Wave;
+            uniform vec2 u_VideoSize;
+            uniform vec2 u_TexSize;
+            varying vec2 v_TexCoord;
+
+            void main(){
+                vec2 uv = v_TexCoord;
+                vec2 px = 1.0 / u_TexSize;
+                float wave = texture2D(u_Wave, uv).r;
+                float waveX = texture2D(u_Wave, uv + vec2(px.x, 0.0)).r - texture2D(u_Wave, uv - vec2(px.x, 0.0)).r;
+                float waveY = texture2D(u_Wave, uv + vec2(0.0, px.y)).r - texture2D(u_Wave, uv - vec2(0.0, px.y)).r;
+                vec2 grad = vec2(waveX, waveY);
+                float len = length(grad);
+                vec2 offset = wave * 0.015 * (len > 0.0001 ? grad / len : vec2(0.0));
+
+                // 色散RGB偏移模拟 - 翻转Y轴修正摄像头图像方向
+                vec2 videoUv = vec2(uv.x + offset.x, 1.0 - uv.y - offset.y);
+                float r = texture2D(u_Video, videoUv + vec2(offset.x * 0.2, -offset.y * 0.2)).r;
+                float g = texture2D(u_Video, videoUv).g;
+                float b = texture2D(u_Video, videoUv - vec2(offset.x * 0.2, -offset.y * 0.2)).b;
+
+                // 高光
+                float spec = pow(max(0.0, dot(normalize(vec3(-offset, 1.0)), vec3(0,0,1))), 32.0);
+                vec3 col = vec3(r,g,b) + spec * 0.35;
+                gl_FragColor = vec4(col, 1.0);
+            }
+        `;
+
+      // ===================== WebGL工具函数 =====================
+      function compileShader(type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error("Shader compile error:", gl.getShaderInfoLog(shader));
+          return null;
+        }
+        return shader;
+      }
+      function createProgram(vs, fs) {
+        const p = gl.createProgram();
+        const vsShader = compileShader(gl.VERTEX_SHADER, vs);
+        const fsShader = compileShader(gl.FRAGMENT_SHADER, fs);
+        if (!vsShader || !fsShader) return null;
+        gl.attachShader(p, vsShader);
+        gl.attachShader(p, fsShader);
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+          console.error("Program link error:", gl.getProgramInfoLog(p));
+          return null;
+        }
+        return p;
+      }
+
+      const physicsProg = createProgram(
+        vertexShaderSource,
+        physicsFragmentSource,
+      );
+      const renderProg = createProgram(
+        vertexShaderSource,
+        renderFragmentSource,
+      );
+
+      const physicsUniforms = {
+        u_Curr: gl.getUniformLocation(physicsProg, "u_Curr"),
+        u_Prev: gl.getUniformLocation(physicsProg, "u_Prev"),
+        u_TexSize: gl.getUniformLocation(physicsProg, "u_TexSize"),
+        u_Damping: gl.getUniformLocation(physicsProg, "u_Damping"),
+        u_Time: gl.getUniformLocation(physicsProg, "u_Time"),
+        u_Touch: gl.getUniformLocation(physicsProg, "u_Touch"),
+      };
+      const physicsAttribs = {
+        a_Pos: gl.getAttribLocation(physicsProg, "a_Pos"),
+        a_TexCoord: gl.getAttribLocation(physicsProg, "a_TexCoord"),
+      };
+
+      const renderUniforms = {
+        u_Wave: gl.getUniformLocation(renderProg, "u_Wave"),
+        u_Video: gl.getUniformLocation(renderProg, "u_Video"),
+        u_VideoSize: gl.getUniformLocation(renderProg, "u_VideoSize"),
+        u_TexSize: gl.getUniformLocation(renderProg, "u_TexSize"),
+      };
+      const renderAttribs = {
+        a_Pos: gl.getAttribLocation(renderProg, "a_Pos"),
+        a_TexCoord: gl.getAttribLocation(renderProg, "a_TexCoord"),
+      };
+
+      const quadBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([
+          -1, -1, 0, 0, 1, -1, 1, 0, -1, 1, 0, 1, -1, 1, 0, 1, 1, -1, 1, 0, 1,
+          1, 1, 1,
+        ]),
+        gl.STATIC_DRAW,
+      );
+
+      // FBO 帧缓冲（3个循环Ping-Pong）
+      let fbos = [],
+        textures = [];
+      function initFBO(w, h) {
+        fbos = [];
+        textures = [];
+        for (let i = 0; i < 3; i++) {
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            w,
+            h,
+            0,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            null,
+          );
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+          const fbo = gl.createFramebuffer();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+          gl.framebufferTexture2D(
+            gl.FRAMEBUFFER,
+            gl.COLOR_ATTACHMENT0,
+            gl.TEXTURE_2D,
+            tex,
+            0,
+          );
+
+          gl.clearColor(0, 0, 0, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+
+          fbos.push(fbo);
+          textures.push(tex);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+      let fboIdx = 0;
+
+      // ===================== MediaPipe 手部检测 =====================
+      const hands = new Hands({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+      });
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+      });
+      const touchPoints = new Float32Array(40);
+      hands.onResults((results) => {
+        for (let i = 0; i < 40; i++) touchPoints[i] = 0;
+        let idx = 0;
+        for (const hand of results.multiHandLandmarks || []) {
+          const tipIds = [4, 8, 12, 16, 20];
+          for (const tip of tipIds) {
+            const lm = hand[tip];
+            touchPoints[idx++] = lm.x;
+            touchPoints[idx++] = 1.0 - lm.y;
+            touchPoints[idx++] = 0.08;
+            touchPoints[idx++] = 1.0;
+          }
+        }
+      });
+
+      video.addEventListener("loadeddata", () => {
+        videoReady = true;
+        document.querySelector(".tip").textContent =
+          "手部模型加载完成，将手放到摄像头前即可产生水波";
+      });
+
+      new Camera(video, {
+        onFrame: async () => await hands.send({ image: video }),
+        width: 640,
+        height: 480,
+      }).start();
+
+      // ===================== 渲染循环 =====================
+      let time = 0;
+      function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        halfW = Math.floor(width / 4);
+        halfH = Math.floor(height / 4);
+        initFBO(halfW, halfH);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      function drawQuad(aPos, aTex) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aTex, 2, gl.FLOAT, false, 16, 8);
+        gl.enableVertexAttribArray(aTex);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+
+      function loop() {
+        time += 0.016;
+        const curr = fboIdx % 3;
+        const prev = (fboIdx + 2) % 3;
+        const next = (fboIdx + 1) % 3;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[next]);
+        gl.viewport(0, 0, halfW, halfH);
+        gl.useProgram(physicsProg);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, textures[curr]);
+        gl.uniform1i(physicsUniforms.u_Curr, 0);
+
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, textures[prev]);
+        gl.uniform1i(physicsUniforms.u_Prev, 1);
+
+        gl.uniform2f(physicsUniforms.u_TexSize, halfW, halfH);
+        gl.uniform1f(physicsUniforms.u_Damping, 0.985);
+        gl.uniform1f(physicsUniforms.u_Time, time);
+        gl.uniform4fv(physicsUniforms.u_Touch, touchPoints);
+
+        drawQuad(physicsAttribs.a_Pos, physicsAttribs.a_TexCoord);
+        fboIdx = next;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, width, height);
+        gl.useProgram(renderProg);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, textures[fboIdx]);
+        gl.uniform1i(renderUniforms.u_Wave, 0);
+
+        gl.activeTexture(gl.TEXTURE1);
+        if (!videoTexture) {
+          videoTexture = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        }
+        gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+          videoReady = true;
+          if (videoTextureReady) {
+            gl.texSubImage2D(
+              gl.TEXTURE_2D,
+              0,
+              0,
+              0,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              video,
+            );
+          } else {
+            gl.texImage2D(
+              gl.TEXTURE_2D,
+              0,
+              gl.RGBA,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              video,
+            );
+            videoTextureReady = true;
+          }
+        }
+        gl.uniform1i(renderUniforms.u_Video, 1);
+        gl.uniform2f(
+          renderUniforms.u_VideoSize,
+          video.videoWidth || 640,
+          video.videoHeight || 480,
+        );
+        gl.uniform2f(renderUniforms.u_TexSize, halfW, halfH);
+
+        drawQuad(renderAttribs.a_Pos, renderAttribs.a_TexCoord);
+        requestAnimationFrame(loop);
+      }
+      loop();
+    </script>
+  </body>
+</html>

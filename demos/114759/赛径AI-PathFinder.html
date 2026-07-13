@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>赛径AI PathFinder — AI自适应竞赛学习路径规划器</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        dark: '#0a0e1a',
+        darkCard: '#111827',
+        darkBorder: '#1e293b',
+        accent: '#00e68a',
+        cyan: '#00d4ff',
+        accentDim: '#00e68a33',
+        cyanDim: '#00d4ff33',
+      }
+    }
+  }
+}
+</script>
+<style>
+  @keyframes fadeIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes slideIn { from { opacity:0; transform:translateX(-30px); } to { opacity:1; transform:translateX(0); } }
+  @keyframes pulseGlow { 0%,100% { box-shadow:0 0 20px #00e68a33; } 50% { box-shadow:0 0 40px #00e68a66; } }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
+  .fade-in { animation: fadeIn 0.6s ease-out both; }
+  .slide-in { animation: slideIn 0.5s ease-out both; }
+  .pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
+  .float-anim { animation: float 3s ease-in-out infinite; }
+  body { margin:0; background:#0a0e1a; color:#e2e8f0; font-family:'Segoe UI',system-ui,sans-serif; }
+  ::-webkit-scrollbar { width:8px; }
+  ::-webkit-scrollbar-track { background:#0a0e1a; }
+  ::-webkit-scrollbar-thumb { background:#1e293b; border-radius:4px; }
+  .glass { background:rgba(17,24,39,0.8); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
+  .node-tooltip { position:absolute; background:#1e293b; border:1px solid #00e68a; border-radius:12px; padding:16px; min-width:260px; z-index:100; box-shadow:0 0 30px #00e68a33; }
+  .heatmap-cell { width:18px; height:18px; border-radius:3px; transition:all 0.2s; }
+  .heatmap-cell:hover { transform:scale(1.4); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+/* ============ DATA ============ */
+const TRACKS = [
+  { id:'info', emoji:'💻', name:'信息学奥赛', path:'CSP-J → CSP-S → NOIP → NOI → IOI', tags:['C++','算法','数据结构'], grades:'小学-高中', level:'国家级', desc:'全国青少年信息学奥林匹克竞赛，含CSP-J/S、NOIP、NOI、IOI四级晋升体系' },
+  { id:'robot', emoji:'🤖', name:'机器人竞赛', path:'VEX → FTC/FRC → 全国赛 → 国际赛', tags:['VEX','FRC','FTC'], grades:'小学-高中', level:'国际级', desc:'VEX/FRC/FTC机器人竞赛，培养工程思维与团队协作' },
+  { id:'ai', emoji:'🧠', name:'AI竞赛', path:'AI-L2 → AI-L4 → 创新赛 → 顶级赛', tags:['机器学习','深度学习','NLP'], grades:'初中-高中', level:'国家级', desc:'人工智能创新挑战赛，涵盖图像识别、自然语言处理等方向' },
+  { id:'tech', emoji:'🔬', name:'科技创新大赛', path:'校赛 → 区赛 → 市赛 → 省赛 → 国赛', tags:['发明','论文','STEM'], grades:'小学-高中', level:'国家级', desc:'全国青少年科技创新大赛，含发明创造、科学研究论文等类别' },
+  { id:'blue', emoji:'🌉', name:'蓝桥杯/三模一电', path:'省赛 → 国赛 → 选拔赛', tags:['编程','航模','电子'], grades:'小学-高中', level:'国家级', desc:'蓝桥杯软件和信息技术专业人才大赛及三模一电（航模/车模/海模/无线电）竞赛' },
+];
+
+const QUIZ_QUESTIONS = [
+  { q:'在C++中，以下哪个语句可以输出"Hello World"？', opts:['echo "Hello World"','cout<<"Hello World";','print("Hello World")','System.out.println("Hello World")'], ans:1 },
+  { q:'以下算法的时间复杂度最高的是？', opts:['O(1)','O(log n)','O(n)','O(n²)'], ans:3 },
+  { q:'栈(Stack)的特点是？', opts:['先进先出','先进后出','随机存取','双端进出'], ans:1 },
+  { q:'DFS（深度优先搜索）通常使用什么数据结构实现？', opts:['队列','堆','栈','链表'], ans:2 },
+  { q:'动态规划与分治算法的主要区别是？', opts:['动态规划更快','动态规划有重叠子问题','分治只能用于排序','没有区别'], ans:1 },
+];
+
+const SKILL_NODES = [
+  { id:'basic', name:'编程基础', level:1, status:'mastered' },
+  { id:'datatype', name:'数据类型', level:1, status:'mastered' },
+  { id:'control', name:'控制结构', level:1, status:'mastered' },
+  { id:'func', name:'函数', level:2, status:'mastered' },
+  { id:'array', name:'数组', level:2, status:'learning' },
+  { id:'string', name:'字符串', level:2, status:'learning' },
+  { id:'sort', name:'排序算法', level:3, status:'learning' },
+  { id:'binary', name:'二分查找', level:3, status:'weak' },
+  { id:'stack', name:'栈/队列', level:3, status:'weak' },
+  { id:'linkedlist', name:'链表', level:3, status:'notstarted' },
+  { id:'tree', name:'树', level:4, status:'notstarted' },
+  { id:'graph', name:'图论', level:4, status:'notstarted' },
+  { id:'dp', name:'动态规划', level:4, status:'notstarted' },
+  { id:'greedy', name:'贪心', level:4, status:'notstarted' },
+  { id:'search', name:'搜索DFS/BFS', level:4, status:'notstarted' },
+  { id:'contest', name:'竞赛模拟', level:5, status:'notstarted' },
+];
+
+const SKILL_EDGES = [
+  ['basic','datatype'],['basic','control'],['control','func'],['datatype','array'],
+  ['func','string'],['array','sort'],['array','binary'],['func','stack'],
+  ['stack','linkedlist'],['sort','tree'],['binary','tree'],['tree','graph'],
+  ['tree','dp'],['sort','greedy'],['graph','search'],['dp','contest'],
+  ['greedy','contest'],['search','contest'],['linkedlist','tree'],
+];
+
+const CITIES_DATA = {
+  '北京': {
+    region:'华北', overview:'招生比例不超过2%，东城/西城/海淀等六区不再锁区，严禁证书作为硬性录取依据',
+    stats:{ schools:'40+所', students:'约161人(海淀)', ratio:'2%' },
+    tags:['CSP-J/S','NOIP','VEX/FRC','科创发明','天文','电子技术'],
+    condition:'北京市中考报名资格应届初三，在审批科技竞赛中取得优异成绩',
+    timeline:[{d:'4月底-5月初',t:'简章发布'},{d:'5月9日前',t:'区级测试方案'},{d:'6月8日前',t:'完成考核'},{d:'6月8日',t:'合格名单'},{d:'6月15日前',t:'材料上报'}],
+    feature:'与"强基计划"紧密衔接，"AI+硬件"赛道扩招，监管全面升级',
+    source:'北京市教育委员会官网'
+  },
+  '上海': {
+    region:'华东', overview:'通过高中自主招生渠道选拔，2026年自招大幅扩招',
+    stats:{ schools:'30+所重点高中', students:'四校自招合计692人', ratio:'扩招中' },
+    tags:['VEX机器人','信息学奥赛','AI项目','科创大赛'],
+    condition:'上海市中招报名资格应届初三，科技竞赛或科创活动表现突出',
+    timeline:[{d:'5-6月',t:'自招报名'},{d:'中考后',t:'综合能力考核'},{d:'7月10日截止',t:'预录取公示'}],
+    feature:'自招学生集中编班，浦东/闵行占机器人指标约58%',
+    source:'上海市教育考试院'
+  },
+  '广州': {
+    region:'华南', overview:'自招总计划2931人，比去年增518个，省级试点校比例提升至20%',
+    stats:{ schools:'56所', students:'计划2931人', ratio:'增518个' },
+    tags:['教育部白名单','NOIP','机器人','科创','编程'],
+    condition:'广州市中考报名资格应届初三，最多填2所',
+    timeline:[{d:'4/22',t:'政策发布'},{d:'5/9',t:'简章公布'},{d:'5/12-5/15',t:'报名'},{d:'中考后',t:'考核'}],
+    feature:'省级试点校比例大幅提升，校测严禁笔试',
+    source:'广州市教育局'
+  },
+  '深圳': {
+    region:'华南', overview:'科技特长生正式纳入普通高中自主招生，比例控制在10%以内，属地招生新规',
+    stats:{ schools:'约27所', students:'一类自招5197人', ratio:'≤10%' },
+    tags:['VEX机器人','AI','信息学奥赛','白名单科技竞赛'],
+    condition:'深圳ACD类应届，录取=中考60%+校考40%',
+    timeline:[{d:'2月',t:'新规发布'},{d:'5月',t:'各校简章'},{d:'待公布',t:'具体安排'}],
+    feature:'科技特长生从隐性变显性独立类别，招生范围可能收窄至本区',
+    source:'深圳市教育局'
+  },
+  '南京': {
+    region:'华东', overview:'学科+科技特长生招生2302人，投档线560分（总分700）',
+    stats:{ schools:'20+所重点高中', students:'招生2302人', ratio:'投档线560/700' },
+    tags:['信息学奥赛','数理化生竞赛','科创','机器人'],
+    condition:'南京市应届初三，中考达特长生投档线560分',
+    timeline:[{d:'4月',t:'简章发布'},{d:'5月',t:'专业测试'},{d:'6月底7月初',t:'投档线'}],
+    feature:'数理人才贯通培养与科技特长生并行',
+    source:'南京市教育局'
+  },
+  '杭州': {
+    region:'华东', overview:'AI首次从边缘项目升为核心项目，各类特长生列入提前批录取',
+    stats:{ schools:'约21所', students:'—', ratio:'—' },
+    tags:['信息学奥赛','AI-L4+','机器人','航模','科创'],
+    condition:'杭州市区应届初三，须参加中考',
+    timeline:[{d:'4-5月',t:'简章发布'},{d:'5月',t:'报名及测试'},{d:'中考后',t:'提前批录取'}],
+    feature:'AI赛道竞争人数只有信息学的1/3，与中科大少年班衔接',
+    source:'杭州市教育局'
+  },
+  '成都': {
+    region:'西南', overview:'通过项目班方式招收，七中强基计划班30名面向全市',
+    stats:{ schools:'35所', students:'七中强基班30名', ratio:'—' },
+    tags:['信息学奥赛省二+科创银奖','科创','机器人','数理竞赛'],
+    condition:'成都市应届初三，七中强基班按数学+物理总分排序',
+    timeline:[{d:'5-6月',t:'简章'},{d:'6月',t:'测试'}],
+    feature:'强基班对接基础学科拔尖人才培养，数理成绩硬核筛选',
+    source:'成都市教育局'
+  },
+  '武汉': {
+    region:'华中', overview:'华师一附中设有人工智能实验班和科技班，2026年招生940人',
+    stats:{ schools:'第一批次省重点28所', students:'华师一附中940人', ratio:'—' },
+    tags:['信息学奥赛','机器人','科创','数理化竞赛'],
+    condition:'武汉市应届初三，中考达相应批次线',
+    timeline:[{d:'4-5月',t:'简章'},{d:'5月',t:'测试'},{d:'5月底6月',t:'志愿填报'}],
+    feature:'华师一附中设丘成桐少年班（面向六年级），AI实验班特色鲜明',
+    source:'武汉市教育局'
+  },
+  '天津': {
+    region:'华北', overview:'32所高中可招科技特长生，比例5%',
+    stats:{ schools:'32所', students:'比例5%', ratio:'5%' },
+    tags:['科创大赛省一/二奖','信奥','机器人','航模/无线电','电子技术'],
+    condition:'天津市应届初三，指定竞赛获奖，获认定证书',
+    timeline:[{d:'5月',t:'测试'}],
+    feature:'32所学校招生规模全国领先，5%比例较高',
+    source:'天津市教育招生考试院'
+  },
+  '重庆': {
+    region:'西南', overview:'等级考试与竞赛双轨认证，小学阶段可布局',
+    stats:{ schools:'多区学校参与', students:'西大附中/八中等', ratio:'—' },
+    tags:['信奥','C/C++四级+','机器人','科创'],
+    condition:'重庆市应届，竞赛获奖优先，C/C++四级+可报名',
+    timeline:[{d:'4-6月',t:'各校自定'}],
+    feature:'等级考试与竞赛双轨认证机制',
+    source:'重庆市教育考试院'
+  },
+  '西安': {
+    region:'西北', overview:'统一网上报名系统，城六区与远郊分别组织考试',
+    stats:{ schools:'多校', students:'科技类单列', ratio:'—' },
+    tags:['科创','信奥','机器人','航模'],
+    condition:'西安市应届初三，竞赛获奖，项目须与申报一致',
+    timeline:[{d:'4/15-4/27',t:'报名'},{d:'4/27-5/6',t:'学校初审'},{d:'5/6-5/12',t:'区县审核'},{d:'5/20',t:'准考证'},{d:'5/23',t:'市级考试'}],
+    feature:'网上统一报名系统，流程透明规范',
+    source:'西安市教育局'
+  },
+  '长沙': {
+    region:'华中', overview:'2026年特长生招生5月6日启动，流程全程公示',
+    stats:{ schools:'省示范+市重点', students:'多校', ratio:'—' },
+    tags:['市教育局认可科技比赛','信奥','机器人','科创','航模车模'],
+    condition:'长沙市城区应届初三，凭获奖证书报名',
+    timeline:[{d:'5/6',t:'启动'},{d:'5/6-5/8',t:'报名'},{d:'5/10-5/13',t:'学校测试'},{d:'5/23',t:'市局测试'},{d:'6/15',t:'拟入围'},{d:'7/3',t:'成绩'},{d:'7/10',t:'预录'},{d:'7月中旬',t:'正式录取'}],
+    feature:'市局统一资质测试，流程最透明',
+    source:'长沙市教育局'
+  },
+};
+
+const EVENTS_DATA = [
+  { name:'NOI冬令营', date:'2/6-2/13', deadline:'', cat:'info', loc:'青岛', rec:false },
+  { name:'NOI省队选拔', date:'3/7-3/8', deadline:'', cat:'info', loc:'', rec:true },
+  { name:'GESP编程等级认证(第1次)', date:'3月中下旬', deadline:'', cat:'exam', loc:'', rec:false },
+  { name:'蓝桥杯省赛', date:'4月', deadline:'', cat:'info', loc:'', rec:true },
+  { name:'VEX亚洲公开赛总决赛', date:'4月', deadline:'', cat:'robot', loc:'', rec:false },
+  { name:'NCT春季考', date:'4/12-4/13', deadline:'', cat:'exam', loc:'', rec:false },
+  { name:'各省科创赛选拔', date:'3-5月', deadline:'', cat:'tech', loc:'', rec:false },
+  { name:'APIO亚太信奥', date:'5/7-5/11', deadline:'', cat:'info', loc:'北大附中', rec:true },
+  { name:'蓝桥杯全国总决赛', date:'6月中上旬', deadline:'', cat:'info', loc:'武昌首义学院', rec:true },
+  { name:'GESP编程等级认证(第2次)', date:'6月中下旬', deadline:'', cat:'exam', loc:'', rec:false },
+  { name:'MAKEX省赛', date:'4-6月', deadline:'', cat:'robot', loc:'', rec:false },
+  { name:'NOI 2026全国赛', date:'7/18-7/24', deadline:'', cat:'info', loc:'青岛', rec:true },
+  { name:'科创大赛', date:'7/25-7/29', deadline:'', cat:'tech', loc:'西安交大', rec:true },
+  { name:'IOI国际信息学奥赛', date:'8/9-8/16', deadline:'', cat:'info', loc:'乌兹别克斯坦', rec:true },
+  { name:'MAKEX全球总决赛', date:'7-8月', deadline:'', cat:'robot', loc:'待定', rec:false },
+  { name:'NCT夏季考', date:'8/2-8/3', deadline:'', cat:'exam', loc:'', rec:false },
+  { name:'CSP-J/S报名', date:'7/13开始-9/6截止', deadline:'9/6 15:00', cat:'info', loc:'', rec:true },
+  { name:'CSP-J/S第一轮', date:'9/19', deadline:'', cat:'info', loc:'', rec:true },
+  { name:'GESP编程等级认证(第3次)', date:'9月中下旬', deadline:'', cat:'exam', loc:'', rec:false },
+  { name:'CSP-J/S第二轮', date:'10/31', deadline:'', cat:'info', loc:'', rec:true },
+  { name:'NOIP 2026 + 女生竞赛', date:'11/28', deadline:'', cat:'info', loc:'', rec:true },
+  { name:'NOI集训营', date:'12月待定', deadline:'', cat:'info', loc:'', rec:false },
+  { name:'NCT冬季考', date:'12/6-12/7', deadline:'', cat:'exam', loc:'', rec:false },
+  { name:'GESP编程等级认证(第4次)', date:'12月中下旬', deadline:'', cat:'exam', loc:'', rec:false },
+];
+
+const CAT_LABELS = { all:'全部', info:'信息学', robot:'机器人', ai:'AI', tech:'综合科创', exam:'等级考级' };
+const CAT_COLORS = { info:'#00e68a', robot:'#00d4ff', ai:'#a78bfa', tech:'#fbbf24', exam:'#f472b6' };
+
+/* ============ UTILITY ============ */
+const statusColor = s => s==='mastered'?'#00e68a':s==='learning'?'#fbbf24':s==='weak'?'#ef4444':'#4b5563';
+const statusLabel = s => s==='mastered'?'已掌握':s==='learning'?'学习中':s==='weak'?'薄弱':'未开始';
+
+/* ============ COMPONENTS ============ */
+
+/* --- Navbar --- */
+function Navbar({ page, setPage, mobileOpen, setMobileOpen }) {
+  const items = [
+    { key:'home', label:'首页' },
+    { key:'tracks', label:'赛道' },
+    { key:'diagnosis', label:'诊断' },
+    { key:'path', label:'学习路径' },
+    { key:'policy', label:'政策查询' },
+    { key:'calendar', label:'赛事日历' },
+    { key:'dashboard', label:'仪表盘' },
+  ];
+  return (
+    <nav className="fixed top-0 left-0 right-0 z-50 glass border-b border-darkBorder">
+      <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="text-xl font-bold flex items-center gap-2 cursor-pointer" onClick={()=>setPage('home')}>
+          <span className="text-2xl">🧭</span>
+          <span className="bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">赛径 AI PathFinder</span>
+        </div>
+        <div className="hidden md:flex items-center gap-1">
+          {items.map(it => (
+            <button key={it.key} onClick={()=>setPage(it.key)}
+              className={`px-3 py-2 rounded-lg text-sm transition-all ${page===it.key?'bg-accent/20 text-accent font-semibold':'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+              {it.label}
+            </button>
+          ))}
+        </div>
+        <button className="md:hidden text-gray-400 text-2xl" onClick={()=>setMobileOpen(!mobileOpen)}>☰</button>
+      </div>
+      {mobileOpen && (
+        <div className="md:hidden border-t border-darkBorder fade-in">
+          {items.map(it => (
+            <button key={it.key} onClick={()=>{setPage(it.key);setMobileOpen(false);}}
+              className={`block w-full text-left px-6 py-3 text-sm ${page===it.key?'bg-accent/20 text-accent':'text-gray-400'}`}>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </nav>
+  );
+}
+
+/* --- Hero --- */
+function Hero({ setPage }) {
+  return (
+    <section className="min-h-screen flex flex-col items-center justify-center text-center px-4 pt-20 relative overflow-hidden">
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan/10 rounded-full blur-3xl"></div>
+      </div>
+      <div className="relative z-10 fade-in">
+        <h1 className="text-5xl md:text-7xl font-extrabold mb-6 bg-gradient-to-r from-accent via-cyan to-accent bg-clip-text text-transparent">
+          赛径 AI PathFinder
+        </h1>
+        <p className="text-2xl md:text-3xl text-white font-medium mb-4">让每个科技特长生都能找到属于自己的冠军之路</p>
+        <p className="text-lg text-gray-400 mb-10 max-w-2xl mx-auto">基于 AI 知识图谱的自适应竞赛学习路径规划器 — 为信息学奥赛、机器人、AI竞赛、科创大赛量身打造</p>
+        <div className="flex gap-4 justify-center flex-wrap">
+          <button onClick={()=>setPage('diagnosis')} className="px-8 py-3 bg-gradient-to-r from-accent to-emerald-400 text-dark font-bold rounded-xl hover:scale-105 transition-transform pulse-glow">
+            开始诊断
+          </button>
+          <button onClick={()=>setPage('path')} className="px-8 py-3 border-2 border-cyan text-cyan rounded-xl hover:bg-cyan/10 transition-all">
+            查看路径
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-3 justify-center mt-12">
+          {['🤖 机器人竞赛','💻 信息学奥赛','🧠 AI竞赛','🔬 科技创新','🌉 蓝桥杯','📊 政策查询','📅 赛事日历'].map((t,i) => (
+            <span key={i} className="px-4 py-2 rounded-full bg-white/5 border border-darkBorder text-sm text-gray-300">{t}</span>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* --- TrackSelector --- */
+function TrackSelector({ setPage, setDiagTrack }) {
+  return (
+    <section className="max-w-7xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-2 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">竞赛赛道选择</h2>
+      <p className="text-gray-400 text-center mb-12">选择你的目标赛道，AI将为你定制专属学习路径</p>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {TRACKS.map((t,i) => (
+          <div key={t.id} className="fade-in bg-darkCard border border-darkBorder rounded-2xl p-6 hover:border-accent/50 transition-all cursor-pointer group"
+            style={{animationDelay:`${i*0.1}s`}} onClick={()=>{setDiagTrack(t.id);setPage('diagnosis');}}>
+            <div className="text-4xl mb-4">{t.emoji}</div>
+            <h3 className="text-xl font-bold text-white mb-2 group-hover:text-accent transition-colors">{t.name}</h3>
+            <p className="text-accent text-sm mb-3 font-mono">{t.path}</p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {t.tags.map(tg=>(<span key={tg} className="px-2 py-1 bg-accent/10 text-accent text-xs rounded-full">{tg}</span>))}
+            </div>
+            <div className="flex gap-4 text-xs text-gray-500 mb-3">
+              <span>适合: {t.grades}</span><span>级别: {t.level}</span>
+            </div>
+            <p className="text-gray-400 text-sm">{t.desc}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* --- Diagnosis --- */
+function Diagnosis({ setPage }) {
+  const [step, setStep] = useState(0);
+  const [grade, setGrade] = useState('');
+  const [level, setLevel] = useState('');
+  const [answers, setAnswers] = useState([]);
+
+  const grades = ['小学3-6年级','初中7-9年级','高中'];
+  const levels = ['零基础','有编程基础','学过算法','参加过竞赛'];
+
+  const handleAnswer = (qi, ai) => {
+    const na = [...answers]; na[qi] = ai; setAnswers(na);
+  };
+  const score = answers.reduce((s,a,i) => s + (a===QUIZ_QUESTIONS[i].ans?20:0), 0);
+  const dims = [
+    { name:'基础语法', val:Math.min(100, score + 20) },
+    { name:'数据结构', val:Math.min(100, score * 0.8) },
+    { name:'算法思维', val:Math.min(100, score * 0.7 + 10) },
+    { name:'数学基础', val:Math.min(100, score * 0.6 + 25) },
+    { name:'竞赛策略', val:Math.min(100, score * 0.5 + 15) },
+    { name:'项目实践', val:Math.min(100, score * 0.4 + 20) },
+  ];
+  const gradeRank = score>=90?'S':score>=80?'A':score>=70?'B+':score>=60?'B':'C';
+  const rankColor = gradeRank==='S'?'#00e68a':gradeRank==='A'?'#00d4ff':gradeRank==='B+'?'#fbbf24':gradeRank==='B'?'#fb923c':'#ef4444';
+
+  return (
+    <section className="max-w-4xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-2 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">AI 智能诊断</h2>
+      <p className="text-gray-400 text-center mb-8">四步完成能力诊断，获取个性化学习建议</p>
+      <div className="flex justify-center gap-2 mb-10">
+        {[0,1,2,3].map(s => (
+          <div key={s} className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all ${step>=s?'bg-accent text-dark':'bg-darkBorder text-gray-500'}`}>
+            {s+1}
+          </div>
+        ))}
+      </div>
+
+      {step===0 && (
+        <div className="fade-in">
+          <h3 className="text-xl font-bold mb-6 text-center">步骤1：选择学段</h3>
+          <div className="flex flex-wrap justify-center gap-4">
+            {grades.map(g=>(
+              <button key={g} onClick={()=>{setGrade(g);setStep(1);}}
+                className="px-8 py-4 rounded-xl border border-darkBorder bg-darkCard hover:border-accent text-lg transition-all">{g}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {step===1 && (
+        <div className="fade-in">
+          <h3 className="text-xl font-bold mb-6 text-center">步骤2：选择基础水平</h3>
+          <div className="flex flex-wrap justify-center gap-4">
+            {levels.map(l=>(
+              <button key={l} onClick={()=>{setLevel(l);setStep(2);}}
+                className="px-8 py-4 rounded-xl border border-darkBorder bg-darkCard hover:border-accent text-lg transition-all">{l}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {step===2 && (
+        <div className="fade-in">
+          <h3 className="text-xl font-bold mb-6 text-center">步骤3：知识测评（信息学赛道示例）</h3>
+          {QUIZ_QUESTIONS.map((q,qi)=>(
+            <div key={qi} className="mb-8 bg-darkCard rounded-xl p-6 border border-darkBorder slide-in" style={{animationDelay:`${qi*0.1}s`}}>
+              <p className="font-medium mb-4">{qi+1}. {q.q}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {q.opts.map((o,oi)=>(
+                  <button key={oi} onClick={()=>handleAnswer(qi,oi)}
+                    className={`text-left px-4 py-3 rounded-lg border transition-all ${answers[qi]===oi?'border-accent bg-accent/10 text-accent':'border-darkBorder hover:border-gray-500'}`}>
+                    {String.fromCharCode(65+oi)}. {o}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="text-center">
+            <button onClick={()=>setStep(3)} disabled={answers.length<5}
+              className="px-8 py-3 bg-gradient-to-r from-accent to-emerald-400 text-dark font-bold rounded-xl hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed">
+              查看诊断报告
+            </button>
+          </div>
+        </div>
+      )}
+      {step===3 && (
+        <div className="fade-in">
+          <h3 className="text-xl font-bold mb-6 text-center">步骤4：诊断报告</h3>
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* Radar Chart */}
+            <div className="bg-darkCard rounded-xl p-6 border border-darkBorder">
+              <h4 className="text-center font-bold mb-4">能力雷达图</h4>
+              <svg viewBox="0 0 300 280" className="w-full">
+                {[20,40,60,80,100].map((r,ri)=>(
+                  <polygon key={ri}
+                    points={dims.map((_,di)=>{
+                      const angle = (Math.PI*2/dims.length)*di - Math.PI/2;
+                      return `${150+r*1.1*Math.cos(angle)},${140+r*1.1*Math.sin(angle)}`;
+                    }).join(' ')}
+                    fill="none" stroke={ri===4?'#00e68a33':'#1e293b'} strokeWidth="1"/>
+                ))}
+                {dims.map((_,di)=>{
+                  const angle = (Math.PI*2/dims.length)*di - Math.PI/2;
+                  return <line key={di} x1="150" y1="140" x2={150+110*Math.cos(angle)} y2={140+110*Math.sin(angle)} stroke="#1e293b" strokeWidth="1"/>;
+                })}
+                <polygon
+                  points={dims.map((d,di)=>{
+                    const angle = (Math.PI*2/dims.length)*di - Math.PI/2;
+                    const r = d.val * 1.1;
+                    return `${150+r*Math.cos(angle)},${140+r*Math.sin(angle)}`;
+                  }).join(' ')}
+                  fill="#00e68a22" stroke="#00e68a" strokeWidth="2"/>
+                {dims.map((d,di)=>{
+                  const angle = (Math.PI*2/dims.length)*di - Math.PI/2;
+                  const r = d.val * 1.1;
+                  return <circle key={di} cx={150+r*Math.cos(angle)} cy={140+r*Math.sin(angle)} r="4" fill="#00e68a"/>;
+                })}
+                {dims.map((d,di)=>{
+                  const angle = (Math.PI*2/dims.length)*di - Math.PI/2;
+                  return <text key={di} x={150+125*Math.cos(angle)} y={140+125*Math.sin(angle)} fill="#94a3b8" fontSize="11" textAnchor="middle" dominantBaseline="middle">{d.name}</text>;
+                })}
+              </svg>
+            </div>
+            {/* Bars & Grade */}
+            <div className="bg-darkCard rounded-xl p-6 border border-darkBorder">
+              <div className="text-center mb-6">
+                <div className="text-6xl font-extrabold mb-2" style={{color:rankColor}}>{gradeRank}</div>
+                <p className="text-gray-400">综合评分 · {score}/100</p>
+              </div>
+              {dims.map((d,i)=>(
+                <div key={i} className="mb-3 slide-in" style={{animationDelay:`${i*0.05}s`}}>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">{d.name}</span><span className="text-accent">{Math.round(d.val)}%</span></div>
+                  <div className="w-full h-2 bg-darkBorder rounded-full overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-accent to-cyan transition-all duration-1000" style={{width:`${d.val}%`}}></div></div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="mt-6 bg-darkCard rounded-xl p-6 border border-accent/30">
+            <h4 className="font-bold text-accent mb-3">🤖 AI 分析建议</h4>
+            <p className="text-gray-300 leading-relaxed">
+              {score>=80?'你具备扎实的编程基础和算法思维，建议重点攻克数据结构与动态规划，目标直指CSP-S/NOIP。推荐每日投入2小时专项训练，配合历年真题模拟。'
+              :score>=60?'基础尚可，但在数据结构和算法思维方面仍有提升空间。建议先巩固排序、二分查找等基础算法，再逐步接触树和图论。制定12周冲刺计划，每周攻克一个知识模块。'
+              :'建议从编程基础开始系统学习，推荐使用洛谷入门题单进行训练。先掌握C++基本语法和控制结构，建立编程思维后再进入算法学习。预计需要6-8个月打牢基础。'}
+            </p>
+          </div>
+          <div className="text-center mt-8">
+            <button onClick={()=>setPage('path')} className="px-8 py-3 bg-gradient-to-r from-cyan to-blue-500 text-white font-bold rounded-xl hover:scale-105 transition-transform">
+              查看推荐学习路径 →
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* --- Skill Tree / Learning Path --- */
+function LearningPath() {
+  const [selectedNode, setSelectedNode] = useState(null);
+  const nodeW = 130, nodeH = 50;
+  const levels = [[],[],[],[],[]];
+  SKILL_NODES.forEach(n => levels[n.level-1].push(n));
+  const getY = (lvl) => lvl * 110 + 30;
+  const nodePos = {};
+  levels.forEach((lvlNodes, li) => {
+    const totalW = lvlNodes.length * (nodeW + 20) - 20;
+    const startX = (900 - totalW) / 2;
+    lvlNodes.forEach((n, ni) => { nodePos[n.id] = { x: startX + ni*(nodeW+20) + nodeW/2, y: getY(li+1) }; });
+  });
+
+  return (
+    <section className="max-w-7xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-2 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">可视化学习路径图</h2>
+      <p className="text-gray-400 text-center mb-4">点击节点查看详情 · 颜色表示掌握程度</p>
+      <div className="flex flex-wrap justify-center gap-4 mb-8">
+        {[{s:'mastered',l:'已掌握',c:'#00e68a'},{s:'learning',l:'学习中',c:'#fbbf24'},{s:'weak',l:'薄弱',c:'#ef4444'},{s:'notstarted',l:'未开始',c:'#4b5563'}].map(x=>(
+          <div key={x.s} className="flex items-center gap-2 text-sm"><div className="w-4 h-4 rounded" style={{background:x.c}}></div><span className="text-gray-400">{x.l}</span></div>
+        ))}
+      </div>
+      <div className="relative overflow-x-auto">
+        <svg viewBox="0 0 900 620" className="w-full min-w-[600px]" style={{maxHeight:'600px'}}>
+          {/* Edges */}
+          {SKILL_EDGES.map(([from,to],i)=>{
+            const fp = nodePos[from], tp = nodePos[to];
+            if(!fp||!tp) return null;
+            return <line key={i} x1={fp.x} y1={fp.y} x2={tp.x} y2={tp.y} stroke="#1e293b" strokeWidth="2" markerEnd="url(#arrow)"/>
+          })}
+          <defs><marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1e293b"/></marker></defs>
+          {/* Nodes */}
+          {SKILL_NODES.map(n=>{
+            const p = nodePos[n.id];
+            if(!p) return null;
+            return (
+              <g key={n.id} className="cursor-pointer" onClick={()=>setSelectedNode(n.id)}>
+                <rect x={p.x-nodeW/2} y={p.y-nodeH/2} width={nodeW} height={nodeH} rx="12"
+                  fill={statusColor(n.status)} fillOpacity="0.2" stroke={statusColor(n.status)} strokeWidth="2"
+                  className="hover:fill-opacity-40 transition-all"/>
+                <text x={p.x} y={p.y+1} fill="#e2e8f0" fontSize="13" textAnchor="middle" dominantBaseline="middle" fontWeight="500">{n.name}</text>
+                <text x={p.x} y={p.y+nodeH/2+14} fill={statusColor(n.status)} fontSize="10" textAnchor="middle">{statusLabel(n.status)}</text>
+              </g>
+            );
+          })}
+          {/* Level labels */}
+          {[1,2,3,4,5].map(l=>(
+            <text key={l} x="20" y={getY(l)} fill="#4b5563" fontSize="12" dominantBaseline="middle">Level {l}</text>
+          ))}
+        </svg>
+        {/* Tooltip */}
+        {selectedNode && (()=>{
+          const n = SKILL_NODES.find(x=>x.id===selectedNode);
+          if(!n) return null;
+          return (
+            <div className="node-tooltip" style={{left:'50%',top:'10px',transform:'translateX(-50%)'}}>
+              <button className="absolute top-2 right-3 text-gray-400 hover:text-white text-lg" onClick={()=>setSelectedNode(null)}>×</button>
+              <h4 className="text-accent font-bold text-lg mb-2">{n.name}</h4>
+              <p className="text-gray-400 text-sm mb-2">状态：<span style={{color:statusColor(n.status)}}>{statusLabel(n.status)}</span></p>
+              <p className="text-gray-300 text-sm mb-2">该知识点是竞赛核心内容，建议系统学习并配合专项练习。</p>
+              <p className="text-cyan text-sm">📚 推荐资源：洛谷专题 + 《算法竞赛进阶指南》</p>
+              <p className="text-gray-500 text-sm mt-1">🎯 练习题数：15-30 道</p>
+            </div>
+          );
+        })()}
+      </div>
+      {/* Competition Timeline */}
+      <div className="mt-12 bg-darkCard rounded-xl p-6 border border-darkBorder">
+        <h4 className="font-bold text-cyan mb-4">📅 竞赛时间线</h4>
+        <div className="space-y-4">
+          {[{t:'CSP-J/S',d:'9月'},{t:'NOIP',d:'11月'},{t:'省选',d:'3月'},{t:'NOI',d:'7月'},{t:'IOI',d:'8月'}].map((e,i)=>(
+            <div key={i} className="flex items-center gap-4">
+              <div className="w-24 text-right text-accent text-sm font-mono">{e.d}</div>
+              <div className="w-3 h-3 rounded-full bg-accent"></div>
+              <div className="flex-1 h-px bg-darkBorder"></div>
+              <div className="text-white font-medium">{e.t}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* --- AI Advice Panel --- */
+function AIAdvice() {
+  const [tasks, setTasks] = useState([
+    { id:1, text:'完成洛谷P1001 (A+B Problem)', done:false },
+    { id:2, text:'学习二分查找模板', done:false },
+    { id:3, text:'刷3道排序算法题', done:false },
+    { id:4, text:'阅读栈的原理笔记', done:true },
+    { id:5, text:'完成每日一练：DFS入门', done:false },
+  ]);
+  const toggle = id => setTasks(tasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  return (
+    <section className="max-w-4xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-8 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">AI 学习建议</h2>
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="bg-darkCard rounded-xl p-6 border border-darkBorder">
+          <h3 className="font-bold text-accent mb-4">📋 今日学习任务</h3>
+          {tasks.map(t=>(
+            <div key={t.id} className="flex items-center gap-3 mb-3">
+              <button onClick={()=>toggle(t.id)} className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all shrink-0 ${t.done?'border-accent bg-accent':'border-gray-500'}`}>
+                {t.done && <span className="text-dark text-xs font-bold">✓</span>}
+              </button>
+              <span className={`text-sm transition-all ${t.done?'line-through text-gray-500':'text-gray-200'}`}>{t.text}</span>
+            </div>
+          ))}
+          <p className="text-gray-500 text-xs mt-4">已完成 {tasks.filter(t=>t.done).length}/{tasks.length} 项</p>
+        </div>
+        <div className="bg-darkCard rounded-xl p-6 border border-darkBorder">
+          <h3 className="font-bold text-cyan mb-4">🎯 预计达标时间</h3>
+          <div className="mb-6">
+            <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">CSP-J 达标</span><span className="text-accent">78%</span></div>
+            <div className="w-full h-3 bg-darkBorder rounded-full overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-accent to-emerald-300" style={{width:'78%'}}></div></div>
+            <p className="text-gray-500 text-xs mt-1">预计 2026年9月 可达到 CSP-J 入门水平</p>
+          </div>
+          <div className="mb-6">
+            <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">CSP-S 达标</span><span className="text-cyan">35%</span></div>
+            <div className="w-full h-3 bg-darkBorder rounded-full overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-cyan to-blue-400" style={{width:'35%'}}></div></div>
+            <p className="text-gray-500 text-xs mt-1">预计 2027年9月 可冲刺 CSP-S</p>
+          </div>
+          <div>
+            <div className="flex justify-between text-sm mb-1"><span className="text-gray-400">NOIP 达标</span><span className="text-yellow-400">12%</span></div>
+            <div className="w-full h-3 bg-darkBorder rounded-full overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-yellow-400 to-orange-400" style={{width:'12%'}}></div></div>
+            <p className="text-gray-500 text-xs mt-1">预计 2028年11月 有望参加 NOIP</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* --- Policy Query --- */
+function PolicyQuery() {
+  const [selected, setSelected] = useState('北京');
+  const [search, setSearch] = useState('');
+  const cities = Object.keys(CITIES_DATA);
+  const filtered = search ? cities.filter(c => c.includes(search)) : cities;
+  const city = CITIES_DATA[selected];
+
+  return (
+    <section className="max-w-7xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-2 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">地区招生政策查询</h2>
+      <p className="text-gray-400 text-center mb-8">覆盖全国12大城市科技特长生招生政策</p>
+      {/* Search */}
+      <div className="max-w-md mx-auto mb-6">
+        <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索城市..."
+          className="w-full px-4 py-3 bg-darkCard border border-darkBorder rounded-xl text-white placeholder-gray-500 focus:border-accent focus:outline-none"/>
+      </div>
+      {/* City Tags */}
+      <div className="flex flex-wrap justify-center gap-3 mb-10">
+        {filtered.map(c=>(
+          <button key={c} onClick={()=>setSelected(c)}
+            className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${selected===c?'bg-accent text-dark':'bg-darkCard border border-darkBorder text-gray-300 hover:border-accent'}`}>
+            {c}
+          </button>
+        ))}
+      </div>
+      {/* City Detail */}
+      {city && (
+        <div className="fade-in bg-darkCard rounded-2xl border border-darkBorder overflow-hidden">
+          <div className="bg-gradient-to-r from-accent/20 to-cyan/20 px-6 py-5 border-b border-darkBorder">
+            <div className="flex items-center gap-3">
+              <h3 className="text-2xl font-bold text-white">{selected}</h3>
+              <span className="px-3 py-1 bg-accent/20 text-accent text-xs rounded-full">{city.region}</span>
+            </div>
+            <p className="text-gray-300 mt-2">{city.overview}</p>
+          </div>
+          <div className="p-6 grid md:grid-cols-3 gap-6">
+            <div>
+              <h4 className="text-accent font-bold mb-3">📊 关键数据</h4>
+              <div className="space-y-3">
+                {Object.entries(city.stats).map(([k,v])=>(
+                  <div key={k} className="bg-dark rounded-lg p-3">
+                    <p className="text-gray-500 text-xs">{k==='schools'?'招生学校':k==='students'?'招生人数':'招生比例'}</p>
+                    <p className="text-white font-bold">{v}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4">
+                <h4 className="text-accent font-bold mb-2">🏷️ 认可竞赛</h4>
+                <div className="flex flex-wrap gap-2">{city.tags.map(t=>(<span key={t} className="px-2 py-1 bg-cyan/10 text-cyan text-xs rounded-full">{t}</span>))}</div>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-cyan font-bold mb-3">📅 2026时间节点</h4>
+              <div className="space-y-0">
+                {city.timeline.map((ev,i)=>(
+                  <div key={i} className="flex gap-3">
+                    <div className="flex flex-col items-center">
+                      <div className="w-3 h-3 rounded-full bg-cyan mt-1"></div>
+                      {i<city.timeline.length-1 && <div className="w-px flex-1 bg-darkBorder"></div>}
+                    </div>
+                    <div className="pb-4">
+                      <p className="text-cyan text-xs font-mono">{ev.d}</p>
+                      <p className="text-white text-sm">{ev.t}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-yellow-400 font-bold mb-3">📝 报名条件</h4>
+              <p className="text-gray-300 text-sm leading-relaxed mb-4">{city.condition}</p>
+              <h4 className="text-yellow-400 font-bold mb-2">⭐ 政策特色</h4>
+              <p className="text-gray-300 text-sm leading-relaxed mb-4">{city.feature}</p>
+              <p className="text-gray-500 text-xs">📎 参考来源：{city.source}</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* --- Event Calendar --- */
+function EventCalendar() {
+  const [filter, setFilter] = useState('all');
+  const months = ['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+  // Extract month from date string
+  function getMonth(dateStr) {
+    if (!dateStr) return 0;
+    // Handle "3-5月" patterns - assign to middle month
+    if (dateStr.includes('3-5月')) return 4;
+    if (dateStr.includes('4-6月')) return 5;
+    if (dateStr.includes('7-8月')) return 7;
+    if (dateStr.includes('7/13')) return 7; // CSP报名 spans 7-9
+    // Handle "X月" pattern
+    const monthMatch = dateStr.match(/(\d+)月/);
+    if (monthMatch) return parseInt(monthMatch[1]);
+    // Handle "X/Y" pattern - take first number as month
+    const slashMatch = dateStr.match(/^(\d+)\//);
+    if (slashMatch) return parseInt(slashMatch[1]);
+    return 0;
+  }
+
+  const filtered = filter==='all' ? EVENTS_DATA : EVENTS_DATA.filter(e=>e.cat===filter);
+  const monthGroups = {};
+  filtered.forEach(ev => {
+    const m = getMonth(ev.date);
+    if (!monthGroups[m]) monthGroups[m] = [];
+    monthGroups[m].push(ev);
+  });
+
+  const sortedMonths = Object.keys(monthGroups).map(Number).sort((a,b)=>a-b);
+
+  return (
+    <section className="max-w-7xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-2 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">赛事日历 2026</h2>
+      <p className="text-gray-400 text-center mb-8">全年重要赛事时间安排，助力科学备赛</p>
+      {/* Filter Tags */}
+      <div className="flex flex-wrap justify-center gap-3 mb-10">
+        {Object.entries(CAT_LABELS).map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)}
+            className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${filter===k?'bg-accent text-dark':'bg-darkCard border border-darkBorder text-gray-300 hover:border-accent'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {/* Calendar */}
+      <div className="space-y-10">
+        {sortedMonths.map(m => (
+          <div key={m} className="fade-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center text-accent font-bold">{m}</div>
+              <h3 className="text-xl font-bold text-white">{months[m]}</h3>
+              <div className="flex-1 h-px bg-darkBorder"></div>
+            </div>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {monthGroups[m].map((ev,i)=>(
+                <div key={ev.name+i} className="bg-darkCard rounded-xl p-5 border border-darkBorder hover:border-accent/30 transition-all slide-in" style={{animationDelay:`${i*0.05}s`}}>
+                  <div className="flex items-start justify-between mb-2">
+                    <h4 className="font-bold text-white text-sm">{ev.name}</h4>
+                    {ev.rec && <span className="px-2 py-0.5 bg-accent/20 text-accent text-xs rounded-full shrink-0 ml-2">推荐</span>}
+                  </div>
+                  <p className="text-gray-400 text-sm mb-2">📅 {ev.date}</p>
+                  {ev.deadline && <p className="text-yellow-400 text-xs mb-2">报名截止: {ev.deadline}</p>}
+                  {ev.loc && <p className="text-gray-500 text-xs mb-2">📍 {ev.loc}</p>}
+                  <span className="inline-block px-2 py-1 rounded-full text-xs" style={{background:CAT_COLORS[ev.cat]+'22', color:CAT_COLORS[ev.cat]}}>{CAT_LABELS[ev.cat]}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* --- Dashboard --- */
+function Dashboard() {
+  const mastered = SKILL_NODES.filter(n=>n.status==='mastered').length;
+  const learning = SKILL_NODES.filter(n=>n.status==='learning').length;
+  const total = SKILL_NODES.length;
+  const pct = Math.round(((mastered+learning*0.5)/total)*100);
+  const streak = 14;
+  const days = Array.from({length:28},(_,i)=>Math.random());
+  const weeklyData = [3,5,4,6,2,7,5];
+
+  // Ring chart params
+  const ringR = 70, ringW = 12, cx=90, cy=90;
+  const circ = 2*Math.PI*ringR;
+  const offset = circ*(1-pct/100);
+
+  return (
+    <section className="max-w-7xl mx-auto px-4 py-20">
+      <h2 className="text-3xl font-bold text-center mb-8 bg-gradient-to-r from-accent to-cyan bg-clip-text text-transparent">学习仪表盘</h2>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        {[
+          { label:'已掌握知识点', val:mastered, icon:'✅', color:'text-accent' },
+          { label:'学习中', val:learning, icon:'📖', color:'text-yellow-400' },
+          { label:'连续打卡', val:`${streak}天`, icon:'🔥', color:'text-orange-400' },
+          { label:'掌握率', val:`${pct}%`, icon:'📊', color:'text-cyan' },
+        ].map((s,i)=>(
+          <div key={i} className="bg-darkCard rounded-xl p-5 border border-darkBorder fade-in" style={{animationDelay:`${i*0.1}s`}}>
+            <div className="text-2xl mb-2">{s.icon}</div>
+            <p className={`text-2xl font-bold ${s.color}`}>{s.val}</p>
+            <p className="text-gray-500 text-sm">{s.label}</p>
+          </div>
+        ))}
+      </div>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* Ring Chart */}
+        <div className="bg-darkCard rounded-xl p-6 border border-darkBorder fade-in">
+          <h4 className="font-bold text-white mb-4">学习进度</h4>
+          <svg viewBox="0 0 180 180" className="w-48 mx-auto">
+            <circle cx={cx} cy={cy} r={ringR} fill="none" stroke="#1e293b" strokeWidth={ringW}/>
+            <circle cx={cx} cy={cy} r={ringR} fill="none" stroke="#00e68a" strokeWidth={ringW}
+              strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" transform={`rotate(-90 ${cx} ${cy})`}
+              className="transition-all duration-1000"/>
+            <text x={cx} y={cy-5} fill="#e2e8f0" fontSize="28" fontWeight="bold" textAnchor="middle">{pct}%</text>
+            <text x={cx} y={cy+18} fill="#64748b" fontSize="12" textAnchor="middle">总进度</text>
+          </svg>
+        </div>
+        {/* Weekly Bar Chart */}
+        <div className="bg-darkCard rounded-xl p-6 border border-darkBorder fade-in" style={{animationDelay:'0.1s'}}>
+          <h4 className="font-bold text-white mb-4">本周学习时长(h)</h4>
+          <svg viewBox="0 0 280 150" className="w-full">
+            {weeklyData.map((v,i)=>{
+              const max = Math.max(...weeklyData);
+              const h = (v/max)*100;
+              return (
+                <g key={i}>
+                  <rect x={10+i*38} y={130-h} width="26" height={h} rx="4" fill="#00e68a" opacity="0.8" className="hover:opacity-100 transition-all"/>
+                  <text x={10+i*38+13} y={145} fill="#64748b" fontSize="10" textAnchor="middle">{'日一二三四五六'[i]}</text>
+                  <text x={10+i*38+13} y={130-h-5} fill="#00e68a" fontSize="10" textAnchor="middle">{v}h</text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+        {/* Heatmap */}
+        <div className="bg-darkCard rounded-xl p-6 border border-darkBorder fade-in md:col-span-2 lg:col-span-1" style={{animationDelay:'0.2s'}}>
+          <h4 className="font-bold text-white mb-4">28天打卡热力图</h4>
+          <div className="flex flex-wrap gap-1 justify-center">
+            {days.map((d,i)=>{
+              const opacity = d < 0.2 ? 0.1 : d < 0.4 ? 0.3 : d < 0.6 ? 0.5 : d < 0.8 ? 0.7 : 0.9;
+              return <div key={i} className="heatmap-cell" style={{background:`rgba(0,230,138,${opacity})`}} title={`第${i+1}天`}></div>;
+            })}
+          </div>
+          <div className="flex items-center justify-center gap-2 mt-3">
+            <span className="text-gray-500 text-xs">少</span>
+            {[0.1,0.3,0.5,0.7,0.9].map((o,i)=>(
+              <div key={i} className="w-3 h-3 rounded" style={{background:`rgba(0,230,138,${o})`}}></div>
+            ))}
+            <span className="text-gray-500 text-xs">多</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============ APP ============ */
+function App() {
+  const [page, setPage] = useState('home');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [diagTrack, setDiagTrack] = useState('info');
+
+  useEffect(()=>{
+    window.scrollTo({top:0,behavior:'smooth'});
+  },[page]);
+
+  return (
+    <div className="min-h-screen">
+      <Navbar page={page} setPage={setPage} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}/>
+      <main className="pt-16">
+        {page==='home' && <><Hero setPage={setPage}/><TrackSelector setPage={setPage} setDiagTrack={setDiagTrack}/><AIAdvice/></>}
+        {page==='tracks' && <TrackSelector setPage={setPage} setDiagTrack={setDiagTrack}/>}
+        {page==='diagnosis' && <Diagnosis setPage={setPage}/>}
+        {page==='path' && <LearningPath/>}
+        {page==='policy' && <PolicyQuery/>}
+        {page==='calendar' && <EventCalendar/>}
+        {page==='dashboard' && <Dashboard/>}
+      </main>
+      <footer className="border-t border-darkBorder py-8 text-center text-gray-500 text-sm mt-20">
+        <p>🧭 赛径 AI PathFinder — 专为科技特长生打造的 AI 自适应竞赛学习路径规划器</p>
+        <p className="mt-2">Demo 项目 · 仅供展示用途</p>
+      </footer>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>

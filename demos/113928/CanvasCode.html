@@ -1,0 +1,1345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CanvasCode — AI 编程时代的 HTML Figma 多人协作工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', -apple-system, sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+        .canvas-bg {
+            background-color: #f1f5f9;
+            background-image: radial-gradient(circle, #cbd5e1 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+
+        .custom-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .canvas-element {
+            position: absolute;
+            cursor: move;
+            transition: outline 0.12s ease, box-shadow 0.12s ease;
+            outline: 2px solid transparent;
+            outline-offset: 2px;
+            user-select: none;
+        }
+        .canvas-element:hover { outline-color: #c7d2fe; }
+        .canvas-element.selected { outline-color: #6366f1 !important; }
+
+        .collab-cursor {
+            position: absolute;
+            pointer-events: none;
+            z-index: 50;
+            transition: all 2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .annotation-marker {
+            position: absolute;
+            z-index: 45;
+            cursor: pointer;
+            transition: transform 0.15s ease;
+        }
+        .annotation-marker:hover { transform: scale(1.15); }
+        .annotation-marker.resolved { opacity: 0.45; }
+
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(99,102,241,0.35); }
+            70% { box-shadow: 0 0 0 10px rgba(99,102,241,0); }
+            100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+        }
+        .pulse { animation: pulse-ring 2.5s infinite; }
+
+        .comment-mode, .comment-mode * { cursor: crosshair !important; }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .slide-in { animation: slideIn 0.18s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .fade-in { animation: fadeIn 0.2s ease; }
+
+        .code-tag { color: #f472b6; }
+        .code-attr { color: #60a5fa; }
+        .code-value { color: #4ade80; }
+        .code-text { color: #fbbf24; }
+        .code-comment { color: #64748b; }
+
+        input:focus, textarea:focus, select:focus { outline: none; }
+
+        .layer-item.active {
+            background-color: #eef2ff;
+            color: #4f46e5;
+        }
+
+        .annotation-card {
+            position: absolute;
+            z-index: 60;
+        }
+
+        .cursor-label {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            color: white;
+            white-space: nowrap;
+            margin-left: 12px;
+            margin-top: -1px;
+        }
+
+        @keyframes bounce-dot {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        .thinking-dot { animation: bounce-dot 1.2s infinite; }
+        .thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+        .thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+
+        .toast {
+            animation: slideIn 0.25s ease, fadeIn 0.3s ease 2.5s reverse;
+        }
+
+        .prop-input {
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .prop-input:focus {
+            border-color: #818cf8;
+            box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
+        }
+
+        .color-swatch {
+            width: 28px; height: 28px;
+            border-radius: 6px;
+            border: 2px solid #e2e8f0;
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+        .color-swatch:hover { transform: scale(1.1); }
+        .color-swatch.active { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.25); }
+    </style>
+</head>
+<body class="h-screen overflow-hidden bg-slate-100 select-none">
+
+    <!-- ======================== 顶部工具栏 ======================== -->
+    <div class="h-12 bg-white border-b border-slate-200 flex items-center justify-between px-4 shrink-0">
+        <!-- 左侧：窗口控制 + Logo -->
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-red-400 hover:bg-red-500 cursor-pointer transition-colors"></div>
+                <div class="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-500 cursor-pointer transition-colors"></div>
+                <div class="w-3 h-3 rounded-full bg-green-400 hover:bg-green-500 cursor-pointer transition-colors"></div>
+            </div>
+            <div class="w-px h-5 bg-slate-200 mx-1"></div>
+            <div class="flex items-center gap-2">
+                <svg class="w-6 h-6 text-indigo-600" viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" stroke-width="2"/>
+                    <path d="M8 12l3 3 5-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="18" cy="6" r="2.5" fill="#ec4899" stroke="white" stroke-width="1.5"/>
+                </svg>
+                <span class="font-bold text-slate-800 text-sm">CanvasCode</span>
+            </div>
+        </div>
+
+        <!-- 中间：文件名 -->
+        <div class="flex items-center gap-2 text-sm text-slate-500">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <span class="font-medium text-slate-600">Hero Section</span>
+            <span class="text-slate-300">—</span>
+            <span>未命名项目</span>
+            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-semibold bg-green-100 text-green-700 rounded">已自动保存</span>
+        </div>
+
+        <!-- 右侧：协作者头像 + 分享 -->
+        <div class="flex items-center gap-3">
+            <div class="flex -space-x-2" id="collaboratorAvatars"></div>
+            <div class="w-px h-5 bg-slate-200"></div>
+            <button class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                    <polyline points="16 6 12 2 8 6"/>
+                    <line x1="12" y1="2" x2="12" y2="15"/>
+                </svg>
+                分享
+            </button>
+        </div>
+    </div>
+
+    <!-- ======================== 主工作区 ======================== -->
+    <div class="flex" style="height: calc(100vh - 48px);">
+
+        <!-- ======================== 左侧边栏 ======================== -->
+        <div class="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
+            <!-- 图层树 -->
+            <div class="flex flex-col border-b border-slate-100" style="max-height: 38%;">
+                <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
+                    <div class="flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                            <polyline points="2 17 12 22 22 17"/>
+                            <polyline points="2 12 12 17 22 12"/>
+                        </svg>
+                        <span class="text-xs font-semibold text-slate-700 uppercase tracking-wide">图层</span>
+                    </div>
+                    <button class="text-slate-300 hover:text-slate-600 transition-colors">
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scroll px-2 pb-2" id="layerTree"></div>
+            </div>
+
+            <!-- AI 改稿 -->
+            <div class="border-b border-slate-100 p-3 shrink-0">
+                <div class="flex items-center gap-1.5 mb-2">
+                    <svg class="w-3.5 h-3.5 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2l1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5z"/>
+                        <path d="M19 15l.7 2.6L22 18l-2.3.4L19 21l-.7-2.6L16 18l2.3-.4z"/>
+                    </svg>
+                    <span class="text-xs font-semibold text-slate-700 uppercase tracking-wide">AI 改稿</span>
+                    <span class="ml-auto px-1.5 py-0.5 text-[9px] font-bold bg-indigo-100 text-indigo-600 rounded">BETA</span>
+                </div>
+                <textarea id="aiInput" rows="2" placeholder="试试输入：把按钮改成红色" class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-2.5 resize-none prop-input placeholder:text-slate-400"></textarea>
+                <div class="flex items-center justify-between mt-2">
+                    <div class="flex gap-1">
+                        <button class="ai-suggestion px-2 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors" data-cmd="把按钮改成红色">按钮改红</button>
+                        <button class="ai-suggestion px-2 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors" data-cmd="标题字号再大一点">标题加大</button>
+                        <button class="ai-suggestion px-2 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors" data-cmd="圆角再大一些">圆角加大</button>
+                    </div>
+                    <button id="aiExecute" class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1">
+                        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                        执行
+                    </button>
+                </div>
+                <div id="aiThinking" class="hidden items-center gap-1 mt-2 text-xs text-indigo-500">
+                    <span class="font-medium">AI 正在分析</span>
+                    <span class="thinking-dot w-1.5 h-1.5 bg-indigo-500 rounded-full inline-block"></span>
+                    <span class="thinking-dot w-1.5 h-1.5 bg-indigo-500 rounded-full inline-block"></span>
+                    <span class="thinking-dot w-1.5 h-1.5 bg-indigo-500 rounded-full inline-block"></span>
+                </div>
+                <div id="aiResult" class="hidden mt-2 text-xs text-green-600 bg-green-50 border border-green-100 rounded-lg p-2 slide-in"></div>
+            </div>
+
+            <!-- 批注列表 -->
+            <div class="flex-1 flex flex-col overflow-hidden">
+                <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
+                    <div class="flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <span class="text-xs font-semibold text-slate-700 uppercase tracking-wide">批注</span>
+                    </div>
+                    <span class="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 text-slate-500 rounded" id="annotationCount">0</span>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scroll px-3 pb-3 space-y-2" id="annotationList"></div>
+                <div class="px-3 py-2 border-t border-slate-100 shrink-0">
+                    <p class="text-[10px] text-slate-400 flex items-center gap-1">
+                        <kbd class="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono font-semibold text-slate-600">C</kbd>
+                        按住后点击画布创建批注
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ======================== 中间画布 ======================== -->
+        <div class="flex-1 canvas-bg relative overflow-hidden" id="canvas">
+            <!-- 画布元素 -->
+            <div id="canvasElements"></div>
+
+            <!-- 协作光标 -->
+            <div id="collabCursors"></div>
+
+            <!-- 批注标记 -->
+            <div id="annotationMarkers"></div>
+
+            <!-- 批注详情卡片 -->
+            <div id="annotationCardContainer"></div>
+
+            <!-- 批注模式提示 -->
+            <div id="commentModeBanner" class="hidden absolute top-4 left-1/2 -translate-x-1/2 z-[70] bg-indigo-600 text-white text-xs font-medium px-4 py-2 rounded-full shadow-lg flex items-center gap-2 fade-in">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                批注模式 — 点击画布添加批注
+                <kbd class="px-1.5 py-0.5 bg-indigo-500 rounded text-[10px] font-mono">Esc</kbd>
+                退出
+            </div>
+
+            <!-- 缩放控件 -->
+            <div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-white border border-slate-200 rounded-lg shadow-sm px-2 py-1">
+                <button class="p-1 text-slate-400 hover:text-slate-700 transition-colors" onclick="zoomCanvas(-0.1)">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+                <span id="zoomLabel" class="text-xs font-medium text-slate-600 w-10 text-center">100%</span>
+                <button class="p-1 text-slate-400 hover:text-slate-700 transition-colors" onclick="zoomCanvas(0.1)">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+                <div class="w-px h-4 bg-slate-200 mx-1"></div>
+                <button class="p-1 text-slate-400 hover:text-slate-700 transition-colors" title="适合窗口" onclick="resetZoom()">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- ======================== 右侧属性面板 ======================== -->
+        <div class="w-80 bg-white border-l border-slate-200 flex flex-col shrink-0">
+            <!-- 属性区 -->
+            <div class="flex flex-col border-b border-slate-100" style="flex: 1 1 50%; min-height: 0;">
+                <div class="flex items-center justify-between px-4 py-2.5 shrink-0">
+                    <div class="flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="4" y1="21" x2="4" y2="14"/>
+                            <line x1="4" y1="10" x2="4" y2="3"/>
+                            <line x1="12" y1="21" x2="12" y2="12"/>
+                            <line x1="12" y1="8" x2="12" y2="3"/>
+                            <line x1="20" y1="21" x2="20" y2="16"/>
+                            <line x1="20" y1="12" x2="20" y2="3"/>
+                            <line x1="1" y1="14" x2="7" y2="14"/>
+                            <line x1="9" y1="8" x2="15" y2="8"/>
+                            <line x1="17" y1="16" x2="23" y2="16"/>
+                        </svg>
+                        <span class="text-xs font-semibold text-slate-700 uppercase tracking-wide">属性</span>
+                    </div>
+                    <span id="selectedElementName" class="text-xs text-slate-400 font-medium">—</span>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scroll px-4 pb-4" id="propertyPanel"></div>
+            </div>
+
+            <!-- 代码预览区 -->
+            <div class="flex flex-col" style="flex: 1 1 50%; min-height: 0;">
+                <div class="flex items-center justify-between px-4 py-2.5 shrink-0 border-b border-slate-100">
+                    <div class="flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="16 18 22 12 16 6"/>
+                            <polyline points="8 6 2 12 8 18"/>
+                        </svg>
+                        <span class="text-xs font-semibold text-slate-700 uppercase tracking-wide">代码</span>
+                        <span class="px-1.5 py-0.5 text-[9px] font-bold bg-slate-100 text-slate-500 rounded font-mono">HTML</span>
+                    </div>
+                    <button id="copyCodeBtn" class="text-xs text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1 font-medium">
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2"/>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                        </svg>
+                        复制
+                    </button>
+                </div>
+                <div class="flex-1 overflow-auto custom-scroll bg-slate-900">
+                    <pre id="codePreview" class="font-mono text-[11px] leading-relaxed p-4 text-slate-300"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 容器 -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 z-[100] space-y-2"></div>
+
+    <script>
+    // ========================================================================
+    //  状态管理
+    // ========================================================================
+    const state = {
+        zoom: 1,
+        elements: {
+            heroCard: {
+                id: 'heroCard', name: 'Hero 卡片', type: 'container', tag: 'div',
+                text: '', bgColor: '#ffffff', width: 460, height: 340,
+                borderRadius: 24, x: 100, y: 60, shadow: true, padding: 44
+            },
+            title: {
+                id: 'title', name: '主标题', type: 'text', tag: 'h1',
+                text: 'Build Beautiful UI, Together.', color: '#1e293b',
+                fontSize: 30, fontWeight: '800', x: 144, y: 104, width: 372
+            },
+            subtitle: {
+                id: 'subtitle', name: '副标题', type: 'text', tag: 'p',
+                text: 'CanvasCode 让团队在一张画布上协作设计、实时生成代码。',
+                color: '#64748b', fontSize: 15, fontWeight: '400',
+                x: 144, y: 210, width: 372
+            },
+            ctaButton: {
+                id: 'ctaButton', name: 'CTA 按钮', type: 'button', tag: 'button',
+                text: '开始协作', color: '#ffffff', bgColor: '#6366f1',
+                fontSize: 15, fontWeight: '600', borderRadius: 10,
+                x: 144, y: 282, width: 140, height: 44
+            }
+        },
+        elementOrder: ['heroCard', 'title', 'subtitle', 'ctaButton'],
+        selectedId: 'heroCard',
+        annotations: [
+            {
+                id: 'a1', author: '小美', role: '设计师', color: '#ec4899', avatar: '美',
+                content: '标题字号可以再大一点，让视觉层次更分明。', time: '2 分钟前',
+                x: 360, y: 95, resolved: false
+            },
+            {
+                id: 'a2', author: '阿强', role: '开发者', color: '#3b82f6', avatar: '强',
+                content: '按钮的颜色需要和品牌色保持一致，建议用 #6366f1。', time: '5 分钟前',
+                x: 240, y: 305, resolved: false
+            },
+            {
+                id: 'a3', author: '小美', role: '设计师', color: '#ec4899', avatar: '美',
+                content: '卡片圆角可以增加到 24px，更有现代感。', time: '8 分钟前',
+                x: 480, y: 72, resolved: true
+            }
+        ],
+        collaborators: [
+            { name: '你', color: '#6366f1', avatar: '你', isMe: true },
+            { name: '小美', color: '#ec4899', avatar: '美', isMe: false },
+            { name: '阿强', color: '#3b82f6', avatar: '强', isMe: false }
+        ],
+        commentMode: false,
+        activeAnnotationId: null,
+        cKeyPressed: false
+    };
+
+    // ========================================================================
+    //  工具函数
+    // ========================================================================
+    function $(sel) { return document.querySelector(sel); }
+    function $$(sel) { return document.querySelectorAll(sel); }
+    function el(id) { return document.getElementById(id); }
+
+    function showToast(msg, type = 'success') {
+        const container = el('toastContainer');
+        const colors = {
+            success: 'bg-green-600',
+            info: 'bg-indigo-600',
+            error: 'bg-red-500'
+        };
+        const icons = {
+            success: '<polyline points="20 6 9 17 4 12"/>',
+            info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+            error: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
+        };
+        const toast = document.createElement('div');
+        toast.className = `toast ${colors[type]} text-white text-xs font-medium px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2`;
+        toast.innerHTML = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">${icons[type]}</svg>${msg}`;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    // ========================================================================
+    //  画布元素初始化与渲染
+    // ========================================================================
+    function initCanvasElements() {
+        const container = el('canvasElements');
+        container.innerHTML = '';
+
+        state.elementOrder.forEach(id => {
+            const data = state.elements[id];
+            const div = document.createElement('div');
+            div.className = 'canvas-element';
+            div.id = 'el-' + id;
+            div.dataset.elementId = id;
+            container.appendChild(div);
+            makeDraggable(div, id);
+            updateElementDOM(id);
+        });
+
+        selectElement(state.selectedId);
+    }
+
+    function updateElementDOM(id) {
+        const data = state.elements[id];
+        const dom = el('el-' + id);
+        if (!dom) return;
+
+        dom.style.left = data.x + 'px';
+        dom.style.top = data.y + 'px';
+
+        if (data.type === 'container') {
+            dom.style.width = data.width + 'px';
+            dom.style.height = data.height + 'px';
+            dom.style.background = data.bgColor;
+            dom.style.borderRadius = data.borderRadius + 'px';
+            dom.style.padding = data.padding + 'px';
+            dom.style.boxShadow = data.shadow
+                ? '0 10px 25px -5px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.04)'
+                : 'none';
+            dom.style.border = '1px solid #f1f5f9';
+            dom.innerHTML = '';
+        } else if (data.type === 'text') {
+            dom.style.color = data.color;
+            dom.style.fontSize = data.fontSize + 'px';
+            dom.style.fontWeight = data.fontWeight;
+            dom.style.width = data.width + 'px';
+            dom.style.lineHeight = '1.4';
+            dom.style.fontFamily = "'Inter', sans-serif";
+            dom.textContent = data.text;
+        } else if (data.type === 'button') {
+            dom.style.width = data.width + 'px';
+            dom.style.height = data.height + 'px';
+            dom.style.background = data.bgColor;
+            dom.style.color = data.color;
+            dom.style.fontSize = data.fontSize + 'px';
+            dom.style.fontWeight = data.fontWeight;
+            dom.style.borderRadius = data.borderRadius + 'px';
+            dom.style.display = 'flex';
+            dom.style.alignItems = 'center';
+            dom.style.justifyContent = 'center';
+            dom.style.border = 'none';
+            dom.style.cursor = 'move';
+            dom.style.fontFamily = "'Inter', sans-serif";
+            dom.textContent = data.text;
+        }
+    }
+
+    // ========================================================================
+    //  拖拽逻辑
+    // ========================================================================
+    function makeDraggable(domEl, elementId) {
+        let isDragging = false, hasMoved = false;
+        let startX, startY, startLeft, startTop;
+
+        domEl.addEventListener('mousedown', (e) => {
+            if (state.commentMode) return;
+            e.stopPropagation();
+            selectElement(elementId);
+
+            isDragging = true;
+            hasMoved = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            startLeft = state.elements[elementId].x;
+            startTop = state.elements[elementId].y;
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        function onMove(e) {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+
+            const canvas = el('canvas');
+            const rect = canvas.getBoundingClientRect();
+            const data = state.elements[elementId];
+
+            let newX = startLeft + dx;
+            let newY = startTop + dy;
+            newX = Math.max(0, Math.min(newX, rect.width - data.width));
+            newY = Math.max(0, Math.min(newY, rect.height - data.height));
+
+            data.x = newX;
+            data.y = newY;
+            domEl.style.left = newX + 'px';
+            domEl.style.top = newY + 'px';
+
+            // 实时更新属性面板中的位置值
+            const xInput = el('prop-x');
+            const yInput = el('prop-y');
+            if (xInput) xInput.value = Math.round(newX);
+            if (yInput) yInput.value = Math.round(newY);
+        }
+
+        function onUp() {
+            isDragging = false;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            if (hasMoved) renderCodePreview();
+        }
+    }
+
+    // ========================================================================
+    //  选中元素
+    // ========================================================================
+    function selectElement(id) {
+        state.selectedId = id;
+        $$('.canvas-element').forEach(el => el.classList.remove('selected'));
+        const dom = el('el-' + id);
+        if (dom) dom.classList.add('selected');
+        renderLayerTree();
+        renderPropertyPanel();
+        renderCodePreview();
+    }
+
+    // 画布空白处点击取消选中
+    el('canvas').addEventListener('mousedown', (e) => {
+        if (state.commentMode) {
+            // 批注模式下点击画布创建批注
+            if (e.target.id === 'canvas' || e.target.id === 'canvasElements') {
+                const rect = el('canvas').getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                showAnnotationInput(x, y);
+            }
+            return;
+        }
+        if (e.target.id === 'canvas' || e.target.id === 'canvasElements') {
+            $$('.canvas-element').forEach(el => el.classList.remove('selected'));
+            state.selectedId = null;
+            renderLayerTree();
+            renderPropertyPanel();
+            renderCodePreview();
+        }
+        // 关闭批注详情卡片
+        if (!e.target.closest('.annotation-marker') && !e.target.closest('.annotation-card')) {
+            closeAnnotationCard();
+        }
+    });
+
+    // ========================================================================
+    //  图层树
+    // ========================================================================
+    function renderLayerTree() {
+        const tree = el('layerTree');
+        const icons = {
+            container: '<rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>',
+            text: '<path d="M4 7V4h16v3M9 20h6M12 4v16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+            button: '<rect x="2" y="7" width="20" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>'
+        };
+
+        let html = '';
+        state.elementOrder.forEach((id, idx) => {
+            const data = state.elements[id];
+            const indent = idx === 0 ? '' : 'ml-4';
+            const active = state.selectedId === id ? 'active' : '';
+            html += `
+                <div class="layer-item ${active} flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-slate-50 transition-colors ${indent}" onclick="selectElement('${id}')">
+                    <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24">${icons[data.type]}</svg>
+                    <span class="text-xs text-slate-700 truncate">${data.name}</span>
+                    ${idx === 0 ? '<svg class="w-3 h-3 text-slate-300 ml-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' : ''}
+                </div>
+            `;
+        });
+        tree.innerHTML = html;
+    }
+
+    // ========================================================================
+    //  属性面板
+    // ========================================================================
+    function renderPropertyPanel() {
+        const panel = el('propertyPanel');
+        const data = state.elements[state.selectedId];
+
+        if (!data) {
+            panel.innerHTML = `
+                <div class="flex flex-col items-center justify-center h-full text-center py-8">
+                    <svg class="w-10 h-10 text-slate-200 mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <path d="M8 12h8M12 8v8" stroke-linecap="round"/>
+                    </svg>
+                    <p class="text-xs text-slate-400">点击画布元素查看属性</p>
+                </div>
+            `;
+            el('selectedElementName').textContent = '—';
+            return;
+        }
+
+        el('selectedElementName').textContent = data.name;
+
+        let html = '';
+
+        // 通用：位置
+        html += sectionHTML('位置', `
+            ${numberInputHTML('X', 'x', data.x)}
+            ${numberInputHTML('Y', 'y', data.y)}
+        `);
+
+        if (data.type === 'container') {
+            html += sectionHTML('尺寸', `
+                ${numberInputHTML('宽', 'width', data.width)}
+                ${numberInputHTML('高', 'height', data.height)}
+                ${numberInputHTML('内边距', 'padding', data.padding)}
+            `);
+            html += sectionHTML('样式', `
+                ${colorInputHTML('背景色', 'bgColor', data.bgColor)}
+                ${numberInputHTML('圆角', 'borderRadius', data.borderRadius)}
+                <div class="flex items-center justify-between mt-2">
+                    <label class="text-xs text-slate-500 font-medium">阴影</label>
+                    <button onclick="toggleShadow()" class="relative w-9 h-5 rounded-full transition-colors ${data.shadow ? 'bg-indigo-600' : 'bg-slate-300'}">
+                        <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${data.shadow ? 'translate-x-4' : ''}"></span>
+                    </button>
+                </div>
+            `);
+        } else if (data.type === 'text') {
+            html += sectionHTML('内容', `
+                <textarea rows="2" class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-2 resize-none prop-input" onchange="updateProp('text', this.value)">${data.text}</textarea>
+            `);
+            html += sectionHTML('排版', `
+                ${colorInputHTML('文字颜色', 'color', data.color)}
+                <div class="grid grid-cols-2 gap-2 mt-2">
+                    <div>
+                        <label class="text-[10px] text-slate-400 font-medium uppercase">字号</label>
+                        <div class="flex items-center gap-1 mt-0.5">
+                            <input type="number" value="${data.fontSize}" class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 prop-input" onchange="updateProp('fontSize', parseInt(this.value))">
+                            <span class="text-[10px] text-slate-400">px</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-400 font-medium uppercase">字重</label>
+                        <select class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 prop-input mt-0.5" onchange="updateProp('fontWeight', this.value)">
+                            ${['300','400','500','600','700','800','900'].map(w => `<option value="${w}" ${data.fontWeight===w?'selected':''}>${w}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                ${numberInputHTML('宽度', 'width', data.width)}
+            `);
+        } else if (data.type === 'button') {
+            html += sectionHTML('内容', `
+                <input type="text" value="${data.text}" class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-2 prop-input" onchange="updateProp('text', this.value)">
+            `);
+            html += sectionHTML('尺寸', `
+                ${numberInputHTML('宽', 'width', data.width)}
+                ${numberInputHTML('高', 'height', data.height)}
+                ${numberInputHTML('圆角', 'borderRadius', data.borderRadius)}
+            `);
+            html += sectionHTML('样式', `
+                ${colorInputHTML('背景色', 'bgColor', data.bgColor)}
+                ${colorInputHTML('文字颜色', 'color', data.color)}
+                <div class="grid grid-cols-2 gap-2 mt-2">
+                    <div>
+                        <label class="text-[10px] text-slate-400 font-medium uppercase">字号</label>
+                        <div class="flex items-center gap-1 mt-0.5">
+                            <input type="number" value="${data.fontSize}" class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 prop-input" onchange="updateProp('fontSize', parseInt(this.value))">
+                            <span class="text-[10px] text-slate-400">px</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-400 font-medium uppercase">字重</label>
+                        <select class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 prop-input mt-0.5" onchange="updateProp('fontWeight', this.value)">
+                            ${['400','500','600','700','800'].map(w => `<option value="${w}" ${data.fontWeight===w?'selected':''}>${w}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+            `);
+        }
+
+        panel.innerHTML = html;
+    }
+
+    function sectionHTML(title, content) {
+        return `
+            <div class="mb-4">
+                <h4 class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">${title}</h4>
+                ${content}
+            </div>
+        `;
+    }
+
+    function numberInputHTML(label, prop, value) {
+        return `
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+                <label class="text-xs text-slate-500 font-medium w-16 shrink-0">${label}</label>
+                <div class="flex items-center gap-1 flex-1">
+                    <input id="prop-${prop}" type="number" value="${Math.round(value)}" class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 prop-input" onchange="updateProp('${prop}', parseInt(this.value) || 0)">
+                    ${prop === 'fontSize' || prop === 'borderRadius' ? '<span class="text-[10px] text-slate-400">px</span>' : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    function colorInputHTML(label, prop, value) {
+        const presets = ['#6366f1','#ef4444','#f59e0b','#22c55e','#3b82f6','#ec4899','#1e293b','#64748b','#ffffff'];
+        return `
+            <div class="mb-2">
+                <label class="text-xs text-slate-500 font-medium block mb-1.5">${label}</label>
+                <div class="flex items-center gap-2">
+                    <div class="relative">
+                        <input type="color" value="${value}" class="w-9 h-9 rounded-lg border-2 border-slate-200 cursor-pointer" onchange="updateProp('${prop}', this.value)">
+                    </div>
+                    <input type="text" value="${value}" class="flex-1 text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 prop-input font-mono" onchange="updateProp('${prop}', this.value)">
+                </div>
+                <div class="flex gap-1.5 mt-1.5 flex-wrap">
+                    ${presets.map(c => `<div class="color-swatch ${value===c?'active':''}" style="background:${c}" onclick="updateProp('${prop}', '${c}'); renderPropertyPanel();"></div>`).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    function updateProp(prop, value) {
+        if (!state.selectedId) return;
+        state.elements[state.selectedId][prop] = value;
+        updateElementDOM(state.selectedId);
+        renderPropertyPanel();
+        renderCodePreview();
+    }
+
+    function toggleShadow() {
+        const data = state.elements[state.selectedId];
+        data.shadow = !data.shadow;
+        updateElementDOM(state.selectedId);
+        renderPropertyPanel();
+        renderCodePreview();
+    }
+
+    // ========================================================================
+    //  实时代码生成
+    // ========================================================================
+    function renderCodePreview() {
+        const code = generateCode();
+        el('codePreview').innerHTML = syntaxHighlight(code);
+    }
+
+    function generateCode() {
+        const card = state.elements.heroCard;
+        const title = state.elements.title;
+        const sub = state.elements.subtitle;
+        const btn = state.elements.ctaButton;
+
+        let shadow = card.shadow
+            ? '  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.04);\n'
+            : '';
+
+        return `<!-- Hero 卡片 -->
+<div style="
+  background: ${card.bgColor};
+  width: ${card.width}px;
+  height: ${card.height}px;
+  border-radius: ${card.borderRadius}px;
+  padding: ${card.padding}px;
+${shadow}">
+  <!-- 主标题 -->
+  <${title.tag} style="
+    color: ${title.color};
+    font-size: ${title.fontSize}px;
+    font-weight: ${title.fontWeight};
+    line-height: 1.4;
+  ">${title.text}</${title.tag}>
+
+  <!-- 副标题 -->
+  <${sub.tag} style="
+    color: ${sub.color};
+    font-size: ${sub.fontSize}px;
+    font-weight: ${sub.fontWeight};
+    line-height: 1.5;
+  ">${sub.text}</${sub.tag}>
+
+  <!-- CTA 按钮 -->
+  <${btn.tag} style="
+    background: ${btn.bgColor};
+    color: ${btn.color};
+    font-size: ${btn.fontSize}px;
+    font-weight: ${btn.fontWeight};
+    border-radius: ${btn.borderRadius}px;
+    width: ${btn.width}px;
+    height: ${btn.height}px;
+    border: none;
+    cursor: pointer;
+  ">${btn.text}</${btn.tag}>
+</div>`;
+    }
+
+    function syntaxHighlight(code) {
+        return code
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/(&lt;!--.*?--&gt;)/g, '<span class="code-comment">$1</span>')
+            .replace(/(&lt;\/?)([\w-]+)/g, '$1<span class="code-tag">$2</span>')
+            .replace(/([\w-]+):/g, '<span class="code-attr">$1</span>:')
+            .replace(/:\s*([^;]+);/g, ': <span class="code-value">$1</span>;')
+            .replace(/(&gt;)([^&<]+)(&lt;)/g, '$1<span class="code-text">$2</span>$3');
+    }
+
+    // 复制代码
+    el('copyCodeBtn').addEventListener('click', () => {
+        const code = generateCode();
+        navigator.clipboard.writeText(code).then(() => {
+            showToast('代码已复制到剪贴板', 'success');
+        }).catch(() => {
+            showToast('复制失败，请手动选择', 'error');
+        });
+    });
+
+    // ========================================================================
+    //  AI 改稿
+    // ========================================================================
+    function processAICommand(text) {
+        const cmd = text.toLowerCase();
+        const actions = [];
+
+        // 颜色变化
+        if (cmd.includes('红') || cmd.includes('red')) {
+            state.elements.ctaButton.bgColor = '#ef4444';
+            actions.push('按钮背景色 → #ef4444 (红色)');
+        }
+        if (cmd.includes('蓝') || cmd.includes('blue')) {
+            state.elements.ctaButton.bgColor = '#3b82f6';
+            actions.push('按钮背景色 → #3b82f6 (蓝色)');
+        }
+        if (cmd.includes('绿') || cmd.includes('green')) {
+            state.elements.ctaButton.bgColor = '#22c55e';
+            actions.push('按钮背景色 → #22c55e (绿色)');
+        }
+        if (cmd.includes('紫') || cmd.includes('indigo') || cmd.includes('purple')) {
+            state.elements.ctaButton.bgColor = '#6366f1';
+            actions.push('按钮背景色 → #6366f1 (紫色)');
+        }
+        if (cmd.includes('橙') || cmd.includes('orange')) {
+            state.elements.ctaButton.bgColor = '#f59e0b';
+            actions.push('按钮背景色 → #f59e0b (橙色)');
+        }
+        if (cmd.includes('粉') || cmd.includes('pink')) {
+            state.elements.ctaButton.bgColor = '#ec4899';
+            actions.push('按钮背景色 → #ec4899 (粉色)');
+        }
+
+        // 标题字号
+        if ((cmd.includes('标题') || cmd.includes('title')) && (cmd.includes('大') || cmd.includes('big') || cmd.includes('large'))) {
+            state.elements.title.fontSize = Math.min(72, state.elements.title.fontSize + 4);
+            actions.push(`标题字号 → ${state.elements.title.fontSize}px`);
+        }
+        if ((cmd.includes('标题') || cmd.includes('title')) && (cmd.includes('小') || cmd.includes('small'))) {
+            state.elements.title.fontSize = Math.max(12, state.elements.title.fontSize - 4);
+            actions.push(`标题字号 → ${state.elements.title.fontSize}px`);
+        }
+
+        // 按钮字号
+        if ((cmd.includes('按钮') || cmd.includes('button')) && (cmd.includes('大') || cmd.includes('big'))) {
+            state.elements.ctaButton.fontSize = Math.min(24, state.elements.ctaButton.fontSize + 2);
+            actions.push(`按钮字号 → ${state.elements.ctaButton.fontSize}px`);
+        }
+
+        // 圆角
+        if (cmd.includes('圆') || cmd.includes('round')) {
+            state.elements.ctaButton.borderRadius = Math.min(40, state.elements.ctaButton.borderRadius + 6);
+            state.elements.heroCard.borderRadius = Math.min(48, state.elements.heroCard.borderRadius + 4);
+            actions.push(`按钮圆角 → ${state.elements.ctaButton.borderRadius}px，卡片圆角 → ${state.elements.heroCard.borderRadius}px`);
+        }
+        if (cmd.includes('方') || cmd.includes('sharp') || cmd.includes('直角')) {
+            state.elements.ctaButton.borderRadius = Math.max(0, state.elements.ctaButton.borderRadius - 6);
+            actions.push(`按钮圆角 → ${state.elements.ctaButton.borderRadius}px`);
+        }
+
+        // 文字内容
+        const textMatch = text.match(/[「"'「](.*?)[」"'」]/);
+        if (textMatch) {
+            if (cmd.includes('按钮') || cmd.includes('button')) {
+                state.elements.ctaButton.text = textMatch[1];
+                actions.push(`按钮文字 → "${textMatch[1]}"`);
+            } else if (cmd.includes('标题') || cmd.includes('title')) {
+                state.elements.title.text = textMatch[1];
+                actions.push(`标题文字 → "${textMatch[1]}"`);
+            } else if (cmd.includes('副标题') || cmd.includes('subtitle')) {
+                state.elements.subtitle.text = textMatch[1];
+                actions.push(`副标题文字 → "${textMatch[1]}"`);
+            }
+        }
+
+        // 宽度
+        if (cmd.includes('宽') || cmd.includes('wide')) {
+            state.elements.heroCard.width += 40;
+            actions.push(`卡片宽度 → ${state.elements.heroCard.width}px`);
+        }
+        if (cmd.includes('窄') || cmd.includes('narrow')) {
+            state.elements.heroCard.width = Math.max(200, state.elements.heroCard.width - 40);
+            actions.push(`卡片宽度 → ${state.elements.heroCard.width}px`);
+        }
+
+        // 阴影
+        if (cmd.includes('阴影') || cmd.includes('shadow')) {
+            if (cmd.includes('去') || cmd.includes('无') || cmd.includes('remove') || cmd.includes('off')) {
+                state.elements.heroCard.shadow = false;
+                actions.push('卡片阴影 → 已移除');
+            } else {
+                state.elements.heroCard.shadow = true;
+                actions.push('卡片阴影 → 已添加');
+            }
+        }
+
+        return actions;
+    }
+
+    el('aiExecute').addEventListener('click', executeAI);
+    el('aiInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            executeAI();
+        }
+    });
+
+    function executeAI() {
+        const input = el('aiInput');
+        const text = input.value.trim();
+        if (!text) {
+            showToast('请输入 AI 指令', 'info');
+            return;
+        }
+
+        // 显示 AI 思考动画
+        el('aiThinking').classList.remove('hidden');
+        el('aiThinking').classList.add('flex');
+        el('aiResult').classList.add('hidden');
+        input.value = '';
+
+        setTimeout(() => {
+            el('aiThinking').classList.add('hidden');
+            el('aiThinking').classList.remove('flex');
+
+            const actions = processAICommand(text);
+
+            if (actions.length === 0) {
+                const result = el('aiResult');
+                result.className = 'mt-2 text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-2 slide-in';
+                result.innerHTML = '未能识别该指令。试试：把按钮改成红色、标题加大、圆角再大一些';
+                result.classList.remove('hidden');
+            } else {
+                const result = el('aiResult');
+                result.className = 'mt-2 text-xs text-green-600 bg-green-50 border border-green-100 rounded-lg p-2 slide-in';
+                result.innerHTML = `<div class="font-semibold mb-1">已执行 ${actions.length} 项修改：</div>${actions.map(a => `<div class="flex items-center gap-1"><span class="text-green-400">✓</span> ${a}</div>`).join('')}`;
+                result.classList.remove('hidden');
+
+                // 更新所有元素
+                state.elementOrder.forEach(id => updateElementDOM(id));
+                renderPropertyPanel();
+                renderCodePreview();
+            }
+
+            setTimeout(() => el('aiResult').classList.add('hidden'), 5000);
+        }, 800 + Math.random() * 600);
+    }
+
+    // AI 快捷建议
+    $$('.ai-suggestion').forEach(btn => {
+        btn.addEventListener('click', () => {
+            el('aiInput').value = btn.dataset.cmd;
+            el('aiInput').focus();
+        });
+    });
+
+    // ========================================================================
+    //  批注系统
+    // ========================================================================
+    function renderAnnotations() {
+        renderAnnotationMarkers();
+        renderAnnotationList();
+        el('annotationCount').textContent = state.annotations.filter(a => !a.resolved).length;
+    }
+
+    function renderAnnotationMarkers() {
+        const container = el('annotationMarkers');
+        container.innerHTML = '';
+
+        state.annotations.forEach(ann => {
+            const marker = document.createElement('div');
+            marker.className = `annotation-marker ${ann.resolved ? 'resolved' : ''} ${!ann.resolved ? 'pulse' : ''}`;
+            marker.style.left = ann.x + 'px';
+            marker.style.top = ann.y + 'px';
+            marker.innerHTML = `
+                <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold shadow-md border-2 border-white" style="background:${ann.color}">
+                    ${ann.avatar}
+                </div>
+                ${ann.resolved ? '<div class="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white flex items-center justify-center"><svg class="w-2 h-2 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"/></svg></div>' : ''}
+            `;
+            marker.onclick = (e) => {
+                e.stopPropagation();
+                showAnnotationCard(ann.id);
+            };
+            container.appendChild(marker);
+        });
+    }
+
+    function renderAnnotationList() {
+        const list = el('annotationList');
+        if (state.annotations.length === 0) {
+            list.innerHTML = `
+                <div class="flex flex-col items-center justify-center py-6 text-center">
+                    <svg class="w-8 h-8 text-slate-200 mb-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <p class="text-[11px] text-slate-400">暂无批注</p>
+                </div>
+            `;
+            return;
+        }
+
+        list.innerHTML = state.annotations.map(ann => `
+            <div class="bg-slate-50 hover:bg-slate-100 border border-slate-100 rounded-lg p-2.5 cursor-pointer transition-colors" onclick="showAnnotationCard('${ann.id}')">
+                <div class="flex items-center gap-2 mb-1">
+                    <div class="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0" style="background:${ann.color}">${ann.avatar}</div>
+                    <span class="text-xs font-semibold text-slate-700">${ann.author}</span>
+                    <span class="text-[10px] text-slate-400">${ann.role}</span>
+                    <span class="ml-auto text-[10px] text-slate-400">${ann.time}</span>
+                </div>
+                <p class="text-[11px] text-slate-600 leading-relaxed line-clamp-2">${ann.content}</p>
+                <div class="mt-1.5">
+                    ${ann.resolved
+                        ? '<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-semibold bg-green-100 text-green-700 rounded">✓ 已解决</span>'
+                        : '<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-semibold bg-orange-100 text-orange-700 rounded">● 未解决</span>'
+                    }
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function showAnnotationCard(annId) {
+        const ann = state.annotations.find(a => a.id === annId);
+        if (!ann) return;
+
+        state.activeAnnotationId = annId;
+        const container = el('annotationCardContainer');
+        container.innerHTML = `
+            <div class="annotation-card slide-in" style="left:${ann.x + 30}px; top:${ann.y - 10}px;">
+                <div class="bg-white rounded-xl shadow-xl border border-slate-200 w-64 overflow-hidden">
+                    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100" style="background:${ann.color}08">
+                        <div class="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold" style="background:${ann.color}">${ann.avatar}</div>
+                        <div class="flex-1">
+                            <div class="text-xs font-semibold text-slate-700">${ann.author}</div>
+                            <div class="text-[10px] text-slate-400">${ann.role} · ${ann.time}</div>
+                        </div>
+                        <button onclick="closeAnnotationCard()" class="text-slate-300 hover:text-slate-600 transition-colors p-0.5">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                    </div>
+                    <div class="px-3 py-3">
+                        <p class="text-xs text-slate-700 leading-relaxed">${ann.content}</p>
+                        <div class="flex items-center gap-2 mt-3">
+                            <button onclick="toggleAnnotationResolve('${ann.id}')" class="flex-1 px-2 py-1.5 text-[11px] font-medium rounded-lg transition-colors ${ann.resolved ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'bg-green-50 text-green-600 hover:bg-green-100'}">
+                                ${ann.resolved ? '↩ 重新打开' : '✓ 标记为已解决'}
+                            </button>
+                            <button onclick="deleteAnnotation('${ann.id}')" class="px-2 py-1.5 text-[11px] font-medium bg-red-50 text-red-500 rounded-lg hover:bg-red-100 transition-colors">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    function closeAnnotationCard() {
+        state.activeAnnotationId = null;
+        el('annotationCardContainer').innerHTML = '';
+    }
+
+    function toggleAnnotationResolve(annId) {
+        const ann = state.annotations.find(a => a.id === annId);
+        if (ann) {
+            ann.resolved = !ann.resolved;
+            renderAnnotations();
+            showToast(ann.resolved ? '批注已标记为已解决' : '批注已重新打开', 'success');
+            if (state.activeAnnotationId === annId) showAnnotationCard(annId);
+        }
+    }
+
+    function deleteAnnotation(annId) {
+        state.annotations = state.annotations.filter(a => a.id !== annId);
+        closeAnnotationCard();
+        renderAnnotations();
+        showToast('批注已删除', 'info');
+    }
+
+    // 创建新批注的输入框
+    function showAnnotationInput(x, y) {
+        const container = el('annotationCardContainer');
+        container.innerHTML = `
+            <div class="annotation-card slide-in" style="left:${x + 20}px; top:${y - 10}px;">
+                <div class="bg-white rounded-xl shadow-xl border border-slate-200 w-64 overflow-hidden">
+                    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100 bg-indigo-50">
+                        <div class="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold" style="background:#6366f1">你</div>
+                        <span class="text-xs font-semibold text-slate-700">新建批注</span>
+                        <button onclick="closeAnnotationCard()" class="ml-auto text-slate-300 hover:text-slate-600 transition-colors p-0.5">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                    </div>
+                    <div class="px-3 py-3">
+                        <textarea id="newAnnotationInput" rows="3" placeholder="输入批注内容..." class="w-full text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-2 resize-none prop-input placeholder:text-slate-400" autofocus></textarea>
+                        <div class="flex items-center justify-end gap-2 mt-2">
+                            <button onclick="closeAnnotationCard()" class="px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">取消</button>
+                            <button onclick="createAnnotation(${x}, ${y})" class="px-3 py-1 text-[11px] font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">发布</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        setTimeout(() => {
+            const input = el('newAnnotationInput');
+            if (input) input.focus();
+            if (input) input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    createAnnotation(x, y);
+                }
+            });
+        }, 50);
+    }
+
+    function createAnnotation(x, y) {
+        const input = el('newAnnotationInput');
+        if (!input || !input.value.trim()) {
+            closeAnnotationCard();
+            return;
+        }
+
+        const newAnn = {
+            id: 'a' + Date.now(),
+            author: '你',
+            role: '当前用户',
+            color: '#6366f1',
+            avatar: '你',
+            content: input.value.trim(),
+            time: '刚刚',
+            x: x,
+            y: y,
+            resolved: false
+        };
+        state.annotations.push(newAnn);
+        closeAnnotationCard();
+        renderAnnotations();
+        showToast('批注已发布', 'success');
+
+        // 退出批注模式
+        if (state.commentMode) toggleCommentMode(false);
+    }
+
+    // ========================================================================
+    //  批注模式（C 键）
+    // ========================================================================
+    function toggleCommentMode(force) {
+        state.commentMode = force !== undefined ? force : !state.commentMode;
+        const canvas = el('canvas');
+        const banner = el('commentModeBanner');
+        if (state.commentMode) {
+            canvas.classList.add('comment-mode');
+            banner.classList.remove('hidden');
+        } else {
+            canvas.classList.remove('comment-mode');
+            banner.classList.add('hidden');
+        }
+    }
+
+    document.addEventListener('keydown', (e) => {
+        // 不在输入框中
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+        if (e.key === 'c' || e.key === 'C') {
+            if (!state.cKeyPressed) {
+                state.cKeyPressed = true;
+                toggleCommentMode(true);
+            }
+        }
+        if (e.key === 'Escape') {
+            if (state.commentMode) toggleCommentMode(false);
+            closeAnnotationCard();
+        }
+    });
+
+    document.addEventListener('keyup', (e) => {
+        if (e.key === 'c' || e.key === 'C') {
+            state.cKeyPressed = false;
+        }
+    });
+
+    // ========================================================================
+    //  协作光标
+    // ========================================================================
+    function initCollabCursors() {
+        const container = el('collabCursors');
+        const remoteCollaborators = state.collaborators.filter(c => !c.isMe);
+
+        remoteCollaborators.forEach((c, i) => {
+            const cursor = document.createElement('div');
+            cursor.className = 'collab-cursor';
+            cursor.id = 'cursor-' + i;
+            cursor.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="${c.color}" style="filter: drop-shadow(0 1px 3px rgba(0,0,0,0.2));">
+                    <path d="M5.5 3.5L19 12l-6.5 1.5L10 19z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+                </svg>
+                <div class="cursor-label" style="background:${c.color}">${c.name}</div>
+            `;
+            const canvas = el('canvas');
+            const rect = canvas.getBoundingClientRect();
+            cursor.style.left = (100 + i * 200) + 'px';
+            cursor.style.top = (80 + i * 120) + 'px';
+            container.appendChild(cursor);
+        });
+
+        // 动画移动
+        setInterval(() => {
+            const canvas = el('canvas');
+            const rect = canvas.getBoundingClientRect();
+            remoteCollaborators.forEach((c, i) => {
+                const cursor = el('cursor-' + i);
+                if (cursor) {
+                    const x = 60 + Math.random() * (rect.width - 160);
+                    const y = 50 + Math.random() * (rect.height - 200);
+                    cursor.style.left = x + 'px';
+                    cursor.style.top = y + 'px';
+                }
+            });
+        }, 2800);
+    }
+
+    // ========================================================================
+    //  顶部协作者头像
+    // ========================================================================
+    function renderCollaboratorAvatars() {
+        const container = el('collaboratorAvatars');
+        container.innerHTML = state.collaborators.map(c => `
+            <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold border-2 border-white shadow-sm relative" style="background:${c.color}" title="${c.name}${c.isMe ? ' (你)' : ''}">
+                ${c.avatar}
+                ${c.isMe ? '' : '<span class="absolute bottom-0 right-0 w-2 h-2 bg-green-400 rounded-full border border-white"></span>'}
+            </div>
+        `).join('');
+    }
+
+    // ========================================================================
+    //  缩放
+    // ========================================================================
+    function zoomCanvas(delta) {
+        state.zoom = Math.max(0.5, Math.min(2, state.zoom + delta));
+        el('zoomLabel').textContent = Math.round(state.zoom * 100) + '%';
+        el('canvasElements').style.transform = `scale(${state.zoom})`;
+        el('canvasElements').style.transformOrigin = 'top left';
+    }
+
+    function resetZoom() {
+        state.zoom = 1;
+        el('zoomLabel').textContent = '100%';
+        el('canvasElements').style.transform = 'scale(1)';
+    }
+
+    // ========================================================================
+    //  初始化
+    // ========================================================================
+    function init() {
+        renderCollaboratorAvatars();
+        initCanvasElements();
+        renderLayerTree();
+        renderAnnotations();
+        initCollabCursors();
+        renderCodePreview();
+
+        // 欢迎提示
+        setTimeout(() => {
+            showToast('欢迎使用 CanvasCode — 试试拖拽画布元素或输入 AI 指令', 'info');
+        }, 500);
+    }
+
+    // 暴露给全局
+    window.selectElement = selectElement;
+    window.updateProp = updateProp;
+    window.renderPropertyPanel = renderPropertyPanel;
+    window.toggleShadow = toggleShadow;
+    window.showAnnotationCard = showAnnotationCard;
+    window.closeAnnotationCard = closeAnnotationCard;
+    window.toggleAnnotationResolve = toggleAnnotationResolve;
+    window.deleteAnnotation = deleteAnnotation;
+    window.createAnnotation = createAnnotation;
+    window.zoomCanvas = zoomCanvas;
+    window.resetZoom = resetZoom;
+
+    init();
+    </script>
+</body>
+</html>

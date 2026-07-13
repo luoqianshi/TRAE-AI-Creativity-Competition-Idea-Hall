@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MECHA BATTLE - 像素机甲对战</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#000;overflow:hidden;font-family:'VT323',monospace;color:#cfe}
+body{display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 30%,#0a1030 0%,#05060f 60%,#000 100%)}
+#wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+#stage{position:relative;width:min(100vw,177.78vh);aspect-ratio:16/9;image-rendering:pixelated;image-rendering:crisp-edges;box-shadow:0 0 0 3px #1a1f3a,0 0 40px #00386066,0 0 120px #000a inset;background:#05060f}
+canvas#game{width:100%;height:100%;display:block;image-rendering:pixelated}
+#crt{pointer-events:none;position:absolute;inset:0;z-index:5;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0px,rgba(0,0,0,0) 2px,rgba(0,0,0,0.16) 3px,rgba(0,0,0,0.16) 4px),radial-gradient(ellipse at center,rgba(0,0,0,0) 55%,rgba(0,0,0,0.55) 100%);mix-blend-mode:multiply}
+#vignette{pointer-events:none;position:absolute;inset:0;z-index:6;box-shadow:inset 0 0 120px 20px rgba(0,0,0,0.7)}
+.hint{position:fixed;bottom:6px;left:50%;transform:translateX(-50%);z-index:20;font-family:'VT323',monospace;font-size:15px;color:#5e7;opacity:.5;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="stage">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="crt"></div><div id="vignette"></div>
+</div></div>
+<div class="hint">点击画面取得焦点 | 双人本地对战 | P1 红方 / P2 青方</div>
+<script>
+// ============================================================
+//  MECHA BATTLE - 像素机甲对战 (单文件 Demo)
+// ============================================================
+
+var W = 960, H = 540;
+var GROUND_Y = 472;
+var GRAVITY = 0.85;
+var MOVE_SP = 3.1;
+var JUMP_V = -15.2;
+var ROUND_TIME = 60;
+var WALL_PAD = 46;
+var MAX_HP = 100;
+var SPECIAL_COST = 100;
+
+var canvas = document.getElementById('game');
+var ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// 调色板
+var PAL = [
+  { main:'#ff3b3b', dark:'#7d1414', mid:'#c62424', light:'#ff8a8a', joint:'#ffd23b', glow:'#fff7c2', metal:'#9aa3b8', metalD:'#4a5168' },
+  { main:'#3bd8ff', dark:'#0d5b78', mid:'#1aa9d6', light:'#a9f3ff', joint:'#ffd23b', glow:'#fff7c2', metal:'#9aa3b8', metalD:'#4a5168' }
+];
+
+// 平衡常量
+var DMG = { light:6, heavy:14, special:30 };
+var ENERGY = { lightHit:5, heavyHit:8, takeHit:3 };
+var TL = { light:24, heavy:36, hit:18, down:60, special:46, block:0 };
+
+// 输入
+var KEYS = {
+  p1:{ left:'KeyA', right:'KeyD', up:'KeyW', light:'KeyF', heavy:'KeyG', block:'KeyS', special:'KeyR' },
+  p2:{ left:'ArrowLeft', right:'ArrowRight', up:'ArrowUp', light:'KeyK', heavy:'KeyL', block:'ArrowDown', special:'KeyP' }
+};
+var keys = {};
+
+addEventListener('keydown', function(e) {
+  keys[e.code] = true;
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'Space') e.preventDefault();
+  AudioCtx.resume();
+  if (game.phase === 'menu' && (e.code === 'Enter' || e.code === 'Space')) startMatch();
+  else if (game.phase === 'matchEnd' && (e.code === 'Enter' || e.code === 'KeyR')) game.phase = 'menu';
+}, false);
+
+addEventListener('keyup', function(e) { keys[e.code] = false; });
+
+canvas.addEventListener('click', function() {
+  AudioCtx.resume();
+  if (game.phase === 'menu') startMatch();
+  else if (game.phase === 'matchEnd') game.phase = 'menu';
+});
+
+// 音效
+var AudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function beep(freq, dur, type, vol) {
+  if (AudioCtx.state !== 'running') return;
+  type = type || 'square';
+  vol = vol || 0.06;
+  var o = AudioCtx.createOscillator();
+  var g = AudioCtx.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  g.gain.value = vol;
+  g.gain.exponentialRampToValueAtTime(0.0001, AudioCtx.currentTime + dur);
+  o.connect(g);
+  g.connect(AudioCtx.destination);
+  o.start();
+  o.stop(AudioCtx.currentTime + dur);
+}
+
+function sfx(name) {
+  switch (name) {
+    case 'light': beep(520, 0.06, 'square', 0.05); break;
+    case 'heavy': beep(180, 0.18, 'sawtooth', 0.07); break;
+    case 'hit': beep(140, 0.12, 'square', 0.08); beep(80, 0.1, 'sawtooth', 0.05); break;
+    case 'block': beep(300, 0.05, 'square', 0.04); break;
+    case 'special': beep(120, 0.4, 'sawtooth', 0.09); beep(600, 0.4, 'square', 0.05); break;
+    case 'ko': beep(90, 0.6, 'sawtooth', 0.12); break;
+    case 'jump': beep(420, 0.08, 'square', 0.04); break;
+    case 'round': beep(660, 0.12, 'square', 0.06); break;
+    case 'fight': beep(880, 0.18, 'square', 0.07); break;
+  }
+}
+
+// 实体
+function makeFighter(id, x, facing) {
+  return { id:id, x:x, y:GROUND_Y, vx:0, vy:0, hp:MAX_HP, energy:0, facing:facing,
+    state:'idle', stateTimer:0, animTime:0, walkPhase:0, invuln:0,
+    hasHit:false, blockHeld:false };
+}
+
+var f1 = null, f2 = null;
+var projectiles = [], effects = [], particles = [];
+var shake = 0;
+
+var game = {
+  phase:'menu', scores:[0,0], round:1, timer:ROUND_TIME, sub:0, winner:null,
+  announce:'', announceT:0, flashT:0, frame:0
+};
+
+function startMatch() {
+  game.scores = [0, 0];
+  game.round = 1;
+  startRound();
+}
+
+function startRound() {
+  f1 = makeFighter(0, W * 0.30, 1);
+  f2 = makeFighter(1, W * 0.70, -1);
+  projectiles = [];
+  effects = [];
+  particles = [];
+  shake = 0;
+  game.timer = ROUND_TIME;
+  game.winner = null;
+  game.phase = 'roundIntro';
+  game.sub = 0;
+  game.announce = 'READY';
+  sfx('round');
+}
+
+function startFight() {
+  game.phase = 'fighting';
+  game.announce = 'FIGHT!';
+  game.announceT = 70;
+  sfx('fight');
+}
+
+// ============================================================
+//  机甲像素绘制
+// ============================================================
+function px(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(x | 0, y | 0, w | 0, h | 0); }
+
+function drawMecha(f) {
+  var p = PAL[f.id];
+  ctx.save();
+  ctx.translate(f.x | 0, f.y | 0);
+  if (f.facing === -1) ctx.scale(-1, 1);
+
+  var t = f.animTime;
+  var bodyY = 0, legSwing = 0, armSwing = 0, crouch = 0, lean = 0;
+  var armForward = 0, armUp = 0, lying = false, shield = false, glowCore = false;
+
+  switch (f.state) {
+    case 'idle':
+      bodyY = Math.sin(t * 0.06) * 1.5;
+      armSwing = Math.sin(t * 0.06) * 1.2;
+      glowCore = (t % 60 < 30);
+      break;
+    case 'walk':
+      legSwing = Math.sin(t * 0.32) * 7;
+      armSwing = -Math.sin(t * 0.32) * 5;
+      break;
+    case 'jump':
+      armUp = 1; crouch = 2; legSwing = 3; bodyY = -1;
+      break;
+    case 'light':
+      lean = -2;
+      (function() {
+        var k = f.stateTimer;
+        if (k < 6) { armForward = 4; lean = 0; }
+        else if (k < 12) { armForward = 20; glowCore = true; }
+        else { armForward = 8; }
+      })();
+      break;
+    case 'heavy':
+      (function() {
+        var k = f.stateTimer;
+        if (k < 10) { armForward = -6; lean = -2; }
+        else if (k < 14) { armForward = 14; glowCore = true; }
+        else { armForward = 4; }
+      })();
+      break;
+    case 'special':
+      (function() {
+        var k = f.stateTimer;
+        if (k < 8) { armForward = -4; crouch = 2; }
+        else if (k < 14) { armForward = 18; glowCore = true; }
+        else { armForward = 10; }
+      })();
+      break;
+    case 'block':
+      shield = true; crouch = 3; bodyY = 1;
+      break;
+    case 'hit':
+      lean = 5; bodyY = 1; armSwing = 4;
+      break;
+    case 'down':
+      lying = true;
+      break;
+  }
+
+  if (lying) {
+    px(-22, -10, 44, 10, p.dark);
+    px(-20, -22, 40, 14, p.main);
+    px(-20, -26, 40, 4, p.dark);
+    px(-14, -20, 8, 8, p.joint);
+    px(-26, -18, 8, 8, p.main);
+    px(-28, -16, 3, 4, p.glow);
+    px(14, -24, 8, 16, p.dark);
+    px(20, -22, 6, 12, p.main);
+    px(-22, -18, 8, 6, p.main);
+    ctx.restore();
+    return;
+  }
+
+  // 腿
+  drawLeg(-1, -legSwing, p, crouch);
+  drawLeg(1, legSwing, p, crouch);
+  // 骨盆
+  px(-12, -46 - bodyY + crouch, 24, 7, p.dark);
+  px(-12, -46 - bodyY + crouch, 24, 2, p.metalD);
+  // 躯干
+  var ty = -66 - bodyY + crouch;
+  px(-15, ty, 30, 22, p.main);
+  px(-15, ty, 30, 4, p.dark);
+  px(3, ty, 12, 22, p.mid);
+  px(-15, ty + 18, 30, 4, p.dark);
+  // 胸核
+  var cy = -56 - bodyY + crouch;
+  px(-5, cy, 10, 10, p.dark);
+  if (glowCore) {
+    px(-4, cy + 1, 8, 8, p.joint);
+    px(-3, cy + 2, 6, 6, p.glow);
+  } else {
+    px(-4, cy + 1, 8, 8, p.joint);
+    px(-3, cy + 2, 6, 6, p.dark);
+  }
+  // 后臂
+  drawArm(-1, -armSwing, p, bodyY + crouch, armForward * 0.3, armUp);
+  // 头
+  var hy = -84 - bodyY + crouch + lean;
+  px(-4, -70 - bodyY + crouch, 8, 4, p.dark);
+  px(-11, hy, 22, 16, p.main);
+  px(-11, hy, 22, 4, p.dark);
+  px(-11, hy + 12, 22, 4, p.dark);
+  px(-9, hy + 5, 18, 5, '#0a0e16');
+  px(-7, hy + 6, 6, 3, p.glow);
+  px(1, hy + 6, 6, 3, p.glow);
+  px(0, hy - 6, 2, 6, p.joint);
+  px(0, hy - 9, 2, 3, p.glow);
+  // 前臂
+  drawArm(1, armSwing, p, bodyY + crouch, armForward, armUp);
+  // 轻攻击拳
+  if (f.state === 'light' && f.stateTimer >= 6 && f.stateTimer < 12) {
+    var fx = 18 + armForward;
+    px(fx, -52 - bodyY + crouch, 8, 8, p.metal);
+    px(fx + 1, -51 - bodyY + crouch, 6, 6, p.glow);
+  }
+  // 重攻击蓄力
+  if (f.state === 'heavy' && f.stateTimer >= 6 && f.stateTimer < 12) {
+    px(20 + armForward, -52 - bodyY + crouch, 6, 8, p.joint);
+    px(21 + armForward, -51 - bodyY + crouch, 4, 6, p.glow);
+  }
+  // 必杀蓄力光环
+  if (f.state === 'special' && f.stateTimer < 8) {
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = p.glow;
+    ctx.beginPath();
+    ctx.arc(0, -40 - bodyY + crouch, 30 + Math.sin(t * 0.6) * 4, 0, 7);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // 防御盾
+  if (shield) {
+    px(16, -66 - bodyY + crouch, 8, 30, p.metal);
+    px(16, -66 - bodyY + crouch, 8, 4, p.glow);
+    px(22, -64 - bodyY + crouch, 3, 26, p.metalD);
+    px(13, -66 - bodyY + crouch, 3, 30, p.glow);
+  }
+  ctx.restore();
+}
+
+function drawLeg(side, swing, p, crouch) {
+  var bx = side * 5 + swing;
+  px(bx - 4, -4, 10, 4, p.dark);
+  px(bx - 3, -4, 8, 2, p.metalD);
+  px(bx - 3, -24, 8, 20, p.mid);
+  px(bx - 4, -26, 10, 3, p.joint);
+  px(bx - 4, -46, 9, 20, p.dark);
+}
+
+function drawArm(side, swing, p, bodyY, forward, up) {
+  var sx = side * 15 + swing * 0.3;
+  var sy = -66 + bodyY;
+  px(sx - 4, sy, 8, 8, p.dark);
+  if (up) {
+    px(sx - 3, sy - 14, 7, 14, p.main);
+    px(sx - 4, sy - 20, 9, 6, p.joint);
+  } else {
+    px(sx - 3, sy + 6, 7, 14, p.main);
+    var fx = forward > 0 ? forward : 0;
+    var fy = forward > 0 ? -4 : 8;
+    px(sx - 3 + fx, sy + 16 + fy, 8, 7, p.joint);
+    px(sx - 2 + fx, sy + 17 + fy, 6, 5, p.metal);
+  }
+}
+
+// ============================================================
+//  背景
+// ============================================================
+function drawBackground() {
+  var g = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  g.addColorStop(0, '#0a0e27');
+  g.addColorStop(0.5, '#1a1240');
+  g.addColorStop(1, '#3a1a3a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, GROUND_Y);
+  // 星点
+  ctx.fillStyle = '#fff';
+  for (var i = 0; i < 60; i++) {
+    var sx = (i * 97 + 13) % W;
+    var sy = (i * 53 + 7) % (GROUND_Y - 80);
+    ctx.globalAlpha = 0.3 + 0.5 * Math.sin(i + game.frame * 0.02);
+    ctx.fillRect(sx, sy, 1, 1);
+  }
+  ctx.globalAlpha = 1;
+  // 月
+  ctx.fillStyle = '#ffe9a8';
+  ctx.beginPath(); ctx.arc(800, 90, 28, 0, 7); ctx.fill();
+  ctx.fillStyle = '#1a1240';
+  ctx.beginPath(); ctx.arc(812, 84, 26, 0, 7); ctx.fill();
+  // 山
+  drawMountains(330, '#1b1c3a', 0);
+  drawMountains(360, '#22204a', 0.4);
+  drawIndustry();
+  drawGround();
+}
+
+function drawMountains(baseY, color, off) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(0, baseY);
+  var pts = [0,120,200,300,420,540,660,780,900,960];
+  var mh = [60,120,80,140,90,150,100,130,80,70];
+  for (var i = 0; i < pts.length; i++) { ctx.lineTo(pts[i], baseY - mh[i] * (0.8 + off)); }
+  ctx.lineTo(W, baseY);
+  ctx.lineTo(0, baseY);
+  ctx.fill();
+}
+
+function drawIndustry() {
+  var chimneys = [[120,420],[150,420],[690,420],[760,420],[820,420]];
+  for (var ci = 0; ci < chimneys.length; ci++) {
+    var cx = chimneys[ci][0];
+    var b = chimneys[ci][1];
+    ctx.fillStyle = '#2a2d3a'; ctx.fillRect(cx, b - 120, 22, 120);
+    ctx.fillStyle = '#1a1d2a'; ctx.fillRect(cx, b - 120, 5, 120);
+    ctx.fillStyle = '#3a3d4a'; ctx.fillRect(cx, b - 128, 26, 8);
+    ctx.fillStyle = 'rgba(180,180,200,0.08)';
+    for (var s = 0; s < 3; s++) {
+      var sy = b - 130 - ((game.frame * 0.6 + s * 30) % 90);
+      var sr = 8 + s * 4;
+      ctx.beginPath(); ctx.arc(cx + 11 + (s - 1) * 4, sy, sr, 0, 7); ctx.fill();
+    }
+  }
+  ctx.fillStyle = '#3a3d4a';
+  ctx.fillRect(0, 400, 40, 8);
+  ctx.fillRect(W - 40, 400, 40, 8);
+  ctx.fillRect(60, 410, 8, 50);
+  ctx.fillRect(W - 68, 410, 8, 50);
+  ctx.fillStyle = '#ffd23b';
+  for (var wi = 0; wi < 12; wi++) {
+    var wx = 200 + wi * 52;
+    var wy = 300 + ((wi * 37) % 60);
+    if ((game.frame + wi * 7) % 180 < 140) ctx.fillRect(wx, wy, 3, 3);
+  }
+}
+
+function drawGround() {
+  ctx.fillStyle = '#15182a';
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+  ctx.fillStyle = '#3a4a6a'; ctx.fillRect(0, GROUND_Y, W, 3);
+  ctx.fillStyle = '#5a6a8a'; ctx.fillRect(0, GROUND_Y, W, 1);
+  ctx.strokeStyle = '#2a3450'; ctx.lineWidth = 1;
+  for (var gi = -6; gi <= 6; gi++) {
+    var gx = W / 2 + gi * 70;
+    ctx.beginPath(); ctx.moveTo(W / 2, GROUND_Y); ctx.lineTo(gx, H); ctx.stroke();
+  }
+  for (var gr = 1; gr <= 4; gr++) {
+    var gy = GROUND_Y + gr * gr * 4;
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+  }
+  ctx.fillStyle = '#ffa502';
+  for (var gx2 = 0; gx2 < W; gx2 += 48) {
+    if ((gx2 / 48) % 2 < 1) ctx.fillRect(gx2, GROUND_Y + 12, 24, 4);
+  }
+}
+
+// ============================================================
+//  HUD
+// ============================================================
+function drawHUD() {
+  ctx.fillStyle = 'rgba(5,8,20,0.55)'; ctx.fillRect(0, 0, W, 46);
+  ctx.fillStyle = '#3a4a6a'; ctx.fillRect(0, 46, W, 2);
+  drawPortrait(20, 8, 0);
+  drawPortrait(W - 52, 8, 1);
+  drawBar(80, 12, 360, 16, f1.hp / MAX_HP, '#ff4757', '#7d1414', PAL[0].light, false);
+  drawBar(W - 80 - 360, 12, 360, 16, f2.hp / MAX_HP, '#3bd8ff', '#0d5b78', PAL[1].light, true);
+  pixText('P1 RED', 80, 32, PAL[0].light, 1);
+  pixText('P2 CYAN', W - 80 - 50, 32, PAL[1].light, 1);
+  ctx.fillStyle = '#fff7c2'; ctx.font = '16px "Press Start 2P"';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText(String(game.timer | 0).padStart(2, '0'), W / 2, 6);
+  ctx.fillStyle = '#cfe'; ctx.font = '8px "Press Start 2P"';
+  ctx.fillText('ROUND ' + game.round, W / 2, 28);
+  for (var si = 0; si < 2; si++) {
+    ctx.fillStyle = si < game.scores[0] ? PAL[0].main : '#333';
+    ctx.fillRect(W / 2 - 30 + si * 10, 30, 7, 7);
+    ctx.fillStyle = si < game.scores[1] ? PAL[1].main : '#333';
+    ctx.fillRect(W / 2 + 14 + si * 10, 30, 7, 7);
+  }
+  ctx.textAlign = 'left';
+  drawEnergy(20, H - 26, 260, 12, f1.energy, PAL[0].light, false);
+  drawEnergy(W - 20 - 260, H - 26, 260, 12, f2.energy, PAL[1].light, true);
+}
+
+function drawPortrait(x, y, id) {
+  var p = PAL[id];
+  ctx.fillStyle = '#0a0e1a'; ctx.fillRect(x, y, 32, 32);
+  ctx.fillStyle = p.dark; ctx.fillRect(x + 2, y + 2, 28, 28);
+  ctx.fillStyle = p.main; ctx.fillRect(x + 6, y + 8, 20, 16);
+  ctx.fillStyle = '#0a0e16'; ctx.fillRect(x + 9, y + 12, 14, 4);
+  ctx.fillStyle = p.glow; ctx.fillRect(x + 10, y + 13, 4, 2); ctx.fillRect(x + 18, y + 13, 4, 2);
+  ctx.fillStyle = p.joint; ctx.fillRect(x + 13, y + 6, 6, 3);
+  ctx.strokeStyle = p.light; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, 31, 31);
+}
+
+function drawBar(x, y, w, h, ratio, col, bg, edge, rev) {
+  ctx.fillStyle = '#000'; ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+  ctx.fillStyle = bg; ctx.fillRect(x, y, w, h);
+  var fw = Math.max(0, Math.min(1, ratio)) * w;
+  if (rev) {
+    ctx.fillStyle = col; ctx.fillRect(x + w - fw, y, fw, h);
+    ctx.fillStyle = edge; ctx.globalAlpha = 0.5; ctx.fillRect(x + w - fw, y, fw, 2); ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = col; ctx.fillRect(x, y, fw, h);
+    ctx.fillStyle = edge; ctx.globalAlpha = 0.5; ctx.fillRect(x, y, fw, 2); ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  for (var ti = 1; ti < 10; ti++) ctx.fillRect(x + (w * ti / 10 | 0), y, 1, h);
+  ctx.strokeStyle = '#cfe'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+}
+
+function drawEnergy(x, y, w, h, energy, edge, rev) {
+  ctx.fillStyle = '#000'; ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+  ctx.fillStyle = '#22203a'; ctx.fillRect(x, y, w, h);
+  var full = energy >= SPECIAL_COST;
+  var fw = (energy / SPECIAL_COST) * w;
+  var col = full ? (Math.floor(game.frame / 4) % 2 ? '#7c5cff' : '#c0a8ff') : '#7c5cff';
+  if (rev) { ctx.fillStyle = col; ctx.fillRect(x + w - fw, y, fw, h); }
+  else { ctx.fillStyle = col; ctx.fillRect(x, y, fw, h); }
+  if (full) {
+    ctx.fillStyle = '#fff7c2';
+    ctx.globalAlpha = 0.6 + 0.4 * Math.sin(game.frame * 0.3);
+    if (rev) ctx.fillRect(x + w - fw, y, fw, 2);
+    else ctx.fillRect(x, y, fw, 2);
+    ctx.globalAlpha = 1;
+  }
+  ctx.strokeStyle = edge; ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+  pixText('SP', x + 4, y + 1, '#fff', 1);
+}
+
+function pixText(txt, x, y, col, scale) {
+  ctx.fillStyle = col;
+  ctx.font = (6 * (scale || 1)) + 'px "Press Start 2P", monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText(txt, x, y);
+}
+
+// ============================================================
+//  特效
+// ============================================================
+function spawnSpark(x, y, color, big) {
+  effects.push({ type:'spark', x:x, y:y, t:0, max: big ? 20 : 12, color:color, big:big });
+  var count = big ? 16 : 8;
+  for (var i = 0; i < count; i++) {
+    var a = Math.random() * 6.28;
+    var spd = 2 + Math.random() * 4;
+    particles.push({ x:x, y:y, vx:Math.cos(a) * spd, vy:Math.sin(a) * spd - 1, life:20 + Math.random() * 10, color:color, beam:false });
+  }
+  shake = Math.max(shake, big ? 12 : 5);
+}
+
+function updateEffects() {
+  for (var i = effects.length - 1; i >= 0; i--) {
+    effects[i].t++;
+    if (effects[i].t > effects[i].max) effects.splice(i, 1);
+  }
+  for (var j = particles.length - 1; j >= 0; j--) {
+    var pt = particles[j];
+    pt.x += pt.vx; pt.y += pt.vy; pt.vy += 0.2; pt.life--;
+    if (pt.life <= 0) particles.splice(j, 1);
+  }
+  if (shake > 0) shake = Math.max(0, shake - 0.8);
+}
+
+function drawEffects() {
+  for (var pi = 0; pi < particles.length; pi++) {
+    var pt = particles[pi];
+    ctx.globalAlpha = Math.max(0, pt.life / 25);
+    ctx.fillStyle = pt.color;
+    if (pt.beam) ctx.fillRect(pt.x | 0, pt.y | 0, 6, 4);
+    else ctx.fillRect(pt.x | 0, pt.y | 0, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  for (var ei = 0; ei < effects.length; ei++) {
+    var e = effects[ei];
+    if (e.type === 'spark') {
+      var k = e.t / e.max;
+      var s = e.big ? 30 : 16;
+      ctx.globalAlpha = 1 - k;
+      ctx.fillStyle = e.color;
+      var r = s * (1 - k * 0.5);
+      ctx.fillRect(e.x - r | 0, e.y - 2 | 0, r * 2, 4);
+      ctx.fillRect(e.x - 2 | 0, e.y - r | 0, 4, r * 2);
+      ctx.fillStyle = '#fff'; ctx.globalAlpha = (1 - k) * 0.8;
+      ctx.fillRect(e.x - 3 | 0, e.y - 3 | 0, 6, 6);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ============================================================
+//  投射物
+// ============================================================
+function spawnProjectile(owner, x, y, type) {
+  var f = (owner === 0) ? f1 : f2;
+  var facing = f.facing;
+  if (type === 'missile') {
+    projectiles.push({ owner:owner, x:x, y:y, vx:7 * facing, type:type, damage:DMG.heavy, life:120, r:6, trail:[] });
+  } else {
+    projectiles.push({ owner:owner, x:x, y:y, vx:16 * facing, type:type, damage:DMG.special, life:60, r:10, trail:[] });
+  }
+}
+
+function updateProjectiles() {
+  for (var i = projectiles.length - 1; i >= 0; i--) {
+    var pr = projectiles[i];
+    pr.x += pr.vx;
+    pr.life--;
+    if (pr.type === 'missile') {
+      pr.trail.push({ x:pr.x, y:pr.y });
+      if (pr.trail.length > 8) pr.trail.shift();
+    } else {
+      if (game.frame % 2 === 0) {
+        particles.push({ x:pr.x, y:pr.y + (Math.random() * 8 - 4), vx:-pr.vx * 0.2, vy:0, life:14, color:PAL[pr.owner].glow, beam:true });
+      }
+    }
+    if (pr.x < 0 || pr.x > W || pr.life <= 0) { projectiles.splice(i, 1); continue; }
+    var target = (pr.owner === 0) ? f2 : f1;
+    if (hitBody(pr.x, pr.y, target)) {
+      applyHit(target, pr.damage, pr.owner, pr.x, true);
+      spawnSpark(pr.x, pr.y, PAL[pr.owner].glow, pr.type === 'beam');
+      sfx('hit');
+      projectiles.splice(i, 1);
+    }
+  }
+}
+
+function drawProjectiles() {
+  for (var pi = 0; pi < projectiles.length; pi++) {
+    var pr = projectiles[pi];
+    if (pr.type === 'missile') {
+      for (var ti = 0; ti < pr.trail.length; ti++) {
+        var tt = pr.trail[ti];
+        ctx.globalAlpha = ti / pr.trail.length * 0.6;
+        ctx.fillStyle = '#ffa502';
+        ctx.fillRect(tt.x | 0, tt.y | 0, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+      var mf = pr.vx > 0 ? 1 : -1;
+      ctx.save(); ctx.translate(pr.x | 0, pr.y | 0); ctx.scale(mf, 1);
+      px(-6, -3, 12, 6, '#cfd6e6'); px(-6, -3, 12, 2, '#fff');
+      px(4, -2, 4, 4, '#ff4757'); px(-8, -2, 2, 4, '#ffa502');
+      px(-10, -3, 3, 6, '#ffd23b');
+      ctx.restore();
+    } else {
+      var pp = PAL[pr.owner];
+      var bf = pr.vx > 0 ? 1 : -1;
+      ctx.save(); ctx.translate(pr.x | 0, pr.y | 0); ctx.scale(bf, 1);
+      ctx.globalAlpha = 0.4; ctx.fillStyle = pp.glow; ctx.beginPath(); ctx.arc(0, 0, 16, 0, 7); ctx.fill();
+      ctx.globalAlpha = 0.8; ctx.fillStyle = pp.main; ctx.beginPath(); ctx.arc(0, 0, 10, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, 5, 0, 7); ctx.fill();
+      ctx.fillRect(6, -3, 14, 6); ctx.fillStyle = pp.glow; ctx.fillRect(6, -2, 14, 4);
+      ctx.restore();
+    }
+  }
+}
+
+// ============================================================
+//  碰撞 / 命中
+// ============================================================
+function bodyBox(f) {
+  return { x:f.x - 18, y:f.y - 92, w:36, h:92 };
+}
+
+function hitBody(px, py, f) {
+  var b = bodyBox(f);
+  return px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h;
+}
+
+function rectsHit(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function applyHit(target, dmg, attackerId, hitX, isRanged) {
+  if (target.invuln > 0) return;
+  var attacker = (attackerId === 0) ? f1 : f2;
+  var facingAttacker = (attacker.x > target.x) ? 1 : -1;
+  var blocking = (target.state === 'block' && target.facing === facingAttacker);
+  var realDmg = dmg;
+  if (blocking) {
+    realDmg = Math.round(dmg * 0.2);
+    target.energy = Math.min(SPECIAL_COST, target.energy + 2);
+    spawnSpark(hitX, target.y - 55, '#cfe', false);
+    sfx('block');
+    target.vx += facingAttacker * 1.5;
+  } else {
+    target.state = 'hit'; target.stateTimer = 0; target.hasHit = false;
+    target.vx = facingAttacker * (isRanged ? 6 : 4);
+    target.vy = -3;
+    spawnSpark(hitX, target.y - 55, PAL[target.id].light, dmg >= DMG.special);
+    sfx(dmg >= DMG.special ? 'special' : 'hit');
+    target.energy = Math.min(SPECIAL_COST, target.energy + ENERGY.takeHit);
+  }
+  target.hp = Math.max(0, target.hp - realDmg);
+  attacker.energy = Math.min(SPECIAL_COST, attacker.energy + (blocking ? 0 : (isRanged ? ENERGY.heavyHit : ENERGY.lightHit)));
+  if (target.hp <= 0) {
+    target.state = 'down'; target.stateTimer = 0;
+    target.vx = facingAttacker * 2; target.vy = -6;
+    sfx('ko'); shake = 16;
+    game.flashT = 12;
+  }
+}
+
+// ============================================================
+//  机甲逻辑：输入 -> 状态 / 物理
+// ============================================================
+function canAct(f) {
+  return f.state === 'idle' || f.state === 'walk' || f.state === 'jump' || f.state === 'block';
+}
+
+function updateFighter(f, opp, keymap) {
+  f.animTime++;
+  if (f.invuln > 0) f.invuln--;
+
+  function k(code) { return keys[keymap[code]]; }
+
+  if (canAct(f)) {
+    f.facing = (opp.x >= f.x) ? 1 : -1;
+  }
+
+  switch (f.state) {
+    case 'idle':
+    case 'walk':
+    case 'block': {
+      f.vx = 0;
+      var move = 0;
+      if (canAct(f) && f.state !== 'block') {
+        if (k('left')) move = -1;
+        if (k('right')) move = 1;
+      }
+      var blockPress = k('block');
+      if (blockPress && f.state !== 'block' && f.y >= GROUND_Y) {
+        f.state = 'block'; f.stateTimer = 0; f.blockHeld = true; break;
+      }
+      if (f.state === 'block') {
+        if (!blockPress) f.state = 'idle';
+        else f.state = 'block';
+        break;
+      }
+      if (move !== 0) {
+        f.vx = move * MOVE_SP;
+        if (f.state === 'idle') f.state = 'walk';
+        f.walkPhase += 0.3;
+      } else if (f.state === 'walk') { f.state = 'idle'; }
+      if (k('up') && f.y >= GROUND_Y) { f.vy = JUMP_V; f.state = 'jump'; sfx('jump'); }
+      if (f.y >= GROUND_Y) {
+        if (k('light') && canAct(f)) { f.state = 'light'; f.stateTimer = 0; f.hasHit = false; sfx('light'); }
+        else if (k('heavy') && canAct(f)) { f.state = 'heavy'; f.stateTimer = 0; f.hasHit = false; sfx('heavy'); }
+        else if (k('special') && canAct(f) && f.energy >= SPECIAL_COST) {
+          f.state = 'special'; f.stateTimer = 0; f.hasHit = false; f.energy = 0; f.invuln = 24; sfx('special');
+        }
+      }
+      break;
+    }
+    case 'jump': {
+      if (k('left')) f.vx = -MOVE_SP * 0.8;
+      else if (k('right')) f.vx = MOVE_SP * 0.8;
+      else f.vx *= 0.92;
+      break;
+    }
+    case 'light': {
+      if (f.stateTimer === 6) sfx('light');
+      if (f.stateTimer >= 6 && f.stateTimer < 12 && !f.hasHit) {
+        var hx = f.facing > 0 ? f.x + 10 : f.x - 66;
+        var hb = { x:hx, y:f.y - 70, w:56, h:34 };
+        if (rectsHit(hb, bodyBox(opp))) {
+          f.hasHit = true;
+          applyHit(opp, DMG.light, f.id, f.x + 40 * f.facing, false);
+        }
+      }
+      if (f.stateTimer >= TL.light) f.state = 'idle';
+      break;
+    }
+    case 'heavy': {
+      if (f.stateTimer === 10 && !f.hasHit) {
+        f.hasHit = true;
+        spawnProjectile(f.id, f.x + 24 * f.facing, f.y - 58, 'missile');
+      }
+      if (f.stateTimer >= TL.heavy) f.state = 'idle';
+      break;
+    }
+    case 'special': {
+      if (f.stateTimer === 8 && !f.hasHit) {
+        f.hasHit = true;
+        spawnProjectile(f.id, f.x + 24 * f.facing, f.y - 58, 'beam');
+      }
+      if (f.stateTimer >= TL.special) f.state = 'idle';
+      break;
+    }
+    case 'hit': {
+      if (f.stateTimer >= TL.hit) f.state = 'idle';
+      break;
+    }
+    case 'down': {
+      break;
+    }
+  }
+  f.stateTimer++;
+
+  // 物理
+  f.vy += GRAVITY;
+  f.x += f.vx;
+  f.y += f.vy;
+  if (f.y >= GROUND_Y) {
+    f.y = GROUND_Y;
+    f.vy = 0;
+    if (f.state === 'jump') f.state = 'idle';
+  }
+  f.x = Math.max(WALL_PAD, Math.min(W - WALL_PAD, f.x));
+  var minDist = 40;
+  var dx = f.x - opp.x;
+  if (Math.abs(dx) < minDist) {
+    var push = (minDist - Math.abs(dx)) * (dx > 0 ? 1 : -1) * 0.5;
+    f.x += push; opp.x -= push;
+  }
+}
+
+// ============================================================
+//  引擎
+// ============================================================
+function update() {
+  game.frame++;
+  if (game.announceT > 0) game.announceT--;
+  if (game.flashT > 0) game.flashT--;
+  updateEffects();
+
+  if (game.phase === 'roundIntro') {
+    game.sub++;
+    if (game.sub === 70) { game.announce = 'FIGHT!'; game.announceT = 60; startFight(); }
+    return;
+  }
+  if (game.phase !== 'fighting') return;
+
+  if (game.frame % 60 === 0) { game.timer--; if (game.timer <= 0) game.timer = 0; }
+
+  updateFighter(f1, f2, KEYS.p1);
+  updateFighter(f2, f1, KEYS.p2);
+  updateProjectiles();
+
+  if (f1.hp <= 0 || f2.hp <= 0) {
+    endRound();
+  } else if (game.timer <= 0) {
+    if (f1.hp > f2.hp) game.winner = 0;
+    else if (f2.hp > f1.hp) game.winner = 1;
+    else game.winner = -1;
+    finishRound();
+  }
+}
+
+function endRound() {
+  if (f1.hp <= 0 && f2.hp <= 0) game.winner = -1;
+  else if (f1.hp <= 0) game.winner = 1;
+  else game.winner = 0;
+  finishRound();
+}
+
+function finishRound() {
+  if (game.winner === 0) game.scores[0]++;
+  else if (game.winner === 1) game.scores[1]++;
+  game.phase = 'roundEnd';
+  game.sub = 0;
+}
+
+function updateRoundEnd() {
+  game.sub++;
+  if (game.sub < 90) return;
+  if (game.scores[0] >= 2 || game.scores[1] >= 2) {
+    game.phase = 'matchEnd';
+  } else {
+    game.round++;
+    startRound();
+  }
+}
+
+// ============================================================
+//  渲染
+// ============================================================
+function render() {
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  drawBackground();
+
+  if (game.phase !== 'menu') {
+    var order = [f1, f2];
+    for (var fi = 0; fi < order.length; fi++) {
+      var ff = order[fi];
+      if (ff.invuln > 0 && ff.state === 'special') {
+        ctx.globalAlpha = 0.7 + 0.3 * Math.sin(game.frame * 0.8);
+      }
+      drawMecha(ff);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath(); ctx.ellipse(ff.x, GROUND_Y + 2, 22, 5, 0, 0, 7); ctx.fill();
+    }
+    drawProjectiles();
+    drawEffects();
+    drawHUD();
+    if (game.phase === 'roundIntro' || game.announceT > 0) drawAnnounce(game.announce);
+    if (game.phase === 'roundEnd') drawRoundEnd();
+  }
+  if (game.flashT > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,' + (game.flashT / 12 * 0.6) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
+  if (game.phase === 'menu') drawMenu();
+  if (game.phase === 'matchEnd') drawMatchEnd();
+}
+
+function drawAnnounce(txt) {
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  var big = (txt === 'FIGHT!');
+  ctx.font = (big ? 64 : 44) + 'px "Press Start 2P"';
+  var at = game.announceT;
+  ctx.globalAlpha = big ? Math.min(1, at / 30) : 1;
+  ctx.fillStyle = '#000'; ctx.fillText(txt, W / 2 + 3, H / 2 + 3);
+  ctx.fillStyle = big ? '#fff7c2' : PAL[0].light; ctx.fillText(txt, W / 2, H / 2);
+  ctx.restore();
+}
+
+function drawRoundEnd() {
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+  var w = game.winner;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '28px "Press Start 2P"';
+  ctx.fillStyle = '#fff7c2'; ctx.fillText('ROUND ' + game.round, W / 2, H / 2 - 40);
+  ctx.font = '40px "Press Start 2P"';
+  ctx.fillStyle = (w === -1) ? '#cfe' : PAL[w].light;
+  var msg = (w === -1) ? 'DRAW' : (w === 0 ? 'P1 WINS' : 'P2 WINS');
+  ctx.fillText(msg, W / 2, H / 2 + 10);
+  ctx.font = '12px "Press Start 2P"'; ctx.fillStyle = '#9af';
+  if (game.sub > 60) ctx.fillText('NEXT ROUND...', W / 2, H / 2 + 60);
+  ctx.textAlign = 'left';
+}
+
+function drawMatchEnd() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, W, H);
+  var w = (game.scores[0] > game.scores[1]) ? 0 : 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '88px "Press Start 2P"';
+  ctx.fillStyle = '#000'; ctx.fillText('K.O.', W / 2 + 4, H / 2 - 50 + 4);
+  ctx.fillStyle = '#ff4757'; ctx.fillText('K.O.', W / 2, H / 2 - 50);
+  ctx.font = '36px "Press Start 2P"';
+  ctx.fillStyle = PAL[w].light; ctx.fillText((w === 0 ? 'RED' : 'CYAN') + ' VICTORY', W / 2, H / 2 + 20);
+  ctx.font = '14px "Press Start 2P"'; ctx.fillStyle = '#cfe';
+  ctx.fillText(game.scores[0] + ' - ' + game.scores[1], W / 2, H / 2 + 60);
+  ctx.fillStyle = '#9af'; ctx.font = '10px "Press Start 2P"';
+  if (Math.floor(game.frame / 30) % 2 === 0) ctx.fillText('PRESS ENTER / CLICK TO RESTART', W / 2, H / 2 + 95);
+  ctx.textAlign = 'left';
+}
+
+// 菜单
+function drawMenu() {
+  drawBackground();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '12px "Press Start 2P"';
+  ctx.fillStyle = '#9af'; ctx.fillText('PIXEL MECHA COMBAT', W / 2, 90);
+  ctx.font = '64px "Press Start 2P"';
+  var wob = Math.sin(game.frame * 0.05) * 2;
+  ctx.fillStyle = '#000'; ctx.fillText('MECHA', W / 2 + 4, 150 + wob + 4);
+  ctx.fillStyle = PAL[0].main; ctx.fillText('MECHA', W / 2, 150 + wob);
+  ctx.fillStyle = '#000'; ctx.fillText('BATTLE', W / 2 + 4, 215 - wob + 4);
+  ctx.fillStyle = PAL[1].main; ctx.fillText('BATTLE', W / 2, 215 - wob);
+  // 机甲预览
+  var pv1 = makeFighter(0, W / 2 - 160, 1); pv1.state = 'idle'; pv1.animTime = game.frame; pv1.y = GROUND_Y;
+  var pv2 = makeFighter(1, W / 2 + 160, -1); pv2.state = 'idle'; pv2.animTime = game.frame; pv2.y = GROUND_Y;
+  drawMecha(pv1); drawMecha(pv2);
+  // 操作说明
+  ctx.font = '10px "Press Start 2P"'; ctx.textBaseline = 'top';
+  ctx.fillStyle = PAL[0].light; ctx.textAlign = 'left'; ctx.fillText('PLAYER 1 - RED', 60, 320);
+  drawControls(60, 340, 'p1', false);
+  ctx.fillStyle = PAL[1].light; ctx.textAlign = 'right'; ctx.fillText('PLAYER 2 - CYAN', W - 60, 320);
+  drawControls(W - 60, 340, 'p2', true);
+  // 开始按钮
+  ctx.textAlign = 'center';
+  var bx = W / 2 - 130, by = 455, bw = 260, bh = 44;
+  ctx.fillStyle = '#1a1f3a'; ctx.fillRect(bx, by, bw, bh);
+  ctx.fillStyle = '#3a4a6a'; ctx.fillRect(bx, by, bw, 4);
+  ctx.fillStyle = '#5a6a8a'; ctx.fillRect(bx, by + bh - 4, bw, 4);
+  ctx.strokeStyle = (Math.floor(game.frame / 20) % 2) ? '#fff7c2' : '#7c5cff';
+  ctx.lineWidth = 2; ctx.strokeRect(bx + 1, by + 1, bw - 2, bh - 2);
+  ctx.font = '16px "Press Start 2P"'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff7c2'; ctx.fillText('PRESS ENTER / CLICK', W / 2, by + bh / 2);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+}
+
+function drawControls(x, y, which, rev) {
+  var labels = ['MOVE','JUMP','LIGHT','HEAVY','BLOCK','SPECIAL'];
+  var map = {
+    p1: { MOVE:'A / D', JUMP:'W', LIGHT:'F', HEAVY:'G', BLOCK:'S', SPECIAL:'R' },
+    p2: { MOVE:'< >', JUMP:'UP', LIGHT:'K', HEAVY:'L', BLOCK:'DOWN', SPECIAL:'P' }
+  };
+  ctx.font = '9px "Press Start 2P"';
+  for (var i = 0; i < labels.length; i++) {
+    var yy = y + i * 16;
+    ctx.fillStyle = '#6a7a9a';
+    ctx.fillText(labels[i], rev ? x : x, yy);
+    ctx.fillStyle = '#cfe';
+    ctx.fillText(map[which][labels[i]], rev ? x - 90 : x + 90, yy);
+  }
+}
+
+// 主循环
+function loop() {
+  update();
+  if (game.phase === 'roundEnd') updateRoundEnd();
+  render();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>

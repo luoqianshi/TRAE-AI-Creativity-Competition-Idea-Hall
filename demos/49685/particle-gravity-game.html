@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>粒子引力游戏 | Particle Gravity Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            color: #00f0ff;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            box-shadow: 0 0 20px rgba(0, 240, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .score {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            letter-spacing: 2px;
+        }
+
+        .level {
+            font-size: 16px;
+            opacity: 0.8;
+        }
+
+        .instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 13px;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px 20px;
+            border-radius: 8px;
+            letter-spacing: 1px;
+        }
+
+        .game-over-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            background: rgba(15, 20, 50, 0.9);
+            padding: 40px 50px;
+            border-radius: 20px;
+            border: 2px solid rgba(0, 240, 255, 0.5);
+            box-shadow: 0 0 40px rgba(0, 240, 255, 0.3);
+            text-align: center;
+            backdrop-filter: blur(20px);
+            display: none;
+        }
+
+        .game-over-screen h2 {
+            color: #ff0080;
+            font-size: 32px;
+            margin-bottom: 20px;
+            letter-spacing: 3px;
+        }
+
+        .final-score {
+            color: #00f0ff;
+            font-size: 28px;
+            margin-bottom: 30px;
+        }
+
+        .restart-btn {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(168, 85, 247, 0.2));
+            color: #fff;
+            border: 1px solid rgba(0, 240, 255, 0.4);
+            padding: 12px 30px;
+            font-size: 16px;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+            border-radius: 25px;
+            transition: all 0.3s;
+            letter-spacing: 2px;
+        }
+
+        .restart-btn:hover {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.3), rgba(168, 85, 247, 0.3));
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 240, 255, 0.3);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div class="ui-overlay">
+            <div class="score">分数: <span id="scoreValue">0</span></div>
+            <div class="level">关卡: <span id="levelValue">1</span></div>
+            <div style="margin-top: 10px; opacity: 0.7;">目标粒子: <span id="targetCount">0</span>/<span id="totalCount">0</span></div>
+        </div>
+
+        <div class="instructions">
+            点击创建引力点 | 引导蓝色粒子进入绿色目标区域 | 躲避红色障碍物
+        </div>
+
+        <div class="game-over-screen" id="gameOverScreen">
+            <h2>游戏结束</h2>
+            <div class="final-score">最终分数: <span id="finalScore">0</span></div>
+            <button class="restart-btn" onclick="restartGame()">重新开始</button>
+        </div>
+    </div>
+
+    <script>
+        // ============ 游戏配置 ============
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        // 游戏状态
+        let score = 0;
+        let level = 1;
+        let gameOver = false;
+        let particles = [];
+        let gravityPoints = [];
+        let targetZones = [];
+        let obstacles = [];
+        let particlesCollected = 0;
+        let particlesTotal = 0;
+
+        // 颜色配置
+        const colors = {
+            particle: '#00f0ff',
+            particleGlow: 'rgba(0, 240, 255, 0.3)',
+            gravity: '#a855f7',
+            gravityGlow: 'rgba(168, 85, 247, 0.4)',
+            target: '#00ff88',
+            targetGlow: 'rgba(0, 255, 136, 0.2)',
+            obstacle: '#ff0080',
+            obstacleGlow: 'rgba(255, 0, 128, 0.3)',
+            background: '#0f0c29'
+        };
+
+        // ============ 粒子类 ============
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = Math.random() * 2 - 1;
+                this.vy = Math.random() * 2 - 1;
+                this.radius = 3 + Math.random() * 2;
+                this.collected = false;
+                this.active = true;
+            }
+
+            update() {
+                if (!this.active) return;
+
+                // 应用引力点影响
+                gravityPoints.forEach(gp => {
+                    const dx = gp.x - this.x;
+                    const dy = gp.y - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < gp.radius * 10 && dist > 10) {
+                        const force = gp.strength / (dist * dist);
+                        this.vx += dx / dist * force;
+                        this.vy += dy / dist * force;
+                    }
+                });
+
+                // 应用障碍物排斥力
+                obstacles.forEach(obs => {
+                    const dx = this.x - obs.x;
+                    const dy = this.y - obs.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < obs.radius * 3) {
+                        const force = 50 / (dist * dist);
+                        this.vx += dx / dist * force;
+                        this.vy += dy / dist * force;
+                    }
+
+                    // 碰撞检测
+                    if (dist < obs.radius + this.radius) {
+                        this.active = false;
+                        gameOver = true;
+                    }
+                });
+
+                // 检测目标区域
+                targetZones.forEach(zone => {
+                    const dx = this.x - zone.x;
+                    const dy = this.y - zone.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < zone.radius) {
+                        this.collected = true;
+                        this.active = false;
+                        score += 10;
+                        particlesCollected++;
+                        updateUI();
+                    }
+                });
+
+                // 限制速度
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > 5) {
+                    this.vx = this.vx / speed * 5;
+                    this.vy = this.vy / speed * 5;
+                }
+
+                // 更新位置
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // 边界反弹
+                if (this.x < 0 || this.x > width) this.vx *= -0.8;
+                if (this.y < 0 || this.y > height) this.vy *= -0.8;
+                
+                this.x = Math.max(0, Math.min(width, this.x));
+                this.y = Math.max(0, Math.min(height, this.y));
+            }
+
+            draw() {
+                if (!this.active) return;
+
+                // 外发光
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 2, 0, Math.PI * 2);
+                ctx.fillStyle = colors.particleGlow;
+                ctx.fill();
+
+                // 核心
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = colors.particle;
+                ctx.fill();
+
+                // 高光
+                ctx.beginPath();
+                ctx.arc(this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.4, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.fill();
+            }
+        }
+
+        // ============ 引力点类 ============
+        class GravityPoint {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 20;
+                this.strength = 100;
+                this.life = 300; // 生命值（帧数）
+                this.maxLife = 300;
+            }
+
+            update() {
+                this.life--;
+                this.radius = 20 * (this.life / this.maxLife);
+                this.strength = 100 * (this.life / this.maxLife);
+                return this.life > 0;
+            }
+
+            draw() {
+                const alpha = this.life / this.maxLife;
+
+                // 外圈脉动
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 2, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(168, 85, 247, ${alpha * 0.2})`;
+                ctx.fill();
+
+                // 核心圈
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(168, 85, 247, ${alpha})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // 中心点
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+                ctx.fillStyle = colors.gravity;
+                ctx.fill();
+
+                // 引力线动画
+                const time = Date.now() / 1000;
+                for (let i = 0; i < 3; i++) {
+                    const lineRadius = this.radius * (1 + i * 0.5 + Math.sin(time * 3 + i) * 0.3);
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, lineRadius, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(168, 85, 247, ${alpha * (0.3 - i * 0.1)})`;
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // ============ 目标区域类 ============
+        class TargetZone {
+            constructor(x, y, radius) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+            }
+
+            draw() {
+                const time = Date.now() / 1000;
+                const pulse = Math.sin(time * 2) * 5;
+
+                // 外发光
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius + pulse + 20, 0, Math.PI * 2);
+                ctx.fillStyle = colors.targetGlow;
+                ctx.fill();
+
+                // 目标圈
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius + pulse, 0, Math.PI * 2);
+                ctx.strokeStyle = colors.target;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                // 旋转装饰线
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(time);
+                
+                for (let i = 0; i < 4; i++) {
+                    ctx.rotate(Math.PI / 2);
+                    ctx.beginPath();
+                    ctx.moveTo(0, -this.radius * 0.8);
+                    ctx.lineTo(0, -this.radius);
+                    ctx.strokeStyle = colors.target;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                
+                ctx.restore();
+
+                // 中心文字
+                ctx.fillStyle = colors.target;
+                ctx.font = '12px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('目标', this.x, this.y + 5);
+            }
+        }
+
+        // ============ 障碍物类 ============
+        class Obstacle {
+            constructor(x, y, radius) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.angle = 0;
+            }
+
+            update() {
+                this.angle += 0.02;
+            }
+
+            draw() {
+                // 外发光
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius + 15, 0, Math.PI * 2);
+                ctx.fillStyle = colors.obstacleGlow;
+                ctx.fill();
+
+                // 主体
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = colors.obstacle;
+                ctx.fill();
+
+                // 旋转警告标记
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.5, 0);
+                ctx.lineTo(this.radius * 0.5, 0);
+                ctx.moveTo(0, -this.radius * 0.5);
+                ctx.lineTo(0, this.radius * 0.5);
+                ctx.stroke();
+                
+                ctx.restore();
+            }
+        }
+
+        // ============ 游戏逻辑 ============
+        function initLevel() {
+            particles = [];
+            gravityPoints = [];
+            targetZones = [];
+            obstacles = [];
+            particlesCollected = 0;
+
+            // 根据关卡难度调整参数
+            const particleCount = 10 + level * 5;
+            const obstacleCount = Math.min(level, 5);
+
+            // 创建粒子（随机分布）
+            for (let i = 0; i < particleCount; i++) {
+                particles.push(new Particle(
+                    Math.random() * (width - 100) + 50,
+                    Math.random() * (height - 100) + 50
+                ));
+            }
+            particlesTotal = particleCount;
+
+            // 创建目标区域（固定位置）
+            const targetRadius = 50 + Math.random() * 30;
+            targetZones.push(new TargetZone(
+                width - 150 + Math.random() * 50,
+                height / 2 + Math.random() * 100 - 50,
+                targetRadius
+            ));
+
+            // 创建障碍物（随机位置）
+            for (let i = 0; i < obstacleCount; i++) {
+                obstacles.push(new Obstacle(
+                    Math.random() * (width - 200) + 100,
+                    Math.random() * (height - 200) + 100,
+                    30 + Math.random() * 20
+                ));
+            }
+
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('scoreValue').textContent = score;
+            document.getElementById('levelValue').textContent = level;
+            document.getElementById('targetCount').textContent = particlesCollected;
+            document.getElementById('totalCount').textContent = particlesTotal;
+        }
+
+        function animate() {
+            if (gameOver) {
+                showGameOver();
+                return;
+            }
+
+            // 清空画布
+            ctx.fillStyle = colors.background;
+            ctx.fillRect(0, 0, width, height);
+
+            // 绘制背景网格
+            drawBackgroundGrid();
+
+            // 更新和绘制目标区域
+            targetZones.forEach(zone => zone.draw());
+
+            // 更新和绘制障碍物
+            obstacles.forEach(obs => {
+                obs.update();
+                obs.draw();
+            });
+
+            // 更新和绘制引力点
+            gravityPoints = gravityPoints.filter(gp => gp.update());
+            gravityPoints.forEach(gp => gp.draw());
+
+            // 更新和绘制粒子
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            // 检查关卡完成
+            if (particlesCollected >= particlesTotal) {
+                level++;
+                score += 50;
+                initLevel();
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        function drawBackgroundGrid() {
+            ctx.strokeStyle = 'rgba(0, 240, 255, 0.05)';
+            ctx.lineWidth = 1;
+
+            const gridSize = 50;
+            for (let x = 0; x < width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+        }
+
+        function showGameOver() {
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('gameOverScreen').style.display = 'block';
+        }
+
+        function restartGame() {
+            gameOver = false;
+            score = 0;
+            level = 1;
+            document.getElementById('gameOverScreen').style.display = 'none';
+            initLevel();
+            animate();
+        }
+
+        // ============ 事件监听 ============
+        canvas.addEventListener('click', (e) => {
+            if (gameOver) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            gravityPoints.push(new GravityPoint(x, y));
+        });
+
+        canvas.addEventListener('touchstart', (e) => {
+            if (gameOver) return;
+            e.preventDefault();
+
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            gravityPoints.push(new GravityPoint(x, y));
+        });
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        });
+
+        // ============ 启动游戏 ============
+        initLevel();
+        animate();
+    </script>
+</body>
+</html>

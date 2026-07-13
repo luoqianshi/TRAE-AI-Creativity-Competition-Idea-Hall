@@ -1,0 +1,1754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>VECTOR TERRAIN V5</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Share Tech Mono', monospace;
+            touch-action: none;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background: #000;
+        }
+        
+        #hud {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.9);
+            border-top: 2px solid #0ff;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            color: #0ff;
+            font-size: 12px;
+            text-shadow: 0 0 10px #0ff;
+        }
+        
+        #hud .section {
+            display: flex;
+            gap: 20px;
+        }
+        
+        #hud .item {
+            display: flex;
+            gap: 8px;
+        }
+        
+        #hud .label {
+            color: #088;
+        }
+        
+        #hud .value {
+            color: #0ff;
+            min-width: 60px;
+        }
+        
+        #instructions {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #088;
+            font-size: 11px;
+            letter-spacing: 1px;
+            z-index: 101;
+            text-align: center;
+        }
+        
+        #minimapCanvas {
+            position: fixed;
+            top: 40px;
+            right: 15px;
+            width: 150px;
+            height: 150px;
+            border: 2px solid #0ff;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 100;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <canvas id="minimapCanvas"></canvas>
+    <div id="instructions">WASD/ARROWS/TOUCH/GAMEPAD move | SPACE/TAP-CENTER releases ball</div>
+    <div id="hud">
+        <div class="section">
+            <div class="item">
+                <span class="label">SCORE:</span>
+                <span class="value" id="score">0</span>
+            </div>
+            <div class="item">
+                <span class="label">COMBO:</span>
+                <span class="value" id="combo">x1</span>
+            </div>
+        </div>
+        <div class="section">
+            <div class="item">
+                <span class="label">POS:</span>
+                <span class="value" id="pos">0, 0</span>
+            </div>
+            <div class="item">
+                <span class="label">ALT:</span>
+                <span class="value" id="altitude">0</span>
+            </div>
+        </div>
+        <div class="section">
+            <div class="item">
+                <span class="label">BALLS:</span>
+                <span class="value" id="ballCount">0</span>
+            </div>
+            <div class="item">
+                <span class="label">KILLS:</span>
+                <span class="value" id="killCount">0</span>
+            </div>
+        </div>
+        <div class="section">
+            <div class="item">
+                <span class="label">HEADING:</span>
+                <span class="value" id="heading">0°</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const minimapCanvas = document.getElementById('minimapCanvas');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        
+        minimapCanvas.width = 150;
+        minimapCanvas.height = 150;
+        
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight - 50;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+        
+        // Terrain configuration
+        const GRID_SIZE = 80;
+        const CELL_SIZE = 25;
+        const terrain = [];
+        
+        // Light direction (normalized) - removed static light, using dynamic lights now
+        
+        // UFOs - flying light sources
+        const ufos = [];
+        const UFO_COUNT = 4;
+        
+        function createUFO() {
+            const margin = CELL_SIZE * 10;
+            const maxPos = (GRID_SIZE - 10) * CELL_SIZE;
+            return {
+                x: margin + Math.random() * (maxPos - margin),
+                y: 80 + Math.random() * 100,
+                z: margin + Math.random() * (maxPos - margin),
+                vx: (Math.random() - 0.5) * 200,
+                vy: 0,
+                vz: (Math.random() - 0.5) * 200,
+                color: ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#ffff00', '#00ffff'][Math.floor(Math.random() * 6)],
+                intensity: 300 + Math.random() * 200,
+                hoverPhase: Math.random() * Math.PI * 2,
+                state: 'cruise', // cruise, hover, zoom
+                stateTime: 0,
+                targetX: 0,
+                targetZ: 0
+            };
+        }
+        
+        function initUFOs() {
+            for (let i = 0; i < UFO_COUNT; i++) {
+                ufos.push(createUFO());
+            }
+        }
+        
+        // Drones with flares
+        const drones = [];
+        const DRONE_COUNT = 2;
+        
+        function createDrone() {
+            const margin = CELL_SIZE * 10;
+            const maxPos = (GRID_SIZE - 10) * CELL_SIZE;
+            const x = margin + Math.random() * (maxPos - margin);
+            const z = margin + Math.random() * (maxPos - margin);
+            return {
+                x, z,
+                y: getTerrainHeight(x, z) + 30 + Math.random() * 40,
+                angle: Math.random() * Math.PI * 2,
+                speed: 30 + Math.random() * 30,
+                bobPhase: Math.random() * Math.PI * 2,
+                flareActive: false,
+                flareTime: 0,
+                nextFlare: Math.random() * 5 + 2
+            };
+        }
+        
+        function initDrones() {
+            for (let i = 0; i < DRONE_COUNT; i++) {
+                drones.push(createDrone());
+            }
+        }
+        
+        // Player flashlight
+        const flashlight = {
+            range: 250,
+            intensity: 1.0,
+            coneAngle: 0.5 // radians, half-angle
+        };
+        
+        // Calculate lighting on a point from all sources
+        function calculateLighting(worldX, worldY, worldZ, normalX, normalY, normalZ) {
+            let totalLight = 0.03; // Very dark ambient
+            
+            // Flashlight (from player position, pointing forward)
+            const toPointX = worldX - player.x;
+            const toPointY = worldY - player.y;
+            const toPointZ = worldZ - player.z;
+            const distToPlayer = Math.sqrt(toPointX * toPointX + toPointY * toPointY + toPointZ * toPointZ);
+            
+            if (distToPlayer < flashlight.range && distToPlayer > 0) {
+                // Direction player is facing
+                const facingX = Math.sin(player.angle);
+                const facingZ = Math.cos(player.angle);
+                
+                // Normalize direction to point
+                const dirX = toPointX / distToPlayer;
+                const dirY = toPointY / distToPlayer;
+                const dirZ = toPointZ / distToPlayer;
+                
+                // Angle between flashlight and point
+                const dot = facingX * dirX + facingZ * dirZ;
+                const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+                
+                if (angle < flashlight.coneAngle) {
+                    const coneFalloff = 1 - (angle / flashlight.coneAngle);
+                    const distFalloff = 1 - (distToPlayer / flashlight.range);
+                    const normalDot = Math.max(0, -(normalX * dirX + normalY * dirY + normalZ * dirZ));
+                    totalLight += coneFalloff * distFalloff * flashlight.intensity * (normalDot * 0.7 + 0.3);
+                }
+            }
+            
+            // UFO lights
+            for (const ufo of ufos) {
+                const dx = worldX - ufo.x;
+                const dy = worldY - ufo.y;
+                const dz = worldZ - ufo.z;
+                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                
+                if (dist < ufo.intensity && dist > 0) {
+                    const falloff = 1 - (dist / ufo.intensity);
+                    const dirX = dx / dist;
+                    const dirY = dy / dist;
+                    const dirZ = dz / dist;
+                    const normalDot = Math.max(0, -(normalX * dirX + normalY * dirY + normalZ * dirZ));
+                    totalLight += falloff * falloff * (normalDot * 0.8 + 0.2) * 0.8;
+                }
+            }
+            
+            // Drone flares
+            for (const drone of drones) {
+                if (drone.flareActive) {
+                    const dx = worldX - drone.x;
+                    const dy = worldY - drone.y;
+                    const dz = worldZ - drone.z;
+                    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    
+                    if (dist < 400 && dist > 0) {
+                        const falloff = 1 - (dist / 400);
+                        totalLight += falloff * falloff * 1.5;
+                    }
+                }
+            }
+            
+            return Math.min(1, totalLight);
+        }
+        
+        // Get color contribution from lights
+        function getLightColor(worldX, worldY, worldZ) {
+            let r = 0.03, g = 0.03, b = 0.03; // Base ambient
+            
+            // Flashlight - white
+            const toPointX = worldX - player.x;
+            const toPointY = worldY - player.y;
+            const toPointZ = worldZ - player.z;
+            const distToPlayer = Math.sqrt(toPointX * toPointX + toPointY * toPointY + toPointZ * toPointZ);
+            
+            if (distToPlayer < flashlight.range && distToPlayer > 0) {
+                const facingX = Math.sin(player.angle);
+                const facingZ = Math.cos(player.angle);
+                const dirX = toPointX / distToPlayer;
+                const dirZ = toPointZ / distToPlayer;
+                const dot = facingX * dirX + facingZ * dirZ;
+                const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+                
+                if (angle < flashlight.coneAngle) {
+                    const intensity = (1 - angle / flashlight.coneAngle) * (1 - distToPlayer / flashlight.range);
+                    r += intensity;
+                    g += intensity;
+                    b += intensity;
+                }
+            }
+            
+            // UFO colored lights
+            for (const ufo of ufos) {
+                const dx = worldX - ufo.x;
+                const dy = worldY - ufo.y;
+                const dz = worldZ - ufo.z;
+                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                
+                if (dist < ufo.intensity) {
+                    const falloff = Math.pow(1 - dist / ufo.intensity, 2) * 0.7;
+                    // Parse UFO color
+                    const cr = parseInt(ufo.color.slice(1, 3), 16) / 255;
+                    const cg = parseInt(ufo.color.slice(3, 5), 16) / 255;
+                    const cb = parseInt(ufo.color.slice(5, 7), 16) / 255;
+                    r += cr * falloff;
+                    g += cg * falloff;
+                    b += cb * falloff;
+                }
+            }
+            
+            // Drone flares - bright white/yellow
+            for (const drone of drones) {
+                if (drone.flareActive) {
+                    const dx = worldX - drone.x;
+                    const dy = worldY - drone.y;
+                    const dz = worldZ - drone.z;
+                    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    
+                    if (dist < 400) {
+                        const falloff = Math.pow(1 - dist / 400, 2);
+                        r += falloff * 1.2;
+                        g += falloff * 1.0;
+                        b += falloff * 0.6;
+                    }
+                }
+            }
+            
+            return { r: Math.min(1, r), g: Math.min(1, g), b: Math.min(1, b) };
+        }
+        
+        // Generate terrain
+        function generateTerrain() {
+            for (let z = 0; z < GRID_SIZE; z++) {
+                terrain[z] = [];
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    let height = 0;
+                    height += Math.sin(x * 0.08) * Math.cos(z * 0.08) * 50;
+                    height += Math.sin(x * 0.04 + 1) * Math.sin(z * 0.06) * 80;
+                    height += Math.cos(x * 0.12) * Math.sin(z * 0.1 + 2) * 30;
+                    
+                    // Bowl in center
+                    const cx = GRID_SIZE / 2;
+                    const cz = GRID_SIZE / 2;
+                    const dist = Math.sqrt((x - cx) ** 2 + (z - cz) ** 2);
+                    if (dist < 20) {
+                        height -= (20 - dist) * 3;
+                    }
+                    
+                    terrain[z][x] = height;
+                }
+            }
+        }
+        generateTerrain();
+        
+        // Red explosive tiles grid
+        const redTiles = [];
+        function generateRedTiles() {
+            for (let z = 0; z < GRID_SIZE; z++) {
+                redTiles[z] = [];
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    // Perimeter is red
+                    if (x <= 2 || x >= GRID_SIZE - 3 || z <= 2 || z >= GRID_SIZE - 3) {
+                        redTiles[z][x] = true;
+                    }
+                    // Random red tiles in interior (about 5%)
+                    else if (Math.random() < 0.05) {
+                        redTiles[z][x] = true;
+                    } else {
+                        redTiles[z][x] = false;
+                    }
+                }
+            }
+        }
+        generateRedTiles();
+        
+        // Check if a world position is on a red tile
+        function isRedTile(worldX, worldZ) {
+            const gridX = Math.floor(worldX / CELL_SIZE);
+            const gridZ = Math.floor(worldZ / CELL_SIZE);
+            if (gridX < 0 || gridX >= GRID_SIZE || gridZ < 0 || gridZ >= GRID_SIZE) return true;
+            return redTiles[gridZ][gridX];
+        }
+        
+        // Destroy a red tile
+        function destroyRedTile(worldX, worldZ) {
+            const gridX = Math.floor(worldX / CELL_SIZE);
+            const gridZ = Math.floor(worldZ / CELL_SIZE);
+            if (gridX >= 3 && gridX < GRID_SIZE - 3 && gridZ >= 3 && gridZ < GRID_SIZE - 3) {
+                redTiles[gridZ][gridX] = false;
+                score += POINTS.tile;
+            }
+        }
+        
+        // Player state
+        const player = {
+            x: GRID_SIZE * CELL_SIZE / 2,
+            z: GRID_SIZE * CELL_SIZE / 2 - 100,
+            y: 0,
+            angle: 0,
+            speed: 0
+        };
+        
+        // Camera - low, close to player
+        const camera = {
+            height: 15,
+            distance: 40,
+            pitch: 0.3
+        };
+        
+        // Bowling balls
+        const balls = [];
+        const BALL_RADIUS = 4;
+        const GRAVITY = 250;
+        const FRICTION = 0.99;
+        const BALL_BOUNCE = 0.5;
+        
+        // Stick men
+        const stickMen = [];
+        const STICK_COUNT = 15;
+        const STICK_SPEED = 40;
+        const STICK_HEIGHT = 12;
+        
+        function createStickMan() {
+            // Find a safe spawn point (not on red tile)
+            let x, z, attempts = 0;
+            const margin = CELL_SIZE * 5;
+            const maxPos = (GRID_SIZE - 5) * CELL_SIZE;
+            
+            do {
+                x = margin + Math.random() * (maxPos - margin);
+                z = margin + Math.random() * (maxPos - margin);
+                attempts++;
+            } while (isRedTile(x, z) && attempts < 100);
+            
+            return {
+                x, z,
+                y: getTerrainHeight(x, z),
+                targetX: x,
+                targetZ: z,
+                angle: Math.random() * Math.PI * 2,
+                walkPhase: Math.random() * Math.PI * 2,
+                pickNewTarget: function() {
+                    // Try to find a non-red target
+                    const range = 200;
+                    let attempts = 0;
+                    let newX, newZ;
+                    
+                    do {
+                        newX = this.x + (Math.random() - 0.5) * range * 2;
+                        newZ = this.z + (Math.random() - 0.5) * range * 2;
+                        const margin = CELL_SIZE * 5;
+                        const maxPos = (GRID_SIZE - 5) * CELL_SIZE;
+                        newX = Math.max(margin, Math.min(maxPos, newX));
+                        newZ = Math.max(margin, Math.min(maxPos, newZ));
+                        attempts++;
+                    } while (isRedTile(newX, newZ) && attempts < 20);
+                    
+                    this.targetX = newX;
+                    this.targetZ = newZ;
+                }
+            };
+        }
+        
+        // Initialize stick men after terrain is ready
+        function initStickMen() {
+            for (let i = 0; i < STICK_COUNT; i++) {
+                stickMen.push(createStickMan());
+            }
+        }
+        
+        // Explosions
+        const explosions = [];
+        
+        function createExplosion(x, y, z) {
+            explosions.push({
+                x, y, z,
+                born: performance.now(),
+                particles: Array.from({length: 12}, () => ({
+                    vx: (Math.random() - 0.5) * 200,
+                    vy: Math.random() * 150 + 50,
+                    vz: (Math.random() - 0.5) * 200,
+                    ox: 0, oy: 0, oz: 0
+                }))
+            });
+            playSound('explode');
+        }
+        
+        // Dead stick men flying through air
+const deadMen = [];
+let killCount = 0;
+let score = 0;
+let combo = 0;
+let lastComboTime = 0;
+const COMBO_TIMEOUT = 2000;
+const POINTS = {
+    kill: 100,
+    tile: 50,
+    ufoKill: 500
+};
+        
+        function killStickMan(man, bvx, bvz) {
+            killCount++;
+            
+            const now = performance.now();
+            if (now - lastComboTime < COMBO_TIMEOUT) {
+                combo++;
+            } else {
+                combo = 1;
+            }
+            lastComboTime = now;
+            
+            const multiplier = Math.min(combo, 5);
+            const pointsEarned = POINTS.kill * multiplier;
+            score += pointsEarned;
+            
+            deadMen.push({
+                x: man.x,
+                y: man.y,
+                z: man.z,
+                vx: bvx * 0.5 + (Math.random() - 0.5) * 100,
+                vy: 150 + Math.random() * 100,
+                vz: bvz * 0.5 + (Math.random() - 0.5) * 100,
+                rot: 0,
+                rotSpeed: (Math.random() - 0.5) * 15,
+                born: performance.now()
+            });
+            playSound('die');
+        }
+        
+        // Sound system using Web Audio API
+        let audioCtx = null;
+        
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        function playSound(type) {
+            if (!audioCtx) initAudio();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            const now = audioCtx.currentTime;
+            
+            if (type === 'shoot') {
+                // Pew sound
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.setValueAtTime(880, now);
+                osc.frequency.exponentialRampToValueAtTime(110, now + 0.15);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            } else if (type === 'explode') {
+                // Explosion - noise burst
+                const bufferSize = audioCtx.sampleRate * 0.3;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+                }
+                const noise = audioCtx.createBufferSource();
+                noise.buffer = buffer;
+                const gain = audioCtx.createGain();
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(1000, now);
+                filter.frequency.exponentialRampToValueAtTime(100, now + 0.3);
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.5, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                noise.start(now);
+            } else if (type === 'die') {
+                // Death scream - descending tone
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.setValueAtTime(600, now);
+                osc.frequency.exponentialRampToValueAtTime(50, now + 0.4);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+                osc.start(now);
+                osc.stop(now + 0.4);
+            } else if (type === 'ufo_zoom') {
+                // UFO zoom by - doppler-like whoosh
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(150, now + 0.5);
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                osc.start(now);
+                osc.stop(now + 0.5);
+            } else if (type === 'flare') {
+                // Flare ignite - rising hiss
+                const bufferSize = audioCtx.sampleRate * 0.8;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    const env = Math.sin((i / bufferSize) * Math.PI);
+                    data[i] = (Math.random() * 2 - 1) * env * 0.5;
+                }
+                const noise = audioCtx.createBufferSource();
+                noise.buffer = buffer;
+                const gain = audioCtx.createGain();
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.setValueAtTime(2000, now);
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.2, now);
+                noise.start(now);
+            }
+        }
+        
+        // Initialize audio on first interaction
+        document.addEventListener('click', initAudio, { once: true });
+        document.addEventListener('keydown', initAudio, { once: true });
+        document.addEventListener('touchstart', initAudio, { once: true });
+        
+        // Input handling
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            keys[e.key.toLowerCase()] = true;
+            keys[e.code] = true;
+            if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase()) || e.code === 'Space') {
+                e.preventDefault();
+            }
+        });
+        window.addEventListener('keyup', e => {
+            keys[e.key.toLowerCase()] = false;
+            keys[e.code] = false;
+        });
+        
+        // Touch controls
+        let touchSteer = 0;
+        let touchGas = false;
+        let touchBrake = false;
+        let touchShoot = false;
+        
+        canvas.addEventListener('touchstart', handleTouch, { passive: false });
+        canvas.addEventListener('touchmove', handleTouch, { passive: false });
+        canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+        
+        function handleTouch(e) {
+            e.preventDefault();
+            touchGas = false;
+            touchBrake = false;
+            touchSteer = 0;
+            touchShoot = false;
+            
+            for (let touch of e.touches) {
+                const x = touch.clientX;
+                const y = touch.clientY;
+                const w = window.innerWidth;
+                const h = window.innerHeight;
+                
+                // Center = shoot
+                if (x > w / 3 && x < w * 2 / 3 && y > h / 3 && y < h * 2 / 3) {
+                    touchShoot = true;
+                } else {
+                    if (x < w / 3) touchSteer = -1;
+                    else if (x > w * 2 / 3) touchSteer = 1;
+                    
+                    if (y < h / 2) touchGas = true;
+                    else touchBrake = true;
+                }
+            }
+        }
+        
+        function handleTouchEnd(e) {
+            if (e.touches.length === 0) {
+                touchSteer = 0;
+                touchGas = false;
+                touchBrake = false;
+                touchShoot = false;
+            } else {
+                handleTouch(e);
+            }
+        }
+        
+        // Gamepad
+        let gamepad = null;
+        window.addEventListener('gamepadconnected', e => gamepad = e.gamepad);
+        window.addEventListener('gamepaddisconnected', () => gamepad = null);
+        
+        function getGamepadInput() {
+            const gamepads = navigator.getGamepads();
+            if (gamepads[0]) gamepad = gamepads[0];
+            if (!gamepad) return { steer: 0, gas: 0, shoot: false };
+            
+            return {
+                steer: Math.abs(gamepad.axes[0]) > 0.1 ? gamepad.axes[0] : 0,
+                gas: Math.abs(gamepad.axes[1]) > 0.1 ? -gamepad.axes[1] : 0,  // Y axis inverted, negative = forward
+                shoot: gamepad.buttons[0]?.pressed || gamepad.buttons[2]?.pressed || gamepad.buttons[7]?.pressed
+            };
+        }
+        
+        // Ball shooting cooldown
+        let lastBallTime = 0;
+        
+        // Get terrain height with interpolation
+        function getTerrainHeight(worldX, worldZ) {
+            const gridX = worldX / CELL_SIZE;
+            const gridZ = worldZ / CELL_SIZE;
+            
+            const x0 = Math.floor(gridX);
+            const z0 = Math.floor(gridZ);
+            const x1 = x0 + 1;
+            const z1 = z0 + 1;
+            
+            if (x0 < 0 || x1 >= GRID_SIZE || z0 < 0 || z1 >= GRID_SIZE) return 0;
+            
+            const fx = gridX - x0;
+            const fz = gridZ - z0;
+            
+            const h00 = terrain[z0][x0];
+            const h10 = terrain[z0][x1];
+            const h01 = terrain[z1][x0];
+            const h11 = terrain[z1][x1];
+            
+            return h00 * (1-fx) * (1-fz) + h10 * fx * (1-fz) + h01 * (1-fx) * fz + h11 * fx * fz;
+        }
+        
+        // Get terrain gradient (for ball physics)
+        function getTerrainGradient(worldX, worldZ) {
+            const delta = 2;
+            const hL = getTerrainHeight(worldX - delta, worldZ);
+            const hR = getTerrainHeight(worldX + delta, worldZ);
+            const hU = getTerrainHeight(worldX, worldZ - delta);
+            const hD = getTerrainHeight(worldX, worldZ + delta);
+            
+            return {
+                x: (hL - hR) / (2 * delta),
+                z: (hU - hD) / (2 * delta)
+            };
+        }
+        
+        // Get surface normal at a point
+        function getSurfaceNormal(worldX, worldZ) {
+            const grad = getTerrainGradient(worldX, worldZ);
+            const nx = grad.x;
+            const ny = 1;
+            const nz = grad.z;
+            const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+            return { x: nx/len, y: ny/len, z: nz/len };
+        }
+        
+        // 3D to 2D projection
+        function project(x, y, z, camX, camY, camZ, camAngle) {
+            let dx = x - camX;
+            let dz = z - camZ;
+            
+            const cos = Math.cos(camAngle);
+            const sin = Math.sin(camAngle);
+            const rx = dx * cos - dz * sin;
+            const rz = dx * sin + dz * cos;
+            
+            if (rz <= 20) return null;
+            
+            const pitchCos = Math.cos(camera.pitch);
+            const pitchSin = Math.sin(camera.pitch);
+            const ry = (y - camY) * pitchCos - rz * pitchSin;
+            const rz2 = (y - camY) * pitchSin + rz * pitchCos;
+            
+            if (rz2 <= 20) return null;
+            
+            const fov = 600;
+            const screenX = canvas.width / 2 + (rx * fov) / rz2;
+            const screenY = canvas.height / 2 - (ry * fov) / rz2;
+            
+            if (screenX < -1000 || screenX > canvas.width + 1000 ||
+                screenY < -1000 || screenY > canvas.height + 1000) {
+                return null;
+            }
+            
+            return { x: screenX, y: screenY, z: rz2 };
+        }
+        
+        // Draw a post/platform quad - wireframe cyan or filled red with dynamic lighting
+        function drawPost(p1, p2, p3, p4, normal, depth, isRed, centerX, centerY, centerZ) {
+            // Get dynamic lighting at this position
+            const light = getLightColor(centerX, centerY, centerZ);
+            
+            // Distance fade
+            const maxDist = 600;
+            const distFade = Math.max(0.1, 1 - depth / maxDist);
+            
+            if (isRed) {
+                // Filled red tile with lighting
+                const r = Math.floor(Math.min(255, (180 * light.r + 60) * distFade));
+                const g = Math.floor(Math.min(255, 30 * light.g * distFade));
+                const b = Math.floor(Math.min(255, 30 * light.b * distFade));
+                
+                ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineTo(p3.x, p3.y);
+                ctx.lineTo(p4.x, p4.y);
+                ctx.closePath();
+                ctx.fill();
+            } else {
+                // Black fill
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineTo(p3.x, p3.y);
+                ctx.lineTo(p4.x, p4.y);
+                ctx.closePath();
+                ctx.fill();
+                
+                // Colored wireframe based on lights
+                const brightness = (light.r + light.g + light.b) / 3;
+                const r = Math.floor(Math.min(255, light.r * 255 * distFade));
+                const g = Math.floor(Math.min(255, light.g * 255 * distFade));
+                const b = Math.floor(Math.min(255, light.b * 255 * distFade));
+                
+                ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        }
+        
+        // Draw a ball
+        function drawBall(ball, camX, camY, camZ, camAngle) {
+            const p = project(ball.x, ball.y + BALL_RADIUS, ball.z, camX, camY, camZ, camAngle);
+            if (!p) return null;
+            
+            const screenRadius = (BALL_RADIUS * 600) / p.z;
+            
+            // Get lighting at ball position
+            const light = getLightColor(ball.x, ball.y + BALL_RADIUS, ball.z);
+            const brightness = Math.min(1.5, (light.r + light.g + light.b));
+            
+            // Shaded sphere with lighting influence
+            const grad = ctx.createRadialGradient(
+                p.x - screenRadius * 0.3, p.y - screenRadius * 0.3, 0,
+                p.x, p.y, screenRadius
+            );
+            const r1 = Math.floor(Math.min(255, 255 * (0.5 + light.r * 0.5)));
+            const g1 = Math.floor(Math.min(255, 136 * (0.5 + light.g * 0.5)));
+            const b1 = Math.floor(Math.min(255, 68 * (0.5 + light.b * 0.5)));
+            const r2 = Math.floor(Math.min(255, 204 * brightness * 0.4));
+            const g2 = Math.floor(Math.min(255, 68 * brightness * 0.4));
+            const b2 = Math.floor(0);
+            grad.addColorStop(0, `rgb(${r1}, ${g1}, ${b1})`);
+            grad.addColorStop(0.5, `rgb(${r2}, ${g2}, ${b2})`);
+            grad.addColorStop(1, `rgb(${Math.floor(r2*0.5)}, ${Math.floor(g2*0.5)}, 0)`);
+            
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, screenRadius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            return { depth: p.z };
+        }
+        
+        // Update stick men
+        function updateStickMen(dt) {
+            for (const man of stickMen) {
+                // Move toward target
+                const dx = man.targetX - man.x;
+                const dz = man.targetZ - man.z;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                
+                if (dist < 10) {
+                    man.pickNewTarget();
+                } else {
+                    man.angle = Math.atan2(dx, dz);
+                    
+                    // Calculate next position
+                    const nextX = man.x + (dx / dist) * STICK_SPEED * dt;
+                    const nextZ = man.z + (dz / dist) * STICK_SPEED * dt;
+                    
+                    // Only move if not heading into red tile
+                    if (!isRedTile(nextX, nextZ)) {
+                        man.x = nextX;
+                        man.z = nextZ;
+                        man.walkPhase += dt * 10;
+                    } else {
+                        // Pick new target if blocked
+                        man.pickNewTarget();
+                    }
+                }
+                
+                // Always stay on terrain surface
+                man.y = getTerrainHeight(man.x, man.z);
+            }
+        }
+        
+        // Draw a stick man
+        function drawStickMan(man, camX, camY, camZ, camAngle) {
+            const legSwing = Math.sin(man.walkPhase) * 0.4;
+            const armSwing = Math.sin(man.walkPhase + Math.PI) * 0.3;
+            
+            // Get lighting at stick man position
+            const light = getLightColor(man.x, man.y + STICK_HEIGHT / 2, man.z);
+            const brightness = Math.min(1, (light.r + light.g + light.b) / 1.5);
+            const r = Math.floor(light.r * 255);
+            const g = Math.floor(Math.min(255, light.g * 255 + 100 * brightness)); // Green tint
+            const b = Math.floor(light.b * 255);
+            const color = `rgb(${r}, ${g}, ${b})`;
+            
+            // Body parts heights
+            const footY = man.y;
+            const hipY = man.y + STICK_HEIGHT * 0.4;
+            const shoulderY = man.y + STICK_HEIGHT * 0.8;
+            const headY = man.y + STICK_HEIGHT;
+            
+            // Project key points
+            const head = project(man.x, headY + 2, man.z, camX, camY, camZ, camAngle);
+            const shoulder = project(man.x, shoulderY, man.z, camX, camY, camZ, camAngle);
+            const hip = project(man.x, hipY, man.z, camX, camY, camZ, camAngle);
+            
+            // Leg positions (swing forward/back based on walk phase)
+            const legOffset = 3;
+            const leftFootX = man.x + Math.sin(man.angle + legSwing) * legOffset;
+            const leftFootZ = man.z + Math.cos(man.angle + legSwing) * legOffset;
+            const rightFootX = man.x + Math.sin(man.angle - legSwing) * legOffset;
+            const rightFootZ = man.z + Math.cos(man.angle - legSwing) * legOffset;
+            
+            const leftFoot = project(leftFootX, footY, leftFootZ, camX, camY, camZ, camAngle);
+            const rightFoot = project(rightFootX, footY, rightFootZ, camX, camY, camZ, camAngle);
+            
+            // Arm positions
+            const armOffset = 4;
+            const leftHandX = man.x + Math.sin(man.angle - armSwing) * armOffset;
+            const leftHandZ = man.z + Math.cos(man.angle - armSwing) * armOffset;
+            const rightHandX = man.x + Math.sin(man.angle + armSwing) * armOffset;
+            const rightHandZ = man.z + Math.cos(man.angle + armSwing) * armOffset;
+            
+            const leftHand = project(leftHandX, hipY + 2, leftHandZ, camX, camY, camZ, camAngle);
+            const rightHand = project(rightHandX, hipY + 2, rightHandZ, camX, camY, camZ, camAngle);
+            
+            if (!head || !shoulder || !hip || !leftFoot || !rightFoot) return;
+            
+            const scale = 600 / head.z;
+            const lineWidth = Math.max(1, scale * 1.5);
+            
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth;
+            ctx.lineCap = 'round';
+            
+            // Draw body
+            ctx.beginPath();
+            ctx.moveTo(shoulder.x, shoulder.y);
+            ctx.lineTo(hip.x, hip.y);
+            ctx.stroke();
+            
+            // Draw legs
+            ctx.beginPath();
+            ctx.moveTo(hip.x, hip.y);
+            ctx.lineTo(leftFoot.x, leftFoot.y);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(hip.x, hip.y);
+            ctx.lineTo(rightFoot.x, rightFoot.y);
+            ctx.stroke();
+            
+            // Draw arms
+            if (leftHand && rightHand) {
+                ctx.beginPath();
+                ctx.moveTo(shoulder.x, shoulder.y);
+                ctx.lineTo(leftHand.x, leftHand.y);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(shoulder.x, shoulder.y);
+                ctx.lineTo(rightHand.x, rightHand.y);
+                ctx.stroke();
+            }
+            
+            // Draw head
+            const headRadius = Math.max(2, scale * 2);
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(head.x, head.y, headRadius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Draw explosion
+        function drawExplosion(exp, camX, camY, camZ, camAngle) {
+            const age = (performance.now() - exp.born) / 1000;
+            const alpha = 1 - age * 2;
+            
+            for (const p of exp.particles) {
+                const px = exp.x + p.ox;
+                const py = exp.y + p.oy;
+                const pz = exp.z + p.oz;
+                
+                const proj = project(px, py, pz, camX, camY, camZ, camAngle);
+                if (!proj) continue;
+                
+                const size = Math.max(2, (8 - age * 15) * 600 / proj.z);
+                
+                // Random fire colors
+                const colors = ['#ff4400', '#ff8800', '#ffcc00', '#ff0000', '#ffff00'];
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.globalAlpha = Math.max(0, alpha);
+                ctx.beginPath();
+                ctx.arc(proj.x, proj.y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+        
+        // Draw dead stick man (ragdoll)
+        function drawDeadMan(dead, camX, camY, camZ, camAngle) {
+            const age = (performance.now() - dead.born) / 1000;
+            const alpha = Math.max(0, 1 - age / 3);
+            
+            // Simple tumbling body
+            const bodyLen = STICK_HEIGHT;
+            const rot = dead.rot;
+            
+            const dx = Math.sin(rot) * bodyLen * 0.5;
+            const dy = Math.cos(rot) * bodyLen * 0.5;
+            
+            const p1 = project(dead.x - dx * 0.3, dead.y + dy * 0.5 + 5, dead.z, camX, camY, camZ, camAngle);
+            const p2 = project(dead.x + dx * 0.3, dead.y - dy * 0.3 + 5, dead.z, camX, camY, camZ, camAngle);
+            const head = project(dead.x - dx * 0.5, dead.y + dy * 0.7 + 5, dead.z, camX, camY, camZ, camAngle);
+            
+            if (!p1 || !p2 || !head) return;
+            
+            ctx.globalAlpha = alpha;
+            ctx.strokeStyle = '#0f0';
+            ctx.lineWidth = 2;
+            
+            // Body
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+            
+            // Limbs splayed out
+            const limbLen = 20;
+            for (let i = 0; i < 4; i++) {
+                const angle = rot + i * Math.PI / 2 + age * 3;
+                const lx = Math.cos(angle) * limbLen;
+                const ly = Math.sin(angle) * limbLen;
+                const mid = i < 2 ? p1 : p2;
+                ctx.beginPath();
+                ctx.moveTo(mid.x, mid.y);
+                ctx.lineTo(mid.x + lx, mid.y + ly);
+                ctx.stroke();
+            }
+            
+            // Head
+            const headSize = Math.max(3, 600 / head.z * 2);
+            ctx.fillStyle = '#0f0';
+            ctx.beginPath();
+            ctx.arc(head.x, head.y, headSize, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.globalAlpha = 1;
+        }
+        
+        // Update UFOs
+        function updateUFOs(dt) {
+            for (const ufo of ufos) {
+                ufo.stateTime += dt;
+                ufo.hoverPhase += dt * 3;
+                
+                if (ufo.state === 'cruise') {
+                    ufo.x += ufo.vx * dt;
+                    ufo.z += ufo.vz * dt;
+                    ufo.y += Math.sin(ufo.hoverPhase) * 20 * dt;
+                    
+                    if (ufo.stateTime > 3 + Math.random() * 5) {
+                        ufo.state = Math.random() < 0.5 ? 'hover' : 'zoom';
+                        ufo.stateTime = 0;
+                        if (ufo.state === 'zoom') {
+                            const margin = CELL_SIZE * 10;
+                            const maxPos = (GRID_SIZE - 10) * CELL_SIZE;
+                            ufo.targetX = margin + Math.random() * (maxPos - margin);
+                            ufo.targetZ = margin + Math.random() * (maxPos - margin);
+                            playSound('ufo_zoom');
+                        }
+                    }
+                } else if (ufo.state === 'hover') {
+                    ufo.y += Math.sin(ufo.hoverPhase) * 40 * dt;
+                    
+                    if (ufo.stateTime > 2 + Math.random() * 3) {
+                        ufo.state = 'cruise';
+                        ufo.stateTime = 0;
+                        ufo.vx = (Math.random() - 0.5) * 200;
+                        ufo.vz = (Math.random() - 0.5) * 200;
+                    }
+                } else if (ufo.state === 'zoom') {
+                    const dx = ufo.targetX - ufo.x;
+                    const dz = ufo.targetZ - ufo.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+                    
+                    if (dist > 20) {
+                        ufo.x += (dx / dist) * 400 * dt;
+                        ufo.z += (dz / dist) * 400 * dt;
+                    } else {
+                        ufo.state = 'hover';
+                        ufo.stateTime = 0;
+                    }
+                }
+                
+                const margin = CELL_SIZE * 5;
+                const maxPos = (GRID_SIZE - 5) * CELL_SIZE;
+                ufo.x = Math.max(margin, Math.min(maxPos, ufo.x));
+                ufo.z = Math.max(margin, Math.min(maxPos, ufo.z));
+                ufo.y = Math.max(50, Math.min(200, ufo.y));
+            }
+        }
+        
+        // Update drones
+        function updateDrones(dt) {
+            for (const drone of drones) {
+                drone.angle += dt * 0.5;
+                drone.x += Math.sin(drone.angle) * drone.speed * dt;
+                drone.z += Math.cos(drone.angle) * drone.speed * dt;
+                
+                drone.bobPhase += dt * 2;
+                const baseY = getTerrainHeight(drone.x, drone.z) + 35;
+                drone.y = baseY + Math.sin(drone.bobPhase) * 10;
+                
+                drone.nextFlare -= dt;
+                if (drone.nextFlare <= 0 && !drone.flareActive) {
+                    drone.flareActive = true;
+                    drone.flareTime = 0;
+                    playSound('flare');
+                }
+                
+                if (drone.flareActive) {
+                    drone.flareTime += dt;
+                    if (drone.flareTime > 1.5) {
+                        drone.flareActive = false;
+                        drone.nextFlare = 5 + Math.random() * 10;
+                    }
+                }
+                
+                const margin = CELL_SIZE * 10;
+                const maxPos = (GRID_SIZE - 10) * CELL_SIZE;
+                drone.x = Math.max(margin, Math.min(maxPos, drone.x));
+                drone.z = Math.max(margin, Math.min(maxPos, drone.z));
+            }
+        }
+        
+        // Draw UFO
+        function drawUFO(ufo, camX, camY, camZ, camAngle) {
+            const p = project(ufo.x, ufo.y, ufo.z, camX, camY, camZ, camAngle);
+            if (!p) return;
+            
+            const scale = 600 / p.z;
+            const size = Math.max(5, 20 * scale);
+            
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.ellipse(p.x, p.y, size * 1.5, size * 0.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#666';
+            ctx.beginPath();
+            ctx.ellipse(p.x, p.y - size * 0.3, size * 0.6, size * 0.4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            const grad = ctx.createRadialGradient(p.x, p.y + size * 0.3, 0, p.x, p.y + size * 0.3, size * 2);
+            grad.addColorStop(0, ufo.color);
+            grad.addColorStop(0.3, ufo.color + '88');
+            grad.addColorStop(1, 'transparent');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y + size * 0.3, size * 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            const blinkPhase = performance.now() * 0.01;
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2 + blinkPhase;
+                const lx = p.x + Math.cos(angle) * size * 1.3;
+                const ly = p.y + Math.sin(angle) * size * 0.3;
+                const brightness = Math.sin(blinkPhase * 3 + i) > 0 ? 1 : 0.3;
+                ctx.fillStyle = `rgba(255, 255, 255, ${brightness})`;
+                ctx.beginPath();
+                ctx.arc(lx, ly, Math.max(1, 2 * scale), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Draw drone
+        function drawDrone(drone, camX, camY, camZ, camAngle) {
+            const p = project(drone.x, drone.y, drone.z, camX, camY, camZ, camAngle);
+            if (!p) return;
+            
+            const scale = 600 / p.z;
+            const size = Math.max(3, 8 * scale);
+            
+            ctx.fillStyle = '#222';
+            ctx.fillRect(p.x - size, p.y - size * 0.3, size * 2, size * 0.6);
+            
+            const rotorPhase = performance.now() * 0.05;
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 4; i++) {
+                const ox = (i < 2 ? -1 : 1) * size * 1.2;
+                const oy = (i % 2 === 0 ? -1 : 1) * size * 0.8;
+                ctx.beginPath();
+                ctx.arc(p.x + ox, p.y + oy, size * 0.5, rotorPhase, rotorPhase + Math.PI);
+                ctx.stroke();
+            }
+            
+            const blink = Math.sin(performance.now() * 0.01) > 0;
+            ctx.fillStyle = blink ? '#ff0000' : '#330000';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, Math.max(2, 3 * scale), 0, Math.PI * 2);
+            ctx.fill();
+            
+            if (drone.flareActive) {
+                const flareIntensity = 1 - (drone.flareTime / 1.5);
+                const flareSize = size * 8 * flareIntensity;
+                
+                const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, flareSize);
+                grad.addColorStop(0, `rgba(255, 220, 150, ${flareIntensity})`);
+                grad.addColorStop(0.3, `rgba(255, 150, 50, ${flareIntensity * 0.6})`);
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, flareSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Main render
+        function render() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const camX = player.x - Math.sin(player.angle) * camera.distance;
+            const camZ = player.z - Math.cos(player.angle) * camera.distance;
+            const camY = player.y + camera.height;
+            const camAngle = player.angle;
+            
+            const renderList = [];
+            
+            const playerGridX = Math.floor(player.x / CELL_SIZE);
+            const playerGridZ = Math.floor(player.z / CELL_SIZE);
+            const viewRange = 25;
+            
+            const POST_SIZE = CELL_SIZE * 0.35;
+            
+            for (let z = Math.max(1, playerGridZ - viewRange); z < Math.min(GRID_SIZE - 2, playerGridZ + viewRange); z++) {
+                for (let x = Math.max(1, playerGridX - viewRange); x < Math.min(GRID_SIZE - 2, playerGridX + viewRange); x++) {
+                    const centerX = x * CELL_SIZE + CELL_SIZE / 2;
+                    const centerZ = z * CELL_SIZE + CELL_SIZE / 2;
+                    
+                    const halfSize = POST_SIZE / 2;
+                    
+                    const h1 = getTerrainHeight(centerX - halfSize, centerZ - halfSize);
+                    const h2 = getTerrainHeight(centerX + halfSize, centerZ - halfSize);
+                    const h3 = getTerrainHeight(centerX + halfSize, centerZ + halfSize);
+                    const h4 = getTerrainHeight(centerX - halfSize, centerZ + halfSize);
+                    
+                    const p1 = project(centerX - halfSize, h1, centerZ - halfSize, camX, camY, camZ, camAngle);
+                    const p2 = project(centerX + halfSize, h2, centerZ - halfSize, camX, camY, camZ, camAngle);
+                    const p3 = project(centerX + halfSize, h3, centerZ + halfSize, camX, camY, camZ, camAngle);
+                    const p4 = project(centerX - halfSize, h4, centerZ + halfSize, camX, camY, camZ, camAngle);
+                    
+                    if (p1 && p2 && p3 && p4) {
+                        const avgDepth = (p1.z + p2.z + p3.z + p4.z) / 4;
+                        const normal = getSurfaceNormal(centerX, centerZ);
+                        const isRed = redTiles[z] && redTiles[z][x];
+                        const avgHeight = (h1 + h2 + h3 + h4) / 4;
+                        renderList.push({ 
+                            type: 'post', 
+                            p1, p2, p3, p4, 
+                            normal, 
+                            depth: avgDepth,
+                            isRed,
+                            centerX, centerY: avgHeight, centerZ
+                        });
+                    }
+                }
+            }
+            
+            // Add UFOs
+            for (const ufo of ufos) {
+                const p = project(ufo.x, ufo.y, ufo.z, camX, camY, camZ, camAngle);
+                if (p) {
+                    renderList.push({
+                        type: 'ufo',
+                        ufo,
+                        depth: p.z,
+                        camX, camY, camZ, camAngle
+                    });
+                }
+            }
+            
+            // Add drones
+            for (const drone of drones) {
+                const p = project(drone.x, drone.y, drone.z, camX, camY, camZ, camAngle);
+                if (p) {
+                    renderList.push({
+                        type: 'drone',
+                        drone,
+                        depth: p.z,
+                        camX, camY, camZ, camAngle
+                    });
+                }
+            }
+            
+            // Add balls
+            for (const ball of balls) {
+                const p = project(ball.x, ball.y + BALL_RADIUS, ball.z, camX, camY, camZ, camAngle);
+                if (p) {
+                    renderList.push({
+                        type: 'ball',
+                        ball,
+                        depth: p.z,
+                        camX, camY, camZ, camAngle
+                    });
+                }
+            }
+            
+            // Add stick men
+            for (const man of stickMen) {
+                const p = project(man.x, man.y + STICK_HEIGHT, man.z, camX, camY, camZ, camAngle);
+                if (p) {
+                    renderList.push({
+                        type: 'stickman',
+                        man,
+                        depth: p.z,
+                        camX, camY, camZ, camAngle
+                    });
+                }
+            }
+            
+            // Add explosions
+            for (const exp of explosions) {
+                const p = project(exp.x, exp.y, exp.z, camX, camY, camZ, camAngle);
+                if (p) {
+                    renderList.push({
+                        type: 'explosion',
+                        exp,
+                        depth: p.z,
+                        camX, camY, camZ, camAngle
+                    });
+                }
+            }
+            
+            // Add dead men
+            for (const dead of deadMen) {
+                const p = project(dead.x, dead.y + 5, dead.z, camX, camY, camZ, camAngle);
+                if (p) {
+                    renderList.push({
+                        type: 'deadman',
+                        dead,
+                        depth: p.z,
+                        camX, camY, camZ, camAngle
+                    });
+                }
+            }
+            
+            // Sort far to near
+            renderList.sort((a, b) => b.depth - a.depth);
+            
+            // Render
+            for (const item of renderList) {
+                if (item.type === 'post') {
+                    drawPost(item.p1, item.p2, item.p3, item.p4, item.normal, item.depth, item.isRed, item.centerX, item.centerY, item.centerZ);
+                } else if (item.type === 'ball') {
+                    drawBall(item.ball, item.camX, item.camY, item.camZ, item.camAngle);
+                } else if (item.type === 'stickman') {
+                    drawStickMan(item.man, item.camX, item.camY, item.camZ, item.camAngle);
+                } else if (item.type === 'explosion') {
+                    drawExplosion(item.exp, item.camX, item.camY, item.camZ, item.camAngle);
+                } else if (item.type === 'deadman') {
+                    drawDeadMan(item.dead, item.camX, item.camY, item.camZ, item.camAngle);
+                } else if (item.type === 'ufo') {
+                    drawUFO(item.ufo, item.camX, item.camY, item.camZ, item.camAngle);
+                } else if (item.type === 'drone') {
+                    drawDrone(item.drone, item.camX, item.camY, item.camZ, item.camAngle);
+                }
+            }
+            
+            // Draw flashlight cone overlay at bottom of screen
+            const coneGrad = ctx.createRadialGradient(
+                canvas.width / 2, canvas.height + 50, 0,
+                canvas.width / 2, canvas.height + 50, canvas.height * 0.8
+            );
+            coneGrad.addColorStop(0, 'rgba(255, 255, 200, 0.15)');
+            coneGrad.addColorStop(0.3, 'rgba(255, 255, 200, 0.05)');
+            coneGrad.addColorStop(1, 'transparent');
+            ctx.fillStyle = coneGrad;
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, canvas.height);
+            ctx.lineTo(canvas.width / 2 - canvas.width * 0.4, 0);
+            ctx.lineTo(canvas.width / 2 + canvas.width * 0.4, 0);
+            ctx.closePath();
+            ctx.fill();
+            
+            renderMinimap();
+        }
+        
+        function renderMinimap() {
+            const mm = minimapCtx;
+            const size = minimapCanvas.width;
+            const totalWorldSize = GRID_SIZE * CELL_SIZE;
+            const scale = size / totalWorldSize;
+            
+            mm.fillStyle = '#000';
+            mm.fillRect(0, 0, size, size);
+            
+            for (let z = 0; z < GRID_SIZE; z++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const px = x * CELL_SIZE * scale;
+                    const py = z * CELL_SIZE * scale;
+                    const pw = CELL_SIZE * scale;
+                    const ph = CELL_SIZE * scale;
+                    
+                    if (pw < 1 || ph < 1) continue;
+                    
+                    if (redTiles[z] && redTiles[z][x]) {
+                        mm.fillStyle = '#800';
+                        mm.fillRect(px, py, pw, ph);
+                    } else {
+                        const height = terrain[z][x];
+                        const brightness = Math.max(0.1, Math.min(0.5, (height + 100) / 400));
+                        mm.fillStyle = `rgba(0, ${Math.floor(brightness * 255)}, ${Math.floor(brightness * 128)}, 0.6)`;
+                        mm.fillRect(px, py, pw, ph);
+                    }
+                }
+            }
+            
+            for (const ufo of ufos) {
+                const px = ufo.x * scale;
+                const py = ufo.z * scale;
+                mm.fillStyle = ufo.color;
+                mm.beginPath();
+                mm.arc(px, py, 3, 0, Math.PI * 2);
+                mm.fill();
+            }
+            
+            for (const drone of drones) {
+                const px = drone.x * scale;
+                const py = drone.z * scale;
+                mm.fillStyle = drone.flareActive ? '#ff8' : '#666';
+                mm.beginPath();
+                mm.arc(px, py, 2, 0, Math.PI * 2);
+                mm.fill();
+            }
+            
+            for (const man of stickMen) {
+                const px = man.x * scale;
+                const py = man.z * scale;
+                mm.fillStyle = '#0f0';
+                mm.beginPath();
+                mm.arc(px, py, 2, 0, Math.PI * 2);
+                mm.fill();
+            }
+            
+            for (const ball of balls) {
+                const px = ball.x * scale;
+                const py = ball.z * scale;
+                mm.fillStyle = '#f80';
+                mm.beginPath();
+                mm.arc(px, py, 2, 0, Math.PI * 2);
+                mm.fill();
+            }
+            
+            const playerPx = player.x * scale;
+            const playerPy = player.z * scale;
+            
+            mm.fillStyle = '#0ff';
+            mm.beginPath();
+            mm.moveTo(playerPx, playerPy - 6);
+            mm.lineTo(playerPx - 4, playerPy + 4);
+            mm.lineTo(playerPx + 4, playerPy + 4);
+            mm.closePath();
+            mm.fill();
+            
+            mm.strokeStyle = 'rgba(0, 255, 255, 0.3)';
+            mm.lineWidth = 1;
+            mm.strokeRect(0, 0, size, size);
+        }
+        
+        // Ball physics
+        function updateBalls(dt) {
+            const now = performance.now();
+            
+            for (let i = balls.length - 1; i >= 0; i--) {
+                const ball = balls[i];
+                
+                // Check timeout (3 seconds)
+                if (now - ball.born > 3000) {
+                    createExplosion(ball.x, ball.y, ball.z);
+                    balls.splice(i, 1);
+                    continue;
+                }
+                
+                const grad = getTerrainGradient(ball.x, ball.z);
+                
+                ball.vx += grad.x * GRAVITY * dt;
+                ball.vz += grad.z * GRAVITY * dt;
+                
+                ball.vx *= FRICTION;
+                ball.vz *= FRICTION;
+                
+                ball.x += ball.vx * dt;
+                ball.z += ball.vz * dt;
+                
+                ball.y = getTerrainHeight(ball.x, ball.z);
+                
+                // Check collision with red tiles
+                if (isRedTile(ball.x, ball.z)) {
+                    createExplosion(ball.x, ball.y, ball.z);
+                    destroyRedTile(ball.x, ball.z);
+                    balls.splice(i, 1);
+                    continue;
+                }
+                
+                const margin = CELL_SIZE * 3;
+                const maxPos = (GRID_SIZE - 3) * CELL_SIZE;
+                
+                // Explode on boundary
+                if (ball.x <= margin || ball.x >= maxPos || ball.z <= margin || ball.z >= maxPos) {
+                    createExplosion(ball.x, ball.y, ball.z);
+                    balls.splice(i, 1);
+                    continue;
+                }
+                
+                // Check collision with stick men
+                for (let j = stickMen.length - 1; j >= 0; j--) {
+                    const man = stickMen[j];
+                    const dx = ball.x - man.x;
+                    const dz = ball.z - man.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+                    
+                    if (dist < BALL_RADIUS + 8) {
+                        // Kill the stick man
+                        killStickMan(man, ball.vx, ball.vz);
+                        stickMen.splice(j, 1);
+                        
+                        // Explode the ball
+                        createExplosion(ball.x, ball.y, ball.z);
+                        balls.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+            
+            // Ball-ball collisions
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const a = balls[i];
+                    const b = balls[j];
+                    
+                    const dx = b.x - a.x;
+                    const dz = b.z - a.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+                    const minDist = BALL_RADIUS * 2;
+                    
+                    if (dist < minDist && dist > 0) {
+                        // Both explode on collision
+                        createExplosion(a.x, a.y, a.z);
+                        createExplosion(b.x, b.y, b.z);
+                        balls.splice(j, 1);
+                        balls.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Update explosions
+        function updateExplosions(dt) {
+            const now = performance.now();
+            for (let i = explosions.length - 1; i >= 0; i--) {
+                const exp = explosions[i];
+                const age = (now - exp.born) / 1000;
+                
+                if (age > 0.5) {
+                    explosions.splice(i, 1);
+                    continue;
+                }
+                
+                for (const p of exp.particles) {
+                    p.ox += p.vx * dt;
+                    p.oy += p.vy * dt;
+                    p.oz += p.vz * dt;
+                    p.vy -= 300 * dt; // gravity on particles
+                }
+            }
+        }
+        
+        // Update dead men
+        function updateDeadMen(dt) {
+            const now = performance.now();
+            for (let i = deadMen.length - 1; i >= 0; i--) {
+                const dead = deadMen[i];
+                const age = (now - dead.born) / 1000;
+                
+                if (age > 3) {
+                    deadMen.splice(i, 1);
+                    // Respawn a new stick man
+                    stickMen.push(createStickMan());
+                    continue;
+                }
+                
+                dead.x += dead.vx * dt;
+                dead.z += dead.vz * dt;
+                dead.vy -= 200 * dt; // gravity
+                dead.y += dead.vy * dt;
+                dead.rot += dead.rotSpeed * dt;
+                
+                // Stop at ground
+                const groundY = getTerrainHeight(dead.x, dead.z);
+                if (dead.y < groundY) {
+                    dead.y = groundY;
+                    dead.vy = Math.abs(dead.vy) * 0.3; // Small bounce
+                    dead.vx *= 0.7;
+                    dead.vz *= 0.7;
+                    dead.rotSpeed *= 0.8;
+                }
+            }
+        }
+        
+        // Spawn ball
+        function spawnBall() {
+            const now = performance.now();
+            if (now - lastBallTime < 300) return;
+            lastBallTime = now;
+            
+            const spawnDist = 30;
+            const ball = {
+                x: player.x + Math.sin(player.angle) * spawnDist,
+                z: player.z + Math.cos(player.angle) * spawnDist,
+                y: 0,
+                vx: Math.sin(player.angle) * 240,
+                vz: Math.cos(player.angle) * 240,
+                born: performance.now(),
+                alive: true
+            };
+            ball.y = getTerrainHeight(ball.x, ball.z);
+            balls.push(ball);
+            playSound('shoot');
+            
+            if (balls.length > 50) balls.shift();
+        }
+        
+        // Update player
+        function update(dt) {
+            const acceleration = 150;
+            const maxSpeed = 200;
+            const friction = 0.95;
+            const turnRate = 2.5;
+            
+            const gp = getGamepadInput();
+            
+            let steer = 0;
+            if (keys['a'] || keys['arrowleft']) steer = -1;
+            if (keys['d'] || keys['arrowright']) steer = 1;
+            if (touchSteer !== 0) steer = touchSteer;
+            if (Math.abs(gp.steer) > 0.1) steer = gp.steer;
+            
+            player.angle += steer * turnRate * dt;
+            
+            // Acceleration - keyboard, touch, or analog gamepad
+            let accelInput = 0;
+            if (keys['w'] || keys['arrowup'] || touchGas) accelInput = 1;
+            if (keys['s'] || keys['arrowdown'] || touchBrake) accelInput = -0.7;
+            if (Math.abs(gp.gas) > 0.1) accelInput = gp.gas;
+            
+            player.speed += accelInput * acceleration * dt;
+            
+            player.speed = Math.max(-maxSpeed * 0.5, Math.min(maxSpeed, player.speed));
+            player.speed *= friction;
+            
+            // Move in facing direction
+            player.x += Math.sin(player.angle) * player.speed * dt;
+            player.z += Math.cos(player.angle) * player.speed * dt;
+            
+            const margin = CELL_SIZE * 3;
+            const maxPos = (GRID_SIZE - 3) * CELL_SIZE;
+            player.x = Math.max(margin, Math.min(maxPos, player.x));
+            player.z = Math.max(margin, Math.min(maxPos, player.z));
+            
+            player.y = getTerrainHeight(player.x, player.z);
+            
+            if (keys[' '] || keys['Space'] || touchShoot || gp.shoot) {
+                spawnBall();
+            }
+            
+            updateBalls(dt);
+            updateStickMen(dt);
+            updateExplosions(dt);
+            updateDeadMen(dt);
+            updateUFOs(dt);
+            updateDrones(dt);
+            
+            document.getElementById('pos').textContent = `${Math.floor(player.x)}, ${Math.floor(player.z)}`;
+            document.getElementById('altitude').textContent = Math.floor(player.y);
+            document.getElementById('heading').textContent = Math.floor((player.angle * 180 / Math.PI + 360) % 360) + '°';
+            document.getElementById('ballCount').textContent = balls.length;
+            document.getElementById('killCount').textContent = killCount;
+            document.getElementById('score').textContent = score.toLocaleString();
+            document.getElementById('combo').textContent = `x${combo}`;
+        }
+        
+        // Game loop
+        let lastTime = performance.now();
+        function gameLoop(time) {
+            const dt = Math.min(0.05, (time - lastTime) / 1000);
+            lastTime = time;
+            
+            update(dt);
+            render();
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        initStickMen();
+        initUFOs();
+        initDrones();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
