@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>校园装甲英雄：篮球场的拖延怪</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0a1528,#1a3058 45%,#4a80b0);font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;padding:16px}
+  .page{width:min(1200px,96vw);display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start}
+  .game-card,.info-card{background:rgba(255,255,255,0.95);border:3px solid #fff;border-radius:20px;box-shadow:0 16px 40px rgba(8,24,55,0.3);overflow:hidden}
+  .game-title{padding:14px 18px;background:linear-gradient(90deg,#0d8bd8,#2ed4b0);color:#fff;display:flex;justify-content:space-between;align-items:center}
+  .game-title h1{margin:0;font-size:20px}
+  .game-title span{font-size:14px;opacity:0.9}
+  .canvas-wrap{position:relative;width:100%;background:#87ceeb;line-height:0}
+  canvas{display:block;width:100%}
+  .info-card{padding:16px}
+  .info-card h2{margin:0 0 10px;font-size:20px;color:#0d6db5}
+  .info-card h3{margin:18px 0 8px;font-size:15px;color:#0d6db5}
+  .info-card p{margin:6px 0;line-height:1.65;font-size:14px}
+  .keys{display:grid;gap:7px;margin-top:8px}
+  .key-row{padding:8px 10px;background:#e8f4ff;border-left:4px solid #2ea0ff;border-radius:8px;font-size:14px}
+  .key-row code{display:inline-block;min-width:68px;color:#0a5ca0;font-weight:700}
+  .note{padding:12px;background:#fff8e0;border:1px solid #ffd97a;border-radius:12px;color:#6b5100;font-size:13px;margin-top:12px}
+  @media(max-width:900px){.page{grid-template-columns:1fr}.info-card{display:none}}
+</style>
+</head>
+<body>
+<main class="page">
+  <section class="game-card">
+    <div class="game-title"><h1>校园装甲英雄</h1><span>第一关：篮球场的拖延怪</span></div>
+    <div class="canvas-wrap"><canvas id="game" width="800" height="520"></canvas></div>
+  </section>
+  <aside class="info-card">
+    <h2>玩法说明</h2>
+    <p>你是原创装甲英雄"疾风甲士"，目标是在篮球场净化"拖延怪"，获得"立即行动徽章"。</p>
+    <div class="keys">
+      <div class="key-row"><code>&larr; &rarr;</code>左右移动</div>
+      <div class="key-row"><code>空格</code>跳跃</div>
+      <div class="key-row"><code>A</code>疾风拳</div>
+      <div class="key-row"><code>S</code>疾风冲刺（需30能量）</div>
+      <div class="key-row"><code>R</code>重新开始</div>
+    </div>
+    <h3>成长主题</h3>
+    <p>拖延怪代表"等一下再做"的坏习惯。通过行动、运动和伙伴鼓励，把对战变成正向成长。</p>
+    <h3>AI 亮点</h3>
+    <p>AI 校园成长助手可根据玩家输入生成怪兽、技能、鼓励语和现实小任务。</p>
+    <div class="note">第一版已可试玩。体验移动、攻击、能量、胜利和失败流程后，告诉我哪里需要改。</div>
+  </aside>
+</main>
+<script>
+(function() {
+  'use strict';
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var keys = {};
+  var messageTimer = 0;
+  var currentMessage = '团团：篮球场被灰雾包围了，拖延怪出现了！';
+  var gameState = 'intro';
+  var groundY = 420;
+
+  var player = {
+    x:120, y:groundY-100, w:50, h:100,
+    vx:0, vy:0, speed:4.5, hp:100, energy:0, face:1,
+    onGround:true, attacking:false,
+    attackCooldown:0, skillCooldown:0, invincible:0, animFrame:0
+  };
+  var enemy = {
+    x:620, y:groundY-95, w:55, h:95,
+    hp:100, speed:1.3, hitCooldown:0, wobble:0, animFrame:0
+  };
+  var pet = {x:60, y:groundY-35, w:40, h:32, healCooldown:480};
+  var basketball = {x:350, y:groundY-25, r:15, active:true, respawn:0};
+  var energyOrb = {x:0, y:0, r:12, active:false, timer:0};
+  var particles = [];
+
+  function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+  function rectsOverlap(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;}
+  function circleRectOverlap(c,r){
+    var nx=clamp(c.x,r.x,r.x+r.w),ny=clamp(c.y,r.y,r.y+r.h);
+    var dx=c.x-nx,dy=c.y-ny;return dx*dx+dy*dy<c.r*c.r;
+  }
+  function addParticles(x,y,color,n){
+    for(var i=0;i<n;i++) particles.push({x:x,y:y,vx:(Math.random()-0.5)*6,vy:(Math.random()-0.5)*6-2,life:30+Math.random()*20,maxLife:50,color:color,size:2+Math.random()*3});
+  }
+  function resetGame(){
+    player.x=120;player.y=groundY-100;player.vx=0;player.vy=0;player.hp=150;player.energy=0;
+    player.face=1;player.onGround=true;player.attacking=false;
+    player.attackCooldown=0;player.skillCooldown=0;player.invincible=0;
+    enemy.x=620;enemy.y=groundY-95;enemy.hp=80;enemy.hitCooldown=0;enemy.wobble=0;
+    basketball.x=350;basketball.active=true;basketball.respawn=0;
+    energyOrb.active=false;energyOrb.timer=0;pet.healCooldown=480;
+    particles.length=0;gameState='playing';
+    currentMessage='疾风甲士：不能再等了，现在就行动！';messageTimer=180;
+  }
+  function getAttackBox(){return{x:player.face===1?player.x+player.w-4:player.x-48,y:player.y+28,w:48,h:42};}
+
+  function updatePlayer(){
+    player.vx=0;
+    if(keys['ArrowLeft']){player.vx=-player.speed;player.face=-1;}
+    if(keys['ArrowRight']){player.vx=player.speed;player.face=1;}
+    if((keys[' ']||keys['Space'])&&player.onGround){player.vy=-12;player.onGround=false;}
+    player.x+=player.vx;player.vy+=0.6;player.y+=player.vy;
+    if(player.y>=groundY-player.h){player.y=groundY-player.h;player.vy=0;player.onGround=true;}
+    player.x=clamp(player.x,10,canvas.width-player.w-10);
+    if(player.attackCooldown>0)player.attackCooldown--;
+    if(player.skillCooldown>0)player.skillCooldown--;
+    if(player.invincible>0)player.invincible--;
+    if(keys['a']&&player.attackCooldown<=0){
+      player.attacking=true;player.attackCooldown=30;
+      setTimeout(function(){player.attacking=false;},180);
+      var ab=getAttackBox();
+      if(rectsOverlap(ab,enemy)&&enemy.hitCooldown<=0){
+        enemy.hp=clamp(enemy.hp-10,0,100);enemy.hitCooldown=22;
+        player.energy=clamp(player.energy+5,0,100);
+        currentMessage='疾风甲士：疾风拳！先开始，就是胜利！';messageTimer=180;
+        addParticles(enemy.x+enemy.w/2,enemy.y+30,'#00ffff',6);
+      }
+    }
+    if(keys['s']&&player.skillCooldown<=0){
+      if(player.energy<30){currentMessage='团团：能量还不够，先去投篮或攻击积攒能量！';messageTimer=120;player.skillCooldown=40;}
+      else{
+        player.energy-=30;player.skillCooldown=55;
+        var ox=player.x;player.x+=player.face*85;player.x=clamp(player.x,10,canvas.width-player.w-10);
+        addParticles(ox+player.w/2,player.y+player.h/2,'#00e5ff',10);
+        if(rectsOverlap(getAttackBox(),enemy)||rectsOverlap(player,enemy)){
+          enemy.hp=clamp(enemy.hp-25,0,100);enemy.hitCooldown=30;
+          currentMessage='疾风甲士：疾风冲刺！把拖延变成行动！';messageTimer=180;
+          addParticles(enemy.x+enemy.w/2,enemy.y+30,'#00ffff',8);
+        }else{currentMessage='疾风甲士：疾风冲刺！';messageTimer=120;}
+      }
+    }
+    if(basketball.active&&circleRectOverlap(basketball,player)){
+      basketball.active=false;basketball.respawn=200;player.energy=clamp(player.energy+20,0,100);
+      currentMessage='团团：投篮训练成功，运动能量上升！';messageTimer=150;
+      addParticles(player.x+player.w/2,player.y,'#ff69b4',5);
+    }
+    if(energyOrb.active&&circleRectOverlap(energyOrb,player)){
+      energyOrb.active=false;player.hp=clamp(player.hp+10,0,100);
+      currentMessage='团团：心情能量恢复了你的状态！';messageTimer=150;
+      addParticles(player.x+player.w/2,player.y,'#ff69b4',5);
+    }
+    player.animFrame++;
+  }
+  function updateEnemy(){
+    enemy.wobble+=0.07;
+    var cp=player.x+player.w/2,ce=enemy.x+enemy.w/2;
+    if(Math.abs(cp-ce)>60) enemy.x+=cp>ce?enemy.speed:-enemy.speed;
+    enemy.x=clamp(enemy.x,20,canvas.width-enemy.w-20);
+    if(enemy.hitCooldown>0)enemy.hitCooldown--;
+    if(rectsOverlap(player,enemy)&&player.invincible<=0){
+      player.hp=clamp(player.hp-10,0,100);player.invincible=65;
+      currentMessage='拖延怪：等一下再做吧……';messageTimer=150;
+      addParticles(player.x+player.w/2,player.y+30,'#ff4444',5);
+    }
+    enemy.animFrame++;
+  }
+  function updatePet(){
+    pet.x+=((player.x-55)-pet.x)*0.08;pet.y+=((player.y+player.h-32)-pet.y)*0.08;
+    pet.healCooldown--;
+    if(pet.healCooldown<=0&&!energyOrb.active){
+      energyOrb.active=true;energyOrb.timer=360;
+      energyOrb.x=clamp(player.x+120,60,canvas.width-60);energyOrb.y=groundY-65;pet.healCooldown=540;
+      currentMessage='团团：我找到了心情能量，需要的话就去拿吧！';messageTimer=180;
+    }
+    if(energyOrb.active){energyOrb.timer--;if(energyOrb.timer<=0)energyOrb.active=false;}
+  }
+  function updateBasketball(){
+    if(!basketball.active){basketball.respawn--;if(basketball.respawn<=0){basketball.active=true;basketball.x=200+Math.random()*400;}}
+  }
+  function updateParticles(){
+    for(var i=particles.length-1;i>=0;i--){var p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.15;p.life--;if(p.life<=0)particles.splice(i,1);}
+  }
+  function checkGameEnd(){
+    if(enemy.hp<=0&&gameState==='playing'){gameState='win';messageTimer=99999;currentMessage='你获得了"立即行动徽章"！现实小任务：现在就开始做一件 10 分钟内可以完成的小事。';addParticles(enemy.x+enemy.w/2,enemy.y+30,'#ff69b4',8);}
+    if(player.hp<=0&&gameState==='playing'){gameState='lose';messageTimer=99999;currentMessage='团团：没关系，失败不代表结束，休息一下再试一次。按 R 重新开始。';}
+  }
+  function update(){
+    if(gameState==='intro')resetGame();
+    if(gameState==='playing'){updatePlayer();updateEnemy();updatePet();updateBasketball();updateParticles();checkGameEnd();}
+    if(messageTimer>0)messageTimer--;
+  }
+
+  // ================== DRAWING ==================
+
+  function drawBackground(){
+    var sky=ctx.createLinearGradient(0,0,0,groundY);
+    sky.addColorStop(0,'#7ec8ff');sky.addColorStop(1,'#d0f0ff');
+    ctx.fillStyle=sky;ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#c8e0f5';ctx.fillRect(0,200,canvas.width,100);
+    ctx.fillStyle='#a8c8e8';
+    ctx.fillRect(60,140,180,160);ctx.fillRect(280,170,150,130);
+    ctx.fillRect(480,150,170,150);ctx.fillRect(700,180,140,120);
+    ctx.fillStyle='#8eb8d8';
+    var blds=[[60,140,180,160],[280,170,150,130],[480,150,170,150],[700,180,140,120]];
+    for(var bi=0;bi<blds.length;bi++){var b=blds[bi];for(var i=0;i<4;i++)for(var j=0;j<3;j++)ctx.fillRect(b[0]+14+i*40,b[1]+14+j*40,22,20);}
+    ctx.fillStyle='#5cb85c';
+    ctx.beginPath();ctx.ellipse(80,310,32,26,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(720,315,36,30,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#4a904a';ctx.fillRect(74,325,12,26);ctx.fillRect(714,330,12,26);
+    ctx.fillStyle='#6bc96b';ctx.fillRect(0,310,canvas.width,34);
+    ctx.fillStyle='#d4883f';ctx.fillRect(0,344,canvas.width,canvas.height-344);
+    ctx.strokeStyle='#fff5d6';ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(0,groundY);ctx.lineTo(canvas.width,groundY);ctx.stroke();
+    ctx.beginPath();ctx.arc(400,groundY,85,Math.PI,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.arc(400,378,42,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,344);ctx.lineTo(canvas.width,344);ctx.stroke();
+    ctx.strokeStyle='#3b6c98';ctx.lineWidth=6;
+    ctx.beginPath();ctx.moveTo(700,175);ctx.lineTo(700,groundY);ctx.stroke();
+    ctx.fillStyle='#e0f2ff';ctx.fillRect(650,175,80,46);
+    ctx.strokeStyle='#e84e3e';ctx.lineWidth=4;ctx.strokeRect(675,213,34,18);
+    ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(692,231,22,0,Math.PI);ctx.stroke();
+  }
+
+  function drawBar(x,y,w,h,value,max,color,label){
+    ctx.fillStyle='rgba(255,255,255,0.88)';ctx.fillRect(x-4,y-20,w+8,h+26);
+    ctx.fillStyle='#1a2a3a';ctx.font='bold 14px Microsoft YaHei';ctx.fillText(label,x,y-6);
+    ctx.fillStyle='#d0dce8';ctx.fillRect(x,y,w,h);
+    ctx.fillStyle=color;ctx.fillRect(x,y,w*clamp(value/max,0,1),h);
+    ctx.strokeStyle='#1a3040';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);
+  }
+
+  // ================== DETAILED HERO ==================
+  function drawPlayer(){
+    ctx.save();
+    if(player.invincible>0&&Math.floor(player.invincible/6)%2===0) ctx.globalAlpha=0.5;
+    ctx.translate(player.x+player.w/2,player.y+player.h/2);
+    ctx.scale(player.face,1);
+    ctx.translate(-player.w/2,-player.h/2);
+
+    var wb=player.onGround?Math.sin(player.animFrame*0.15)*2.5:0;
+
+    // Shadow on ground
+    ctx.fillStyle='rgba(0,0,0,0.15)';
+    ctx.beginPath();ctx.ellipse(25,102,22,5,0,0,Math.PI*2);ctx.fill();
+
+    // ===== JETPACK (back) =====
+    var jg=ctx.createLinearGradient(6,38,16,70);
+    jg.addColorStop(0,'#0c4a6e');jg.addColorStop(1,'#082840');
+    ctx.fillStyle=jg;
+    ctx.beginPath();ctx.moveTo(6,38);ctx.lineTo(16,38);ctx.lineTo(18,68);ctx.lineTo(4,68);ctx.closePath();ctx.fill();
+    // Jet detail lines
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(8,42);ctx.lineTo(14,42);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(8,50);ctx.lineTo(14,50);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(8,58);ctx.lineTo(14,58);ctx.stroke();
+    // Jet glow
+    var jg2=ctx.createLinearGradient(9,66,13,82);
+    jg2.addColorStop(0,'rgba(0,200,255,0.7)');jg2.addColorStop(1,'rgba(0,200,255,0)');
+    if(player.vx!==0&&player.onGround){
+      ctx.fillStyle=jg2;
+      ctx.beginPath();ctx.moveTo(8,66);ctx.lineTo(11,78+Math.random()*6);ctx.lineTo(14,66);ctx.closePath();ctx.fill();
+    }
+
+    // ===== LEFT LEG =====
+    var lg=ctx.createLinearGradient(14,76,26,100);
+    lg.addColorStop(0,'#0d5a8a');lg.addColorStop(1,'#0a3a5a');
+    ctx.fillStyle=lg;
+    ctx.fillRect(14,76+wb,12,26);
+    // Knee joint
+    ctx.fillStyle='#14b9b1';ctx.fillRect(15,82+wb,10,6);
+    // Shin guard
+    var sg=ctx.createLinearGradient(15,88,23,96);
+    sg.addColorStop(0,'#14b9b1');sg.addColorStop(1,'#0e8a80');
+    ctx.fillStyle=sg;ctx.fillRect(15,88+wb,10,10);
+    // Boot
+    var bg=ctx.createLinearGradient(12,96,28,104);
+    bg.addColorStop(0,'#0d426f');bg.addColorStop(1,'#082a48');
+    ctx.fillStyle=bg;
+    ctx.beginPath();ctx.moveTo(12,98+wb);ctx.lineTo(28,98+wb);ctx.lineTo(30,106+wb);ctx.lineTo(10,106+wb);ctx.closePath();ctx.fill();
+    // Boot detail
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(13,100+wb);ctx.lineTo(27,100+wb);ctx.stroke();
+
+    // ===== RIGHT LEG =====
+    ctx.fillStyle=lg;ctx.fillRect(26,76-wb,12,26);
+    ctx.fillStyle='#14b9b1';ctx.fillRect(27,82-wb,10,6);
+    ctx.fillStyle=sg;ctx.fillRect(27,88-wb,10,10);
+    ctx.fillStyle=bg;
+    ctx.beginPath();ctx.moveTo(24,98-wb);ctx.lineTo(40,98-wb);ctx.lineTo(42,106-wb);ctx.lineTo(22,106-wb);ctx.closePath();ctx.fill();
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(25,100-wb);ctx.lineTo(39,100-wb);ctx.stroke();
+
+    // ===== TORSO =====
+    // Main body
+    var tg=ctx.createLinearGradient(16,34,34,78);
+    tg.addColorStop(0,'#1a6a9a');tg.addColorStop(0.5,'#0d5a8a');tg.addColorStop(1,'#0a4870');
+    ctx.fillStyle=tg;
+    ctx.beginPath();ctx.moveTo(18,36);ctx.lineTo(42,36);ctx.lineTo(46,78);ctx.lineTo(14,78);ctx.closePath();ctx.fill();
+    // Chest plate
+    var cg=ctx.createLinearGradient(18,40,38,64);
+    cg.addColorStop(0,'#18c8b8');cg.addColorStop(1,'#10a098');
+    ctx.fillStyle=cg;ctx.fillRect(18,40,24,26);
+    // Chest plate border
+    ctx.strokeStyle='#0d8878';ctx.lineWidth=1.5;ctx.strokeRect(18,40,24,26);
+    // Center seam
+    ctx.strokeStyle='rgba(0,255,255,0.4)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(30,40);ctx.lineTo(30,66);ctx.stroke();
+    // Wind emblem on chest
+    ctx.strokeStyle='#00ffff';ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(30,46);ctx.quadraticCurveTo(35,50,30,54);ctx.quadraticCurveTo(25,58,30,62);
+    ctx.stroke();
+    // Wind emblem glow
+    ctx.fillStyle='rgba(0,255,255,0.3)';
+    ctx.beginPath();ctx.arc(30,54,6,0,Math.PI*2);ctx.fill();
+    // Abs detail lines
+    ctx.strokeStyle='#0a4870';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(22,68);ctx.lineTo(38,68);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(23,72);ctx.lineTo(37,72);ctx.stroke();
+    // Belt
+    ctx.fillStyle='#0d426f';ctx.fillRect(14,76,32,4);
+    ctx.fillStyle='#14b9b1';ctx.fillRect(24,76,8,4);
+
+    // ===== LEFT SHOULDER ARMOR =====
+    var lsg=ctx.createRadialGradient(12,40,2,12,40,10);
+    lsg.addColorStop(0,'#1a7aaa');lsg.addColorStop(1,'#0d426f');
+    ctx.fillStyle=lsg;
+    ctx.beginPath();ctx.arc(12,40,10,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;ctx.beginPath();ctx.arc(12,40,7,0,Math.PI*2);ctx.stroke();
+    // Left upper arm
+    ctx.fillStyle='#0d5a8a';ctx.fillRect(4,48,10,18);
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;ctx.strokeRect(4,48,10,18);
+    // Left forearm
+    var fg=ctx.createLinearGradient(4,66,12,80);
+    fg.addColorStop(0,'#14b9b1');fg.addColorStop(1,'#0e8a80');
+    ctx.fillStyle=fg;ctx.fillRect(5,66,8,14);
+    // Left hand
+    ctx.fillStyle='#0d426f';
+    ctx.beginPath();ctx.moveTo(3,78);ctx.lineTo(15,78);ctx.lineTo(14,86);ctx.lineTo(4,86);ctx.closePath();ctx.fill();
+
+    // ===== RIGHT SHOULDER ARMOR (attack arm) =====
+    var rsg=ctx.createRadialGradient(48,40,2,48,40,10);
+    rsg.addColorStop(0,'#1a7aaa');rsg.addColorStop(1,'#0d426f');
+    ctx.fillStyle=rsg;
+    ctx.beginPath();ctx.arc(48,40,10,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;ctx.beginPath();ctx.arc(48,40,7,0,Math.PI*2);ctx.stroke();
+
+    // Right arm (with attack animation)
+    ctx.save();
+    ctx.translate(50,48);
+    if(player.attacking) ctx.rotate(-0.5);
+    // Upper arm
+    ctx.fillStyle='#0d5a8a';ctx.fillRect(-4,0,10,18);
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;ctx.strokeRect(-4,0,10,18);
+    // Forearm
+    ctx.fillStyle=fg;ctx.fillRect(-3,16,8,14);
+    // Gauntlet
+    var gg=ctx.createLinearGradient(-5,28,7,38);
+    gg.addColorStop(0,'#0d426f');gg.addColorStop(1,'#082a48');
+    ctx.fillStyle=gg;
+    ctx.beginPath();ctx.moveTo(-5,28);ctx.lineTo(7,28);ctx.lineTo(8,38);ctx.lineTo(-6,38);ctx.closePath();ctx.fill();
+    // Wind blade on gauntlet
+    ctx.strokeStyle='#00ffff';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(-4,32);ctx.lineTo(6,30);ctx.moveTo(-4,35);ctx.lineTo(6,33);ctx.stroke();
+
+    // Attack wind slash effect
+    if(player.attacking){
+      var ws=ctx.createLinearGradient(8,26,32,34);
+      ws.addColorStop(0,'rgba(0,230,255,0.8)');ws.addColorStop(0.5,'rgba(0,230,255,0.3)');ws.addColorStop(1,'rgba(0,230,255,0)');
+      ctx.fillStyle=ws;
+      ctx.beginPath();ctx.moveTo(8,24);ctx.lineTo(30,20);ctx.lineTo(32,34);ctx.lineTo(8,36);ctx.closePath();ctx.fill();
+      // Slash arc lines
+      ctx.strokeStyle='rgba(0,255,255,0.6)';ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(20,30,14,-0.8,0.8);ctx.stroke();
+    }
+    ctx.restore();
+
+    // ===== NECK =====
+    ctx.fillStyle='#0a3a5a';ctx.fillRect(22,28,16,10);
+    ctx.fillStyle='#14b9b1';ctx.fillRect(24,30,12,4);
+
+    // ===== HELMET =====
+    // Main helmet shape
+    var hg=ctx.createLinearGradient(16,6,44,30);
+    hg.addColorStop(0,'#1870a8');hg.addColorStop(0.5,'#0d5a8a');hg.addColorStop(1,'#0a4870');
+    ctx.fillStyle=hg;
+    ctx.beginPath();
+    ctx.moveTo(18,8);
+    ctx.quadraticCurveTo(30,2,42,8);
+    ctx.lineTo(46,18);
+    ctx.lineTo(46,30);
+    ctx.lineTo(14,30);
+    ctx.lineTo(14,18);
+    ctx.closePath();ctx.fill();
+    // Helmet border
+    ctx.strokeStyle='#0a3050';ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.moveTo(18,8);ctx.quadraticCurveTo(30,2,42,8);ctx.lineTo(46,18);ctx.lineTo(46,30);ctx.lineTo(14,30);ctx.lineTo(14,18);ctx.closePath();ctx.stroke();
+    // Helmet center ridge
+    ctx.strokeStyle='rgba(0,255,255,0.3)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(30,4);ctx.lineTo(30,30);ctx.stroke();
+    // Side vent details
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(16,16);ctx.lineTo(20,16);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(16,20);ctx.lineTo(20,20);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(40,16);ctx.lineTo(44,16);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(40,20);ctx.lineTo(44,20);ctx.stroke();
+
+    // Crest (knight fin on top)
+    var crg=ctx.createLinearGradient(26,0,34,12);
+    crg.addColorStop(0,'#1aeaca');crg.addColorStop(1,'#10a098');
+    ctx.fillStyle=crg;
+    ctx.beginPath();ctx.moveTo(26,-2);ctx.lineTo(34,-2);ctx.lineTo(36,12);ctx.lineTo(24,12);ctx.closePath();ctx.fill();
+    ctx.strokeStyle='#0a8878';ctx.lineWidth=1;ctx.strokeRect(26,-1,8,12);
+    // Crest gem
+    ctx.fillStyle='#00ffff';ctx.beginPath();ctx.arc(30,6,2.5,0,Math.PI*2);ctx.fill();
+
+    // Visor frame
+    ctx.fillStyle='#0a3050';
+    ctx.fillRect(18,16,10,8);
+    ctx.fillRect(32,16,10,8);
+
+    // Visor glow (eyes)
+    var eg=ctx.createRadialGradient(23,20,1,23,20,5);
+    eg.addColorStop(0,'rgba(0,255,255,0.9)');eg.addColorStop(1,'rgba(0,255,255,0.2)');
+    ctx.fillStyle=eg;ctx.fillRect(19,17,8,6);
+    var eg2=ctx.createRadialGradient(37,20,1,37,20,5);
+    eg2.addColorStop(0,'rgba(0,255,255,0.9)');eg2.addColorStop(1,'rgba(0,255,255,0.2)');
+    ctx.fillStyle=eg2;ctx.fillRect(33,17,8,6);
+    // Eye pupils
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(21,19,4,3);
+    ctx.fillRect(35,19,4,3);
+    // Eye scan line animation
+    var scanY=18+((player.animFrame*0.5)%10)*0.4;
+    ctx.strokeStyle='rgba(0,255,255,0.5)';ctx.lineWidth=0.5;
+    ctx.beginPath();ctx.moveTo(19,scanY);ctx.lineTo(27,scanY);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(33,scanY);ctx.lineTo(41,scanY);ctx.stroke();
+
+    // Mouth guard
+    var mg=ctx.createLinearGradient(20,24,40,28);
+    mg.addColorStop(0,'#0a3050');mg.addColorStop(1,'#082a48');
+    ctx.fillStyle=mg;ctx.fillRect(20,24,20,4);
+    // Mouth vent lines
+    ctx.strokeStyle='#14b9b1';ctx.lineWidth=0.5;
+    for(var vi=0;vi<4;vi++){
+      ctx.beginPath();ctx.moveTo(22,25+vi);ctx.lineTo(38,25+vi);ctx.stroke();
+    }
+
+    // Name label
+    ctx.fillStyle='#fff';ctx.font='bold 9px Microsoft YaHei';
+    ctx.textAlign='center';ctx.fillText('疾风甲士',25,114);ctx.textAlign='left';
+
+    ctx.restore();
+  }
+
+  // ================== DETAILED ENEMY ==================
+  function drawEnemy(){
+    ctx.save();
+    var bobY=Math.sin(enemy.wobble)*3;
+    ctx.translate(enemy.x+enemy.w/2,enemy.y+enemy.h/2+bobY);
+    var hurtFlash=enemy.hitCooldown>0&&Math.floor(enemy.hitCooldown/4)%2===0;
+    if(hurtFlash) ctx.globalAlpha=0.6;
+
+    // Shadow
+    ctx.fillStyle='rgba(0,0,0,0.12)';
+    ctx.beginPath();ctx.ellipse(0,50,26,5,0,0,Math.PI*2);ctx.fill();
+
+    // Mist aura (outer)
+    var ma=ctx.createRadialGradient(0,20,10,0,20,50);
+    ma.addColorStop(0,'rgba(120,100,160,0.15)');ma.addColorStop(1,'rgba(120,100,160,0)');
+    ctx.fillStyle=ma;ctx.beginPath();ctx.arc(0,20,50,0,Math.PI*2);ctx.fill();
+
+    // ===== LEGS =====
+    var lg=ctx.createLinearGradient(-14,36,-14,55);
+    lg.addColorStop(0,'#5a4a78');lg.addColorStop(1,'#3a2a58');
+    ctx.fillStyle=lg;
+    ctx.beginPath();ctx.ellipse(-12,42,9,16,0.15,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(14,42,9,16,-0.15,0,Math.PI*2);ctx.fill();
+    // Leg wrappings
+    ctx.strokeStyle='#4a3a68';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(-18,38);ctx.lineTo(-6,38);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-17,44);ctx.lineTo(-7,44);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(10,38);ctx.lineTo(22,38);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(11,44);ctx.lineTo(21,44);ctx.stroke();
+
+    // ===== BODY =====
+    var bg=ctx.createRadialGradient(-5,15,5,0,15,30);
+    bg.addColorStop(0,'#7a6a98');bg.addColorStop(0.6,'#5a4a78');bg.addColorStop(1,'#3a2a58');
+    ctx.fillStyle=bg;
+    ctx.beginPath();ctx.ellipse(0,16,26,30,0,0,Math.PI*2);ctx.fill();
+    // Body texture swirl
+    ctx.strokeStyle='rgba(80,60,110,0.4)';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(-12,6);ctx.quadraticCurveTo(0,10,12,6);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-14,18);ctx.quadraticCurveTo(0,22,14,18);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-10,30);ctx.quadraticCurveTo(0,34,10,30);ctx.stroke();
+    // Belly button (cute detail)
+    ctx.fillStyle='#4a3a68';ctx.beginPath();ctx.arc(0,22,2,0,Math.PI*2);ctx.fill();
+
+    // ===== ARMS =====
+    ctx.fillStyle=lg;
+    ctx.fillRect(-34,6,11,22);ctx.fillRect(24,6,11,22);
+    // Arm band details
+    ctx.strokeStyle='#4a3a68';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(-34,12);ctx.lineTo(-23,12);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-34,20);ctx.lineTo(-23,20);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(24,12);ctx.lineTo(35,12);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(24,20);ctx.lineTo(35,20);ctx.stroke();
+    // Clawed hands
+    var hg=ctx.createRadialGradient(-28,32,1,-28,32,7);
+    hg.addColorStop(0,'#4a3a68');hg.addColorStop(1,'#2a1a48');
+    ctx.fillStyle=hg;
+    ctx.beginPath();ctx.arc(-28,32,6,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(28,32,6,0,Math.PI*2);ctx.fill();
+    // Claw details
+    ctx.strokeStyle='#3a2a58';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(-32,28);ctx.lineTo(-28,32);ctx.lineTo(-24,28);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(32,28);ctx.lineTo(28,32);ctx.lineTo(24,28);ctx.stroke();
+
+    // ===== HEAD =====
+    var hdg=ctx.createRadialGradient(-3,-16,3,0,-14,20);
+    hdg.addColorStop(0,'#6a5a88');hdg.addColorStop(0.7,'#4a3a68');hdg.addColorStop(1,'#3a2a58');
+    ctx.fillStyle=hdg;
+    ctx.beginPath();ctx.ellipse(0,-14,20,18,0,0,Math.PI*2);ctx.fill();
+    // Head border
+    ctx.strokeStyle='rgba(60,40,90,0.5)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.ellipse(0,-14,20,18,0,0,Math.PI*2);ctx.stroke();
+
+    // Small horns
+    ctx.fillStyle='#4a3a68';
+    ctx.beginPath();ctx.moveTo(-14,-28);ctx.lineTo(-10,-36);ctx.lineTo(-6,-26);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.moveTo(6,-26);ctx.lineTo(10,-36);ctx.lineTo(14,-28);ctx.closePath();ctx.fill();
+    // Horn highlight
+    ctx.fillStyle='#6a5a88';
+    ctx.beginPath();ctx.moveTo(-12,-30);ctx.lineTo(-10,-34);ctx.lineTo(-8,-28);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.moveTo(8,-28);ctx.lineTo(10,-34);ctx.lineTo(12,-30);ctx.closePath();ctx.fill();
+
+    // Eyes
+    var eyg=ctx.createRadialGradient(-9,-16,1,-9,-16,5);
+    eyg.addColorStop(0,'#ffee66');eyg.addColorStop(1,'#ccaa22');
+    ctx.fillStyle=eyg;
+    ctx.beginPath();ctx.arc(-9,-16,4.5,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(9,-16,4.5,0,Math.PI*2);ctx.fill();
+    // Eye shine
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.arc(-10.5,-17.5,1.5,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(7.5,-17.5,1.5,0,Math.PI*2);ctx.fill();
+    // Pupils
+    ctx.fillStyle='#1a0a30';
+    ctx.beginPath();ctx.arc(-9,-16,2,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(9,-16,2,0,Math.PI*2);ctx.fill();
+    // Droopy eyelids (sleepy)
+    ctx.fillStyle='#4a3a68';
+    ctx.beginPath();
+    ctx.moveTo(-15,-20);ctx.quadraticCurveTo(-9,-24,-3,-20);
+    ctx.lineTo(-3,-18);ctx.quadraticCurveTo(-9,-20,-15,-18);ctx.closePath();ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(3,-20);ctx.quadraticCurveTo(9,-24,15,-20);
+    ctx.lineTo(15,-18);ctx.quadraticCurveTo(9,-20,3,-18);ctx.closePath();ctx.fill();
+
+    // Cheek blush (cute)
+    ctx.fillStyle='rgba(255,150,150,0.3)';
+    ctx.beginPath();ctx.ellipse(-14,-10,4,2.5,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(14,-10,4,2.5,0,0,Math.PI*2);ctx.fill();
+
+    // Mouth (yawning)
+    ctx.fillStyle='#2a1a40';
+    ctx.beginPath();ctx.ellipse(0,-4,7,4.5,0,0,Math.PI);ctx.fill();
+    // Tongue
+    ctx.fillStyle='#c87878';
+    ctx.beginPath();ctx.ellipse(0,-2,3,2,0,0,Math.PI);ctx.fill();
+
+    // ===== Zzz BUBBLE =====
+    ctx.fillStyle='rgba(255,248,210,0.95)';
+    var bx=-26,by=-48,bw=52,bh=20,br=6;
+    ctx.beginPath();
+    ctx.moveTo(bx+br,by);ctx.lineTo(bx+bw-br,by);ctx.quadraticCurveTo(bx+bw,by,bx+bw,by+br);
+    ctx.lineTo(bx+bw,by+bh-br);ctx.quadraticCurveTo(bx+bw,by+bh,bx+bw-br,by+bh);
+    ctx.lineTo(bx+br,by+bh);ctx.quadraticCurveTo(bx,by+bh,bx,by+bh-br);
+    ctx.lineTo(bx,by+br);ctx.quadraticCurveTo(bx,by,bx+br,by);
+    ctx.closePath();ctx.fill();
+    ctx.strokeStyle='#8a7a50';ctx.lineWidth=1.5;ctx.stroke();
+    ctx.fillStyle='#6b5a33';ctx.font='bold 11px Microsoft YaHei';
+    ctx.textAlign='center';ctx.fillText('等一下',0,by+14);ctx.textAlign='left';
+
+    // ===== BOOKS ON BACK =====
+    // Book 1
+    var bkg=ctx.createLinearGradient(16,-10,28,0);
+    bkg.addColorStop(0,'#a08860');bkg.addColorStop(1,'#807050');
+    ctx.fillStyle=bkg;
+    ctx.beginPath();ctx.moveTo(16,-10);ctx.lineTo(30,-10);ctx.lineTo(28,2);ctx.lineTo(14,2);ctx.closePath();ctx.fill();
+    ctx.strokeStyle='#6a5a40';ctx.lineWidth=1;ctx.strokeRect(16,-10,14,12);
+    ctx.fillStyle='#e8d8b8';ctx.fillRect(17,-8,12,8);
+    // Book 2
+    ctx.fillStyle=bkg;
+    ctx.beginPath();ctx.moveTo(14,0);ctx.lineTo(32,0);ctx.lineTo(30,10);ctx.lineTo(12,10);ctx.closePath();ctx.fill();
+    ctx.strokeStyle='#6a5a40';ctx.strokeRect(14,0,18,10);
+    ctx.fillStyle='#d8c8a8';ctx.fillRect(15,2,16,6);
+
+    ctx.restore();
+  }
+
+  // ================== DETAILED PET ==================
+  function drawPet(){
+    ctx.save();
+    ctx.translate(pet.x,pet.y);
+
+    // Shadow
+    ctx.fillStyle='rgba(0,0,0,0.1)';
+    ctx.beginPath();ctx.ellipse(22,34,16,3,0,0,Math.PI*2);ctx.fill();
+
+    // ===== TAIL =====
+    ctx.strokeStyle='#f0d888';ctx.lineWidth=5;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(4,22);
+    var tailWag=Math.sin(Date.now()/150)*8;
+    ctx.quadraticCurveTo(-6+tailWag,14,-2+tailWag,6);ctx.stroke();
+    // Tail tip fluff
+    ctx.fillStyle='#fff8e0';
+    ctx.beginPath();ctx.arc(-2+tailWag,6,4,0,Math.PI*2);ctx.fill();
+
+    // ===== BODY =====
+    var bodyG=ctx.createRadialGradient(22,22,4,22,22,18);
+    bodyG.addColorStop(0,'#fff4c0');bodyG.addColorStop(1,'#f0d888');
+    ctx.fillStyle=bodyG;
+    ctx.beginPath();ctx.ellipse(22,22,18,14,0,0,Math.PI*2);ctx.fill();
+    // Belly highlight
+    ctx.fillStyle='rgba(255,255,240,0.5)';
+    ctx.beginPath();ctx.ellipse(22,24,10,8,0,0,Math.PI*2);ctx.fill();
+    // Body outline
+    ctx.strokeStyle='#d8b868';ctx.lineWidth=1;
+    ctx.beginPath();ctx.ellipse(22,22,18,14,0,0,Math.PI*2);ctx.stroke();
+
+    // ===== PAWS (front) =====
+    ctx.fillStyle='#f0d888';
+    ctx.beginPath();ctx.ellipse(8,32,4,3,-0.2,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(36,32,4,3,0.2,0,Math.PI*2);ctx.fill();
+    // Paw pads
+    ctx.fillStyle='#c8a850';
+    ctx.beginPath();ctx.arc(8,33,1.5,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(36,33,1.5,0,Math.PI*2);ctx.fill();
+
+    // ===== HEAD =====
+    var headG=ctx.createRadialGradient(38,12,3,38,12,14);
+    headG.addColorStop(0,'#fff8d8');headG.addColorStop(1,'#f0d888');
+    ctx.fillStyle=headG;
+    ctx.beginPath();ctx.arc(38,12,12,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#d8b868';ctx.lineWidth=1;ctx.stroke();
+
+    // ===== EARS =====
+    ctx.fillStyle='#f0d888';
+    ctx.beginPath();ctx.ellipse(30,1,5,9,-0.3,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(46,1,5,9,0.3,0,Math.PI*2);ctx.fill();
+    // Inner ears
+    ctx.fillStyle='#e8a8a8';
+    ctx.beginPath();ctx.ellipse(30,2,3,6,-0.3,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(46,2,3,6,0.3,0,Math.PI*2);ctx.fill();
+
+    // ===== EYES =====
+    // White
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.ellipse(34,10,4,4.5,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(43,10,4,4.5,0,0,Math.PI*2);ctx.fill();
+    // Iris
+    var irisG=ctx.createRadialGradient(34,10,1,34,10,3);
+    irisG.addColorStop(0,'#3a2810');irisG.addColorStop(1,'#5a4018');
+    ctx.fillStyle=irisG;
+    ctx.beginPath();ctx.arc(34,10,2.5,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(43,10,2.5,0,Math.PI*2);ctx.fill();
+    // Pupils
+    ctx.fillStyle='#1a0a00';
+    ctx.beginPath();ctx.arc(34,10,1.2,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(43,10,1.2,0,Math.PI*2);ctx.fill();
+    // Eye shine
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.arc(35,9,0.8,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(44,9,0.8,0,Math.PI*2);ctx.fill();
+
+    // Eyebrows (cute)
+    ctx.strokeStyle='#c8a850';ctx.lineWidth=1.5;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(31,5);ctx.quadraticCurveTo(34,3,37,5);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(40,5);ctx.quadraticCurveTo(43,3,46,5);ctx.stroke();
+
+    // ===== NOSE =====
+    ctx.fillStyle='#d08060';
+    ctx.beginPath();ctx.ellipse(38.5,14.5,2,1.5,0,0,Math.PI*2);ctx.fill();
+
+    // ===== MOUTH =====
+    ctx.strokeStyle='#a07040';ctx.lineWidth=1.2;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(36,16);ctx.quadraticCurveTo(38.5,19,41,16);ctx.stroke();
+
+    // ===== CHEEK BLUSH =====
+    ctx.fillStyle='rgba(255,150,150,0.3)';
+    ctx.beginPath();ctx.ellipse(30,14,3,2,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(47,14,3,2,0,0,Math.PI*2);ctx.fill();
+
+    // ===== BACKPACK =====
+    var bpG=ctx.createLinearGradient(14,8,26,18);
+    bpG.addColorStop(0,'#5ab0e8');bpG.addColorStop(1,'#2e75ba');
+    ctx.fillStyle=bpG;
+    // Rounded rect
+    var bpx=14,bpy=6,bpw=12,bph=11,bpr=3;
+    ctx.beginPath();
+    ctx.moveTo(bpx+bpr,bpy);ctx.lineTo(bpx+bpw-bpr,bpy);ctx.quadraticCurveTo(bpx+bpw,bpy,bpx+bpw,bpy+bpr);
+    ctx.lineTo(bpx+bpw,bpy+bph-bpr);ctx.quadraticCurveTo(bpx+bpw,bpy+bph,bpx+bpw-bpr,bpy+bph);
+    ctx.lineTo(bpx+bpr,bpy+bph);ctx.quadraticCurveTo(bpx,bpy+bph,bpx,bpy+bph-bpr);
+    ctx.lineTo(bpx,bpy+bpr);ctx.quadraticCurveTo(bpx,bpy,bpx+bpr,bpy);
+    ctx.closePath();ctx.fill();
+    ctx.strokeStyle='#1a5090';ctx.lineWidth=1;ctx.stroke();
+    // Backpack buckle
+    ctx.fillStyle='#ffd700';ctx.fillRect(19,10,4,3);
+
+    // ===== COLLAR BADGE =====
+    ctx.fillStyle='#e84e3e';
+    ctx.beginPath();ctx.arc(38.5,22,2.5,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#fff';ctx.font='bold 3px Arial';ctx.textAlign='center';
+    ctx.fillText('★',38.5,23.5);ctx.textAlign='left';
+
+    // Name label
+    ctx.fillStyle='#2e75ba';ctx.font='bold 10px Microsoft YaHei';
+    ctx.fillText('团团',6,-4);
+
+    ctx.restore();
+  }
+
+  function drawBasketball(){
+    if(!basketball.active)return;
+    ctx.save();ctx.translate(basketball.x,basketball.y);
+    // Ball gradient
+    var ballG=ctx.createRadialGradient(-3,-3,2,0,0,basketball.r);
+    ballG.addColorStop(0,'#f89838');ballG.addColorStop(1,'#cc6010');
+    ctx.fillStyle=ballG;ctx.beginPath();ctx.arc(0,0,basketball.r,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#804010';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(-basketball.r,0);ctx.lineTo(basketball.r,0);
+    ctx.moveTo(0,-basketball.r);ctx.lineTo(0,basketball.r);
+    ctx.arc(0,0,basketball.r*0.7,-Math.PI/2,Math.PI/2);
+    ctx.arc(0,0,basketball.r*0.7,Math.PI/2,Math.PI*1.5);ctx.stroke();
+    // Highlight
+    ctx.fillStyle='rgba(255,255,255,0.3)';
+    ctx.beginPath();ctx.arc(-4,-4,5,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEnergyOrb(){
+    if(!energyOrb.active)return;
+    ctx.save();ctx.translate(energyOrb.x,energyOrb.y);
+    var pulse=Math.sin(Date.now()/200)*2;
+    ctx.fillStyle='rgba(255,200,230,0.4)';
+    ctx.beginPath();ctx.arc(0,0,18+pulse,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,200,230,0.2)';
+    ctx.beginPath();ctx.arc(0,0,24+pulse,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#ff78b5';
+    ctx.beginPath();ctx.moveTo(0,12);
+    ctx.bezierCurveTo(-22,-7,-10,-24,0,-10);
+    ctx.bezierCurveTo(10,-24,22,-7,0,12);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.beginPath();ctx.arc(-3,-5,2,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+
+  function drawParticles(){
+    particles.forEach(function(p){
+      var alpha=p.life/p.maxLife;ctx.globalAlpha=alpha;
+      ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.size*alpha,0,Math.PI*2);ctx.fill();
+    });ctx.globalAlpha=1;
+  }
+
+  function drawMessage(){
+    // Message box with gradient
+    var msgG=ctx.createLinearGradient(36,458,36,500);
+    msgG.addColorStop(0,'rgba(255,255,255,0.95)');msgG.addColorStop(1,'rgba(240,248,255,0.95)');
+    ctx.fillStyle=msgG;ctx.fillRect(36,458,728,42);
+    ctx.strokeStyle='#2e75ba';ctx.lineWidth=2;ctx.strokeRect(36,458,728,42);
+    ctx.fillStyle='#17304f';ctx.font='bold 16px Microsoft YaHei';ctx.fillText(currentMessage,50,485);
+  }
+
+  function drawEndOverlay(){
+    if(gameState!=='win'&&gameState!=='lose')return;
+    ctx.fillStyle='rgba(8,20,40,0.6)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#fff';ctx.fillRect(170,120,460,240);
+    ctx.strokeStyle=gameState==='win'?'#28b989':'#6e8eb3';ctx.lineWidth=5;ctx.strokeRect(170,120,460,240);
+    ctx.fillStyle=gameState==='win'?'#15956e':'#476a90';ctx.font='bold 30px Microsoft YaHei';ctx.textAlign='center';
+    ctx.fillText(gameState==='win'?'通关成功':'挑战失败',400,170);
+    ctx.fillStyle='#17304f';ctx.font='bold 17px Microsoft YaHei';
+    if(gameState==='win'){
+      ctx.fillText('获得：立即行动徽章',400,215);
+      ctx.fillText('现实小任务：现在就开始做一件',400,250);
+      ctx.fillText('10 分钟内可以完成的小事。',400,278);
+    }else{
+      ctx.fillText('失败不代表结束。',400,230);
+      ctx.fillText('按 R 重新开始，再试一次。',400,265);
+    }
+    ctx.font='bold 15px Microsoft YaHei';ctx.fillStyle='#6e8eb3';
+    ctx.fillText('按 R 重新开始',400,320);ctx.textAlign='left';
+  }
+
+  function draw(){
+    drawBackground();
+    drawBar(24,32,200,18,player.hp,150,'#36c878','疾风甲士血量');
+    drawBar(576,32,200,18,enemy.hp,100,'#e95b5b','拖延怪血量');
+    drawBar(24,78,200,14,player.energy,100,'#42c8ff','运动能量');
+    ctx.fillStyle='rgba(255,255,255,0.8)';ctx.fillRect(300,18,200,36);
+    ctx.fillStyle='#0d6db5';ctx.font='bold 17px Microsoft YaHei';ctx.fillText('第一关：篮球场的拖延怪',310,42);
+    drawBasketball();drawEnergyOrb();drawPet();drawEnemy();drawPlayer();drawParticles();drawMessage();drawEndOverlay();
+  }
+
+  function loop(){update();draw();requestAnimationFrame(loop);}
+
+  window.addEventListener('keydown',function(e){
+    var key=e.key.length===1?e.key.toLowerCase():e.key;
+    keys[key]=true;
+    if(['ArrowLeft','ArrowRight',' ','Space'].indexOf(e.key)!==-1)e.preventDefault();
+    if(key==='r')resetGame();
+  });
+  window.addEventListener('keyup',function(e){
+    var key=e.key.length===1?e.key.toLowerCase():e.key;
+    keys[key]=false;
+  });
+
+  resetGame();
+  loop();
+})();
+</script>
+</body>
+</html>

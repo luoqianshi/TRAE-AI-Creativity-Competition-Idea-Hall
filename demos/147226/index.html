@@ -1,0 +1,2123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>autoPrint — OCR 智能打印工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,800;9..144,900&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ========== 设计令牌 ========== */
+:root {
+  --paper: #F5F1E8;
+  --paper-dark: #EDE6D3;
+  --paper-edge: #E8E2D0;
+  --ink: #1A1A1A;
+  --ink-soft: #3D3833;
+  --ink-muted: #8B8378;
+  --stamp-red: #D64545;
+  --stamp-red-dark: #B83838;
+  --tech-blue: #2B6CB0;
+  --tech-blue-light: #EBF2FA;
+  --confidence-high: #2F855A;
+  --confidence-mid: #D69E2E;
+  --confidence-low: #C53030;
+  --border: #D4CCB8;
+  --shadow: rgba(26, 26, 26, 0.08);
+  --shadow-md: rgba(26, 26, 26, 0.14);
+  --radius: 4px;
+  --radius-lg: 8px;
+  --serif: 'Fraunces', Georgia, serif;
+  --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--mono);
+  background: var(--paper);
+  color: var(--ink);
+  min-height: 100vh;
+  font-size: 13px;
+  line-height: 1.6;
+  position: relative;
+}
+
+/* 纸张纹理噪点 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.1 0 0 0 0 0.08 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.6;
+  mix-blend-mode: multiply;
+}
+
+/* ========== 顶部工具栏 ========== */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  height: 64px;
+  background: var(--ink);
+  color: var(--paper);
+  border-bottom: 3px solid var(--stamp-red);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  background: var(--stamp-red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 20px;
+  color: var(--paper);
+  border-radius: 2px;
+  position: relative;
+  transform: rotate(-3deg);
+  box-shadow: 0 2px 8px rgba(214, 69, 69, 0.4);
+}
+
+.brand-mark::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1px solid rgba(245, 241, 232, 0.4);
+  border-radius: 1px;
+}
+
+.brand-name {
+  font-family: var(--serif);
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+}
+
+.brand-name span {
+  color: var(--stamp-red);
+}
+
+.brand-tag {
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border-left: 1px solid var(--ink-muted);
+  padding-left: 12px;
+  margin-left: 4px;
+}
+
+/* 流程步骤指示器 */
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-size: 11px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  color: var(--ink-muted);
+  transition: all 0.3s ease;
+  letter-spacing: 0.5px;
+}
+
+.step.active {
+  color: var(--paper);
+}
+
+.step.done {
+  color: var(--stamp-red);
+}
+
+.step-num {
+  width: 20px;
+  height: 20px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.step.active .step-num {
+  background: var(--paper);
+  color: var(--ink);
+  border-color: var(--paper);
+}
+
+.step.done .step-num {
+  background: var(--stamp-red);
+  color: var(--paper);
+  border-color: var(--stamp-red);
+}
+
+.step-arrow {
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+/* 打印按钮 */
+.btn-print-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: var(--stamp-red);
+  color: var(--paper);
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 0 var(--stamp-red-dark), 0 4px 12px rgba(214, 69, 69, 0.3);
+  text-transform: uppercase;
+}
+
+.btn-print-top:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--stamp-red-dark), 0 6px 16px rgba(214, 69, 69, 0.4);
+}
+
+.btn-print-top:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 var(--stamp-red-dark);
+}
+
+.btn-print-top:disabled {
+  background: var(--ink-muted);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ========== 主布局 ========== */
+.workspace {
+  display: grid;
+  grid-template-columns: 340px 1fr 400px;
+  gap: 20px;
+  padding: 20px 32px 40px;
+  max-width: 1600px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+/* ========== 卡片通用 ========== */
+.card {
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-edge) 100%);
+}
+
+.card-title {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title .num {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--stamp-red);
+  border: 1px solid var(--stamp-red);
+  padding: 1px 5px;
+  border-radius: 2px;
+  letter-spacing: 1px;
+}
+
+.card-badge {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+
+.badge-stamp {
+  color: var(--stamp-red);
+  border: 1px solid var(--stamp-red);
+  background: rgba(214, 69, 69, 0.06);
+}
+
+.badge-tech {
+  color: var(--tech-blue);
+  border: 1px solid var(--tech-blue);
+  background: var(--tech-blue-light);
+}
+
+.badge-done {
+  color: var(--confidence-high);
+  border: 1px solid var(--confidence-high);
+  background: rgba(47, 133, 90, 0.08);
+}
+
+.card-body {
+  padding: 18px;
+}
+
+/* 套准标记装饰 */
+.crop-marks {
+  position: relative;
+}
+
+.crop-marks::before,
+.crop-marks::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.crop-marks::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--stamp-red);
+  border-left: 2px solid var(--stamp-red);
+}
+
+.crop-marks::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--stamp-red);
+  border-right: 2px solid var(--stamp-red);
+}
+
+/* ========== 左栏：图片上传 ========== */
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  background: var(--paper-dark);
+}
+
+.upload-zone:hover,
+.upload-zone.dragover {
+  border-color: var(--stamp-red);
+  background: rgba(214, 69, 69, 0.04);
+}
+
+.upload-zone.dragover {
+  transform: scale(1.02);
+}
+
+.upload-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
+  border: 2px solid var(--ink-muted);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.upload-zone:hover .upload-icon {
+  border-color: var(--stamp-red);
+  color: var(--stamp-red);
+}
+
+.upload-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.upload-text {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.upload-hint {
+  font-size: 10px;
+  color: var(--ink-muted);
+  letter-spacing: 0.5px;
+}
+
+.upload-sample-btn {
+  display: inline-block;
+  margin-top: 14px;
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--tech-blue);
+  border: 1px solid var(--tech-blue);
+  border-radius: 2px;
+  background: var(--tech-blue-light);
+  cursor: pointer;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.upload-sample-btn:hover {
+  background: var(--tech-blue);
+  color: var(--paper);
+}
+
+/* 已上传图片预览 */
+.upload-preview {
+  display: none;
+}
+
+.upload-preview.active {
+  display: block;
+}
+
+.preview-img-wrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--paper-dark);
+  margin-bottom: 12px;
+}
+
+.preview-img-wrap img {
+  width: 100%;
+  display: block;
+  max-height: 240px;
+  object-fit: contain;
+}
+
+/* 扫描动画 */
+.scan-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(43, 108, 176, 0.15);
+  display: none;
+  align-items: flex-start;
+  overflow: hidden;
+}
+
+.scan-overlay.active {
+  display: block;
+}
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--tech-blue), transparent);
+  box-shadow: 0 0 12px var(--tech-blue), 0 0 4px var(--tech-blue);
+  animation: scanMove 1.5s ease-in-out infinite;
+}
+
+@keyframes scanMove {
+  0%, 100% { top: 0%; }
+  50% { top: 100%; }
+}
+
+.scan-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--ink);
+  color: var(--tech-blue);
+  padding: 6px 16px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  border-radius: 2px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.scan-badge::before {
+  content: '◉';
+  margin-right: 6px;
+  animation: blink 0.8s infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0.3; }
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--ink-muted);
+  padding: 8px 0;
+  border-top: 1px dashed var(--border);
+  margin-top: 8px;
+}
+
+.file-info-name {
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.reupload-btn {
+  font-size: 10px;
+  color: var(--stamp-red);
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+  letter-spacing: 0.5px;
+}
+
+/* OCR 统计信息 */
+.ocr-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+}
+
+.ocr-stat {
+  text-align: center;
+  padding: 8px 4px;
+  background: var(--paper-dark);
+  border-radius: var(--radius);
+}
+
+.ocr-stat-val {
+  font-family: var(--serif);
+  font-weight: 800;
+  font-size: 20px;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.ocr-stat-val.red { color: var(--stamp-red); }
+.ocr-stat-val.blue { color: var(--tech-blue); }
+
+.ocr-stat-label {
+  font-size: 9px;
+  color: var(--ink-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+/* ========== 中栏：OCR结果 + SKU编辑 ========== */
+.center-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* OCR 识别结果框 */
+.ocr-result {
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.8;
+  min-height: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  position: relative;
+}
+
+.ocr-result::-webkit-scrollbar { width: 6px; }
+.ocr-result::-webkit-scrollbar-track { background: var(--ink-soft); }
+.ocr-result::-webkit-scrollbar-thumb { background: var(--ink-muted); border-radius: 3px; }
+
+.ocr-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  animation: fadeSlideIn 0.3s ease forwards;
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.ocr-line .line-num {
+  color: var(--ink-muted);
+  font-size: 9px;
+  min-width: 20px;
+  text-align: right;
+}
+
+.ocr-line .line-text {
+  flex: 1;
+  color: var(--paper);
+}
+
+.ocr-line .conf {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.conf-high { background: rgba(47, 133, 90, 0.3); color: #68D391; }
+.conf-mid { background: rgba(214, 158, 46, 0.3); color: #F6E05E; }
+.conf-low { background: rgba(197, 48, 48, 0.3); color: #FC8181; }
+
+.ocr-placeholder {
+  color: var(--ink-muted);
+  font-size: 11px;
+  text-align: center;
+  padding: 40px 0;
+  letter-spacing: 1px;
+}
+
+.ocr-placeholder::before {
+  content: '⌗';
+  display: block;
+  font-size: 24px;
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+}
+
+/* 光标 */
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--tech-blue);
+  animation: cursorBlink 1s steps(2) infinite;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+
+@keyframes cursorBlink {
+  50% { opacity: 0; }
+}
+
+/* SKU 可编辑表格 */
+.sku-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+table.sku-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+table.sku-table thead {
+  background: var(--paper-dark);
+}
+
+table.sku-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--ink-muted);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--ink);
+  white-space: nowrap;
+}
+
+table.sku-table td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+table.sku-table tbody tr {
+  transition: background 0.2s ease;
+}
+
+table.sku-table tbody tr:hover {
+  background: var(--paper-dark);
+}
+
+.cell-edit {
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  outline: none;
+  transition: background 0.2s ease;
+}
+
+.cell-edit:focus {
+  background: var(--tech-blue-light);
+  box-shadow: inset 0 0 0 2px var(--tech-blue);
+}
+
+.cell-edit.sku-code {
+  font-weight: 600;
+  color: var(--tech-blue);
+}
+
+.qty-cell {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  justify-content: center;
+}
+
+.qty-btn {
+  width: 24px;
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--paper-dark);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  font-weight: 600;
+}
+
+.qty-btn:hover {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.qty-input {
+  width: 50px;
+  height: 28px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-right: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+}
+
+.qty-input:focus {
+  background: var(--tech-blue-light);
+}
+
+.row-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+}
+
+.row-action-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  color: var(--ink-muted);
+  cursor: pointer;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.row-action-btn:hover {
+  background: var(--stamp-red);
+  color: var(--paper);
+  border-color: var(--stamp-red);
+}
+
+.row-action-btn.add-btn:hover {
+  background: var(--confidence-high);
+  border-color: var(--confidence-high);
+}
+
+/* 表格操作栏 */
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.table-summary {
+  font-size: 10px;
+  color: var(--ink-muted);
+  letter-spacing: 1px;
+}
+
+.table-summary strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.add-row-btn {
+  padding: 6px 14px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-row-btn:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* ========== 右栏：模板选择 + 打印预览 ========== */
+.right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* 模板选择下拉 */
+.template-select-wrap {
+  position: relative;
+}
+
+.template-select {
+  width: 100%;
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--paper-dark);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  transition: all 0.2s ease;
+  letter-spacing: 0.5px;
+}
+
+.template-select:hover,
+.template-select:focus {
+  border-color: var(--ink);
+  background: var(--paper);
+}
+
+.template-select-wrap::after {
+  content: '▼';
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 8px;
+  color: var(--ink-muted);
+  pointer-events: none;
+}
+
+/* 模板信息 */
+.template-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--paper-dark);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--stamp-red);
+}
+
+.template-info-icon {
+  width: 32px;
+  height: 32px;
+  background: var(--ink);
+  color: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  font-family: var(--serif);
+  font-weight: 800;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.template-info-text {
+  flex: 1;
+}
+
+.template-info-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.template-info-desc {
+  font-size: 9px;
+  color: var(--ink-muted);
+  margin-top: 2px;
+  letter-spacing: 0.5px;
+}
+
+/* 打印预览区 */
+.preview-container {
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  padding: 24px;
+  min-height: 400px;
+  max-height: 600px;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  position: relative;
+}
+
+.preview-container::-webkit-scrollbar { width: 6px; }
+.preview-container::-webkit-scrollbar-track { background: var(--paper-edge); }
+.preview-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* 预览纸张 */
+.preview-paper {
+  background: white;
+  box-shadow: 0 2px 8px var(--shadow), 0 8px 24px var(--shadow-md);
+  position: relative;
+  transform-origin: top center;
+}
+
+/* A4 比例 */
+.preview-paper.a4 {
+  width: 320px;
+  min-height: 452px;
+  padding: 20px;
+}
+
+/* 标签比例 */
+.preview-paper.label {
+  width: 240px;
+  padding: 16px;
+}
+
+.preview-paper.label-small {
+  width: 280px;
+  padding: 14px;
+}
+
+/* 空预览状态 */
+.preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 350px;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+.preview-empty-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+.preview-empty-text {
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+/* ========== 打印模板样式 ========== */
+/* 物流面单 */
+.tpl-logistics { font-family: var(--mono); color: #1a1a1a; }
+.tpl-logistics .tpl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 3px solid #1a1a1a;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.tpl-logistics .tpl-logo {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 18px;
+}
+.tpl-logistics .tpl-logo span { color: var(--stamp-red); }
+.tpl-logistics .tpl-meta {
+  text-align: right;
+  font-size: 9px;
+  line-height: 1.5;
+  color: #666;
+}
+.tpl-logistics .tpl-section {
+  border: 1px solid #ccc;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.tpl-logistics .tpl-section-label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #999;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.tpl-logistics .tpl-recipient { font-weight: 600; font-size: 12px; }
+.tpl-logistics .tpl-items {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9px;
+  margin-top: 4px;
+}
+.tpl-logistics .tpl-items th {
+  text-align: left;
+  border-bottom: 1px solid #333;
+  padding: 4px 6px;
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #666;
+}
+.tpl-logistics .tpl-items td {
+  border-bottom: 1px solid #eee;
+  padding: 4px 6px;
+}
+.tpl-logistics .tpl-barcode-area {
+  margin-top: 12px;
+  text-align: center;
+  border-top: 2px solid #1a1a1a;
+  padding-top: 10px;
+}
+.tpl-logistics .tpl-barcode {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  height: 40px;
+  gap: 1px;
+  margin-bottom: 4px;
+}
+.tpl-logistics .tpl-barcode span {
+  background: #1a1a1a;
+  height: 100%;
+}
+.tpl-logistics .tpl-order-num {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+
+/* 价签 */
+.tpl-price-tag { text-align: center; font-family: var(--mono); }
+.tpl-price-tag .pt-brand {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 11px;
+  letter-spacing: 2px;
+  border-bottom: 2px solid #1a1a1a;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+}
+.tpl-price-tag .pt-name {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+.tpl-price-tag .pt-spec {
+  font-size: 9px;
+  color: #666;
+  margin-bottom: 10px;
+}
+.tpl-price-tag .pt-price {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 28px;
+  color: var(--stamp-red);
+  line-height: 1;
+  margin: 8px 0;
+}
+.tpl-price-tag .pt-price-symbol { font-size: 14px; vertical-align: top; }
+.tpl-price-tag .pt-barcode {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  height: 32px;
+  gap: 1px;
+  margin: 8px 0 4px;
+}
+.tpl-price-tag .pt-barcode span { background: #1a1a1a; height: 100%; }
+.tpl-price-tag .pt-sku {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #333;
+}
+.tpl-price-tag .pt-divider {
+  border-top: 1px dashed #ccc;
+  margin: 8px 0;
+}
+
+/* 条码标签 */
+.tpl-barcode-label { font-family: var(--mono); }
+.tpl-barcode-label .bl-item {
+  border-bottom: 1px dashed #ccc;
+  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tpl-barcode-label .bl-item:last-child { border-bottom: none; }
+.tpl-barcode-label .bl-barcode {
+  display: flex;
+  align-items: flex-end;
+  height: 36px;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.tpl-barcode-label .bl-barcode span { background: #1a1a1a; height: 100%; }
+.tpl-barcode-label .bl-info { flex: 1; }
+.tpl-barcode-label .bl-sku {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.tpl-barcode-label .bl-name {
+  font-size: 9px;
+  color: #555;
+  margin: 1px 0;
+}
+.tpl-barcode-label .bl-qty {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--stamp-red);
+}
+
+/* 拣货单 */
+.tpl-picking { font-family: var(--mono); color: #1a1a1a; }
+.tpl-picking .pk-header {
+  text-align: center;
+  border-bottom: 3px solid #1a1a1a;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+.tpl-picking .pk-title {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 18px;
+  letter-spacing: 4px;
+}
+.tpl-picking .pk-subtitle {
+  font-size: 9px;
+  color: #666;
+  margin-top: 4px;
+  letter-spacing: 1px;
+}
+.tpl-picking .pk-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  padding: 6px 0;
+  border-bottom: 1px solid #ddd;
+  margin-bottom: 8px;
+}
+.tpl-picking .pk-meta strong { font-weight: 700; }
+.tpl-picking .pk-items {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+.tpl-picking .pk-items th {
+  text-align: left;
+  padding: 6px 4px;
+  border-bottom: 2px solid #1a1a1a;
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #666;
+  text-transform: uppercase;
+}
+.tpl-picking .pk-items td {
+  padding: 6px 4px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+.tpl-picking .pk-check {
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #1a1a1a;
+  border-radius: 2px;
+  display: inline-block;
+}
+.tpl-picking .pk-loc {
+  font-weight: 700;
+  color: var(--stamp-red);
+  letter-spacing: 1px;
+}
+.tpl-picking .pk-qty {
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+}
+.tpl-picking .pk-footer {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 2px solid #1a1a1a;
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* 打印预览底部操作 */
+.preview-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btn {
+  flex: 1;
+  padding: 10px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--stamp-red);
+  color: var(--paper);
+  border: none;
+  box-shadow: 0 2px 0 var(--stamp-red-dark);
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--stamp-red-dark), 0 4px 12px rgba(214, 69, 69, 0.3);
+}
+
+.btn-primary:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 var(--stamp-red-dark);
+}
+
+.btn-primary:disabled {
+  background: var(--border);
+  box-shadow: none;
+  cursor: not-allowed;
+  color: var(--ink-muted);
+}
+
+.btn-secondary {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--ink);
+}
+
+.btn-secondary:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* ========== 响应式 ========== */
+@media (max-width: 1280px) {
+  .workspace {
+    grid-template-columns: 300px 1fr 360px;
+    gap: 16px;
+    padding: 16px 20px 32px;
+  }
+  .steps { display: none; }
+}
+
+@media (max-width: 1024px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .toolbar { padding: 0 20px; }
+}
+
+@media (max-width: 640px) {
+  .brand-tag { display: none; }
+  .toolbar { height: 56px; }
+  .workspace { padding: 12px; }
+}
+
+/* ========== 打印样式 ========== */
+@media print {
+  body::before { display: none; }
+  .toolbar, .workspace, .scan-overlay { display: none !important; }
+  #printArea {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  .preview-paper {
+    box-shadow: none !important;
+    width: 100% !important;
+    min-height: auto !important;
+    page-break-after: always;
+  }
+}
+
+#printArea { display: none; }
+
+/* 滚动条美化 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--paper-edge); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+
+/* Toast 通知 */
+.toast {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: var(--ink);
+  color: var(--paper);
+  padding: 12px 24px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  letter-spacing: 1px;
+  z-index: 9999;
+  opacity: 0;
+  transition: all 0.3s ease;
+  box-shadow: 0 8px 24px var(--shadow-md);
+  border-left: 3px solid var(--stamp-red);
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* 注册标记分隔符 */
+.reg-mark {
+  text-align: center;
+  color: var(--stamp-red);
+  font-size: 12px;
+  letter-spacing: 8px;
+  padding: 4px 0;
+  opacity: 0.5;
+}
+</style>
+</head>
+<body>
+
+<!-- ========== 顶部工具栏 ========== -->
+<header class="toolbar">
+  <div class="brand">
+    <div class="brand-mark">A</div>
+    <div>
+      <div class="brand-name">auto<span>Print</span></div>
+    </div>
+    <div class="brand-tag">OCR SMART PRINT STUDIO</div>
+  </div>
+
+  <div class="steps" id="stepsIndicator">
+    <div class="step" data-step="1"><span class="step-num">1</span>上传</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="2"><span class="step-num">2</span>识别</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="3"><span class="step-num">3</span>编辑</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="4"><span class="step-num">4</span>选模板</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="5"><span class="step-num">5</span>打印</div>
+  </div>
+
+  <button class="btn-print-top" id="topPrintBtn" disabled>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+    一键打印
+  </button>
+</header>
+
+<!-- ========== 主工作区 ========== -->
+<main class="workspace">
+
+  <!-- ===== 左栏：图片上传 ===== -->
+  <section class="card crop-marks">
+    <div class="card-header">
+      <div class="card-title"><span class="num">01</span>图片上传</div>
+      <span class="card-badge badge-stamp" id="uploadBadge">待上传</span>
+    </div>
+    <div class="card-body">
+      <!-- 上传区域 -->
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </div>
+        <div class="upload-text">拖拽图片至此或点击上传</div>
+        <div class="upload-hint">支持 JPG / PNG / WEBP 格式</div>
+        <button class="upload-sample-btn" id="sampleBtn">使用示例图片</button>
+        <input type="file" id="fileInput" accept="image/*" style="display:none;">
+      </div>
+
+      <!-- 已上传预览 -->
+      <div class="upload-preview" id="uploadPreview">
+        <div class="preview-img-wrap">
+          <img id="previewImg" src="" alt="uploaded">
+          <div class="scan-overlay" id="scanOverlay">
+            <div class="scan-line"></div>
+            <div class="scan-badge">OCR 识别中</div>
+          </div>
+        </div>
+        <div class="file-info">
+          <span class="file-info-name" id="fileName">order_001.jpg</span>
+          <button class="reupload-btn" id="reuploadBtn">重新上传 ↻</button>
+        </div>
+      </div>
+
+      <!-- OCR 统计 -->
+      <div class="ocr-stats" id="ocrStats" style="display:none;">
+        <div class="ocr-stat">
+          <div class="ocr-stat-val red" id="statItems">0</div>
+          <div class="ocr-stat-label">识别项</div>
+        </div>
+        <div class="ocr-stat">
+          <div class="ocr-stat-val" id="statQty">0</div>
+          <div class="ocr-stat-label">总数量</div>
+        </div>
+        <div class="ocr-stat">
+          <div class="ocr-stat-val blue" id="statConf">0%</div>
+          <div class="ocr-stat-label">平均置信度</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 中栏：OCR结果 + SKU编辑 ===== -->
+  <section class="center-col">
+    <!-- OCR 识别结果 -->
+    <div class="card crop-marks">
+      <div class="card-header">
+        <div class="card-title"><span class="num">02</span>OCR 识别结果</div>
+        <span class="card-badge badge-tech" id="ocrBadge">等待识别</span>
+      </div>
+      <div class="card-body">
+        <div class="ocr-result" id="ocrResult">
+          <div class="ocr-placeholder">上传图片后将显示识别结果</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SKU 编辑列表 -->
+    <div class="card crop-marks">
+      <div class="card-header">
+        <div class="card-title"><span class="num">03</span>SKU 与数量编辑</div>
+        <span class="card-badge badge-stamp" id="skuBadge">待编辑</span>
+      </div>
+      <div class="card-body">
+        <div class="sku-table-wrap">
+          <table class="sku-table">
+            <thead>
+              <tr>
+                <th style="width:130px;">SKU 编码</th>
+                <th>商品名称</th>
+                <th style="width:100px;">数量</th>
+                <th style="width:120px;">规格</th>
+                <th style="width:70px;">置信度</th>
+                <th style="width:60px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="skuTableBody">
+              <tr id="emptyRow">
+                <td colspan="6" style="text-align:center; padding:32px; color:var(--ink-muted); font-size:11px; letter-spacing:1px;">
+                  ⌗ 请先上传图片进行 OCR 识别
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-toolbar">
+          <div class="table-summary" id="tableSummary">共 <strong>0</strong> 条记录 · 合计 <strong>0</strong> 件</div>
+          <button class="add-row-btn" id="addRowBtn" disabled style="opacity:0.5;">
+            <span style="font-size:14px;">+</span> 添加行
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 右栏：模板选择 + 打印预览 ===== -->
+  <section class="right-col">
+    <!-- 模板选择 -->
+    <div class="card crop-marks">
+      <div class="card-header">
+        <div class="card-title"><span class="num">04</span>打印模板</div>
+        <span class="card-badge badge-tech" id="templateBadge">未选择</span>
+      </div>
+      <div class="card-body">
+        <div class="template-select-wrap">
+          <select class="template-select" id="templateSelect">
+            <option value="">— 选择打印模板 —</option>
+            <option value="logistics">物流面单（A4 竖版）</option>
+            <option value="priceTag">价签标签（小尺寸）</option>
+            <option value="barcodeLabel">条码标签（小尺寸）</option>
+            <option value="picking">拣货单（A4 竖版）</option>
+          </select>
+        </div>
+        <div class="template-info" id="templateInfo" style="display:none;">
+          <div class="template-info-icon" id="tplIcon">面</div>
+          <div class="template-info-text">
+            <div class="template-info-name" id="tplName">物流面单</div>
+            <div class="template-info-desc" id="tplDesc">A4竖版 · 适用于快递发货</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 打印预览 -->
+    <div class="card crop-marks">
+      <div class="card-header">
+        <div class="card-title"><span class="num">05</span>打印预览</div>
+        <span class="card-badge badge-stamp" id="previewBadge">无预览</span>
+      </div>
+      <div class="card-body">
+        <div class="preview-container" id="previewContainer">
+          <div class="preview-empty" id="previewEmpty">
+            <div class="preview-empty-icon">▤</div>
+            <div class="preview-empty-text">选择模板后显示预览</div>
+          </div>
+        </div>
+        <div class="preview-actions">
+          <button class="btn btn-secondary" id="refreshPreviewBtn" disabled>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            刷新预览
+          </button>
+          <button class="btn btn-primary" id="printBtn" disabled>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+            一键打印
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 打印区域（仅打印时显示） -->
+<div id="printArea"></div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== 模拟数据 ==========
+const mockOCRData = [
+  { sku: 'SKU-2024-001', name: '无线蓝牙耳机 Pro', quantity: 12, spec: '黑色/标准版', confidence: 0.98 },
+  { sku: 'SKU-2024-002', name: 'USB-C 快充数据线', quantity: 50, spec: '1.5米/编织', confidence: 0.95 },
+  { sku: 'SKU-2024-003', name: '便携充电宝 10000mAh', quantity: 8, spec: '白色/PD快充', confidence: 0.92 },
+  { sku: 'SKU-2024-004', name: '手机支架铝合金', quantity: 30, spec: '银色/可调节', confidence: 0.99 },
+  { sku: 'SKU-2024-005', name: '蓝牙音箱迷你版', quantity: 15, spec: '深灰/防水', confidence: 0.88 },
+  { sku: 'SKU-2024-006', name: 'LED台灯护眼版', quantity: 6, spec: '白色/触控', confidence: 0.96 }
+];
+
+const sampleImageUrl = 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=' + encodeURIComponent('A printed e-commerce packing slip document on white paper, top-down flat lay view, showing order number, date, and a clean table listing SKU codes, product names, quantities and specifications, realistic document scan, sharp text, professional business document') + '&image_size=portrait_4_3';
+
+// 模板配置
+const templates = {
+  logistics: { name: '物流面单', icon: '面', desc: 'A4竖版 · 适用于快递发货', paperClass: 'a4' },
+  priceTag: { name: '价签标签', icon: '价', desc: '小尺寸 · 适用于货架展示', paperClass: 'label' },
+  barcodeLabel: { name: '条码标签', icon: '码', desc: '小尺寸 · 适用于仓储管理', paperClass: 'label-small' },
+  picking: { name: '拣货单', icon: '拣', desc: 'A4竖版 · 适用于仓库拣货', paperClass: 'a4' }
+};
+
+// ========== 状态管理 ==========
+let state = {
+  uploaded: false,
+  ocrDone: false,
+  skuData: [],
+  selectedTemplate: '',
+  currentStep: 1
+};
+
+// ========== DOM 引用 ==========
+const $ = id => document.getElementById(id);
+const uploadZone = $('uploadZone');
+const uploadPreview = $('uploadPreview');
+const fileInput = $('fileInput');
+const previewImg = $('previewImg');
+const scanOverlay = $('scanOverlay');
+const ocrResult = $('ocrResult');
+const skuTableBody = $('skuTableBody');
+const templateSelect = $('templateSelect');
+const previewContainer = $('previewContainer');
+const printArea = $('printArea');
+const toast = $('toast');
+
+// ========== Toast 通知 ==========
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2400);
+}
+
+// ========== 步骤指示器 ==========
+function updateStep(step) {
+  state.currentStep = step;
+  document.querySelectorAll('.step').forEach(el => {
+    const s = parseInt(el.dataset.step);
+    el.classList.remove('active', 'done');
+    if (s < step) el.classList.add('done');
+    else if (s === step) el.classList.add('active');
+  });
+}
+
+// ========== 图片上传 ==========
+uploadZone.addEventListener('click', e => {
+  if (e.target.id === 'sampleBtn') return;
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+uploadZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  uploadZone.classList.add('dragover');
+});
+
+uploadZone.addEventListener('dragleave', () => {
+  uploadZone.classList.remove('dragover');
+});
+
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+$('sampleBtn').addEventListener('click', e => {
+  e.stopPropagation();
+  handleSampleImage();
+});
+
+$('reuploadBtn').addEventListener('click', () => {
+  resetUpload();
+});
+
+function handleFile(file) {
+  if (!file.type.startsWith('image/')) {
+    showToast('请上传图片文件');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    showPreview(e.target.result, file.name);
+    startOCR();
+  };
+  reader.readAsDataURL(file);
+}
+
+function handleSampleImage() {
+  showPreview(sampleImageUrl, 'sample_order.png');
+  startOCR();
+}
+
+function showPreview(src, name) {
+  previewImg.src = src;
+  $('fileName').textContent = name;
+  uploadZone.style.display = 'none';
+  uploadPreview.classList.add('active');
+  state.uploaded = true;
+  $('uploadBadge').textContent = '已上传';
+  $('uploadBadge').className = 'card-badge badge-done';
+  updateStep(2);
+}
+
+function resetUpload() {
+  state.uploaded = false;
+  state.ocrDone = false;
+  state.skuData = [];
+  state.selectedTemplate = '';
+  uploadZone.style.display = 'block';
+  uploadPreview.classList.remove('active');
+  ocrResult.innerHTML = '<div class="ocr-placeholder">上传图片后将显示识别结果</div>';
+  $('ocrStats').style.display = 'none';
+  $('ocrBadge').textContent = '等待识别';
+  $('ocrBadge').className = 'card-badge badge-tech';
+  $('uploadBadge').textContent = '待上传';
+  $('uploadBadge').className = 'card-badge badge-stamp';
+  renderSKUTable();
+  templateSelect.value = '';
+  $('templateInfo').style.display = 'none';
+  $('templateBadge').textContent = '未选择';
+  $('templateBadge').className = 'card-badge badge-tech';
+  previewContainer.innerHTML = '<div class="preview-empty" id="previewEmpty"><div class="preview-empty-icon">▤</div><div class="preview-empty-text">选择模板后显示预览</div></div>';
+  $('previewBadge').textContent = '无预览';
+  $('previewBadge').className = 'card-badge badge-stamp';
+  $('printBtn').disabled = true;
+  $('topPrintBtn').disabled = true;
+  $('refreshPreviewBtn').disabled = true;
+  $('addRowBtn').disabled = true;
+  $('addRowBtn').style.opacity = '0.5';
+  updateStep(1);
+}
+
+// ========== OCR 识别模拟 ==========
+function startOCR() {
+  scanOverlay.classList.add('active');
+  $('ocrBadge').textContent = '识别中...';
+  $('ocrBadge').className = 'card-badge badge-tech';
+
+  setTimeout(() => {
+    scanOverlay.classList.remove('active');
+    state.ocrDone = true;
+    state.skuData = JSON.parse(JSON.stringify(mockOCRData));
+    $('ocrBadge').textContent = '已识别';
+    $('ocrBadge').className = 'card-badge badge-done';
+    $('skuBadge').textContent = '编辑中';
+    $('skuBadge').className = 'card-badge badge-tech';
+    $('addRowBtn').disabled = false;
+    $('addRowBtn').style.opacity = '1';
+    updateStep(3);
+    typewriterOCR();
+    renderSKUTable();
+    updateStats();
+    showToast('OCR 识别完成，共识别 ' + state.skuData.length + ' 条记录');
+  }, 2000);
+}
+
+// 打字机效果展示 OCR 结果
+function typewriterOCR() {
+  ocrResult.innerHTML = '';
+  const lines = [
+    { num: '01', text: '订单编号: ORD-20240713-0086', conf: null },
+    { num: '02', text: '日期: 2024-07-13    状态: 待处理', conf: null },
+    { num: '03', text: '────────────────────────────────', conf: null }
+  ];
+  mockOCRData.forEach((item, i) => {
+    lines.push({
+      num: String(i + 4).padStart(2, '0'),
+      text: `${item.sku}  ${item.name}  x${item.quantity}  ${item.spec}`,
+      conf: item.confidence
+    });
+  });
+
+  let idx = 0;
+  function nextLine() {
+    if (idx >= lines.length) {
+      updateStep(3);
+      return;
+    }
+    const line = lines[idx];
+    const div = document.createElement('div');
+    div.className = 'ocr-line';
+    div.style.animationDelay = '0s';
+
+    const confClass = line.conf >= 0.95 ? 'conf-high' : line.conf >= 0.88 ? 'conf-mid' : 'conf-low';
+    const confText = line.conf ? Math.round(line.conf * 100) + '%' : '';
+
+    div.innerHTML = `
+      <span class="line-num">${line.num}</span>
+      <span class="line-text">${line.text}</span>
+      ${line.conf ? `<span class="conf ${confClass}">${confText}</span>` : ''}
+    `;
+    ocrResult.appendChild(div);
+    ocrResult.scrollTop = ocrResult.scrollHeight;
+    idx++;
+    setTimeout(nextLine, 180);
+  }
+  nextLine();
+}
+
+// ========== 统计信息 ==========
+function updateStats() {
+  $('ocrStats').style.display = 'grid';
+  $('statItems').textContent = state.skuData.length;
+  const totalQty = state.skuData.reduce((s, i) => s + (parseInt(i.quantity) || 0), 0);
+  $('statQty').textContent = totalQty;
+  const avgConf = state.skuData.length > 0
+    ? Math.round(state.skuData.reduce((s, i) => s + i.confidence, 0) / state.skuData.length * 100)
+    : 0;
+  $('statConf').textContent = avgConf + '%';
+
+  $('tableSummary').innerHTML = `共 <strong>${state.skuData.length}</strong> 条记录 · 合计 <strong>${totalQty}</strong> 件`;
+}
+
+// ========== SKU 表格渲染 ==========
+function renderSKUTable() {
+  if (state.skuData.length === 0) {
+    skuTableBody.innerHTML = `
+      <tr id="emptyRow">
+        <td colspan="6" style="text-align:center; padding:32px; color:var(--ink-muted); font-size:11px; letter-spacing:1px;">
+          ⌗ 请先上传图片进行 OCR 识别
+        </td>
+      </tr>`;
+    return;
+  }
+
+  skuTableBody.innerHTML = state.skuData.map((item, idx) => {
+    const confClass = item.confidence >= 0.95 ? 'conf-high' : item.confidence >= 0.88 ? 'conf-mid' : 'conf-low';
+    const confPct = Math.round(item.confidence * 100);
+    return `
+      <tr data-idx="${idx}">
+        <td><input class="cell-edit sku-code" value="${item.sku}" onchange="updateSKU(${idx}, 'sku', this.value)"></td>
+        <td><input class="cell-edit" value="${item.name}" onchange="updateSKU(${idx}, 'name', this.value)"></td>
+        <td>
+          <div class="qty-cell">
+            <button class="qty-btn" onclick="adjustQty(${idx}, -1)">−</button>
+            <input class="qty-input" type="number" min="1" value="${item.quantity}" onchange="updateSKU(${idx}, 'quantity', parseInt(this.value)||1)">
+            <button class="qty-btn" onclick="adjustQty(${idx}, 1)">+</button>
+          </div>
+        </td>
+        <td><input class="cell-edit" value="${item.spec}" onchange="updateSKU(${idx}, 'spec', this.value)"></td>
+        <td style="text-align:center;"><span class="conf ${confClass}" style="display:inline-block; padding:2px 6px; border-radius:2px; font-size:10px; font-weight:600;">${confPct}%</span></td>
+        <td>
+          <div class="row-actions">
+            <button class="row-action-btn add-btn" onclick="insertRow(${idx})" title="插入行">+</button>
+            <button class="row-action-btn" onclick="deleteRow(${idx})" title="删除行">×</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+// SKU 编辑操作
+window.updateSKU = function(idx, field, value) {
+  state.skuData[idx][field] = value;
+  updateStats();
+  if (state.selectedTemplate) renderPreview();
+};
+
+window.adjustQty = function(idx, delta) {
+  const newVal = Math.max(1, (state.skuData[idx].quantity || 1) + delta);
+  state.skuData[idx].quantity = newVal;
+  renderSKUTable();
+  updateStats();
+  if (state.selectedTemplate) renderPreview();
+};
+
+window.deleteRow = function(idx) {
+  state.skuData.splice(idx, 1);
+  renderSKUTable();
+  updateStats();
+  if (state.selectedTemplate) renderPreview();
+  showToast('已删除一行');
+};
+
+window.insertRow = function(idx) {
+  state.skuData.splice(idx + 1, 0, {
+    sku: 'SKU-NEW-' + String(Date.now()).slice(-4),
+    name: '新商品',
+    quantity: 1,
+    spec: '待填写',
+    confidence: 1.0
+  });
+  renderSKUTable();
+  updateStats();
+  if (state.selectedTemplate) renderPreview();
+  showToast('已插入新行');
+};
+
+$('addRowBtn').addEventListener('click', () => {
+  state.skuData.push({
+    sku: 'SKU-NEW-' + String(Date.now()).slice(-4),
+    name: '新商品',
+    quantity: 1,
+    spec: '待填写',
+    confidence: 1.0
+  });
+  renderSKUTable();
+  updateStats();
+  if (state.selectedTemplate) renderPreview();
+});
+
+// ========== 模板选择 ==========
+templateSelect.addEventListener('change', e => {
+  state.selectedTemplate = e.target.value;
+  if (state.selectedTemplate) {
+    const tpl = templates[state.selectedTemplate];
+    $('templateInfo').style.display = 'flex';
+    $('tplIcon').textContent = tpl.icon;
+    $('tplName').textContent = tpl.name;
+    $('tplDesc').textContent = tpl.desc;
+    $('templateBadge').textContent = '已选择';
+    $('templateBadge').className = 'card-badge badge-done';
+    $('refreshPreviewBtn').disabled = false;
+    updateStep(4);
+    renderPreview();
+  } else {
+    $('templateInfo').style.display = 'none';
+    $('templateBadge').textContent = '未选择';
+    $('templateBadge').className = 'card-badge badge-tech';
+    $('refreshPreviewBtn').disabled = true;
+    previewContainer.innerHTML = '<div class="preview-empty"><div class="preview-empty-icon">▤</div><div class="preview-empty-text">选择模板后显示预览</div></div>';
+    $('printBtn').disabled = true;
+    $('topPrintBtn').disabled = true;
+    $('previewBadge').textContent = '无预览';
+    $('previewBadge').className = 'card-badge badge-stamp';
+  }
+});
+
+$('refreshPreviewBtn').addEventListener('click', () => {
+  if (state.selectedTemplate) {
+    renderPreview();
+    showToast('预览已刷新');
+  }
+});
+
+// ========== 条形码生成 ==========
+function generateBarcode(seed, bars = 30) {
+  let hash = 0;
+  const str = String(seed);
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  let html = '';
+  for (let i = 0; i < bars; i++) {
+    hash = (hash * 1103515245 + 12345) & 0x7fffffff;
+    const width = (hash % 3) + 1;
+    const isBlack = (hash % 100) > 35;
+    if (isBlack) {
+      html += `<span style="width:${width}px"></span>`;
+    } else {
+      html += `<span style="width:${width}px;background:transparent"></span>`;
+    }
+  }
+  return html;
+}
+
+// ========== 打印预览渲染 ==========
+function renderPreview() {
+  if (!state.selectedTemplate || state.skuData.length === 0) {
+    $('printBtn').disabled = true;
+    $('topPrintBtn').disabled = true;
+    return;
+  }
+
+  const tpl = templates[state.selectedTemplate];
+  let html = '';
+
+  switch (state.selectedTemplate) {
+    case 'logistics':
+      html = renderLogistics();
+      break;
+    case 'priceTag':
+      html = renderPriceTag();
+      break;
+    case 'barcodeLabel':
+      html = renderBarcodeLabel();
+      break;
+    case 'picking':
+      html = renderPicking();
+      break;
+  }
+
+  previewContainer.innerHTML = `<div class="preview-paper ${tpl.paperClass}">${html}</div>`;
+  $('printBtn').disabled = false;
+  $('topPrintBtn').disabled = false;
+  $('previewBadge').textContent = '就绪';
+  $('previewBadge').className = 'card-badge badge-done';
+  updateStep(5);
+}
+
+// 物流面单模板
+function renderLogistics() {
+  const totalQty = state.skuData.reduce((s, i) => s + i.quantity, 0);
+  return `
+    <div class="tpl-logistics">
+      <div class="tpl-header">
+        <div class="tpl-logo">auto<span>Print</span> 物流</div>
+        <div class="tpl-meta">
+          面单编号: LP${Date.now().toString().slice(-8)}<br>
+          打印时间: ${new Date().toLocaleString('zh-CN')}
+        </div>
+      </div>
+      <div class="tpl-section">
+        <div class="tpl-section-label">收件人</div>
+        <div class="tpl-recipient">张三 13800138000</div>
+        <div>广东省深圳市南山区科技园路1号</div>
+      </div>
+      <div class="tpl-section">
+        <div class="tpl-section-label">发件人</div>
+        <div>autoPrint旗舰店 0571-88888888</div>
+        <div>浙江省杭州市余杭区文一西路969号</div>
+      </div>
+      <div class="tpl-section">
+        <div class="tpl-section-label">商品明细（共${state.skuData.length}件商品 / ${totalQty}个）</div>
+        <table class="tpl-items">
+          <thead><tr><th>SKU</th><th>商品名称</th><th>数量</th><th>规格</th></tr></thead>
+          <tbody>
+            ${state.skuData.map(i => `<tr><td>${i.sku}</td><td>${i.name}</td><td style="text-align:center;font-weight:600;">${i.quantity}</td><td>${i.spec}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="tpl-barcode-area">
+        <div class="tpl-barcode">${generateBarcode('ORD-20240713', 40)}</div>
+        <div class="tpl-order-num">ORD-20240713-0086</div>
+      </div>
+    </div>`;
+}
+
+// 价签标签模板
+function renderPriceTag() {
+  return state.skuData.slice(0, 3).map(item => {
+    const price = (Math.abs(item.sku.charCodeAt(7) * 7) % 200 + 29).toFixed(0);
+    return `
+      <div class="tpl-price-tag" style="margin-bottom:12px;border:1px dashed #ccc;padding:8px;">
+        <div class="pt-brand">autoPrint</div>
+        <div class="pt-name">${item.name}</div>
+        <div class="pt-spec">${item.spec}</div>
+        <div class="pt-price"><span class="pt-price-symbol">¥</span>${price}</div>
+        <div class="pt-divider"></div>
+        <div class="pt-barcode">${generateBarcode(item.sku, 28)}</div>
+        <div class="pt-sku">${item.sku}</div>
+      </div>`;
+  }).join('');
+}
+
+// 条码标签模板
+function renderBarcodeLabel() {
+  return state.skuData.map(item => `
+    <div class="tpl-barcode-label">
+      <div class="bl-item">
+        <div class="bl-barcode">${generateBarcode(item.sku, 24)}</div>
+        <div class="bl-info">
+          <div class="bl-sku">${item.sku}</div>
+          <div class="bl-name">${item.name}</div>
+          <div class="bl-qty">x${item.quantity}</div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// 拣货单模板
+function renderPicking() {
+  const totalQty = state.skuData.reduce((s, i) => s + i.quantity, 0);
+  const locations = ['A-01', 'B-03', 'C-02', 'D-05', 'A-07', 'B-01'];
+  return `
+    <div class="tpl-picking">
+      <div class="pk-header">
+        <div class="pk-title">拣 货 单</div>
+        <div class="pk-subtitle">PICKING LIST · ORD-20240713-0086</div>
+      </div>
+      <div class="pk-meta">
+        <span>日期: ${new Date().toLocaleDateString('zh-CN')}</span>
+        <span>拣货员: _________</span>
+        <span>状态: <strong>待拣货</strong></span>
+      </div>
+      <table class="pk-items">
+        <thead>
+          <tr><th style="width:20px;">☐</th><th style="width:50px;">库位</th><th style="width:100px;">SKU</th><th>商品名称</th><th style="width:40px;">数量</th></tr>
+        </thead>
+        <tbody>
+          ${state.skuData.map((i, idx) => `<tr>
+            <td><span class="pk-check"></span></td>
+            <td><span class="pk-loc">${locations[idx % locations.length]}</span></td>
+            <td>${i.sku}</td>
+            <td>${i.name}</td>
+            <td class="pk-qty">${i.quantity}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="pk-footer">
+        <span>合计: ${state.skuData.length} 种商品</span>
+        <span>总数量: ${totalQty} 件</span>
+        <span>签字: _________</span>
+      </div>
+    </div>`;
+}
+
+// ========== 打印 ==========
+function doPrint() {
+  if (!state.selectedTemplate || state.skuData.length === 0) {
+    showToast('请先完成数据编辑并选择模板');
+    return;
+  }
+  const tpl = templates[state.selectedTemplate];
+  let html = '';
+  switch (state.selectedTemplate) {
+    case 'logistics': html = renderLogistics(); break;
+    case 'priceTag': html = renderPriceTag(); break;
+    case 'barcodeLabel': html = renderBarcodeLabel(); break;
+    case 'picking': html = renderPicking(); break;
+  }
+  printArea.innerHTML = `<div class="preview-paper ${tpl.paperClass}">${html}</div>`;
+  window.print();
+  showToast('正在调用打印机...');
+}
+
+$('printBtn').addEventListener('click', doPrint);
+$('topPrintBtn').addEventListener('click', doPrint);
+
+// 初始化
+updateStep(1);
+</script>
+</body>
+</html>

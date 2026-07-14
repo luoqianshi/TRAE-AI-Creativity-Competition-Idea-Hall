@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D图形小票 - Verlet物理模拟</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#f0f0f0;overflow:hidden;font-family:sans-serif;cursor:default}
+canvas{display:block}
+#hint{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  color:#aaa;font-size:13px;pointer-events:none;text-align:center;
+  background:rgba(255,255,255,0.7);padding:6px 18px;border-radius:20px;
+  backdrop-filter:blur(4px);
+}
+#resetBtn{
+  position:fixed;top:20px;right:20px;
+  padding:10px 20px;font-size:14px;color:#555;
+  background:rgba(255,255,255,0.9);border:none;border-radius:8px;
+  cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.1);
+  backdrop-filter:blur(4px);transition:all 0.2s;
+}
+#resetBtn:hover{background:#fff;transform:scale(1.05);box-shadow:0 4px 12px rgba(0,0,0,0.15)}
+#windControl{
+  position:fixed;top:20px;left:20px;
+  display:flex;align-items:center;gap:10px;
+  background:rgba(255,255,255,0.9);padding:10px 16px;border-radius:8px;
+  box-shadow:0 2px 8px rgba(0,0,0,0.1);backdrop-filter:blur(4px);
+  font-size:14px;color:#555;
+}
+#windInput{width:70px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;
+  font-family:monospace;font-size:14px;text-align:center;outline:none;
+  transition:border-color 0.2s;
+}
+#windInput:focus{border-color:#66afe9}
+</style>
+</head>
+<body>
+<div id="hint">🖱️ 左键拖拽小票 · 滚轮缩放 · 按住A键点击切割</div>
+<button id="resetBtn">🔄 重置视角</button>
+<div id="windControl">
+  <label>💨 风力</label>
+  <input type="number" id="windInput" value="-0.12" step="0.01">
+</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ====== 配置 ====== */
+var COLS = 22;
+var ROWS = 58;
+var CLOTH_W = 3.0;
+var CLOTH_H = 8.5;
+var GRAVITY = -10.0;
+var DAMPING = 0.97;
+var ITERS = 18;
+var STIFF_STRUCT = 1.0;
+var STIFF_SHEAR  = 0.75;
+var STIFF_BEND   = 0.35;
+var TOP_Y = CLOTH_H / 2;
+var WIND_FORCE = -0.12;
+
+/* ====== 粒子数据 (SoA) ====== */
+var N = COLS * ROWS;
+var px = new Float32Array(N);
+var py = new Float32Array(N);
+var pz = new Float32Array(N);
+var ox = new Float32Array(N);
+var oy = new Float32Array(N);
+var oz = new Float32Array(N);
+var pin = new Uint8Array(N);
+
+function idx(i,j){ return j * COLS + i; }
+
+function initParticles(){
+  var sx = CLOTH_W / (COLS - 1);
+  var sy = CLOTH_H / (ROWS - 1);
+  for(var j=0;j<ROWS;j++){
+    for(var i=0;i<COLS;i++){
+      var id = idx(i,j);
+      px[id] = -CLOTH_W/2 + i * sx;
+      py[id] = TOP_Y - j * sy;
+      pz[id] = 0;
+      ox[id] = px[id];
+      oy[id] = py[id];
+      oz[id] = pz[id];
+      if(j === 0) pin[id] = 1;
+    }
+  }
+  for(var j2 = ROWS - 8; j2 < ROWS; j2++){
+    var t = (j2 - (ROWS - 8)) / 8;
+    for(var i2 = 0; i2 < COLS; i2++){
+      var id2 = idx(i2, j2);
+      pz[id2] += t * t * 0.25;
+      oz[id2] = pz[id2];
+    }
+  }
+}
+
+/* ====== 约束 ====== */
+var cA = [], cB = [], cR = [], cS = [];
+
+function addConstraint(a,b,stiff){
+  var dx = px[a]-px[b], dy = py[a]-py[b], dz = pz[a]-pz[b];
+  cA.push(a); cB.push(b);
+  cR.push(Math.sqrt(dx*dx+dy*dy+dz*dz));
+  cS.push(stiff);
+}
+
+function initConstraints(){
+  for(var j=0;j<ROWS;j++){
+    for(var i=0;i<COLS;i++){
+      var id = idx(i,j);
+      if(i < COLS-1) addConstraint(id, idx(i+1,j), STIFF_STRUCT);
+      if(j < ROWS-1) addConstraint(id, idx(i,j+1), STIFF_STRUCT);
+      if(i < COLS-1 && j < ROWS-1){
+        addConstraint(id, idx(i+1,j+1), STIFF_SHEAR);
+        addConstraint(idx(i+1,j), idx(i,j+1), STIFF_SHEAR);
+      }
+      if(i < COLS-2) addConstraint(id, idx(i+2,j), STIFF_BEND);
+      if(j < ROWS-2) addConstraint(id, idx(i,j+2), STIFF_BEND);
+    }
+  }
+}
+
+/* ====== 模拟步进 ====== */
+function simulate(dt){
+  var dt2 = dt * dt;
+  var gx = 0, gy = GRAVITY, gz = 0;
+  var time = performance.now() * 0.001;
+  var windX = WIND_FORCE + Math.sin(time * 0.4) * 0.06 + Math.sin(time * 1.8) * 0.03;
+  var windZ = Math.cos(time * 0.6) * 0.04;
+
+  for(var i=0;i<N;i++){
+    if(pin[i]) continue;
+    var vx = (px[i]-ox[i])*DAMPING;
+    var vy = (py[i]-oy[i])*DAMPING;
+    var vz = (pz[i]-oz[i])*DAMPING;
+    ox[i] = px[i];
+    oy[i] = py[i];
+    oz[i] = pz[i];
+    px[i] += vx + (gx + windX) * dt2;
+    py[i] += vy + gy * dt2;
+    pz[i] += vz + (gz + windZ) * dt2;
+  }
+
+  for(var iter=0;iter<ITERS;iter++){
+    for(var c=0;c<cA.length;c++){
+      var a = cA[c], b = cB[c];
+      var dx = px[b]-px[a], dy = py[b]-py[a], dz = pz[b]-pz[a];
+      var dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if(dist < 1e-8) continue;
+      var rest = cR[c];
+      var stiff = cS[c];
+      var diff = (1 - rest/dist) * stiff * 0.5;
+      var cx = dx * diff, cy = dy * diff, cz = dz * diff;
+      if(!pin[a]){ px[a]+=cx; py[a]+=cy; pz[a]+=cz; }
+      if(!pin[b]){ px[b]-=cx; py[b]-=cy; pz[b]-=cz; }
+    }
+  }
+  for(var i=0;i<N;i++){
+    if(pin[i]) continue;
+    if(pz[i] < -1.2) pz[i] = -1.2;
+  }
+}
+
+var THICKNESS = 0.30;
+var CELL_SZ = 0.15;
+
+function selfCollision(){
+  var grid = {};
+  for(var i=0;i<N;i++){
+    var cx = Math.floor(px[i]/CELL_SZ);
+    var cy = Math.floor(py[i]/CELL_SZ);
+    var cz = Math.floor(pz[i]/CELL_SZ);
+    var key = cx+','+cy+','+cz;
+    if(!grid[key]) grid[key]=[];
+    grid[key].push(i);
+  }
+  for(var i=0;i<N;i++){
+    var cx = Math.floor(px[i]/CELL_SZ);
+    var cy = Math.floor(py[i]/CELL_SZ);
+    var cz = Math.floor(pz[i]/CELL_SZ);
+    for(var dx=-1;dx<=1;dx++){
+      for(var dy=-1;dy<=1;dy++){
+        for(var dz=-1;dz<=1;dz++){
+          var key = (cx+dx)+','+(cy+dy)+','+(cz+dz);
+          var cell = grid[key];
+          if(!cell) continue;
+          for(var k=0;k<cell.length;k++){
+            var j = cell[k];
+            if(j<=i) continue;
+            var di = (i%COLS)-(j%COLS); if(di<0) di=-di;
+            var dj = ((i/COLS)|0)-((j/COLS)|0); if(dj<0) dj=-dj;
+            if(di<=2 && dj<=2) continue;
+            var ddx = px[j]-px[i];
+            var ddy = py[j]-py[i];
+            var ddz = pz[j]-pz[i];
+            var d2 = ddx*ddx+ddy*ddy+ddz*ddz;
+            if(d2<THICKNESS*THICKNESS && d2>1e-10){
+              var d = Math.sqrt(d2);
+              var p = (THICKNESS-d)/d*0.8;
+              var mx=ddx*p, my=ddy*p, mz=ddz*p;
+              if(!pin[i]){px[i]-=mx;py[i]-=my;pz[i]-=mz;}
+              if(!pin[j]){px[j]+=mx;py[j]+=my;pz[j]+=mz;}
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/* ====== 小票纹理 ====== */
+function createReceiptTexture(){
+  var W = 512, H = 1440;
+  var cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  var c = cv.getContext("2d");
+
+  c.fillStyle = "#f6f1e3";
+  c.fillRect(0,0,W,H);
+
+  var id = c.getImageData(0,0,W,H);
+  var d = id.data;
+  for(var y=0;y<H;y++){
+    for(var x=0;x<W;x++){
+      var p = (y*W+x)*4;
+      var n = (Math.random()-0.5)*8;
+      d[p]   = Math.min(255,Math.max(0,d[p]+n));
+      d[p+1] = Math.min(255,Math.max(0,d[p+1]+n));
+      d[p+2] = Math.min(255,Math.max(0,d[p+2]+n));
+    }
+  }
+  c.putImageData(id,0,0);
+
+  var tc = "#3a3530";
+  var fc = "#5a5347";
+  c.textAlign = "center";
+
+  var y0 = 50;
+  function line(txt, sz, color, yy){
+    c.fillStyle = color || tc;
+    c.font = sz + "px 'Courier New',monospace";
+    c.fillText(txt, W/2, yy);
+    return yy + sz * 1.5;
+  }
+  function dashLine(yy){
+    c.strokeStyle = tc;
+    c.lineWidth = 1;
+    c.setLineDash([6,4]);
+    c.beginPath(); c.moveTo(40,yy); c.lineTo(W-40,yy); c.stroke();
+    c.setLineDash([]);
+    return yy + 16;
+  }
+  function solidLine(yy){
+    c.strokeStyle = tc;
+    c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(40,yy); c.lineTo(W-40,yy); c.stroke();
+    return yy + 16;
+  }
+  function doubleLine(yy){
+    c.strokeStyle = tc;
+    c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(40,yy); c.lineTo(W-40,yy); c.stroke();
+    c.beginPath(); c.moveTo(40,yy+5); c.lineTo(W-40,yy+5); c.stroke();
+    return yy + 18;
+  }
+  function item(name, qty, price, yy){
+    c.fillStyle = tc;
+    c.font = "17px 'Courier New',monospace";
+    c.textAlign = "left";
+    c.fillText(name, 44, yy);
+    c.textAlign = "right";
+    c.fillText(qty + " x " + price, W-44, yy);
+    c.textAlign = "center";
+    return yy + 24;
+  }
+
+  y0 = line("================================", 16, tc, y0);
+  y0 = line("\u{1F5A5} 3D\u56FE\u5F62\u7528\u54C1\u8D85\u5E02 \u{1F5A5}", 22, tc, y0);
+  y0 = line("3D GRAPHICS SUPPLY STORE", 13, fc, y0);
+  y0 = line("================================", 16, tc, y0);
+  y0 += 4;
+  y0 = line("\u65E5\u671F: 2026-05-18 14:30", 14, fc, y0);
+  y0 = line("\u5355\u53F7: GL-20260518-001", 14, fc, y0);
+  y0 = line("\u6536\u94F6\u5458: GPU #0 (CUDA Cores)", 14, fc, y0);
+  y0 = line("================================", 16, tc, y0);
+  y0 += 4;
+  y0 = dashLine(y0);
+  y0 += 2;
+
+  c.fillStyle = tc;
+  c.font = "bold 15px 'Courier New',monospace";
+  c.textAlign = "left";
+  c.fillText("\u5546\u54C1\u540D", 44, y0);
+  c.textAlign = "right";
+  c.fillText("\u6570\u91CF\u00D7\u5355\u4EF7  \u91D1\u989D", W-44, y0);
+  c.textAlign = "center";
+  y0 += 22;
+  y0 = dashLine(y0);
+  y0 += 4;
+
+  y0 = item("\u9876\u70B9\u7F13\u51B2\u5BF9\u8C61 VBO", "1", "299.00", y0);
+  y0 = item("\u7247\u6BB5\u7740\u8272\u5668 FragShader", "1", "599.00", y0);
+  y0 = item("Mipmap Level 0", "2", "49.00", y0);
+  y0 = item("4xMSAA \u6297\u952F\u9F7F", "1", "199.00", y0);
+  y0 = item("\u6DF1\u5EA6\u7F13\u51B2 Z-Buffer", "1", "399.00", y0);
+  y0 = item("\u6CD5\u7EBF\u8D34\u56FE NormalMap", "1", "149.00", y0);
+  y0 = item("\u89C6\u9525\u4F53\u88C1\u526A FrustumClip", "1", "89.00", y0);
+  y0 = item("\u9F50\u6B21\u5750\u6807 HomoCoord", "3", "29.00", y0);
+  y0 = item("\u80CC\u9762\u5254\u9664 BackCull", "1", "59.00", y0);
+  y0 = item("\u7EB9\u7406\u91C7\u6837\u5668 Sampler", "2", "179.00", y0);
+  y0 = item("\u51E0\u4F55\u7740\u8272\u5668 GeoShader", "1", "499.00", y0);
+  y0 = item("\u5149\u6805\u5316\u5668 Rasterizer", "1", "349.00", y0);
+  y0 = item("\u6E32\u67D3\u7BA1\u7EBF Pipeline", "1", "899.00", y0);
+  y0 = item("\u77E9\u9635\u53D8\u6362 MatTransform", "2", "69.00", y0);
+  y0 = item("\u5C4F\u5E55\u7A7A\u95F4 ScreenSpace", "1", "159.00", y0);
+  y0 = item("\u5E27\u7F13\u51B2 FrameBuffer", "1", "449.00", y0);
+
+  y0 += 4;
+  y0 = dashLine(y0);
+  y0 += 6;
+
+  c.textAlign = "right";
+  c.fillStyle = tc;
+  c.font = "16px 'Courier New',monospace";
+  c.fillText("\u5C0F\u8BA1:           4,829.00", W-44, y0); y0 += 24;
+  c.fillText("\u6E32\u67D3\u7A0E(13%):      627.77", W-44, y0); y0 += 24;
+  y0 = solidLine(y0);
+  y0 += 4;
+  c.font = "bold 20px 'Courier New',monospace";
+  c.fillText("\u603B\u8BA1:       \u00A55,456.77", W-44, y0); y0 += 28;
+
+  y0 = doubleLine(y0);
+  y0 += 8;
+  c.textAlign = "center";
+  y0 = line("\u{1F389} \u611F\u8C22\u60E0\u987E\uFF01\u5E27\u7387\u6C38\u4E0D\u4F4E\u4E8E60\uFF01 \u{1F389}", 16, tc, y0);
+  y0 = line("\u626B\u7801\u83B7\u53D6\u4F60\u7684 Shader", 14, fc, y0);
+  y0 += 4;
+  y0 = line("* Verlet\u79EF\u5206\u7269\u7406\u5F15\u64CE\u6253\u5370 *", 12, fc, y0);
+  y0 = line("* GPU\u52A0\u901F\u8BA1\u7B97\uFF0C\u5149\u6805\u5316\u5B8C\u6210 *", 12, fc, y0);
+  y0 += 8;
+  y0 = line("================================", 16, tc, y0);
+
+  var tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/* ====== Three.js 场景 ====== */
+var scene, camera, renderer;
+var clothMesh, clothGeo;
+var holder;
+
+function initScene(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf0f0f0);
+
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
+  camera.position.set(0, 1.0, 12);
+  camera.lookAt(0, -0.5, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
+  document.body.appendChild(renderer.domElement);
+
+  var amb = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(amb);
+
+  var dir = new THREE.DirectionalLight(0xffffff, 1.2);
+  dir.position.set(3, 5, 6);
+  dir.castShadow = true;
+  dir.shadow.mapSize.width = 1024;
+  dir.shadow.mapSize.height = 1024;
+  dir.shadow.camera.near = 0.5;
+  dir.shadow.camera.far = 25;
+  dir.shadow.camera.left = -6;
+  dir.shadow.camera.right = 6;
+  dir.shadow.camera.top = 8;
+  dir.shadow.camera.bottom = -8;
+  dir.shadow.bias = -0.001;
+  scene.add(dir);
+
+  var fill = new THREE.DirectionalLight(0xddeeff, 0.3);
+  fill.position.set(-3, 2, 4);
+  scene.add(fill);
+
+  var backWall = new THREE.Mesh(
+    new THREE.PlaneGeometry(16, 16),
+    new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.9, metalness: 0 })
+  );
+  backWall.position.z = -1.5;
+  backWall.receiveShadow = true;
+  scene.add(backWall);
+
+  var holderGeo = new THREE.BoxGeometry(CLOTH_W + 0.5, 0.1, 0.22);
+  var holderMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.85, roughness: 0.2 });
+  holder = new THREE.Mesh(holderGeo, holderMat);
+  holder.position.set(0, TOP_Y + 0.08, 0);
+  holder.castShadow = true;
+  scene.add(holder);
+
+  var bracketGeo = new THREE.BoxGeometry(0.12, 0.28, 0.28);
+  var bracketMat = new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.9, roughness: 0.15 });
+  var lb = new THREE.Mesh(bracketGeo, bracketMat);
+  lb.position.set(-CLOTH_W/2 - 0.18, TOP_Y + 0.04, 0);
+  lb.castShadow = true;
+  scene.add(lb);
+  var rb = new THREE.Mesh(bracketGeo, bracketMat);
+  rb.position.set(CLOTH_W/2 + 0.18, TOP_Y + 0.04, 0);
+  rb.castShadow = true;
+  scene.add(rb);
+}
+
+function createClothMesh(){
+  clothGeo = new THREE.PlaneGeometry(CLOTH_W, CLOTH_H, COLS-1, ROWS-1);
+  var tex = createReceiptTexture();
+  var mat = new THREE.MeshStandardMaterial({
+    map: tex,
+    side: THREE.DoubleSide,
+    roughness: 0.85,
+    metalness: 0.0,
+    color: 0xfcfaf5,
+  });
+  clothMesh = new THREE.Mesh(clothGeo, mat);
+  clothMesh.castShadow = true;
+  clothMesh.receiveShadow = true;
+  scene.add(clothMesh);
+}
+
+function updateMesh(){
+  var pos = clothGeo.attributes.position;
+  var arr = pos.array;
+  for(var j=0;j<ROWS;j++){
+    for(var i=0;i<COLS;i++){
+      var vi = j * COLS + i;
+      var id = idx(i,j);
+      arr[vi*3]   = px[id];
+      arr[vi*3+1] = py[id];
+      arr[vi*3+2] = pz[id];
+    }
+  }
+  pos.needsUpdate = true;
+  clothGeo.computeVertexNormals();
+}
+
+/* ====== 鼠标交互 ====== */
+var mouse = new THREE.Vector2();
+var raycaster = new THREE.Raycaster();
+var isDragging = false;
+var dragIdx = -1;
+var dragPlane = new THREE.Plane();
+var dragOffset = new THREE.Vector3();
+var intersectPt = new THREE.Vector3();
+var INFLUENCE_R = 4;
+var isKeyADown = false;
+var isCutting = false;
+var cutStart = new THREE.Vector2();
+var cutEnd = new THREE.Vector2();
+var cutPath = [];
+
+function getMouse(e){
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+}
+
+function findClosestParticle(){
+  raycaster.setFromCamera(mouse, camera);
+  var minD = Infinity, best = -1;
+  var ray = raycaster.ray;
+  var tmp = new THREE.Vector3();
+  for(var i=0;i<N;i++){
+    if(pin[i]) continue;
+    tmp.set(px[i], py[i], pz[i]);
+    var d = ray.distanceToPoint(tmp);
+    if(d < minD){ minD = d; best = i; }
+  }
+  return minD < 0.6 ? best : -1;
+}
+
+function onDown(e){
+  if(e.button !== 0) return;
+  getMouse(e);
+  
+  if(isKeyADown){
+    isCutting = true;
+    cutStart.set(mouse.x, mouse.y);
+    cutEnd.set(mouse.x, mouse.y);
+    cutPath = [{x: mouse.x, y: mouse.y}];
+    return;
+  }
+  
+  var ci = findClosestParticle();
+  if(ci < 0) return;
+  isDragging = true;
+  dragIdx = ci;
+  raycaster.setFromCamera(mouse, camera);
+  var ppos = new THREE.Vector3(px[ci], py[ci], pz[ci]);
+  var camDir = camera.getWorldDirection(new THREE.Vector3());
+  dragPlane.setFromNormalAndCoplanarPoint(camDir, ppos);
+  raycaster.ray.intersectPlane(dragPlane, intersectPt);
+  dragOffset.copy(ppos).sub(intersectPt);
+  renderer.domElement.style.cursor = "grabbing";
+}
+
+function onUp(){
+  if(isCutting){
+    performCut();
+    isCutting = false;
+    cutPath = [];
+    return;
+  }
+  
+  isDragging = false;
+  dragIdx = -1;
+  renderer.domElement.style.cursor = isKeyADown ? "crosshair" : "default";
+}
+
+function performCut(){
+  if(cutPath.length < 2) return;
+  
+  var cutWidth = 0.3;
+  var cutParticles = new Set();
+  
+  for(var i = 0; i < N; i++){
+    if(pin[i]) continue;
+    var pos = screenPos(i);
+    if(isPointNearPath(pos.x, pos.y, cutWidth)){
+      cutParticles.add(i);
+    }
+  }
+  
+  for(var c = cA.length - 1; c >= 0; c--){
+    var a = cA[c];
+    var b = cB[c];
+    
+    if(cutParticles.has(a) || cutParticles.has(b)){
+      cA.splice(c, 1);
+      cB.splice(c, 1);
+      cR.splice(c, 1);
+      cS.splice(c, 1);
+    }
+  }
+  
+  for(var i = 0; i < N; i++){
+    if(cutParticles.has(i)){
+      pin[i] = 0;
+    }
+  }
+}
+
+function isPointNearPath(px, py, threshold){
+  for(var i = 0; i < cutPath.length - 1; i++){
+    var x1 = cutPath[i].x;
+    var y1 = cutPath[i].y;
+    var x2 = cutPath[i+1].x;
+    var y2 = cutPath[i+1].y;
+    
+    var dx = x2 - x1;
+    var dy = y2 - y1;
+    var len2 = dx * dx + dy * dy;
+    
+    if(len2 === 0){
+      var dist = Math.sqrt((px - x1) * (px - x1) + (py - y1) * (py - y1));
+      if(dist < threshold) return true;
+      continue;
+    }
+    
+    var t = ((px - x1) * dx + (py - y1) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    
+    var nearX = x1 + t * dx;
+    var nearY = y1 + t * dy;
+    
+    var dist = Math.sqrt((px - nearX) * (px - nearX) + (py - nearY) * (py - nearY));
+    if(dist < threshold) return true;
+  }
+  return false;
+}
+
+function lineSegmentsIntersect(x1, y1, x2, y2){
+  for(var i = 0; i < cutPath.length - 1; i++){
+    var x3 = cutPath[i].x;
+    var y3 = cutPath[i].y;
+    var x4 = cutPath[i+1].x;
+    var y4 = cutPath[i+1].y;
+    
+    var denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+    if(denom === 0) continue;
+    
+    var ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+    var ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+    
+    if(ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1){
+      return true;
+    }
+  }
+  return false;
+}
+
+function pointToPathDistance(px, py){
+  var minDist = Infinity;
+  
+  for(var i = 0; i < cutPath.length - 1; i++){
+    var x1 = cutPath[i].x;
+    var y1 = cutPath[i].y;
+    var x2 = cutPath[i+1].x;
+    var y2 = cutPath[i+1].y;
+    
+    var dx = x2 - x1;
+    var dy = y2 - y1;
+    var len2 = dx * dx + dy * dy;
+    
+    if(len2 === 0){
+      var dist = Math.sqrt((px - x1) * (px - x1) + (py - y1) * (py - y1));
+      minDist = Math.min(minDist, dist);
+      continue;
+    }
+    
+    var t = ((px - x1) * dx + (py - y1) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    
+    var nearX = x1 + t * dx;
+    var nearY = y1 + t * dy;
+    
+    var dist = Math.sqrt((px - nearX) * (px - nearX) + (py - nearY) * (py - nearY));
+    minDist = Math.min(minDist, dist);
+  }
+  
+  return minDist;
+}
+
+function screenPos(id){
+  var vec = new THREE.Vector3(px[id], py[id], pz[id]);
+  vec.project(camera);
+  return {x: vec.x, y: vec.y};
+}
+
+function pointToSegmentDistance(px, py, qx, qy){
+  var minDist = Infinity;
+  
+  for(var i = 0; i < cutPath.length - 1; i++){
+    var x1 = cutPath[i].x;
+    var y1 = cutPath[i].y;
+    var x2 = cutPath[i+1].x;
+    var y2 = cutPath[i+1].y;
+    
+    var dx = x2 - x1;
+    var dy = y2 - y1;
+    var len2 = dx * dx + dy * dy;
+    
+    if(len2 === 0){
+      var dist = Math.sqrt((px - x1) * (px - x1) + (py - y1) * (py - y1));
+      minDist = Math.min(minDist, dist);
+      continue;
+    }
+    
+    var t = ((px - x1) * dx + (py - y1) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    
+    var nearX = x1 + t * dx;
+    var nearY = y1 + t * dy;
+    
+    var dist = Math.sqrt((px - nearX) * (px - nearX) + (py - nearY) * (py - nearY));
+    minDist = Math.min(minDist, dist);
+  }
+  
+  return minDist;
+}
+
+function onMove(e){
+  getMouse(e);
+  
+  if(isCutting){
+    var last = cutPath[cutPath.length - 1];
+    var dist = Math.sqrt((mouse.x - last.x) * (mouse.x - last.x) + (mouse.y - last.y) * (mouse.y - last.y));
+    if(dist > 0.05){
+      cutEnd.set(mouse.x, mouse.y);
+      cutPath.push({x: mouse.x, y: mouse.y});
+    }
+    return;
+  }
+  
+  if(!isDragging || dragIdx < 0) return;
+  raycaster.setFromCamera(mouse, camera);
+  if(!raycaster.ray.intersectPlane(dragPlane, intersectPt)) return;
+  var target = intersectPt.add(dragOffset);
+
+  var di = dragIdx % COLS;
+  var dj = Math.floor(dragIdx / COLS);
+  var origX = px[dragIdx], origY = py[dragIdx], origZ = pz[dragIdx];
+  px[dragIdx] = target.x;
+  py[dragIdx] = target.y;
+  pz[dragIdx] = target.z;
+  var ddx = target.x - origX, ddy = target.y - origY, ddz = target.z - origZ;
+
+  for(var dj2 = Math.max(0, dj - INFLUENCE_R); dj2 <= Math.min(ROWS-1, dj + INFLUENCE_R); dj2++){
+    for(var di2 = Math.max(0, di - INFLUENCE_R); di2 <= Math.min(COLS-1, di + INFLUENCE_R); di2++){
+      if(di2 === di && dj2 === dj) continue;
+      var id = idx(di2, dj2);
+      if(pin[id]) continue;
+      var dist = Math.sqrt((di2-di)*(di2-di) + (dj2-dj)*(dj2-dj));
+      if(dist > INFLUENCE_R) continue;
+      var inf = Math.exp(-dist*dist / 3.0) * 0.35;
+      px[id] += ddx * inf;
+      py[id] += ddy * inf;
+      pz[id] += ddz * inf;
+    }
+  }
+}
+
+function onWheel(e){
+  e.preventDefault();
+  var zoomSpeed = 0.0015;
+  var factor = 1 - e.deltaY * zoomSpeed;
+  var newDist = camera.position.length() * factor;
+  if(newDist < 5 || newDist > 25) return;
+  
+  var mouse3D = new THREE.Vector3();
+  var plane = new THREE.Plane(new THREE.Vector3(0,0,1), 0);
+  raycaster.setFromCamera(mouse, camera);
+  raycaster.ray.intersectPlane(plane, mouse3D);
+  
+  var dir = camera.position.clone().sub(mouse3D);
+  dir.multiplyScalar(factor);
+  camera.position.copy(mouse3D).add(dir);
+}
+
+function resetCamera(){
+  camera.position.set(0, 1.0, 12);
+  camera.lookAt(0, -0.5, 0);
+}
+
+/* ====== 主循环 ====== */
+var FIXED_DT = 1/60;
+var preSimDone = false;
+
+function animate(){
+  requestAnimationFrame(animate);
+
+  if(!preSimDone){
+    for(var s=0;s<120;s++){ simulate(FIXED_DT); selfCollision(); }
+    preSimDone = true;
+  }
+
+  simulate(FIXED_DT);
+  for(var ci=0;ci<3;ci++) selfCollision();
+  updateMesh();
+  renderer.render(scene, camera);
+}
+
+function onResize(){
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* ====== 初始化 ====== */
+function onKeyDown(e){
+  if(e.key.toLowerCase() === 'a'){
+    isKeyADown = true;
+    renderer.domElement.style.cursor = "crosshair";
+  }
+}
+
+function onKeyUp(e){
+  if(e.key.toLowerCase() === 'a'){
+    isKeyADown = false;
+    renderer.domElement.style.cursor = isDragging ? "grabbing" : "default";
+  }
+}
+
+function init(){
+  initParticles();
+  initConstraints();
+  initScene();
+  createClothMesh();
+
+  var cv = renderer.domElement;
+  cv.addEventListener("mousedown", onDown);
+  cv.addEventListener("mousemove", onMove);
+  cv.addEventListener("wheel", onWheel);
+  window.addEventListener("mouseup", onUp);
+  window.addEventListener("resize", onResize);
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  cv.addEventListener("touchstart", onTouchStart);
+  cv.addEventListener("touchmove", onTouchMove);
+  cv.addEventListener("touchend", onTouchEnd);
+  document.getElementById("resetBtn").addEventListener("click", resetCamera);
+  document.getElementById("windInput").addEventListener("input", updateWind);
+
+  animate();
+}
+
+function getTouchPos(e){
+  var touch = e.touches[0];
+  mouse.x = (touch.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(touch.clientY / window.innerHeight) * 2 + 1;
+}
+
+function onTouchStart(e){
+  e.preventDefault();
+  getTouchPos(e);
+  var ci = findClosestParticle();
+  if(ci < 0) return;
+  isDragging = true;
+  dragIdx = ci;
+  raycaster.setFromCamera(mouse, camera);
+  var ppos = new THREE.Vector3(px[ci], py[ci], pz[ci]);
+  var camDir = camera.getWorldDirection(new THREE.Vector3());
+  dragPlane.setFromNormalAndCoplanarPoint(camDir, ppos);
+  raycaster.ray.intersectPlane(dragPlane, intersectPt);
+  dragOffset.copy(ppos).sub(intersectPt);
+}
+
+function onTouchMove(e){
+  e.preventDefault();
+  getTouchPos(e);
+  if(!isDragging || dragIdx < 0) return;
+  raycaster.setFromCamera(mouse, camera);
+  if(!raycaster.ray.intersectPlane(dragPlane, intersectPt)) return;
+  var target = intersectPt.add(dragOffset);
+
+  var di = dragIdx % COLS;
+  var dj = Math.floor(dragIdx / COLS);
+  var origX = px[dragIdx], origY = py[dragIdx], origZ = pz[dragIdx];
+  px[dragIdx] = target.x;
+  py[dragIdx] = target.y;
+  pz[dragIdx] = target.z;
+  var ddx = target.x - origX, ddy = target.y - origY, ddz = target.z - origZ;
+
+  for(var dj2 = Math.max(0, dj - INFLUENCE_R); dj2 <= Math.min(ROWS-1, dj + INFLUENCE_R); dj2++){
+    for(var di2 = Math.max(0, di - INFLUENCE_R); di2 <= Math.min(COLS-1, di + INFLUENCE_R); di2++){
+      if(di2 === di && dj2 === dj) continue;
+      var id = idx(di2, dj2);
+      if(pin[id]) continue;
+      var dist = Math.sqrt((di2-di)*(di2-di) + (dj2-dj)*(dj2-dj));
+      if(dist > INFLUENCE_R) continue;
+      var inf = Math.exp(-dist*dist / 3.0) * 0.35;
+      px[id] += ddx * inf;
+      py[id] += ddy * inf;
+      pz[id] += ddz * inf;
+    }
+  }
+}
+
+function onTouchEnd(){
+  isDragging = false;
+  dragIdx = -1;
+}
+
+function updateWind(e){
+  var val = parseFloat(e.target.value);
+  if(!isNaN(val)) WIND_FORCE = val;
+}
+
+init();
+
+})();
+</script>
+</body>
+</html>

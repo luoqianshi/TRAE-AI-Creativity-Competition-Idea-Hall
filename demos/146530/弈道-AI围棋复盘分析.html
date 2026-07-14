@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>弈道 - AI围棋复盘分析</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --wood-light: #e6c896;
+  --wood: #d2a679;
+  --wood-deep: #b8864a;
+  --wood-dark: #8d6e63;
+  --ink: #3e2723;
+  --ink-soft: #5d4037;
+  --paper: #faf6ed;
+  --gold: #c9a14a;
+  --red-seal: #b71c1c;
+}
+html, body { width: 100%; height: 100%; overflow: hidden; }
+body {
+  font-family: "STKaiti", "KaiTi", "Microsoft YaHei", serif;
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(255,250,235,0.5) 0%, transparent 40%),
+    radial-gradient(ellipse at 80% 90%, rgba(141,110,99,0.15) 0%, transparent 50%),
+    repeating-linear-gradient(90deg, rgba(139,90,43,0.025) 0px, rgba(139,90,43,0.025) 2px, transparent 2px, transparent 9px),
+    repeating-linear-gradient(0deg, rgba(101,67,33,0.018) 0px, rgba(101,67,33,0.018) 3px, transparent 3px, transparent 13px),
+    linear-gradient(135deg, #e8d4a8 0%, #d8bc88 50%, #e8d4a8 100%);
+  position: relative;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+.header {
+  position: relative;
+  z-index: 10;
+  text-align: center;
+  padding: 14px 16px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+.header-seal {
+  width: 46px; height: 46px;
+  background: var(--red-seal);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 22px;
+  font-weight: bold;
+  box-shadow: 0 3px 10px rgba(183,28,28,0.4), inset 0 0 0 2px rgba(255,255,255,0.2);
+  transform: rotate(-4deg);
+  font-family: "STKaiti", serif;
+}
+.header-text h1 {
+  font-size: 30px;
+  color: var(--ink);
+  letter-spacing: 14px;
+  font-weight: bold;
+  text-shadow: 1px 1px 2px rgba(255,255,255,0.6);
+  line-height: 1;
+}
+.header-text p {
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+  letter-spacing: 4px;
+  opacity: 0.75;
+}
+.header-deco {
+  width: 60px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--wood-dark), transparent);
+}
+
+.main {
+  position: absolute;
+  top: 78px;
+  bottom: 70px;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 14px;
+  padding: 0 16px;
+  z-index: 5;
+}
+
+.board-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.board-wrap {
+  position: relative;
+  filter: drop-shadow(0 12px 28px rgba(62,39,35,0.35));
+}
+.board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #6d4c2e, #4a321e, #6d4c2e);
+  z-index: -1;
+}
+.board-svg { cursor: pointer; display: block; border-radius: 8px; }
+.board-bg { fill: url(#woodGrad); }
+.grid-line { stroke: var(--ink); stroke-width: 1.3; opacity: 0.85; }
+.grid-line.edge { stroke-width: 2; }
+.star-point { fill: var(--ink); }
+.coord-text { fill: var(--ink-soft); font-size: 11px; opacity: 0.7; }
+
+.stone {
+  filter: drop-shadow(1.5px 2.5px 3px rgba(0,0,0,0.35));
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.stone:hover { transform: scale(1.12); }
+.stone-new { animation: stonePlace 0.45s cubic-bezier(0.34,1.56,0.64,1); }
+@keyframes stonePlace {
+  0% { transform: scale(0) translateY(-25px); opacity: 0; }
+  60% { transform: scale(1.35); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.last-marker {
+  animation: lastPulse 1.5s ease-in-out infinite;
+}
+@keyframes lastPulse {
+  0%, 100% { opacity: 0.9; r: 3; }
+  50% { opacity: 0.4; r: 5; }
+}
+.ripple {
+  animation: ripple 0.7s ease-out forwards;
+}
+@keyframes ripple {
+  0% { r: 8; opacity: 0.7; stroke-width: 2.5; }
+  100% { r: 38; opacity: 0; stroke-width: 0.5; }
+}
+
+.heatmap-cell { opacity: 0; transition: opacity 0.5s; }
+.heatmap-on .heatmap-cell { opacity: 0.32; }
+
+.side-panel {
+  width: 290px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.panel-card {
+  background: rgba(255,251,240,0.82);
+  border-radius: 12px;
+  padding: 14px;
+  border: 1px solid rgba(101,67,33,0.18);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px rgba(62,39,35,0.12);
+  position: relative;
+}
+.panel-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 14px; right: 14px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  opacity: 0.6;
+}
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 10px;
+  letter-spacing: 3px;
+  font-weight: bold;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(101,67,33,0.15);
+}
+.panel-title .deco {
+  width: 4px; height: 14px;
+  background: var(--red-seal);
+  border-radius: 2px;
+}
+
+/* 对局信息 */
+.match-info {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.player {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.04);
+}
+.player-stone {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.player-stone.b { background: radial-gradient(circle at 35% 30%, #666, #1a1a1a 60%, #000); box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+.player-stone.w { background: radial-gradient(circle at 35% 30%, #fff, #eee 60%, #bbb); box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+.player-info .name { font-size: 13px; color: var(--ink); font-weight: bold; }
+.player-info .rank { font-size: 10px; color: var(--ink-soft); opacity: 0.7; }
+.vs { display: flex; align-items: center; color: var(--wood-dark); font-size: 12px; font-weight: bold; }
+
+/* 形势条 */
+.balance-wrap {
+  margin-top: 8px;
+}
+.balance-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+}
+.balance-bar {
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, #1a1a1a 0%, #1a1a1a var(--bal,50%), #f5f5f5 var(--bal,50%), #f5f5f5 100%);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+  position: relative;
+  overflow: hidden;
+}
+.balance-bar::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 50%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.3), transparent);
+}
+.balance-text {
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink);
+  margin-top: 6px;
+  font-weight: bold;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.stat-row:last-child { margin-bottom: 0; }
+.stat-row .k { color: var(--ink-soft); }
+.stat-row .v { color: var(--ink); font-weight: bold; }
+
+.move-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.move-items {
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 4px;
+}
+.move-items::-webkit-scrollbar { width: 6px; }
+.move-items::-webkit-scrollbar-track { background: rgba(101,67,33,0.05); border-radius: 3px; }
+.move-items::-webkit-scrollbar-thumb { background: var(--wood-dark); border-radius: 3px; }
+.move-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+  margin-bottom: 2px;
+}
+.move-item:hover { background: rgba(101,67,33,0.1); transform: translateX(2px); }
+.move-item.active {
+  background: linear-gradient(90deg, rgba(201,161,74,0.25), rgba(201,161,74,0.1));
+  font-weight: bold;
+  box-shadow: inset 3px 0 0 var(--red-seal);
+}
+.move-num {
+  color: var(--wood-dark);
+  width: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.move-dot {
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.move-dot.b { background: radial-gradient(circle at 35% 30%, #666, #000); }
+.move-dot.w { background: radial-gradient(circle at 35% 30%, #fff, #ccc); border: 1px solid #999; }
+.move-coord { color: var(--ink-soft); }
+
+.controls {
+  position: absolute;
+  bottom: 14px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  z-index: 10;
+}
+.ctrl-btn {
+  padding: 10px 20px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  background: rgba(255,251,240,0.85);
+  border: 1px solid rgba(101,67,33,0.25);
+  color: var(--ink);
+  letter-spacing: 3px;
+  transition: all 0.2s;
+  font-family: inherit;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 3px 10px rgba(62,39,35,0.1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ctrl-btn:hover {
+  background: rgba(210,166,121,0.9);
+  transform: translateY(-2px);
+  box-shadow: 0 5px 14px rgba(62,39,35,0.2);
+}
+.ctrl-btn:active { transform: translateY(0); }
+.ctrl-btn.primary {
+  background: var(--ink);
+  color: var(--wood-light);
+  border-color: var(--ink);
+}
+.ctrl-btn.primary:hover { background: #2a1810; }
+.ctrl-btn.toggle.active {
+  background: linear-gradient(135deg, #2e7d32, #1b5e20);
+  color: #fff;
+  border-color: #2e7d32;
+  box-shadow: 0 3px 12px rgba(46,125,50,0.4);
+}
+.ctrl-btn svg { width: 14px; height: 14px; }
+
+.toast {
+  position: fixed;
+  top: 90px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  background: rgba(62,39,35,0.92);
+  color: var(--wood-light);
+  padding: 10px 24px;
+  border-radius: 24px;
+  font-size: 13px;
+  letter-spacing: 2px;
+  opacity: 0;
+  transition: all 0.3s;
+  z-index: 100;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+  pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+@media (max-width: 900px) {
+  .main { flex-direction: column; top: 70px; bottom: 64px; }
+  .side-panel { width: 100%; flex-direction: row; max-height: 200px; }
+  .panel-card { flex: 1; }
+  .move-list { min-width: 150px; }
+  .header-text h1 { font-size: 22px; letter-spacing: 8px; }
+  .ctrl-btn { padding: 8px 14px; font-size: 12px; letter-spacing: 1px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-deco"></div>
+  <div class="header-seal">弈</div>
+  <div class="header-text">
+    <h1>弈 道</h1>
+    <p>手谈一局 · 胜负半目 · 以弈悟道</p>
+  </div>
+  <div class="header-deco"></div>
+</div>
+
+<div class="main">
+  <div class="board-area">
+    <div class="board-wrap" id="boardWrap">
+      <svg class="board-svg" id="boardSvg" width="620" height="620" viewBox="0 0 620 620">
+        <defs>
+          <linearGradient id="woodGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#e0b884"/>
+            <stop offset="40%" stop-color="#d2a679"/>
+            <stop offset="70%" stop-color="#c4985f"/>
+            <stop offset="100%" stop-color="#b8864a"/>
+          </linearGradient>
+          <radialGradient id="blackStone" cx="0.35" cy="0.3" r="0.7">
+            <stop offset="0%" stop-color="#888"/>
+            <stop offset="25%" stop-color="#444"/>
+            <stop offset="60%" stop-color="#1a1a1a"/>
+            <stop offset="100%" stop-color="#000"/>
+          </radialGradient>
+          <radialGradient id="whiteStone" cx="0.35" cy="0.3" r="0.7">
+            <stop offset="0%" stop-color="#fff"/>
+            <stop offset="40%" stop-color="#f5f5f5"/>
+            <stop offset="75%" stop-color="#e0e0e0"/>
+            <stop offset="100%" stop-color="#b0b0b0"/>
+          </radialGradient>
+          <radialGradient id="blackHeat" cx="0.5" cy="0.5" r="0.6">
+            <stop offset="0%" stop-color="rgba(20,20,20,0.5)"/>
+            <stop offset="100%" stop-color="rgba(20,20,20,0)"/>
+          </radialGradient>
+          <radialGradient id="whiteHeat" cx="0.5" cy="0.5" r="0.6">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.55)"/>
+            <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+          </radialGradient>
+        </defs>
+        <rect class="board-bg" x="0" y="0" width="620" height="620" rx="8"/>
+        <g id="gridGroup"></g>
+        <g id="heatmapGroup"></g>
+        <g id="stoneGroup"></g>
+        <g id="markerGroup"></g>
+        <g id="rippleGroup"></g>
+        <g id="coordGroup"></g>
+      </svg>
+    </div>
+  </div>
+
+  <div class="side-panel">
+    <div class="panel-card">
+      <div class="panel-title"><span class="deco"></span>对 局 信 息</div>
+      <div class="match-info">
+        <div class="player">
+          <div class="player-stone b"></div>
+          <div class="player-info">
+            <div class="name">执黑</div>
+            <div class="rank">让先 · 7段</div>
+          </div>
+        </div>
+        <div class="vs">VS</div>
+        <div class="player">
+          <div class="player-stone w"></div>
+          <div class="player-info">
+            <div class="name">执白</div>
+            <div class="rank">贴6目半 · 7段</div>
+          </div>
+        </div>
+      </div>
+      <div class="balance-wrap">
+        <div class="balance-label">
+          <span>黑方势力</span>
+          <span>白方势力</span>
+        </div>
+        <div class="balance-bar" id="balanceBar" style="--bal:50%"></div>
+        <div class="balance-text" id="balanceText">均势</div>
+      </div>
+    </div>
+
+    <div class="panel-card" style="flex:0 0 auto;">
+      <div class="panel-title"><span class="deco"></span>形 势</div>
+      <div class="stat-row"><span class="k">当前手数</span><span class="v" id="moveCount">0</span></div>
+      <div class="stat-row"><span class="k">黑提子</span><span class="v" id="blackCaptures">0</span></div>
+      <div class="stat-row"><span class="k">白提子</span><span class="v" id="whiteCaptures">0</span></div>
+      <div class="stat-row"><span class="k">AI 评估</span><span class="v" id="aiEval">—</span></div>
+    </div>
+
+    <div class="panel-card move-list">
+      <div class="panel-title"><span class="deco"></span>手 数 谱</div>
+      <div class="move-items" id="moveItems"></div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="ctrl-btn" id="firstBtn">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+    首 手
+  </button>
+  <button class="ctrl-btn" id="prevBtn">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+    上 一 手
+  </button>
+  <button class="ctrl-btn primary" id="autoBtn">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+    自 动 播 放
+  </button>
+  <button class="ctrl-btn" id="nextBtn">
+    下一手
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+  </button>
+  <button class="ctrl-btn" id="lastBtn">
+    末手
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+  </button>
+  <button class="ctrl-btn toggle" id="heatBtn">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.66 8L12 2.35 6.34 8C4.78 9.56 4 11.64 4 13.64s.78 4.08 2.34 5.64 3.6 2.35 5.66 2.35 4.1-.79 5.66-2.35S20 15.64 20 13.64 19.22 9.56 17.66 8z"/></svg>
+    势 力 图
+  </button>
+  <button class="ctrl-btn" id="resetBtn">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    复 盘
+  </button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var SIZE = 19;
+var PAD = 32;
+var CELL = (620 - PAD * 2) / (SIZE - 1);
+var board = [];
+var moves = [];
+var curMove = 0;
+var blackCaps = 0, whiteCaps = 0;
+var autoPlay = false;
+var autoTimer = null;
+
+function initBoard() {
+  board = [];
+  for (var i = 0; i < SIZE; i++) {
+    board[i] = [];
+    for (var j = 0; j < SIZE; j++) board[i][j] = 0;
+  }
+}
+
+function drawGrid() {
+  var g = document.getElementById("gridGroup");
+  g.innerHTML = "";
+  for (var i = 0; i < SIZE; i++) {
+    var x = PAD + i * CELL;
+    var isEdge = (i === 0 || i === SIZE - 1);
+    var h = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    h.setAttribute("x1", PAD); h.setAttribute("y1", x); h.setAttribute("x2", 620 - PAD); h.setAttribute("y2", x);
+    h.setAttribute("class", "grid-line" + (isEdge ? " edge" : ""));
+    g.appendChild(h);
+    var v = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    v.setAttribute("x1", x); v.setAttribute("y1", PAD); v.setAttribute("x2", x); v.setAttribute("y2", 620 - PAD);
+    v.setAttribute("class", "grid-line" + (isEdge ? " edge" : ""));
+    g.appendChild(v);
+  }
+  var stars = [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]];
+  stars.forEach(function(s) {
+    var c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", PAD + s[0] * CELL); c.setAttribute("cy", PAD + s[1] * CELL); c.setAttribute("r", 4);
+    c.setAttribute("class", "star-point");
+    g.appendChild(c);
+  });
+  var cg = document.getElementById("coordGroup");
+  cg.innerHTML = "";
+  var letters = "ABCDEFGHJKLMNOPQRST";
+  for (var i = 0; i < SIZE; i++) {
+    var t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", PAD + i * CELL); t.setAttribute("y", 20);
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("font-size", "11"); t.setAttribute("class", "coord-text");
+    t.textContent = letters[i]; cg.appendChild(t);
+    var t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t2.setAttribute("x", 14); t2.setAttribute("y", PAD + i * CELL + 4);
+    t2.setAttribute("text-anchor", "middle"); t2.setAttribute("font-size", "11"); t2.setAttribute("class", "coord-text");
+    t2.textContent = (SIZE - i); cg.appendChild(t2);
+  }
+}
+
+function drawHeatmap() {
+  var g = document.getElementById("heatmapGroup");
+  g.innerHTML = "";
+  for (var i = 0; i < SIZE; i++) {
+    for (var j = 0; j < SIZE; j++) {
+      if (board[i][j] === 0) {
+        var dist = nearestStoneDist(i, j);
+        if (dist < 4) {
+          var inf = influence(i, j);
+          if (inf !== 0) {
+            var rect = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            rect.setAttribute("cx", PAD + i * CELL);
+            rect.setAttribute("cy", PAD + j * CELL);
+            rect.setAttribute("r", CELL * 0.7);
+            rect.setAttribute("class", "heatmap-cell");
+            rect.setAttribute("fill", inf > 0 ? "url(#blackHeat)" : "url(#whiteHeat)");
+            g.appendChild(rect);
+          }
+        }
+      }
+    }
+  }
+}
+
+function nearestStoneDist(i, j) {
+  var min = 99;
+  for (var x = 0; x < SIZE; x++) for (var y = 0; y < SIZE; y++) {
+    if (board[x][y] !== 0) {
+      var d = Math.max(Math.abs(x - i), Math.abs(y - j));
+      if (d < min) min = d;
+    }
+  }
+  return min;
+}
+function influence(i, j) {
+  var b = 0, w = 0;
+  for (var x = 0; x < SIZE; x++) for (var y = 0; y < SIZE; y++) {
+    if (board[x][y] !== 0) {
+      var d = Math.max(Math.abs(x - i), Math.abs(y - j));
+      if (d <= 3) {
+        var v = 4 - d;
+        if (board[x][y] === 1) b += v; else w += v;
+      }
+    }
+  }
+  return b - w;
+}
+
+function placeStone(i, j, color, animate) {
+  if (board[i][j] !== 0) return;
+  board[i][j] = color;
+  var g = document.getElementById("stoneGroup");
+  var s = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  s.setAttribute("cx", PAD + i * CELL); s.setAttribute("cy", PAD + j * CELL); s.setAttribute("r", CELL * 0.46);
+  s.setAttribute("class", "stone" + (animate ? " stone-new" : ""));
+  s.setAttribute("fill", color === 1 ? "url(#blackStone)" : "url(#whiteStone)");
+  s.setAttribute("data-i", i); s.setAttribute("data-j", j);
+  g.appendChild(s);
+  if (animate) {
+    var r = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    r.setAttribute("cx", PAD + i * CELL); r.setAttribute("cy", PAD + j * CELL); r.setAttribute("r", 8);
+    r.setAttribute("fill", "none"); r.setAttribute("stroke", color === 1 ? "#000" : "#fff");
+    r.setAttribute("stroke-width", 2.5); r.setAttribute("class", "ripple");
+    document.getElementById("rippleGroup").appendChild(r);
+    setTimeout(function() { r.remove(); }, 750);
+  }
+  checkCaptures(i, j, color);
+  drawHeatmap();
+  updateInfo();
+}
+
+function drawLastMarker(i, j, color) {
+  var mg = document.getElementById("markerGroup");
+  mg.innerHTML = "";
+  if (i === undefined) return;
+  var m = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  m.setAttribute("cx", PAD + i * CELL); m.setAttribute("cy", PAD + j * CELL); m.setAttribute("r", 4);
+  m.setAttribute("fill", color === 1 ? "#fff" : "#000");
+  m.setAttribute("class", "last-marker");
+  mg.appendChild(m);
+}
+
+function removeStone(i, j) {
+  board[i][j] = 0;
+  var stones = document.querySelectorAll("#stoneGroup circle");
+  stones.forEach(function(s) {
+    if (parseInt(s.getAttribute("data-i")) === i && parseInt(s.getAttribute("data-j")) === j) {
+      s.style.transition = "opacity 0.4s, transform 0.4s";
+      s.style.opacity = "0"; s.style.transform = "scale(0)";
+      setTimeout(function() { s.remove(); }, 400);
+    }
+  });
+}
+
+function getGroup(i, j, color) {
+  var visited = {}; var queue = [[i, j]]; var group = [];
+  while (queue.length) {
+    var pos = queue.shift();
+    var key = pos[0] + "," + pos[1];
+    if (visited[key]) continue;
+    visited[key] = true;
+    if (board[pos[0]][pos[1]] !== color) continue;
+    group.push(pos);
+    var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    for (var d = 0; d < 4; d++) {
+      var ni = pos[0] + dirs[d][0], nj = pos[1] + dirs[d][1];
+      if (ni >= 0 && ni < SIZE && nj >= 0 && nj < SIZE && !visited[ni + "," + nj]) queue.push([ni, nj]);
+    }
+  }
+  return group;
+}
+function hasLiberty(group) {
+  for (var k = 0; k < group.length; k++) {
+    var i = group[k][0], j = group[k][1];
+    var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    for (var d = 0; d < 4; d++) {
+      var ni = i + dirs[d][0], nj = j + dirs[d][1];
+      if (ni >= 0 && ni < SIZE && nj >= 0 && nj < SIZE && board[ni][nj] === 0) return true;
+    }
+  }
+  return false;
+}
+function checkCaptures(i, j, color) {
+  var opp = color === 1 ? 2 : 1;
+  var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  for (var d = 0; d < 4; d++) {
+    var ni = i + dirs[d][0], nj = j + dirs[d][1];
+    if (ni >= 0 && ni < SIZE && nj >= 0 && nj < SIZE && board[ni][nj] === opp) {
+      var g = getGroup(ni, nj, opp);
+      if (!hasLiberty(g)) {
+        g.forEach(function(p) { removeStone(p[0], p[1]); });
+        if (color === 1) blackCaps += g.length; else whiteCaps += g.length;
+      }
+    }
+  }
+}
+
+var demoMoves = [
+  [3,3,1],[15,15,2],[3,15,1],[15,3,2],[5,2,1],[13,16,2],
+  [2,5,1],[16,13,2],[4,3,1],[15,12,2],[3,7,1],[15,8,2],
+  [7,3,1],[11,15,2],[5,5,1],[13,11,2],[2,7,1],[16,9,2],
+  [6,3,1],[12,15,2],[3,9,1],[15,6,2],[5,9,1],[13,7,2],
+  [7,5,1],[11,13,2],[8,3,1],[10,15,2],[9,5,1],[9,13,2],
+  [4,7,1],[14,9,2],[6,7,1],[12,9,2],[2,9,1],[16,7,2],
+  [7,7,1],[11,9,2],[8,7,1],[10,9,2],[9,7,1],[9,11,2],
+  [6,9,1],[12,11,2],[4,11,1],[14,11,2],[3,11,1],[15,11,2]
+];
+
+function gotoMove(n) {
+  n = Math.max(0, Math.min(n, demoMoves.length));
+  initBoard();
+  document.getElementById("stoneGroup").innerHTML = "";
+  document.getElementById("rippleGroup").innerHTML = "";
+  document.getElementById("markerGroup").innerHTML = "";
+  blackCaps = 0; whiteCaps = 0;
+  for (var i = 0; i < n; i++) {
+    var m = demoMoves[i];
+    placeStone(m[0], m[1], m[2], false);
+  }
+  curMove = n;
+  if (n > 0) {
+    var last = demoMoves[n - 1];
+    drawLastMarker(last[0], last[1], last[2]);
+  }
+  updateMoveList();
+  updateInfo();
+  drawHeatmap();
+  if (document.getElementById("heatBtn").classList.contains("active")) {
+    document.getElementById("boardWrap").classList.add("heatmap-on");
+  }
+}
+
+function updateMoveList() {
+  var list = document.getElementById("moveItems");
+  list.innerHTML = "";
+  for (var i = 0; i < demoMoves.length; i++) {
+    var m = demoMoves[i];
+    var div = document.createElement("div");
+    div.className = "move-item" + (i + 1 === curMove ? " active" : "");
+    var letters = "ABCDEFGHJKLMNOPQRST";
+    var coord = letters[m[0]] + (SIZE - m[1]);
+    div.innerHTML = '<span class="move-num">' + (i + 1) + '</span>' +
+      '<span class="move-dot ' + (m[2] === 1 ? "b" : "w") + '"></span>' +
+      '<span class="move-coord">' + coord + '</span>';
+    div.addEventListener("click", function(idx) { return function() {
+      if (autoPlay) toggleAuto();
+      gotoMove(idx);
+    }; }(i + 1));
+    list.appendChild(div);
+  }
+  var active = list.querySelector(".active");
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function calcBalance() {
+  var b = 0, w = 0;
+  for (var x = 0; x < SIZE; x++) for (var y = 0; y < SIZE; y++) {
+    if (board[x][y] === 1) b++;
+    else if (board[x][y] === 2) w++;
+  }
+  var total = b + w;
+  if (total === 0) return 50;
+  return Math.round(b / total * 100);
+}
+
+function updateInfo() {
+  document.getElementById("moveCount").textContent = curMove;
+  document.getElementById("blackCaptures").textContent = blackCaps;
+  document.getElementById("whiteCaptures").textContent = whiteCaps;
+  var bal = calcBalance();
+  var bar = document.getElementById("balanceBar");
+  bar.style.setProperty("--bal", bal + "%");
+  var diff = bal - 50;
+  var bt = document.getElementById("balanceText");
+  var ev = document.getElementById("aiEval");
+  if (curMove === 0) {
+    bt.textContent = "未开局";
+    ev.textContent = "—";
+  } else if (Math.abs(diff) <= 4) {
+    bt.textContent = "局势均势";
+    ev.textContent = "均势";
+  } else if (diff > 4) {
+    bt.textContent = "黑势占优 (" + (diff > 12 ? "明显" : "微弱") + ")";
+    ev.textContent = "黑 " + (diff > 12 ? "65%" : "55%");
+  } else {
+    bt.textContent = "白势占优 (" + (-diff > 12 ? "明显" : "微弱") + ")";
+    ev.textContent = "白 " + (-diff > 12 ? "65%" : "55%");
+  }
+}
+
+function showToast(msg) {
+  var t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(function() { t.classList.remove("show"); }, 1800);
+}
+
+document.getElementById("firstBtn").addEventListener("click", function() {
+  if (autoPlay) toggleAuto();
+  gotoMove(0);
+  showToast("回到首手");
+});
+document.getElementById("prevBtn").addEventListener("click", function() {
+  if (autoPlay) toggleAuto();
+  gotoMove(curMove - 1);
+});
+document.getElementById("nextBtn").addEventListener("click", function() {
+  if (autoPlay) toggleAuto();
+  gotoMove(curMove + 1);
+});
+document.getElementById("lastBtn").addEventListener("click", function() {
+  if (autoPlay) toggleAuto();
+  gotoMove(demoMoves.length);
+  showToast("跳至末手");
+});
+document.getElementById("resetBtn").addEventListener("click", function() {
+  if (autoPlay) toggleAuto();
+  gotoMove(0);
+  showToast("复盘重置");
+});
+function toggleAuto() {
+  autoPlay = !autoPlay;
+  var btn = document.getElementById("autoBtn");
+  if (autoPlay) {
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>暂 停';
+    if (curMove >= demoMoves.length) gotoMove(0);
+    autoTimer = setInterval(function() {
+      if (curMove >= demoMoves.length) { toggleAuto(); showToast("复盘结束"); return; }
+      gotoMove(curMove + 1);
+    }, 1200);
+  } else {
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>自 动 播 放';
+    clearInterval(autoTimer);
+  }
+}
+document.getElementById("autoBtn").addEventListener("click", toggleAuto);
+
+document.getElementById("heatBtn").addEventListener("click", function() {
+  this.classList.toggle("active");
+  document.getElementById("boardWrap").classList.toggle("heatmap-on");
+  showToast(this.classList.contains("active") ? "势力图已开启" : "势力图已关闭");
+});
+
+document.getElementById("boardSvg").addEventListener("click", function(e) {
+  var rect = this.getBoundingClientRect();
+  var scaleX = 620 / rect.width, scaleY = 620 / rect.height;
+  var x = (e.clientX - rect.left) * scaleX;
+  var y = (e.clientY - rect.top) * scaleY;
+  var i = Math.round((x - PAD) / CELL);
+  var j = Math.round((y - PAD) / CELL);
+  if (i >= 0 && i < SIZE && j >= 0 && j < SIZE && board[i][j] === 0) {
+    var color = curMove % 2 === 0 ? 1 : 2;
+    placeStone(i, j, color, true);
+    drawLastMarker(i, j, color);
+  }
+});
+
+initBoard();
+drawGrid();
+gotoMove(0);
+</script>
+</body>
+</html>
