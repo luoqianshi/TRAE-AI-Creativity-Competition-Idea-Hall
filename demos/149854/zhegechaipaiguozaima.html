@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>这个插排过载吗 — 插排负载功率累加计算与过载预警助手</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A0A0B;
+    --panel:#1C1C1E;
+    --panel-2:#242426;
+    --metal-dark:#2C2C2E;
+    --metal-mid:#3A3A3C;
+    --metal-light:#48484A;
+    --silver:#C7C7CC;
+    --silver-bright:#E5E5EA;
+    --silver-dim:#8E8E93;
+    --green:#34C759;
+    --orange:#FF9500;
+    --red:#FF3B30;
+    --yellow:#FFCC00;
+    --ink:#000000;
+    --text:#E5E5EA;
+    --text-dim:#8E8E93;
+    --line:#2C2C2E;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--text);font-family:'Inter','Noto Sans SC',system-ui,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+
+  /* top bar */
+  header.top{background:#000;border-bottom:1px solid var(--metal-dark);padding:14px 0}
+  header.top .wrap{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.08em;color:var(--silver)}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red)}
+  .brand b{color:var(--silver-bright);font-weight:700}
+  .built{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;color:var(--silver-dim);border:1px solid var(--metal-mid);padding:5px 10px;border-radius:3px}
+
+  /* hero */
+  .hero{padding:64px 0 36px;border-bottom:1px solid var(--line)}
+  .hero .kicker{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.2em;color:var(--orange);margin-bottom:18px}
+  .hero h1{font-family:'Noto Sans SC',sans-serif;font-weight:900;font-size:clamp(40px,6vw,72px);line-height:1.05;letter-spacing:-.02em;color:var(--silver-bright);margin-bottom:18px}
+  .hero h1 em{font-style:normal;color:var(--orange)}
+  .hero p.lead{font-size:17px;color:var(--text-dim);max-width:680px}
+  .hero p.lead b{color:var(--silver);font-weight:600}
+
+  /* stage: power strip */
+  .stage{padding:48px 0 24px}
+  .stage-label{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  .stage-label .tag{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--silver-dim);background:var(--panel);border:1px solid var(--metal-mid);padding:4px 10px;border-radius:2px}
+  .stage-label .line{flex:1;height:1px;background:var(--metal-dark)}
+
+  /* skeuomorphic strip body */
+  .strip{
+    position:relative;
+    background:linear-gradient(180deg,#48484A 0%,#3A3A3C 18%,#2C2C2E 60%,#1C1C1E 100%);
+    border:2px solid #0A0A0B;
+    border-radius:14px;
+    padding:30px 60px 30px 40px;
+    box-shadow:
+      inset 0 1px 0 #6C6C70,
+      inset 0 -2px 0 #000,
+      0 8px 24px rgba(0,0,0,.6),
+      0 2px 0 #000;
+    transition:border-color .3s, box-shadow .3s;
+  }
+  .strip.warn{border-color:#5A3A00;box-shadow:inset 0 1px 0 #6C6C70,inset 0 -2px 0 #000,0 0 24px rgba(255,149,0,.35),0 8px 24px rgba(0,0,0,.6)}
+  .strip.over{border-color:var(--red);box-shadow:inset 0 1px 0 #6C6C70,inset 0 -2px 0 #000,0 0 28px rgba(255,59,48,.5),0 8px 24px rgba(0,0,0,.6)}
+
+  /* brand plate on strip */
+  .strip-plate{position:absolute;top:14px;left:24px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.18em;color:var(--silver-dim)}
+  .strip-plate b{color:var(--silver)}
+  .strip-rating-tag{position:absolute;top:14px;right:96px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;color:var(--silver-dim);text-align:right}
+  .strip-rating-tag b{display:block;color:var(--silver-bright);font-size:13px;letter-spacing:.06em}
+
+  /* sockets row */
+  .sockets{display:grid;grid-template-columns:repeat(6,1fr);gap:18px;margin-top:8px}
+  .socket-wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .socket-led{
+    width:9px;height:9px;border-radius:50%;
+    background:#2A2A2C;
+    box-shadow:inset 0 0 2px #000, inset 0 1px 1px #1a1a1a;
+    transition:background .2s;
+  }
+  .socket-led.on-green{background:var(--green);box-shadow:0 0 8px var(--green),inset 0 0 1px #fff;animation:ledOn .45s ease-out}
+  .socket-led.on-orange{background:var(--orange);box-shadow:0 0 8px var(--orange),inset 0 0 1px #fff;animation:ledOn .45s ease-out}
+  .socket-led.on-red{background:var(--red);box-shadow:0 0 10px var(--red),inset 0 0 1px #fff;animation:ledOn .45s ease-out}
+  @keyframes ledOn{
+    0%{background:#2A2A2C;box-shadow:inset 0 0 2px #000}
+    45%{background:#7FFF9B;box-shadow:0 0 14px currentColor}
+    100%{background:currentColor}
+  }
+  .socket{
+    width:64px;height:64px;
+    background:radial-gradient(circle at 50% 28%,#1C1C1E 0%,#0A0A0B 70%,#000 100%);
+    border-radius:8px;
+    border:1px solid #000;
+    box-shadow:inset 0 2px 5px rgba(0,0,0,.9),inset 0 -1px 0 #2C2C2E,0 1px 0 #4A4A4C;
+    position:relative;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+    transition:box-shadow .3s;
+  }
+  .socket.occupied{box-shadow:inset 0 2px 5px rgba(0,0,0,.9),inset 0 -1px 0 #2C2C2E,0 0 0 1px var(--metal-light)}
+  /* socket holes: two-pin (top) + three-pin (bottom) simplified */
+  .holes-two{display:flex;gap:14px}
+  .holes-two i{display:block;width:5px;height:14px;background:#000;border-radius:1px;box-shadow:inset 0 1px 1px #000}
+  .holes-three{display:flex;gap:8px;align-items:flex-end}
+  .holes-three i{display:block;width:5px;height:10px;background:#000;border-radius:1px}
+  .holes-three i:nth-child(2){height:12px;width:6px;border-radius:50% 50% 1px 1px}
+  .socket-num{position:absolute;bottom:-20px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--silver-dim);letter-spacing:.08em}
+  .socket-device{position:absolute;top:-26px;font-size:10px;color:var(--silver);background:var(--panel);border:1px solid var(--metal-mid);padding:2px 6px;border-radius:2px;max-width:90px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* power cord from right end */
+  .cord{position:absolute;right:-2px;top:50%;width:90px;height:14px;transform:translateY(-50%);display:flex;align-items:center}
+  .cord .wire{flex:1;height:6px;background:linear-gradient(180deg,#2C2C2E,#000,#2C2C2E);border-radius:3px}
+  .cord .plug{width:18px;height:22px;background:linear-gradient(180deg,#3A3A3C,#1C1C1E);border:1px solid #000;border-radius:2px;position:relative;box-shadow:inset 0 1px 0 #4A4A4C}
+  .cord .plug::before,.cord .plug::after{content:'';position:absolute;bottom:-6px;width:3px;height:6px;background:#000}
+  .cord .plug::before{left:4px}.cord .plug::after{right:4px}
+
+  /* console: controls + gauge */
+  .console{display:grid;grid-template-columns:1.1fr 1fr;gap:28px;margin-top:48px}
+  @media(max-width:860px){.console{grid-template-columns:1fr}.sockets{grid-template-columns:repeat(3,1fr)}}
+
+  .panel{background:var(--panel);border:1px solid var(--metal-dark);border-radius:10px;padding:24px}
+  .panel h3{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.16em;color:var(--silver-dim);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .panel h3::before{content:'';width:6px;height:6px;background:var(--orange);border-radius:1px}
+
+  /* rating selector */
+  .rating-row{display:flex;gap:10px;margin-bottom:22px}
+  .rating-btn{flex:1;background:var(--metal-dark);border:1px solid var(--metal-light);color:var(--silver-dim);padding:14px 8px;border-radius:6px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;transition:all .15s;text-align:center}
+  .rating-btn b{display:block;font-size:20px;color:var(--silver-bright);font-weight:700}
+  .rating-btn span{font-size:10px;letter-spacing:.1em;color:var(--silver-dim);font-weight:400}
+  .rating-btn:hover{border-color:var(--silver-dim);color:var(--silver)}
+  .rating-btn.active{background:var(--silver-bright);border-color:var(--silver-bright);color:#000}
+  .rating-btn.active b{color:#000}.rating-btn.active span{color:#3A3A3C}
+
+  /* device library chips */
+  .lib-label{font-size:12px;color:var(--text-dim);margin-bottom:10px;letter-spacing:.04em}
+  .lib-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px}
+  .lib-chip{background:var(--panel-2);border:1px solid var(--metal-mid);color:var(--silver);padding:9px 8px;border-radius:5px;cursor:pointer;font-size:12px;transition:all .12s;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left}
+  .lib-chip b{font-weight:600;color:var(--silver-bright);font-size:13px}
+  .lib-chip i{font-style:normal;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--orange)}
+  .lib-chip.big i{color:var(--red)}
+  .lib-chip:hover{border-color:var(--silver);background:var(--metal-dark)}
+  .lib-chip:disabled{opacity:.35;cursor:not-allowed}
+
+  /* manual add */
+  .manual{display:grid;grid-template-columns:1.4fr 0.8fr 0.9fr auto;gap:8px;margin-top:8px}
+  .manual input,.manual select{background:var(--panel-2);border:1px solid var(--metal-mid);color:var(--silver-bright);padding:11px 10px;border-radius:5px;font-family:inherit;font-size:13px;outline:none;transition:border-color .15s}
+  .manual input:focus,.manual select:focus{border-color:var(--orange)}
+  .manual input::placeholder{color:var(--silver-dim)}
+  .manual button{background:var(--orange);color:#000;border:none;padding:0 18px;border-radius:5px;font-weight:700;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.08em;transition:opacity .15s}
+  .manual button:hover{opacity:.85}
+  .manual button:disabled{background:var(--metal-mid);color:var(--silver-dim);cursor:not-allowed}
+
+  /* gauge panel */
+  .gauge-panel{display:flex;flex-direction:column;align-items:center;justify-content:flex-start}
+  .gauge-wrap{position:relative;width:240px;height:240px;margin:6px auto 18px}
+  .gauge-svg{width:100%;height:100%}
+  .gauge-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+  .gauge-readout{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:38px;color:var(--silver-bright);line-height:1;letter-spacing:-.02em}
+  .gauge-readout small{font-size:14px;color:var(--silver-dim);font-weight:500;margin-left:2px}
+  .gauge-sub{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--silver-dim);letter-spacing:.14em;margin-top:6px}
+  .gauge-marks{position:absolute;inset:0;pointer-events:none}
+  .gauge-marks span{position:absolute;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--silver-dim)}
+
+  /* load bar */
+  .loadbar-wrap{width:100%;margin-top:8px}
+  .loadbar-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .loadbar-head .l{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;color:var(--silver-dim)}
+  .loadbar-head .r{font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--silver-bright);font-weight:700}
+  .loadbar{height:14px;background:var(--panel-2);border:1px solid var(--metal-mid);border-radius:3px;overflow:hidden;position:relative}
+  .loadbar-fill{height:100%;background:var(--green);transition:width .5s ease, background .3s}
+  .loadbar-ticks{position:absolute;inset:0;display:flex}
+  .loadbar-ticks i{flex:1;border-right:1px solid rgba(0,0,0,.4)}
+  .loadbar-ticks i:last-child{border-right:none}
+
+  /* status badge */
+  .status-row{display:flex;align-items:center;justify-content:space-between;width:100%;margin-top:18px;padding-top:16px;border-top:1px solid var(--metal-dark)}
+  .status-badge{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;letter-spacing:.1em;padding:8px 14px;border-radius:3px}
+  .status-badge .ind{width:8px;height:8px;border-radius:50%}
+  .status-safe{background:rgba(52,199,89,.12);color:var(--green);border:1px solid var(--green)}
+  .status-safe .ind{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .status-warn{background:rgba(255,149,0,.12);color:var(--orange);border:1px solid var(--orange)}
+  .status-warn .ind{background:var(--orange);box-shadow:0 0 6px var(--orange)}
+  .status-over{background:rgba(255,59,48,.12);color:var(--red);border:1px solid var(--red)}
+  .status-over .ind{background:var(--red);box-shadow:0 0 8px var(--red);animation:blink 0.8s steps(2) infinite}
+  @keyframes blink{50%{opacity:.3}}
+  .status-headroom{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--silver-dim);text-align:right}
+  .status-headroom b{color:var(--silver-bright);font-weight:700}
+
+  /* advice panel */
+  .advice{margin-top:24px;background:linear-gradient(180deg,rgba(255,59,48,.08),transparent);border:1px solid var(--red);border-radius:8px;padding:18px 20px;display:none}
+  .advice.show{display:block;animation:adviceIn .35s ease-out}
+  @keyframes adviceIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+  .advice h4{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.14em;color:var(--red);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .advice h4::before{content:'⚠';font-size:14px}
+  .advice p{font-size:14px;color:var(--silver);line-height:1.7}
+  .advice p b{color:var(--silver-bright);font-weight:600}
+  .advice .unplug{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+  .advice .unplug button{background:var(--red);color:#fff;border:none;padding:8px 12px;border-radius:4px;font-size:12px;cursor:pointer;font-family:inherit;transition:opacity .15s}
+  .advice .unplug button:hover{opacity:.85}
+  .advice .unplug button b{color:#fff;font-family:'JetBrains Mono',monospace;margin-left:6px}
+
+  /* devices list */
+  .devices{margin-top:44px}
+  .devices-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .devices-head h3{font-family:'Noto Sans SC',sans-serif;font-weight:700;font-size:18px;color:var(--silver-bright)}
+  .devices-head .count{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--silver-dim)}
+  .dev-empty{background:var(--panel);border:1px dashed var(--metal-mid);border-radius:8px;padding:32px;text-align:center;color:var(--silver-dim);font-size:14px}
+  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+  .dev-card{background:var(--panel);border:1px solid var(--metal-dark);border-left:3px solid var(--green);border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;position:relative}
+  .dev-card.cat-big{border-left-color:var(--red)}
+  .dev-card.cat-home{border-left-color:var(--orange)}
+  .dev-card.cat-office{border-left-color:var(--green)}
+  .dev-card .n{font-size:14px;color:var(--silver-bright);font-weight:600;padding-right:60px}
+  .dev-card .meta{display:flex;align-items:center;gap:10px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--silver-dim)}
+  .dev-card .meta b{color:var(--silver);font-weight:700}
+  .dev-card .meta .sock{background:var(--metal-dark);border:1px solid var(--metal-light);padding:1px 6px;border-radius:2px;color:var(--silver)}
+  .dev-card .rm{position:absolute;top:12px;right:12px;background:none;border:1px solid var(--metal-mid);color:var(--silver-dim);width:24px;height:24px;border-radius:3px;cursor:pointer;font-size:14px;line-height:1;transition:all .15s}
+  .dev-card .rm:hover{border-color:var(--red);color:var(--red)}
+
+  /* narrative sections */
+  .narr{padding:56px 0;border-top:1px solid var(--line)}
+  .narr .kicker{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.2em;color:var(--orange);margin-bottom:14px}
+  .narr h2{font-family:'Noto Sans SC',sans-serif;font-weight:900;font-size:clamp(28px,4vw,40px);line-height:1.15;color:var(--silver-bright);margin-bottom:24px;letter-spacing:-.01em}
+  .narr p{font-size:16px;color:var(--text-dim);margin-bottom:14px;max-width:760px}
+  .narr p b{color:var(--silver);font-weight:600}
+
+  /* workflow */
+  .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px}
+  @media(max-width:760px){.flow{grid-template-columns:repeat(2,1fr)}}
+  .flow-step{background:var(--panel);border:1px solid var(--metal-dark);border-radius:8px;padding:18px}
+  .flow-step .n{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--orange);letter-spacing:.14em;margin-bottom:8px}
+  .flow-step h4{font-size:15px;color:var(--silver-bright);margin-bottom:6px;font-weight:600}
+  .flow-step p{font-size:13px;color:var(--silver-dim);line-height:1.55;margin:0}
+
+  /* value */
+  .value-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:12px}
+  @media(max-width:760px){.value-grid{grid-template-columns:1fr}}
+  .value-card{background:var(--panel);border:1px solid var(--metal-dark);border-top:2px solid var(--orange);border-radius:8px;padding:22px}
+  .value-card h4{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--orange);margin-bottom:10px}
+  .value-card p{font-size:15px;color:var(--silver);line-height:1.7;margin:0}
+
+  /* trae section */
+  .trae{background:#000;border-top:1px solid var(--metal-dark);padding:56px 0}
+  .trae .kicker{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.2em;color:var(--green);margin-bottom:14px}
+  .trae h2{font-family:'Noto Sans SC',sans-serif;font-weight:900;font-size:clamp(26px,3.6vw,36px);color:var(--silver-bright);margin-bottom:20px}
+  .trae p{font-size:15px;color:var(--text-dim);line-height:1.75;max-width:780px;margin-bottom:12px}
+  .trae p b{color:var(--silver)}
+  .trae .stamp{display:inline-block;margin-top:18px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.16em;color:#000;background:var(--silver-bright);padding:8px 16px;border-radius:2px;font-weight:700}
+
+  footer{background:var(--bg);padding:28px 0;border-top:1px solid var(--line);text-align:center}
+  footer p{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--silver-dim);letter-spacing:.1em}
+
+  .demo-hint{background:var(--panel-2);border:1px solid var(--metal-mid);border-radius:6px;padding:12px 16px;font-size:13px;color:var(--silver-dim);margin-top:14px}
+  .demo-hint b{color:var(--orange)}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span><b>POWERLINE</b> · LOAD METER</div>
+    <div class="built">BUILT WITH TRAE WORK</div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="kicker">硬件交互 / 家庭用电安全 / NO.017</div>
+    <h1>这个插排，<em>过载了吗？</em></h1>
+    <p class="lead">把插排上每一台设备的功率加起来，和插排额定功率比一比。<b>从"凭感觉插"变成"插之前算一下"</b>——绿黄红三档信号、拟物功率表指针实时摆动，过载时直接告诉你先拔哪个。</p>
+  </div>
+</section>
+
+<section class="stage">
+  <div class="wrap">
+    <div class="stage-label">
+      <span class="tag">STAGE 01 · 拟物插排主舞台</span>
+      <span class="line"></span>
+    </div>
+
+    <div class="strip" id="strip">
+      <div class="strip-plate"><b>POWERLINE</b> 6-SOCKET · 250V~</div>
+      <div class="strip-rating-tag">RATED MAX<b id="ratingTag">2500 W</b></div>
+      <div class="sockets" id="sockets">
+        <!-- 6 sockets injected by JS -->
+      </div>
+      <div class="cord"><div class="wire"></div><div class="plug"></div></div>
+    </div>
+
+    <div class="demo-hint">演示：下方选择额定功率 → 点设备库或手动添加 → 观察插排指示灯与功率表指针变化。</div>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="console">
+    <!-- LEFT: controls -->
+    <div class="panel">
+      <h3>控制台 · CONFIGURE</h3>
+
+      <div class="lib-label">① 选择插排额定功率</div>
+      <div class="rating-row" id="ratingRow">
+        <button class="rating-btn" data-r="400"><b>400</b><span>W · 小排插</span></button>
+        <button class="rating-btn active" data-r="2500"><b>2500</b><span>W · 普通国标</span></button>
+        <button class="rating-btn" data-r="4000"><b>4000</b><span>W · 工业级</span></button>
+      </div>
+
+      <div class="lib-label">② 从常用设备库添加（点击插入下一个空插座）</div>
+      <div class="lib-grid" id="libGrid">
+        <!-- chips injected -->
+      </div>
+
+      <div class="lib-label">③ 或手动添加设备</div>
+      <div class="manual">
+        <input id="devName" type="text" placeholder="设备名（如：电热毯）">
+        <input id="devWatts" type="number" min="1" max="5000" placeholder="功率 W">
+        <select id="devSock"><option value="0">自动选座</option></select>
+        <button id="addBtn">ADD</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: gauge -->
+    <div class="panel gauge-panel">
+      <h3 style="align-self:flex-start">功率表 · LOAD METER</h3>
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" viewBox="0 0 200 200">
+          <!-- background ring -->
+          <circle cx="100" cy="100" r="80" fill="none" stroke="#2C2C2E" stroke-width="14"/>
+          <!-- green arc 240°->24° (0-60%) -->
+          <path d="M 30.7 140 A 80 80 0 0 1 132.6 26.9" fill="none" stroke="#34C759" stroke-width="14" stroke-linecap="butt"/>
+          <!-- orange arc 24°->96° (60-90%) -->
+          <path d="M 132.6 26.9 A 80 80 0 0 1 179.6 108.4" fill="none" stroke="#FF9500" stroke-width="14" stroke-linecap="butt"/>
+          <!-- red arc 96°->120° (90-100%) -->
+          <path d="M 179.6 108.4 A 80 80 0 0 1 169.3 140" fill="none" stroke="#FF3B30" stroke-width="14" stroke-linecap="butt"/>
+          <!-- tick marks -->
+          <g stroke="#6C6C70" stroke-width="1">
+            <line x1="100" y1="20" x2="100" y2="28"/>
+            <line x1="30.7" y1="60" x2="36" y2="64"/>
+            <line x1="169.3" y1="60" x2="164" y2="64"/>
+          </g>
+          <!-- pointer -->
+          <g id="pointer" style="transform-origin:100px 100px;transform:rotate(240deg);transition:transform .6s cubic-bezier(.34,1.2,.64,1)">
+            <line x1="100" y1="100" x2="100" y2="28" stroke="#E5E5EA" stroke-width="2.5" stroke-linecap="round"/>
+            <polygon points="100,28 96,36 104,36" fill="#FF3B30"/>
+          </g>
+          <!-- hub -->
+          <circle cx="100" cy="100" r="7" fill="#1C1C1E" stroke="#C7C7CC" stroke-width="1.5"/>
+          <circle cx="100" cy="100" r="2" fill="#000"/>
+        </svg>
+      </div>
+
+      <div class="loadbar-wrap">
+        <div class="loadbar-head">
+          <span class="l">负载率 · LOAD RATE</span>
+          <span class="r" id="loadRateTxt">0%</span>
+        </div>
+        <div class="loadbar">
+          <div class="loadbar-fill" id="loadFill" style="width:0%"></div>
+          <div class="loadbar-ticks"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </div>
+
+      <div class="status-row">
+        <div id="statusBadge" class="status-badge status-safe">
+          <span class="ind"></span><span id="statusTxt">SAFE · 安全</span>
+        </div>
+        <div class="status-headroom">
+          剩余余量<br><b id="headroom">2500 W</b>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- advice -->
+  <div class="advice" id="advice">
+    <h4>OVERLOAD · 过载预警</h4>
+    <p id="adviceTxt"></p>
+    <div class="unplug" id="unplugBtns"></div>
+  </div>
+</section>
+
+<section class="devices wrap">
+  <div class="devices-head">
+    <h3>已插入设备清单</h3>
+    <span class="count" id="devCount">0 台 · 0 W</span>
+  </div>
+  <div id="devList">
+    <div class="dev-empty">还没有插入设备。从上方设备库点击添加，或手动输入设备名和功率。</div>
+  </div>
+</section>
+
+<section class="narr">
+  <div class="wrap">
+    <div class="kicker">PAIN POINT · 为什么会想到做这个</div>
+    <h2>"2500W"是个数字，<br>但没人算得过来自己到底插了多少瓦。</h2>
+    <p>家里和工位上的插排经常被插满——笔记本 65W、显示器 40W、台灯 15W、充电器 20W、路由器 12W 是常驻；冬天再加取暖器 2000W，烧水时再插电热水壶 1800W，偶尔还要插电吹风 1600W、电磁炉 2100W。</p>
+    <p>单个看着都不大，摞在一起就没人算得清。<b>等到跳闸、插排发烫、闻到焦味，才知道已经超了</b>——而那时候已经走在了起火边缘。普通插排额定 2500W，取暖器+电热水壶两个大功率一起插就已经超载，但插排上印的那个"2500W"，对用户来说没有任何体感。</p>
+    <p>这个工具要做的，就是在你插上去之前那几秒，给一个看得见的红黄绿信号。</p>
+  </div>
+</section>
+
+<section class="narr">
+  <div class="wrap">
+    <div class="kicker">HOW IT WORKS · 工作流</div>
+    <h2>四步：从插排到过载建议</h2>
+    <div class="flow">
+      <div class="flow-step"><div class="n">STEP 01</div><h4>选额定功率</h4><p>选你的插排是 400W 小排插、2500W 普通国标、还是 4000W 工业级，决定功率表刻度上限。</p></div>
+      <div class="flow-step"><div class="n">STEP 02</div><h4>添加设备</h4><p>从常用设备库点一下插入，或手动输入设备名和功率。系统自动分配到下一个空插座，插座指示灯亮起。</p></div>
+      <div class="flow-step"><div class="n">STEP 03</div><h4>实时累加</h4><p>功率表指针摆到当前总功率，负载率条同步变色，三档状态（安全/警告/过载）实时判定。</p></div>
+      <div class="flow-step"><div class="n">STEP 04</div><h4>过载建议</h4><p>一旦过载，插排外壳变红，系统按功率从高到低建议"先拔哪个"，一键移除即可降载。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="narr">
+  <div class="wrap">
+    <div class="kicker">VALUE · 价值与意义</div>
+    <h2>把"看不见的过载"变成"看得见的信号"</h2>
+    <div class="value-grid">
+      <div class="value-card">
+        <h4>EFFICIENCY · 效率提升</h4>
+        <p>用户不用再翻电器铭牌或搜百度查瓦数，常用设备功率预置在库里点一下就行。总功率、负载率、状态判定实时更新，过载时直接告诉"先拔取暖器还是先拔电热水壶"，决策成本几乎为零。</p>
+      </div>
+      <div class="value-card">
+        <h4>SOCIAL · 社会价值</h4>
+        <p>插排过载是城市家庭火灾的高频原因之一，尤其冬天和老房子。这个工具不替换专业电工判断，而是在最容易疏忽的"插上去之前那几秒"给一个明确红黄绿信号，让超没超载从凭感觉变成有依据。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="trae">
+  <div class="wrap">
+    <div class="kicker">BUILT WITH TRAE · 创作说明</div>
+    <h2>这个插排过载检测助手，<br>是怎么用 TRAE Work 做出来的</h2>
+    <p>我在 <b>TRAE Work</b> 中先把"插排过载"这件事拆成五个环节：<b>插排额定功率 → 已插设备清单 → 实时累加 → 负载率与状态判定 → 过载建议</b>。先梳理清楚每一台家用设备的典型功率（笔记本 65W、取暖器 2000W、电热水壶 1800W、电磁炉 2100W 等），再理清"总功率 / 额定功率 = 负载率"和"60% 安全 / 90% 警告 / 超额 过载"的三档判定逻辑。</p>
+    <p>然后用 <b>TRAE IDE</b> 构建了这个拟物风格的插排负载演示页：把插排外壳、插座孔凹陷、指示灯、电源线、功率表指针都做成接近真实硬件的样子——每添加一台设备，对应插座的指示灯会亮起、功率表指针会摆到当前总功率，负载率条同步变色，过载时整个插排外壳进入红色警示状态并给出"先拔哪个"的建议。页面重点演示产品怎么工作，而不是只做功能介绍。</p>
+    <p>后续可在 TRAE 中继续扩展更多设备类型、多插排并联场景、历史负载记录和长时间过载告警，把它从单次计算工具升级成家庭用电的轻量监测助手。</p>
+    <span class="stamp">BUILT WITH TRAE WORK</span>
+  </div>
+</section>
+
+<footer>
+  <p>POWERLINE LOAD METER · 这个插排过载吗 · 硬件交互赛道 · TRAE 社区创作者大赛</p>
+</footer>
+
+<script>
+  // ---------- state ----------
+  const state = {
+    rating: 2500,
+    sockets: 6,
+    devices: [] // {id, name, watts, socket, cat}
+  };
+  let nextId = 1;
+
+  // ---------- device library ----------
+  const deviceLib = [
+    {name:'笔记本电脑', watts:65, cat:'office'},
+    {name:'显示器', watts:40, cat:'office'},
+    {name:'台灯', watts:15, cat:'office'},
+    {name:'手机充电器', watts:20, cat:'office'},
+    {name:'路由器', watts:12, cat:'office'},
+    {name:'打印机', watts:50, cat:'office'},
+    {name:'电风扇', watts:60, cat:'home'},
+    {name:'电视机', watts:150, cat:'home'},
+    {name:'电饭煲', watts:800, cat:'home'},
+    {name:'微波炉', watts:1000, cat:'home'},
+    {name:'电吹风', watts:1600, cat:'big'},
+    {name:'电热水壶', watts:1800, cat:'big'},
+    {name:'取暖器', watts:2000, cat:'big'},
+    {name:'电磁炉', watts:2100, cat:'big'},
+    {name:'电暖风机', watts:2200, cat:'big'},
+  ];
+
+  // ---------- helpers ----------
+  const $ = s => document.querySelector(s);
+  const total = () => state.devices.reduce((s,d)=>s+d.watts, 0);
+  const loadRate = () => total() / state.rating;
+  function statusOf(){
+    const t = total();
+    if (t > state.rating) return 'over';
+    const r = loadRate();
+    if (r < 0.6) return 'safe';
+    if (r < 0.9) return 'warn';
+    return 'over';
+  }
+  function nextFreeSocket(){
+    const used = state.devices.map(d=>d.socket);
+    for(let i=1;i<=state.sockets;i++){ if(!used.includes(i)) return i; }
+    return 0; // none free
+  }
+  function ledClassFor(status){
+    return status==='safe'?'on-green':status==='warn'?'on-orange':'on-red';
+  }
+
+  // ---------- render: sockets ----------
+  function renderSockets(){
+    const wrap = $('#sockets');
+    wrap.innerHTML = '';
+    for(let i=1;i<=state.sockets;i++){
+      const dev = state.devices.find(d=>d.socket===i);
+      const st = statusOf();
+      const ledOn = dev ? ledClassFor(st) : '';
+      const el = document.createElement('div');
+      el.className = 'socket-wrap';
+      el.innerHTML = `
+        ${dev ? `<div class="socket-device" title="${dev.name}">${dev.name}</div>` : ''}
+        <div class="socket-led ${ledOn}"></div>
+        <div class="socket ${dev?'occupied':''}">
+          <div class="holes-two"><i></i><i></i></div>
+          <div class="holes-three"><i></i><i></i><i></i></div>
+        </div>
+        <div class="socket-num">#${i}</div>
+      `;
+      wrap.appendChild(el);
+    }
+  }
+
+  // ---------- render: device library chips ----------
+  function renderLib(){
+    const grid = $('#libGrid');
+    grid.innerHTML = '';
+    deviceLib.forEach(d => {
+      const btn = document.createElement('button');
+      btn.className = 'lib-chip' + (d.cat==='big'?' big':'');
+      btn.innerHTML = `<b>${d.name}</b><i>${d.watts} W</i>`;
+      btn.onclick = () => addDevice({...d});
+      grid.appendChild(btn);
+    });
+  }
+
+  // ---------- render: socket select options ----------
+  function renderSockSelect(){
+    const sel = $('#devSock');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="0">自动选座</option>';
+    const used = state.devices.map(d=>d.socket);
+    for(let i=1;i<=state.sockets;i++){
+      if(!used.includes(i)){
+        const o = document.createElement('option');
+        o.value = i; o.textContent = `#${i}`;
+        sel.appendChild(o);
+      }
+    }
+    sel.value = cur;
+  }
+
+  // ---------- add / remove ----------
+  function addDevice(d){
+    let sock = parseInt($('#devSock').value) || 0;
+    if(!sock) sock = nextFreeSocket();
+    if(!sock){ alert('6 个插座已插满，请先拔掉一个设备'); return; }
+    if(!d.name || !d.watts || d.watts<=0){ return; }
+    state.devices.push({id:nextId++, name:d.name, watts:parseInt(d.watts), socket:sock, cat:d.cat||'home'});
+    $('#devName').value=''; $('#devWatts').value=''; $('#devSock').value='0';
+    renderAll();
+  }
+  function removeDevice(id){
+    state.devices = state.devices.filter(d=>d.id!==id);
+    renderAll();
+  }
+  function unplugDevice(id){
+    removeDevice(id);
+  }
+
+  // ---------- render: gauge + status ----------
+  function renderGauge(){
+    const t = total();
+    const r = Math.min(loadRate(), 1);
+    // pointer: 0W -> 240deg, max -> 240+240=480deg(=120deg)
+    const angle = 240 + r * 240;
+    $('#pointer').style.transform = `rotate(${angle}deg)`;
+    $('#loadRateTxt').textContent = Math.round(loadRate()*100) + '%';
+    $('#loadFill').style.width = Math.min(loadRate(),1)*100 + '%';
+    const st = statusOf();
+    const fill = $('#loadFill');
+    fill.style.background = st==='safe'?'var(--green)':st==='warn'?'var(--orange)':'var(--red)';
+    // status badge
+    const badge = $('#statusBadge');
+    badge.className = 'status-badge ' + (st==='safe'?'status-safe':st==='warn'?'status-warn':'status-over');
+    $('#statusTxt').textContent = st==='safe'?'SAFE · 安全':st==='warn'?'WARN · 警告':'OVERLOAD · 过载';
+    $('#headroom').textContent = (state.rating - t > 0 ? (state.rating - t) : 0) + ' W';
+    // strip border
+    const strip = $('#strip');
+    strip.className = 'strip ' + (st==='warn'?'warn':st==='over'?'over':'');
+    $('#ratingTag').textContent = state.rating + ' W';
+    // advice
+    renderAdvice(st);
+  }
+
+  function renderAdvice(st){
+    const adv = $('#advice');
+    if(st !== 'over'){
+      adv.classList.remove('show');
+      return;
+    }
+    adv.classList.add('show');
+    const t = total();
+    const over = t - state.rating;
+    // sort devices by watts desc, suggest unplug high-power ones until under 0.6
+    const sorted = [...state.devices].sort((a,b)=>b.watts-a.watts);
+    let acc = t;
+    const suggest = [];
+    for(const d of sorted){
+      if(acc <= state.rating * 0.6) break;
+      suggest.push(d);
+      acc -= d.watts;
+    }
+    $('#adviceTxt').innerHTML = `当前总功率 <b>${t} W</b>，已超出额定功率 <b>${over} W</b>。建议先拔掉以下大功率设备，使负载回到安全区（60% 以下）：`;
+    const ub = $('#unplugBtns');
+    ub.innerHTML = '';
+    suggest.forEach(d => {
+      const b = document.createElement('button');
+      b.innerHTML = `拔掉 ${d.name}<b>${d.watts}W</b>`;
+      b.onclick = () => unplugDevice(d.id);
+      ub.appendChild(b);
+    });
+  }
+
+  // ---------- render: device list ----------
+  function renderDevList(){
+    const list = $('#devList');
+    $('#devCount').textContent = `${state.devices.length} 台 · ${total()} W`;
+    if(state.devices.length===0){
+      list.innerHTML = `<div class="dev-empty">还没有插入设备。从上方设备库点击添加，或手动输入设备名和功率。</div>`;
+      return;
+    }
+    list.className = 'dev-grid';
+    list.innerHTML = '';
+    [...state.devices].sort((a,b)=>b.watts-a.watts).forEach(d => {
+      const card = document.createElement('div');
+      card.className = 'dev-card cat-' + d.cat;
+      const catName = d.cat==='big'?'大功率':d.cat==='home'?'家电':'办公';
+      card.innerHTML = `
+        <div class="n">${d.name}</div>
+        <div class="meta"><b>${d.watts} W</b> · ${catName} · <span class="sock">#${d.socket}</span></div>
+        <button class="rm" title="拔掉" data-id="${d.id}">×</button>
+      `;
+      card.querySelector('.rm').onclick = () => removeDevice(d.id);
+      list.appendChild(card);
+    });
+  }
+
+  function renderAll(){
+    renderSockets();
+    renderSockSelect();
+    renderGauge();
+    renderDevList();
+  }
+
+  // ---------- events ----------
+  $('#ratingRow').addEventListener('click', e => {
+    const b = e.target.closest('.rating-btn');
+    if(!b) return;
+    state.rating = parseInt(b.dataset.r);
+    document.querySelectorAll('.rating-btn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    renderAll();
+  });
+  $('#addBtn').addEventListener('click', () => {
+    const name = $('#devName').value.trim();
+    const watts = parseInt($('#devWatts').value);
+    if(!name || !watts || watts<=0){ alert('请填写设备名和功率'); return; }
+    let cat = 'home';
+    if(watts >= 1000) cat = 'big';
+    else if(watts < 100) cat = 'office';
+    addDevice({name, watts, cat});
+  });
+
+  // ---------- init ----------
+  renderLib();
+  renderAll();
+  // seed a few devices to show the demo alive
+  addDevice({name:'笔记本电脑', watts:65, cat:'office'});
+  addDevice({name:'显示器', watts:40, cat:'office'});
+  addDevice({name:'路由器', watts:12, cat:'office'});
+  addDevice({name:'取暖器', watts:2000, cat:'big'});
+</script>
+</body>
+</html>

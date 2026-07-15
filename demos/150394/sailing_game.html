@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>复古像素航海 · Retro Pixel Voyage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --deep:#0a2540; --deep2:#102a43; --sea:#1b3a5b; --sea2:#234a72;
+    --parch:#e8d8a8; --parch2:#d4c08a; --parchDk:#9c8a52;
+    --gold:#d4af37; --goldDk:#9c7c1c; --copper:#b87333;
+    --red:#c1272d; --redDk:#7a1820; --ink:#2a1d0e;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'VT323',monospace}
+  #wrap{position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center}
+  #game{image-rendering:pixelated;image-rendering:crisp-edges;display:block;background:#0a2540}
+  /* CRT 扫描线叠加 */
+  #crt{position:fixed;inset:0;pointer-events:none;z-index:50;
+    background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,0.18) 3px,rgba(0,0,0,0.18) 4px);
+    mix-blend-mode:multiply}
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:49;
+    background:radial-gradient(ellipse at center,rgba(0,0,0,0) 55%,rgba(0,0,0,0.55) 100%)}
+  /* 红色低血量边框 */
+  #lowhp{position:fixed;inset:0;pointer-events:none;z-index:51;box-shadow:inset 0 0 120px 10px rgba(193,39,45,0.55);opacity:0;transition:opacity .15s}
+  /* 像素字体辅助类 */
+  .px{font-family:'Press Start 2P',monospace;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+</div>
+<div id="vignette"></div>
+<div id="crt"></div>
+<div id="lowhp"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   复古像素航海 — Retro Pixel Voyage
+   单文件 Canvas 2D 程序化像素美术
+   ============================================================ */
+
+// ---------- 画布与低分辨率离屏缓冲 ----------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+// 逻辑低分辨率（像素感来源）
+const VW = 480, VH = 270;
+const off = document.createElement('canvas');
+off.width = VW; off.height = VH;
+const octx = off.getContext('2d');
+octx.imageSmoothingEnabled = false;
+ctx.imageSmoothingEnabled = false;
+
+function resize(){
+  const sw = window.innerWidth, sh = window.innerHeight;
+  const scale = Math.max(1, Math.floor(Math.min(sw/VW, sh/VH)));
+  canvas.width = VW*scale; canvas.height = VH*scale;
+  canvas.style.width = canvas.width+'px'; canvas.style.height = canvas.height+'px';
+  ctx.imageSmoothingEnabled = false;
+  ctx.mozImageSmoothingEnabled=false;
+  ctx.webkitImageSmoothingEnabled=false;
+  ctx.msImageSmoothingEnabled=false;
+}
+window.addEventListener('resize',resize); resize();
+
+// ---------- 工具函数 ----------
+const TAU = Math.PI*2;
+const rand = (a,b)=>a+Math.random()*(b-a);
+const randi = (a,b)=>Math.floor(rand(a,b));
+const clamp = (v,a,b)=>v<a?a:v>b?b:v;
+const lerp = (a,b,t)=>a+(b-a)*t;
+const dist2 = (ax,ay,bx,by)=>{const dx=ax-bx,dy=ay-by;return dx*dx+dy*dy};
+const dist = (ax,ay,bx,by)=>Math.hypot(ax-bx,ay-by);
+const angleTo = (ax,ay,bx,by)=>Math.atan2(by-ay,bx-ax);
+const angDiff = (a,b)=>{let d=(b-a)%TAU;if(d>Math.PI)d-=TAU;if(d<-Math.PI)d+=TAU;return d};
+
+// ---------- 输入 ----------
+const keys = {};
+const justPressed = {};
+window.addEventListener('keydown',e=>{
+  const k = e.key.length===1?e.key.toLowerCase():e.key.toLowerCase();
+  if(!keys[k]) justPressed[k]=true;
+  keys[k]=true;
+  // 阻止 Tab 默认行为
+  if(k==='tab'||k===' '){e.preventDefault()}
+});
+window.addEventListener('keyup',e=>{
+  const k = e.key.length===1?e.key.toLowerCase():e.key.toLowerCase();
+  keys[k]=false;
+});
+function pressed(k){ if(justPressed[k]){justPressed[k]=false;return true} return false }
+
+// ---------- 颜色 ----------
+const C = {
+  deepSea:'#0a2540', sea:'#1b3a5b', seaLt:'#234a72', seaFoam:'#5d7a96',
+  parch:'#e8d8a8', parch2:'#d4c08a', parchDk:'#9c8a52', parchLine:'#6b5d34',
+  gold:'#d4af37', goldLt:'#f0d56a', goldDk:'#9c7c1c',
+  copper:'#b87333', wood:'#6b3e1e', woodLt:'#8a5a30',
+  red:'#c1272d', redDk:'#7a1820', redLt:'#e5484e',
+  ink:'#2a1d0e', black:'#0a0a0a', white:'#f4ecd2',
+  green:'#4a7c3a', greenDk:'#2f5320', sand:'#d9c489', rock:'#7a6a52',
+  sail:'#f0e6c8', sailDk:'#b8a878',
+};
+
+// ---------- 音频 (Web Audio 程序化合成) ----------
+let audioCtx=null, muted=false;
+function ac(){ if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}} return audioCtx }
+function beep(freq=220,dur=0.08,type='square',vol=0.12){
+  if(muted) return; const a=ac(); if(!a) return;
+  const o=a.createOscillator(), g=a.createGain();
+  o.type=type; o.frequency.value=freq; o.connect(g); g.connect(a.destination);
+  g.gain.setValueAtTime(vol,a.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+dur);
+  o.start(); o.stop(a.currentTime+dur);
+}
+function noiseBurst(dur=0.2,vol=0.18){
+  if(muted) return; const a=ac(); if(!a) return;
+  const n=a.createBufferSource(), len=a.sampleRate*dur;
+  const buf=a.createBuffer(1,len,a.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2);
+  n.buffer=buf; const g=a.createGain(); g.gain.value=vol;
+  n.connect(g); g.connect(a.destination); n.start();
+}
+const SFX = {
+  cannon:()=>{ beep(120,0.18,'sawtooth',0.18); noiseBurst(0.25,0.22) },
+  hit:()=>{ beep(80,0.12,'square',0.18); noiseBurst(0.15,0.18) },
+  explosion:()=>{ beep(70,0.3,'sawtooth',0.2); noiseBurst(0.4,0.28) },
+  pickup:()=>{ beep(660,0.06,'square',0.1); setTimeout(()=>beep(880,0.08,'square',0.1),60) },
+  coin:()=>{ beep(990,0.05,'square',0.1); setTimeout(()=>beep(1320,0.06,'square',0.08),50) },
+  skill:()=>{ beep(330,0.1,'square',0.12); setTimeout(()=>beep(550,0.12,'square',0.12),80) },
+  ui:()=>beep(440,0.05,'square',0.08),
+  repair:()=>{ beep(200,0.05,'square',0.08); setTimeout(()=>beep(240,0.05,'square',0.08),60) },
+  anchor:()=>beep(150,0.15,'sine',0.12),
+  death:()=>{ beep(200,0.4,'sawtooth',0.18); setTimeout(()=>beep(100,0.6,'sawtooth',0.18),200) },
+};
+
+// ============================================================
+// 游戏状态机
+// ============================================================
+let state = 'TITLE'; // TITLE | EXPLORE | TRADE | PAUSED | GAMEOVER
+let selectedChar = 0;
+let gameTime = 0;
+let lastTime = performance.now();
+let shakeTime=0, shakeMag=0;
+let hitFlash=0;
+let tradeMerchant=null;
+let showHelp=true;
+let mapOpen=false;
+let gameOverTime=0;
+
+// ---------- 角色配置 ----------
+const CHARS = [
+  { id:'captain', name:'船长', role:'统帅', color:C.gold,
+    skill:'号令加速', skillDesc:'8秒提速50%', cd:20, accent:'#f0d56a',
+    desc:'经验丰富的指挥官，号令全船提速突进。' },
+  { id:'sailor', name:'水手', role:'精修', color:'#5d9bd1',
+    skill:'紧急修补', skillDesc:'耗20木材回40血', cd:15, accent:'#7fb4e8',
+    desc:'老练的修补匠，危急时刻紧急修补船体。' },
+  { id:'pirate', name:'海盗', role:'劫掠', color:C.red,
+    skill:'重炮齐发', skillDesc:'连发5枚炮弹', cd:25, accent:'#e5484e',
+    desc:'劫掠四方的海盗，重炮齐发倾泻火力。' },
+  { id:'navy', name:'海军', role:'防御', color:'#3a6b9c',
+    skill:'双侧齐射', skillDesc:'左右舷同时开火', cd:18, accent:'#5d8fc0',
+    desc:'正规海军军官，双侧齐射火力压制。' },
+  { id:'explorer', name:'探险家', role:'探索', color:'#4a9c5a',
+    skill:'探测资源', skillDesc:'揭示附近资源敌舰', cd:12, accent:'#6bc080',
+    desc:'追寻未知的海图测绘者，探测远方资源。' },
+];
+
+// ---------- 世界生成 ----------
+const WORLD = 4000; // 世界半径
+let islands=[], merchants=[], enemies=[], particles=[], projectiles=[], floats=[];
+let explored=[]; // 探索网格
+
+function genWorld(){
+  islands=[]; merchants=[]; enemies=[]; particles=[]; projectiles=[]; floats=[];
+  // 岛屿
+  const types=['forest','rock','village'];
+  for(let i=0;i<22;i++){
+    const ang=rand(0,TAU), r=rand(700,WORLD-300);
+    const x=Math.cos(ang)*r, y=Math.sin(ang)*r;
+    const rad=rand(45,90);
+    const t=types[randi(0,3)];
+    islands.push({x,y,radius:rad,type:t, res:{wood:randi(20,60),food:randi(20,60),gold:randi(5,20)}, depleted:false, shake:0});
+  }
+  // 商人
+  for(let i=0;i<5;i++){
+    const ang=rand(0,TAU), r=rand(600,WORLD-500);
+    merchants.push({x:Math.cos(ang)*r,y:Math.sin(ang)*r, bob:rand(0,TAU)});
+  }
+  // 敌舰
+  for(let i=0;i<6;i++) spawnEnemy(true);
+}
+
+function spawnEnemy(initial=false){
+  const types=[
+    {kind:'scout', health:40, speed:0.9, damage:8, fireRate:2500, gold:15, color:C.redDk},
+    {kind:'frigate', health:80, speed:0.7, damage:14, fireRate:2200, gold:30, color:'#5a4a8c'},
+    {kind:'flagship', health:160, speed:0.5, damage:22, fireRate:2000, gold:60, color:'#3a2a4c'},
+  ];
+  const w = types[randi(0,3)];
+  let x,y;
+  if(initial){
+    const ang=rand(0,TAU), r=rand(1200,WORLD-400);
+    x=Math.cos(ang)*r; y=Math.sin(ang)*r;
+  }else{
+    // 从世界边缘刷新
+    const ang=rand(0,TAU), r=WORLD-300;
+    x=Math.cos(ang)*r; y=Math.sin(ang)*r;
+  }
+  enemies.push({
+    ...w, maxHealth:w.health, x,y, angle:rand(0,TAU), vx:0, vy:0,
+    state:'patrol', target:null, fireCd:rand(1000,2500),
+    patrolTarget:{x:rand(-WORLD,WORLD),y:rand(-WORLD,WORLD)},
+    alertTimer:0, hurtFlash:0, sinkTime:0,
+  });
+}
+
+// ---------- 玩家 ----------
+let player=null;
+function initPlayer(){
+  const ch = CHARS[selectedChar];
+  player = {
+    x:0,y:0, angle:-Math.PI/2, vel:0,
+    health:100, maxHealth:100,
+    food:100, maxFood:100,
+    wood:50, maxWood:100,
+    gold:20,
+    anchored:false, viewMode:'third',
+    char:ch.id,
+    skillCd:0, fireCd:0, kills:0,
+    hurtFlash:0, speedBoost:0, // 船长技能计时
+    detectTimer:0, // 探险家技能计时
+    burstShots:0, burstTimer:0, // 海盗连发
+    alive:true, sinkTime:0,
+  };
+}
+
+// ============================================================
+// 程序化像素绘制
+// ============================================================
+// 绘制像素方块矩阵（每格1像素）
+function px(x,y,c,w=1,h=1){ octx.fillStyle=c; octx.fillRect(x|0,y|0,w,h) }
+// 像素矩形
+function pRect(x,y,w,h,c){ octx.fillStyle=c; octx.fillRect(x|0,y|0,w|0,h|0) }
+// 像素圆（用方块近似）
+function pCircle(cx,cy,r,c){
+  octx.fillStyle=c;
+  for(let y=-r;y<=r;y++) for(let x=-r;x<=r;x++){
+    if(x*x+y*y<=r*r) octx.fillRect((cx+x)|0,(cy+y)|0,1,1);
+  }
+}
+
+// 海洋绘制（带波浪）
+let waveTime=0;
+function drawOcean(camX,camY){
+  // 基础渐变海面
+  octx.fillStyle=C.sea; octx.fillRect(0,0,VW,VH);
+  // 波纹条带
+  const tileSize=16;
+  const sx = Math.floor(camX/tileSize), sy=Math.floor(camY/tileSize);
+  for(let ty=-1;ty<VH/tileSize+1;ty++){
+    for(let tx=-1;tx<VW/tileSize+1;tx++){
+      const wx=(sx+tx)*tileSize, wy=(sy+ty)*tileSize;
+      // 伪随机波纹
+      const h=((wx*73856093)^(wy*19349663))>>>0;
+      const v=(h%100)/100;
+      const wph = Math.sin(waveTime*0.03 + (wx+wy)*0.02)*0.5+0.5;
+      const shade = v*0.4 + wph*0.6;
+      if(shade>0.65){ octx.fillStyle=C.seaLt; }
+      else if(shade>0.35){ octx.fillStyle=C.sea; }
+      else { octx.fillStyle=C.deepSea; }
+      octx.fillRect(tx*tileSize - (camX%tileSize), ty*tileSize - (camY%tileSize), tileSize, tileSize);
+    }
+  }
+  // 像素泡沫点
+  for(let i=0;i<40;i++){
+    const fx=((i*131+Math.floor(camX))%VW+VW)%VW;
+    const fy=((i*911+Math.floor(camY)+Math.floor(Math.sin(waveTime*0.02+i)*4))%VH+VH)%VH;
+    octx.fillStyle=C.seaFoam; octx.fillRect(fx,fy,1,1);
+  }
+}
+
+// 像素船只绘制
+function drawShip(cx,cy,angle,scale,opts={}){
+  const sail=opts.sail||C.sail, sailDk=opts.sailDk||C.sailDk;
+  const hull=opts.hull||C.wood, hullLt=opts.hullLt||C.woodLt;
+  const flag=opts.flag||C.gold;
+  octx.save();
+  octx.translate(cx,cy);
+  octx.rotate(angle+Math.PI/2); // 船头朝上
+  octx.scale(scale,scale);
+  // 船体 (椭圆形像素化) — 船头朝-y
+  // 船体主体
+  const hullMap = [
+    "  ######  ",
+    " ##########",
+    "###########",
+    "###########",
+    " ######### ",
+    "  #######  ",
+    "   #####   ",
+    "    ###    ",
+  ];
+  for(let r=0;r<hullMap.length;r++){
+    for(let c=0;c<hullMap[r].length;c++){
+      if(hullMap[r][c]==='#'){
+        const edge = (r===0||r===hullMap.length-1||c===0||c===hullMap[r].length-1);
+        octx.fillStyle = edge? hullLt : hull;
+        octx.fillRect(c-5, r-4, 1, 1);
+      }
+    }
+  }
+  // 桅杆
+  octx.fillStyle=C.wood; octx.fillRect(-1,-3,2,6);
+  // 帆 (三角形像素)
+  const sailMap=[
+    "  X  ",
+    " XXX ",
+    "XXXXX",
+    "XXXXX",
+    " XXX ",
+  ];
+  for(let r=0;r<sailMap.length;r++)for(let c=0;c<sailMap[r].length;c++){
+    if(sailMap[r][c]==='X'){
+      octx.fillStyle = (c===2)? sailDk : sail;
+      octx.fillRect(c-2, r-2, 1, 1);
+    }
+  }
+  // 旗帜
+  octx.fillStyle=flag; octx.fillRect(0,-4,3,2);
+  octx.fillStyle=C.wood; octx.fillRect(0,-5,1,3);
+  octx.restore();
+}
+
+// 岛屿绘制
+function drawIsland(cx,cy,island){
+  const r=island.radius;
+  // 沙滩外圈
+  pCircle(cx,cy,r,C.sand);
+  // 内部地形
+  const t=island.type;
+  let innerC, detailC;
+  if(t==='forest'){innerC=C.green; detailC=C.greenDk}
+  else if(t==='rock'){innerC=C.rock; detailC='#5a4a3a'}
+  else{innerC=C.parch2; detailC=C.parchDk}
+  pCircle(cx,cy,r-6,innerC);
+  // 细节装饰（树/岩石/房子）
+  const seedH = ((island.x*73856093)^(island.y*19349663))>>>0;
+  for(let i=0;i<8;i++){
+    const a=((seedH+i*131)%100)/100*TAU;
+    const rr=((seedH+i*977)%100)/100*(r-8);
+    const dx=Math.cos(a)*rr, dy=Math.sin(a)*rr;
+    if(t==='forest'){
+      // 树
+      octx.fillStyle=C.greenDk; octx.fillRect((cx+dx-1)|0,(cy+dy)|0,3,2);
+      octx.fillStyle='#3a6b2a'; octx.fillRect((cx+dx)|0,(cy+dy-2)|0,1,3);
+    }else if(t==='rock'){
+      octx.fillStyle='#5a4a3a'; octx.fillRect((cx+dx)|0,(cy+dy)|0,3,2);
+      octx.fillStyle=C.rock; octx.fillRect((cx+dx)|0,(cy+dy-1)|0,2,1);
+    }else{
+      // 房子
+      octx.fillStyle=C.parchDk; octx.fillRect((cx+dx)|0,(cy+dy)|0,3,3);
+      octx.fillStyle=C.red; octx.fillRect((cx+dx)|0,(cy+dy-1)|0,3,1);
+    }
+  }
+  // 资源高亮（可采集）
+  if(!island.depleted){
+    const pulse=Math.sin(gameTime*0.005)*0.5+0.5;
+    octx.fillStyle=`rgba(212,175,55,${0.3+pulse*0.4})`;
+    octx.beginPath(); octx.arc(cx,cy,r+3,0,TAU); octx.stroke();
+  }
+}
+
+// 商人船绘制
+function drawMerchant(cx,cy,bob){
+  const yo=Math.sin(bob)*1;
+  // 小船 + 旗
+  drawShip(cx,cy+yo,0,1,{hull:'#8a6a3a',hullLt:'#a8825a',sail:'#e8d8a8',sailDk:'#b8a878',flag:'#4a9c5a'});
+  // 标记
+  octx.fillStyle=C.gold; octx.fillRect((cx-1)|0,(cy-7+yo)|0,3,1);
+}
+
+// 炮弹绘制
+function drawProjectile(cx,cy){
+  octx.fillStyle=C.black; octx.fillRect((cx-1)|0,(cy-1)|0,3,3);
+  octx.fillStyle='#ffaa44'; octx.fillRect((cx)|0,(cy)|0,1,1);
+  // 烟雾尾迹
+  octx.fillStyle='rgba(200,200,200,0.5)'; octx.fillRect((cx-1)|0,(cy-1)|0,1,1);
+}
+
+// ============================================================
+// 相机
+// ============================================================
+let camX=0, camY=0;
+function updateCamera(){
+  if(!player) return;
+  let tx,ty;
+  if(player.viewMode==='first'){
+    // 第一人称：相机前移至船首
+    tx = player.x + Math.cos(player.angle)*60;
+    ty = player.y + Math.sin(player.angle)*60;
+  }else{
+    tx=player.x; ty=player.y;
+  }
+  camX = lerp(camX, tx - VW/2, 0.12);
+  camY = lerp(camY, ty - VH/2, 0.12);
+  // 屏幕震动
+  if(shakeTime>0){
+    camX += rand(-shakeMag,shakeMag);
+    camY += rand(-shakeMag,shakeMag);
+  }
+}
+function worldToScreen(wx,wy){ return [wx-camX, wy-camY] }
+function shake(mag,dur){ shakeMag=Math.max(shakeMag,mag); shakeTime=Math.max(shakeTime,dur) }
+
+// ============================================================
+// 更新逻辑
+// ============================================================
+function update(dt){
+  gameTime += dt;
+  waveTime += dt*0.1;
+
+  if(state==='TITLE'){
+    updateTitle(dt);
+  }else if(state==='EXPLORE'){
+    updateExplore(dt);
+  }else if(state==='TRADE'){
+    updateTrade(dt);
+  }else if(state==='PAUSED'){
+    updatePaused(dt);
+  }else if(state==='GAMEOVER'){
+    updateGameOver(dt);
+  }
+
+  // 通用衰减
+  if(shakeTime>0) shakeTime-=dt;
+  if(shakeTime<=0) shakeMag=0;
+  if(hitFlash>0) hitFlash-=dt;
+  // 清除 justPressed
+  for(const k in justPressed) justPressed[k]=false;
+}
+
+function updateTitle(dt){
+  // 角色选择
+  if(pressed('arrowleft')||pressed('a')){ selectedChar=(selectedChar-1+CHARS.length)%CHARS.length; SFX.ui() }
+  if(pressed('arrowright')||pressed('d')){ selectedChar=(selectedChar+1)%CHARS.length; SFX.ui() }
+  // 数字键直选
+  for(let i=0;i<5;i++){ if(pressed(String(i+1))){ selectedChar=i; SFX.ui() } }
+  if(pressed('enter')||pressed(' ')){
+    ac(); // 唤醒音频
+    initPlayer(); genWorld(); state='EXPLORE'; SFX.coin();
+  }
+}
+
+function updateExplore(dt){
+  if(!player) return;
+  // M 静音
+  if(pressed('m')){ muted=!muted; SFX.ui() }
+  // H 控制提示
+  if(pressed('h')){ showHelp=!showHelp; SFX.ui() }
+  // ESC 暂停
+  if(pressed('escape')){ state='PAUSED'; SFX.ui(); return }
+  // Tab 海图
+  if(pressed('tab')){ mapOpen=!mapOpen; SFX.ui() }
+  if(mapOpen) return; // 海图打开时暂停世界
+
+  // V 视角切换
+  if(pressed('v')){ player.viewMode = player.viewMode==='third'?'first':'third'; SFX.ui() }
+
+  // 船只控制
+  const ch = player.char;
+  let accel=0;
+  if(!player.anchored){
+    if(keys['w']||keys['arrowup']) accel=0.012;
+    if(keys['s']||keys['arrowdown']) accel=-0.008;
+    // 转向（需要速度）
+    const turnRate = 0.0028 * clamp(Math.abs(player.vel)/0.6,0.2,1);
+    if(keys['a']||keys['arrowleft']) player.angle -= turnRate;
+    if(keys['d']||keys['arrowright']) player.angle += turnRate;
+    // Shift 加速
+    let maxV = 1.2;
+    if((keys['shift']) && player.food>0){
+      maxV = 2.0; player.food -= 0.03*dt;
+      if(player.food<0) player.food=0;
+    }
+    // 船长提速
+    if(player.speedBoost>0){ maxV*=1.5; player.speedBoost-=dt }
+    player.vel += accel*dt;
+    player.vel *= 0.985; // 摩擦
+    player.vel = clamp(player.vel, -0.8, maxV);
+    // 抛锚
+  }
+  // 空格抛锚/起锚
+  if(pressed(' ')){ player.anchored=!player.anchored; if(player.anchored) player.vel=0; SFX.anchor() }
+
+  // 移动
+  if(!player.anchored){
+    player.x += Math.cos(player.angle)*player.vel*dt*0.1;
+    player.y += Math.sin(player.angle)*player.vel*dt*0.1;
+  }
+  // 世界边界
+  const dr = Math.hypot(player.x,player.y);
+  if(dr>WORLD){ player.x*=WORLD/dr; player.y*=WORLD/dr; player.vel*=0.3 }
+
+  // R 修理
+  if(keys['r'] && player.wood>=1 && player.health<player.maxHealth){
+    if(Math.floor(gameTime/100)%2===0){
+      player.wood-=0.02*dt; player.health=clamp(player.health+0.04*dt,0,player.maxHealth);
+      if(Math.random()<0.1) SFX.repair();
+    }
+  }
+  // F 开炮
+  player.fireCd-=dt;
+  if(player.fireCd<0) player.fireCd=0;
+  if(keys['f'] && player.fireCd<=0){
+    fireCannon(player.angle, player, true);
+    player.fireCd = 700;
+  }
+  // 海盗连发逻辑
+  if(player.burstShots>0){
+    player.burstTimer-=dt;
+    if(player.burstTimer<=0){
+      fireCannon(player.angle+rand(-0.15,0.15), player, true);
+      player.burstShots--;
+      player.burstTimer=150;
+    }
+  }
+  // Q 技能
+  player.skillCd-=dt;
+  if(player.skillCd<0) player.skillCd=0;
+  if(pressed('q') && player.skillCd<=0){
+    useSkill();
+  }
+  // 探险家探测
+  if(player.detectTimer>0) player.detectTimer-=dt;
+
+  // E 互动
+  if(pressed('e')){
+    tryInteract();
+  }
+
+  // 敌舰更新
+  for(const e of enemies) updateEnemy(e,dt);
+  enemies = enemies.filter(e=>!(e.dead && e.sinkTime>1500));
+  // 维持敌舰数量
+  if(enemies.length<5 && Math.random()<0.005) spawnEnemy(false);
+
+  // 炮弹更新
+  for(const p of projectiles){
+    p.x+=p.vx*dt*0.1; p.y+=p.vy*dt*0.1; p.life-=dt;
+    // 命中检测
+    let hit=false;
+    if(p.fromPlayer){
+      for(const e of enemies){
+        if(e.dead) continue;
+        if(dist2(p.x,p.y,e.x,e.y) < 16*16){
+          damageEnemy(e, p.dmg); hit=true; break;
+        }
+      }
+    }else{
+      if(player.alive && dist2(p.x,p.y,player.x,player.y) < 14*14){
+        damagePlayer(p.dmg); hit=true;
+      }
+    }
+    // 岛屿阻挡
+    if(!hit) for(const isl of islands){
+      if(dist2(p.x,p.y,isl.x,isl.y) < isl.radius*isl.radius){
+        hit=true; break;
+      }
+    }
+    if(hit){ p.life=0; explode(p.x,p.y, p.fromPlayer) }
+  }
+  projectiles = projectiles.filter(p=>p.life>0);
+
+  // 粒子更新
+  for(const pt of particles){
+    pt.x+=pt.vx*dt*0.1; pt.y+=pt.vy*dt*0.1;
+    pt.vx*=0.95; pt.vy*=0.95; pt.life-=dt;
+  }
+  particles = particles.filter(p=>p.life>0);
+
+  // 浮动文字
+  for(const f of floats){ f.y-=0.02*dt; f.life-=dt }
+  floats = floats.filter(f=>f.life>0);
+
+  // 受击闪烁
+  if(player.hurtFlash>0) player.hurtFlash-=dt;
+
+  // 低血量警告
+  const lowHp = document.getElementById('lowhp');
+  if(player.health < player.maxHealth*0.3){
+    lowHp.style.opacity = (Math.sin(gameTime*0.01)*0.4+0.6).toFixed(2);
+  } else { lowHp.style.opacity=0 }
+
+  // 死亡
+  if(player.health<=0 && player.alive){
+    player.alive=false; player.sinkTime=0;
+    SFX.death(); shake(8,800);
+  }
+  if(!player.alive){
+    player.sinkTime+=dt;
+    if(player.sinkTime>1500){
+      state='GAMEOVER'; gameOverTime=0; SFX.ui();
+    }
+  }
+}
+
+function useSkill(){
+  const ch = player.char;
+  const cfg = CHARS.find(c=>c.id===ch);
+  player.skillCd = cfg.cd*1000;
+  SFX.skill();
+  if(ch==='captain'){
+    player.speedBoost = 8000;
+    addFloat(player.x,player.y-20,'加速!',C.goldLt);
+  }else if(ch==='sailor'){
+    if(player.wood>=20){
+      player.wood-=20; player.health=clamp(player.health+40,0,player.maxHealth);
+      addFloat(player.x,player.y-20,'+40 HP',C.green);
+    }else{
+      addFloat(player.x,player.y-20,'木材不足',C.red);
+      player.skillCd=0; // 退还冷却
+    }
+  }else if(ch==='pirate'){
+    player.burstShots=5; player.burstTimer=0;
+    addFloat(player.x,player.y-20,'齐发!',C.redLt);
+  }else if(ch==='navy'){
+    fireCannon(player.angle-Math.PI/2, player, true, 0.8);
+    fireCannon(player.angle+Math.PI/2, player, true, 0.8);
+    addFloat(player.x,player.y-20,'双侧齐射!',C.goldLt);
+  }else if(ch==='explorer'){
+    player.detectTimer=6000;
+    addFloat(player.x,player.y-20,'探测激活',C.green);
+  }
+}
+
+function fireCannon(angle, shooter, fromPlayer, dmgMult=1){
+  const speed=4;
+  const ox = Math.cos(angle)*14, oy=Math.sin(angle)*14;
+  projectiles.push({
+    x: shooter.x+ox, y: shooter.y+oy,
+    vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed,
+    life: 1400, fromPlayer, dmg: (fromPlayer?18:shooter.damage)*dmgMult,
+  });
+  SFX.cannon();
+  shake(fromPlayer?2:1, 120);
+}
+
+function explode(x,y,fromPlayer){
+  SFX.explosion();
+  shake(4,180);
+  for(let i=0;i<24;i++){
+    const a=rand(0,TAU), s=rand(0.5,2.5);
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(300,700),
+      color: i<8?'#ffcc44':i<16?'#ff6622':'#664433', size:rand(1,2)});
+  }
+}
+
+function damageEnemy(e,dmg){
+  e.health-=dmg; e.hurtFlash=200; e.state='engage'; e.alertTimer=3000;
+  addFloat(e.x,e.y-15,'-'+Math.round(dmg),C.redLt);
+  if(e.health<=0 && !e.dead){
+    e.dead=true; e.sinkTime=0; e.state='dead';
+    player.gold += e.gold; player.kills++;
+    addFloat(e.x,e.y-25,'+'+e.gold+' 金',C.goldLt);
+    SFX.coin();
+    explode(e.x,e.y,true);
+  }
+}
+
+function damagePlayer(dmg){
+  if(!player.alive) return;
+  player.health-=dmg; player.hurtFlash=300;
+  hitFlash=200; shake(4,200);
+  addFloat(player.x,player.y-15,'-'+Math.round(dmg),C.redLt);
+  SFX.hit();
+}
+
+function addFloat(x,y,text,color){
+  floats.push({x,y,text,color,life:1200});
+}
+
+// 敌舰 AI
+function updateEnemy(e,dt){
+  if(e.dead){
+    e.sinkTime+=dt; return;
+  }
+  e.hurtFlash=Math.max(0,e.hurtFlash-dt);
+  e.fireCd-=dt;
+  if(e.alertTimer>0) e.alertTimer-=dt;
+
+  const d = dist(e.x,e.y,player.x,player.y);
+  const detectR = 350;
+  if(player.alive && d<detectR && e.state!=='engage'){
+    e.state='chase'; e.alertTimer=4000;
+  }
+  if(e.alertTimer<=0 && e.state!=='patrol'){
+    e.state='patrol';
+  }
+
+  if(e.state==='patrol'){
+    const td = dist(e.x,e.y,e.patrolTarget.x,e.patrolTarget.y);
+    if(td<40){ e.patrolTarget={x:rand(-WORLD,WORLD),y:rand(-WORLD,WORLD)} }
+    const ta = angleTo(e.x,e.y,e.patrolTarget.x,e.patrolTarget.y);
+    const da = angDiff(e.angle, ta);
+    e.angle += clamp(da,-0.02,0.02)*dt;
+    e.vel = lerp(e.vel, e.speed*0.6, 0.02);
+  }else if(e.state==='chase'){
+    const ta = angleTo(e.x,e.y,player.x,player.y);
+    const da = angDiff(e.angle, ta);
+    e.angle += clamp(da,-0.03,0.03)*dt;
+    e.vel = lerp(e.vel, e.speed, 0.03);
+    if(d<250){ e.state='engage'; e.alertTimer=5000 }
+  }else if(e.state==='engage'){
+    const ta = angleTo(e.x,e.y,player.x,player.y);
+    // 侧舷对敌
+    const desired = ta + Math.PI/2;
+    const da = angDiff(e.angle, desired);
+    e.angle += clamp(da,-0.025,0.025)*dt;
+    e.vel = lerp(e.vel, e.speed*0.4, 0.03);
+    // 开火
+    if(e.fireCd<=0 && d<400){
+      // 朝玩家开炮
+      const aim = angleTo(e.x,e.y,player.x,player.y)+rand(-0.1,0.1);
+      fireCannon(aim, e, false);
+      e.fireCd = e.fireRate;
+    }
+    if(d>350) e.state='chase';
+    if(player.health < player.maxHealth*0.3) {} // 可扩展逃跑
+  }
+
+  e.x += Math.cos(e.angle)*e.vel*dt*0.1;
+  e.y += Math.sin(e.angle)*e.vel*dt*0.1;
+  const dr = Math.hypot(e.x,e.y);
+  if(dr>WORLD){ e.x*=WORLD/dr; e.y*=WORLD/dr; e.angle+=Math.PI }
+}
+
+function tryInteract(){
+  // 找最近的岛屿或商人
+  let best=null, bestD=Infinity, bestType=null;
+  for(const isl of islands){
+    if(isl.depleted) continue;
+    const d = dist(player.x,player.y,isl.x,isl.y);
+    if(d<isl.radius+30 && d<bestD){ bestD=d; best=isl; bestType='island' }
+  }
+  for(const m of merchants){
+    const d = dist(player.x,player.y,m.x,m.y);
+    if(d<40 && d<bestD){ bestD=d; best=m; bestType='merchant' }
+  }
+  if(bestType==='island'){
+    harvest(best);
+  }else if(bestType==='merchant'){
+    tradeMerchant=best; state='TRADE'; SFX.ui();
+  }else{
+    addFloat(player.x,player.y-20,'无可互动目标',C.parchDk);
+  }
+}
+
+function harvest(isl){
+  if(isl.depleted) return;
+  let gained=false;
+  if(isl.res.wood>0){ const g=Math.min(15,isl.res.wood); player.wood=clamp(player.wood+g,0,player.maxWood); isl.res.wood-=g; addFloat(isl.x,isl.y-15,'+'+g+' 木',C.woodLt); gained=true }
+  if(isl.res.food>0){ const g=Math.min(15,isl.res.food); player.food=clamp(player.food+g,0,player.maxFood); isl.res.food-=g; addFloat(isl.x+8,isl.y-15,'+'+g+' 食',C.green); gained=true }
+  if(isl.res.gold>0){ const g=Math.min(8,isl.res.gold); player.gold+=g; isl.res.gold-=g; addFloat(isl.x-8,isl.y-15,'+'+g+' 金',C.goldLt); gained=true }
+  if(isl.res.wood<=0 && isl.res.food<=0 && isl.res.gold<=0){ isl.depleted=true; addFloat(isl.x,isl.y-25,'资源耗尽',C.parchDk) }
+  if(gained){ SFX.pickup(); isl.shake=200 }
+}
+
+function updateTrade(dt){
+  if(pressed('escape')||pressed('e')){ state='EXPLORE'; tradeMerchant=null; SFX.ui(); return }
+  // 1 买食物 2 买木材 3 卖木材换金
+  if(pressed('1')){ if(player.gold>=4){ player.gold-=4; player.food=clamp(player.food+25,0,player.maxFood); SFX.coin(); addFloat(player.x,player.y-20,'买食物',C.green) } else SFX.ui() }
+  if(pressed('2')){ if(player.gold>=6){ player.gold-=6; player.wood=clamp(player.wood+20,0,player.maxWood); SFX.coin(); addFloat(player.x,player.y-20,'买木材',C.woodLt) } else SFX.ui() }
+  if(pressed('3')){ if(player.wood>=15){ player.wood-=15; player.gold+=5; SFX.coin(); addFloat(player.x,player.y-20,'卖木材',C.goldLt) } else SFX.ui() }
+  if(pressed('4')){ if(player.food>=20){ player.food-=20; player.gold+=4; SFX.coin(); addFloat(player.x,player.y-20,'卖食物',C.goldLt) } else SFX.ui() }
+}
+
+function updatePaused(dt){
+  if(pressed('escape')){ state='EXPLORE'; SFX.ui() }
+  if(pressed('r')){ initPlayer(); genWorld(); state='EXPLORE'; SFX.ui() }
+  if(pressed('q')){ state='TITLE'; SFX.ui() }
+}
+
+function updateGameOver(dt){
+  gameOverTime+=dt;
+  if(pressed('enter')||pressed(' ')){ state='TITLE'; SFX.ui() }
+  if(pressed('r')){ initPlayer(); genWorld(); state='EXPLORE'; SFX.ui() }
+}
+
+// ============================================================
+// 渲染
+// ============================================================
+function render(){
+  octx.fillStyle=C.deepSea; octx.fillRect(0,0,VW,VH);
+
+  if(state==='TITLE'){
+    renderTitle();
+  }else{
+    updateCamera();
+    drawOcean(camX,camY);
+    renderWorld();
+    if(state==='TRADE') renderTrade();
+    if(state==='PAUSED') renderPaused();
+    if(state==='GAMEOVER') renderGameOver();
+    if(mapOpen) renderMap();
+    renderHUD();
+  }
+
+  // 受击红闪
+  if(hitFlash>0){
+    octx.fillStyle=`rgba(193,39,45,${hitFlash/200*0.4})`;
+    octx.fillRect(0,0,VW,VH);
+  }
+
+  // 放大到主画布
+  ctx.drawImage(off,0,0,canvas.width,canvas.height);
+}
+
+function renderTitle(){
+  // 深海背景 + 像素波浪
+  octx.fillStyle=C.deepSea; octx.fillRect(0,0,VW,VH);
+  // 波浪
+  for(let y=120;y<VH;y+=8){
+    const off=Math.sin(waveTime*0.04+y*0.1)*4;
+    octx.fillStyle = (y%16===0)? C.seaLt : C.sea;
+    octx.fillRect(0,y,VW,4);
+  }
+  // 标题
+  octx.fillStyle=C.gold;
+  drawPixelText('RETRO VOYAGE', VW/2-60, 30, 2, C.gold);
+  drawPixelText('复古像素航海', VW/2-48, 50, 1, C.parch);
+  // 角色卡片
+  const cw=76, ch=90, gap=8;
+  const totalW = CHARS.length*cw + (CHARS.length-1)*gap;
+  const startX = (VW-totalW)/2;
+  for(let i=0;i<CHARS.length;i++){
+    const x=startX+i*(cw+gap), y=80;
+    const sel = i===selectedChar;
+    octx.fillStyle = sel? C.parch : C.parch2;
+    pRect(x,y,cw,ch, octx.fillStyle);
+    octx.strokeStyle = sel? C.gold : C.parchDk;
+    octx.lineWidth=1; octx.strokeRect(x+0.5,y+0.5,cw-1,ch-1);
+    // 角色像素立绘（小船+旗）
+    const flagC = CHARS[i].color;
+    drawShip(x+cw/2, y+30, 0, 1.5, {flag:flagC, sail:sel?C.white:C.sail, hull:sel?'#7a5a3a':C.wood});
+    // 名字
+    drawPixelText(CHARS[i].name, x+cw/2-CHARS[i].name.length*4, y+50, 1, C.ink);
+    drawPixelText(CHARS[i].role, x+cw/2-CHARS[i].role.length*4, y+60, 1, C.copper);
+    if(sel){
+      // 闪烁边框
+      const pulse=Math.sin(gameTime*0.008)*0.5+0.5;
+      octx.strokeStyle=`rgba(212,175,55,${0.5+pulse*0.5})`;
+      octx.strokeRect(x-2,y-2,cw+4,ch+4);
+    }
+  }
+  // 优势面板
+  const ch0=CHARS[selectedChar];
+  const py=185;
+  octx.fillStyle=C.parch2; pRect(60,py,VW-120,55,C.parch2);
+  octx.strokeStyle=C.gold; octx.strokeRect(60.5,py+0.5,VW-121,54);
+  drawPixelText(ch0.skill+' · '+ch0.skillDesc, 70, py+8, 1, C.redDk);
+  // 描述（VT323 字体直接画）
+  octx.fillStyle=C.ink; octx.font='14px VT323';
+  wrapText(ch0.desc, 70, py+28, VW-140, 14);
+  // 提示
+  drawPixelText('← → 选择  ENTER 启航', VW/2-72, VH-18, 1, C.goldLt);
+  drawPixelText('数字 1-5 快速选择', VW/2-56, VH-8, 1, C.parchDk);
+}
+
+// 像素文字（简易 5x7 点阵替代：用 fillText 配像素字体）
+function drawPixelText(text,x,y,size,color){
+  octx.fillStyle=color;
+  octx.font=(8*size)+"px 'Press Start 2P', monospace";
+  octx.fillText(text,x,y+8*size);
+}
+function wrapText(text,x,y,maxW,lh){
+  const words=text.split('');
+  let line='', yy=y;
+  for(const ch of words){
+    const test=line+ch;
+    if(octx.measureText(test).width>maxW){ octx.fillText(line,x,yy); line=ch; yy+=lh }
+    else line=test;
+  }
+  octx.fillText(line,x,yy);
+}
+
+function renderWorld(){
+  // 岛屿
+  for(const isl of islands){
+    const sx=isl.x-camX, sy=isl.y-camY;
+    if(sx< -isl.radius-10||sx>VW+isl.radius+10||sy<-isl.radius-10||sy>VH+isl.radius+10) continue;
+    drawIsland(sx,sy,isl);
+  }
+  // 商人
+  for(const m of merchants){
+    const sx=m.x-camX, sy=m.y-camY;
+    if(sx<-20||sx>VW+20||sy<-20||sy>VH+20) continue;
+    m.bob+=0.05;
+    drawMerchant(sx,sy,m.bob);
+    // 可互动提示
+    if(dist(player.x,player.y,m.x,m.y)<40){
+      drawPixelText('E 交易', sx-16, sy-18, 1, C.goldLt);
+    }
+  }
+  // 敌舰
+  for(const e of enemies){
+    const sx=e.x-camX, sy=e.y-camY;
+    if(sx<-30||sx>VW+30||sy<-30||sy>VH+30) continue;
+    let sc=1.6;
+    if(e.dead){ sc*=1-clamp(e.sinkTime/1500,0,1)*0.5 }
+    let flagC = e.kind==='scout'?C.red: e.kind==='frigate'?'#7a5acd':'#5a3a8c';
+    drawShip(sx,sy,e.angle,sc,{flag:flagC, hull:e.dead?'#3a2a1a':C.wood, sail:e.dead?'#665544':C.sail});
+    // 受击闪烁
+    if(e.hurtFlash>0){
+      octx.fillStyle=`rgba(255,255,255,${e.hurtFlash/200*0.6})`;
+      octx.fillRect(sx-8,sy-8,16,16);
+    }
+    // 血条
+    if(!e.dead && e.health<e.maxHealth){
+      const bw=20;
+      octx.fillStyle=C.black; octx.fillRect(sx-bw/2-1,sy-20-1,bw+2,4);
+      octx.fillStyle=C.red; octx.fillRect(sx-bw/2,sy-20,bw*(e.health/e.maxHealth),2);
+    }
+  }
+  // 玩家船只
+  if(player){
+    const sx=player.x-camX, sy=player.y-camY;
+    if(!player.alive){
+      // 沉船下沉
+      const sink=clamp(player.sinkTime/1500,0,1);
+      octx.globalAlpha=1-sink;
+      drawShip(sx,sy+sink*8,player.angle,1.6,{flag:CHARS[selectedChar].color, hull:'#3a2a1a'});
+      octx.globalAlpha=1;
+    }else{
+      const showShip = player.viewMode==='third';
+      if(showShip){
+        drawShip(sx,sy,player.angle,1.6,{flag:CHARS[selectedChar].color});
+      }else{
+        // 第一人称：只画船头一部分
+        drawShip(sx,sy,player.angle,1.6,{flag:CHARS[selectedChar].color});
+      }
+      // 帆动画
+    }
+    // 抛锚标记
+    if(player.anchored){
+      drawPixelText('锚', sx-4, sy-22, 1, C.goldLt);
+    }
+    // 可互动岛屿提示
+    for(const isl of islands){
+      if(isl.depleted) continue;
+      if(dist(player.x,player.y,isl.x,isl.y)<isl.radius+30){
+        const ix=isl.x-camX, iy=isl.y-camY;
+        drawPixelText('E 采集', ix-16, iy-isl.radius-10, 1, C.goldLt);
+      }
+    }
+  }
+  // 炮弹
+  for(const p of projectiles){
+    const sx=p.x-camX, sy=p.y-camY;
+    drawProjectile(sx,sy);
+  }
+  // 粒子
+  for(const pt of particles){
+    const sx=pt.x-camX, sy=pt.y-camY;
+    if(sx<0||sx>VW||sy<0||sy>VH) continue;
+    octx.fillStyle=pt.color;
+    octx.fillRect(sx|0,sy|0,pt.size,pt.size);
+  }
+  // 浮动文字
+  for(const f of floats){
+    const sx=f.x-camX, sy=f.y-camY;
+    octx.fillStyle=f.color;
+    octx.font='10px VT323';
+    octx.fillText(f.text, sx-8, sy);
+  }
+  // 探险家探测范围
+  if(player && player.detectTimer>0){
+    const sx=player.x-camX, sy=player.y-camY;
+    octx.strokeStyle=`rgba(106,192,128,${player.detectTimer/6000*0.6})`;
+    octx.beginPath(); octx.arc(sx,sy,600,0,TAU); octx.stroke();
+    // 揭示范围内的实体（小地图已有，这里画轮廓）
+    octx.strokeStyle=`rgba(106,192,128,0.3)`;
+    for(const e of enemies){
+      if(dist(e.x,e.y,player.x,player.y)<600){
+        const ex=e.x-camX, ey=e.y-camY;
+        octx.strokeRect(ex-8,ey-8,16,16);
+      }
+    }
+  }
+}
+
+// 小地图
+function renderMinimap(){
+  const mw=70, mh=70, mx=8, my=VH-mh-8;
+  octx.fillStyle='rgba(10,37,64,0.85)'; octx.fillRect(mx-1,my-1,mw+2,mh+2);
+  octx.strokeStyle=C.gold; octx.strokeRect(mx-0.5,my-0.5,mw+1,mh+1);
+  const scale = mw/(WORLD*0.6);
+  const cx=mx+mw/2, cy=my+mh/2;
+  // 岛屿
+  for(const isl of islands){
+    const ix=cx+(isl.x-player.x)*scale, iy=cy+(isl.y-player.y)*scale;
+    if(ix<mx||ix>mx+mw||iy<my||iy>my+mh) continue;
+    octx.fillStyle = isl.depleted?C.parchDk : (isl.type==='forest'?C.green:isl.type==='rock'?C.rock:C.parch2);
+    octx.fillRect(ix|0,iy|0,2,2);
+  }
+  // 商人
+  for(const m of merchants){
+    const ix=cx+(m.x-player.x)*scale, iy=cy+(m.y-player.y)*scale;
+    if(ix<mx||ix>mx+mw||iy<my||iy>my+mh) continue;
+    octx.fillStyle=C.gold; octx.fillRect(ix|0,iy|0,2,2);
+  }
+  // 敌舰
+  for(const e of enemies){
+    if(e.dead) continue;
+    const ix=cx+(e.x-player.x)*scale, iy=cy+(e.y-player.y)*scale;
+    if(ix<mx||ix>mx+mw||iy<my||iy>my+mh){
+      // 探测范围内才显示
+      if(player.detectTimer<=0) continue;
+    }
+    octx.fillStyle=C.red; octx.fillRect(ix|0,iy|0,2,2);
+  }
+  // 玩家
+  octx.fillStyle=C.white; octx.fillRect(cx|0,cy|0,2,2);
+  // 视野方向
+  octx.strokeStyle=C.white; octx.beginPath();
+  octx.moveTo(cx,cy); octx.lineTo(cx+Math.cos(player.angle)*6,cy+Math.sin(player.angle)*6); octx.stroke();
+}
+
+// 全屏海图
+function renderMap(){
+  octx.fillStyle='rgba(10,15,25,0.92)'; octx.fillRect(0,0,VW,VH);
+  octx.strokeStyle=C.gold; octx.strokeRect(4,4,VW-8,VH-8);
+  drawPixelText('海图 MAP', 10, 12, 1, C.goldLt);
+  const scale = (VW-20)/(WORLD*2);
+  const cx=VW/2, cy=VH/2+10;
+  // 网格
+  octx.strokeStyle='rgba(212,175,55,0.15)';
+  for(let i=-4;i<=4;i++){
+    octx.beginPath(); octx.moveTo(cx+i*WORLD/4*scale,cy-WORLD*scale); octx.lineTo(cx+i*WORLD/4*scale,cy+WORLD*scale); octx.stroke();
+    octx.beginPath(); octx.moveTo(cx-WORLD*scale,cy+i*WORLD/4*scale); octx.lineTo(cx+WORLD*scale,cy+i*WORLD/4*scale); octx.stroke();
+  }
+  // 岛屿
+  for(const isl of islands){
+    const ix=cx+isl.x*scale, iy=cy+isl.y*scale;
+    octx.fillStyle = isl.depleted?C.parchDk : (isl.type==='forest'?C.green:isl.type==='rock'?C.rock:C.parch2);
+    octx.fillRect(ix-2|0,iy-2|0,4,4);
+  }
+  // 商人
+  for(const m of merchants){ octx.fillStyle=C.gold; octx.fillRect((cx+m.x*scale-1)|0,(cy+m.y*scale-1)|0,3,3) }
+  // 敌舰
+  for(const e of enemies){ if(!e.dead){ octx.fillStyle=C.red; octx.fillRect((cx+e.x*scale-1)|0,(cy+e.y*scale-1)|0,3,3) } }
+  // 玩家
+  octx.fillStyle=C.white; octx.fillRect((cx+player.x*scale-1)|0,(cy+player.y*scale-1)|0,3,3);
+  drawPixelText('TAB 关闭', VW-72, VH-12, 1, C.parchDk);
+}
+
+function renderHUD(){
+  // 左上：血量/食物/木材
+  drawPanel(4,4,90,42);
+  drawPixelText('HP', 8, 10, 1, C.white);
+  drawBar(22, 8, 60, 4, player.health/player.maxHealth, C.red, C.redDk);
+  drawPixelText('FOOD', 8, 20, 1, C.green);
+  drawBar(30, 18, 52, 4, player.food/player.maxFood, C.green, C.greenDk);
+  drawPixelText('WOOD', 8, 30, 1, C.woodLt);
+  drawBar(32, 28, 50, 4, player.wood/player.maxWood, C.woodLt, C.wood);
+
+  // 右上：金币/击杀
+  drawPanel(VW-74,4,70,22);
+  drawPixelText('G:'+player.gold, VW-68, 10, 1, C.goldLt);
+  drawPixelText('K:'+player.kills, VW-38, 10, 1, C.redLt);
+
+  // 左下：小地图
+  renderMinimap();
+
+  // 底部：技能槽
+  const ch=CHARS[selectedChar];
+  const sw=110, sx=(VW-sw)/2, sy=VH-22;
+  drawPanel(sx,sy,sw,18);
+  drawPixelText('Q:'+ch.skill, sx+6, sy+5, 1, C.goldLt);
+  // 冷却环
+  const cdRatio = player.skillCd>0 ? player.skillCd/(ch.cd*1000) : 0;
+  if(cdRatio>0){
+    octx.fillStyle=C.parchDk;
+    octx.fillRect(sx+sw-22, sy+3, 14, 10);
+    octx.fillStyle=C.red;
+    octx.fillRect(sx+sw-22, sy+3, 14*(1-cdRatio), 10);
+    drawPixelText(Math.ceil(player.skillCd/1000)+'s', sx+sw-20, sy+5, 1, C.white);
+  }else{
+    drawPixelText('READY', sx+sw-22, sy+5, 1, C.green);
+  }
+
+  // 视角模式
+  drawPixelText(player.viewMode==='third'?'3RD':'1ST', VW-24, VH-12, 1, C.parch);
+
+  // 控制提示
+  if(showHelp){
+    drawPanel(VW-150,28,146,80);
+    octx.font='11px VT323'; octx.fillStyle=C.ink;
+    const lines=[
+      'WASD 航行  Shift 加速',
+      'F 开炮  Q 技能  R 修理',
+      'E 互动  V 视角  空格 锚',
+      'TAB 海图  ESC 暂停',
+      'M 静音  H 隐藏提示',
+    ];
+    lines.forEach((l,i)=>octx.fillText(l, VW-146, 42+i*12));
+  }else{
+    drawPixelText('H 提示', VW-28, 30, 1, C.parchDk);
+  }
+
+  // 抛锚状态
+  if(player.anchored){
+    drawPixelText('已抛锚', VW/2-20, 8, 1, C.gold);
+  }
+}
+
+function drawPanel(x,y,w,h){
+  octx.fillStyle='rgba(232,216,168,0.92)'; octx.fillRect(x,y,w,h);
+  octx.strokeStyle=C.gold; octx.lineWidth=1; octx.strokeRect(x+0.5,y+0.5,w-1,h-1);
+  octx.strokeStyle=C.parchDk; octx.strokeRect(x+1.5,y+1.5,w-3,h-3);
+}
+function drawBar(x,y,w,h,ratio,fg,bg){
+  octx.fillStyle=C.black; octx.fillRect(x-1,y-1,w+2,h+2);
+  octx.fillStyle=bg; octx.fillRect(x,y,w,h);
+  octx.fillStyle=fg; octx.fillRect(x,y,w*clamp(ratio,0,1),h);
+}
+
+function renderTrade(){
+  octx.fillStyle='rgba(0,0,0,0.6)'; octx.fillRect(0,0,VW,VH);
+  const pw=200, ph=130, px=(VW-pw)/2, py=(VH-ph)/2;
+  drawPanel(px,py,pw,ph);
+  drawPixelText('商人交易', px+pw/2-36, py+8, 1, C.gold);
+  octx.font='13px VT323'; octx.fillStyle=C.ink;
+  const opts=[
+    '1. 买食物 +25  (4金)',
+    '2. 买木材 +20  (6金)',
+    '3. 卖木材 -15  (+5金)',
+    '4. 卖食物 -20  (+4金)',
+  ];
+  opts.forEach((o,i)=>octx.fillText(o, px+14, py+34+i*14));
+  drawPixelText('持有: '+player.gold+'金 '+Math.floor(player.food)+'食 '+Math.floor(player.wood)+'木', px+10, py+100, 1, C.copper);
+  drawPixelText('ESC/E 离开', px+pw-66, py+ph-8, 1, C.parchDk);
+}
+
+function renderPaused(){
+  octx.fillStyle='rgba(0,0,0,0.6)'; octx.fillRect(0,0,VW,VH);
+  drawPanel(VW/2-60,VH/2-40,120,80);
+  drawPixelText('暂停', VW/2-18, VH/2-30, 2, C.gold);
+  octx.font='13px VT323'; octx.fillStyle=C.ink;
+  octx.fillText('ESC 继续', VW/2-30, VH/2-2);
+  octx.fillText('R 重新开始', VW/2-34, VH/2+14);
+  octx.fillText('Q 返回标题', VW/2-34, VH/2+30);
+}
+
+function renderGameOver(){
+  octx.fillStyle='rgba(0,0,0,0.75)'; octx.fillRect(0,0,VW,VH);
+  const pw=200, ph=120, px=(VW-pw)/2, py=(VH-ph)/2;
+  drawPanel(px,py,pw,ph);
+  drawPixelText('沉船', px+pw/2-16, py+12, 2, C.red);
+  octx.font='13px VT323'; octx.fillStyle=C.ink;
+  octx.fillText('角色: '+CHARS[selectedChar].name, px+16, py+44);
+  octx.fillText('击沉敌舰: '+player.kills, px+16, py+60);
+  octx.fillText('金币: '+player.gold, px+16, py+76);
+  drawPixelText('R 重战  ENTER 标题', px+pw/2-64, py+ph-8, 1, C.gold);
+}
+
+// ============================================================
+// 主循环
+// ============================================================
+function loop(now){
+  let dt = now-lastTime; lastTime=now;
+  if(dt>50) dt=50;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// 首次点击唤醒音频
+window.addEventListener('click',()=>ac(),{once:true});
+window.addEventListener('keydown',()=>ac(),{once:true});
+</script>
+</body>
+</html>

@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Med-Guide · 医学影像简易判读助手</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Sora:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- html2pdf.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#EAF1FF', 100: '#D4E2FF', 200: '#A8C5FF', 300: '#7CA8FF',
+                            400: '#508BFF', 500: '#165DFF', 600: '#0F4AD9', 700: '#0B3AB3',
+                            800: '#082B8C', 900: '#061F66'
+                        },
+                        accent: { 400: '#5EEAD4', 500: '#14B8A6', 600: '#0D9488' },
+                        risk: { high: '#EF4444', medium: '#F59E0B', safe: '#10B981' },
+                        slate2: {
+                            50: '#F7FAFC', 100: '#EEF2F7', 200: '#DFE5EE', 300: '#C3CCD9',
+                            400: '#94A1B5', 500: '#64748B', 600: '#475569', 700: '#334155',
+                            800: '#1E293B', 900: '#0F172A'
+                        }
+                    },
+                    fontFamily: {
+                        display: ['Sora', 'Noto Sans SC', 'system-ui', 'sans-serif'],
+                        sans: ['"Noto Sans SC"', 'Sora', 'system-ui', 'sans-serif']
+                    },
+                    boxShadow: {
+                        soft: '0 10px 30px -12px rgba(22,93,255,0.18), 0 4px 12px -4px rgba(15,23,42,0.05)',
+                        glow: '0 0 0 6px rgba(22,93,255,0.12)'
+                    },
+                    keyframes: {
+                        'fade-up': { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+                        'scan': { '0%': { transform: 'translateX(-100%)' }, '100%': { transform: 'translateX(100%)' } },
+                        'ecg': { '0%': { strokeDashoffset: '1000' }, '100%': { strokeDashoffset: '0' } },
+                        'breathe': { '0%,100%': { transform: 'scale(1)', opacity: '1' }, '50%': { transform: 'scale(1.05)', opacity: '0.8' } },
+                        'slide-up': { '0%': { opacity: '0', transform: 'translateY(20px) scale(0.95)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } }
+                    },
+                    animation: {
+                        'fade-up': 'fade-up 0.6s cubic-bezier(0.22,1,0.36,1) both',
+                        'scan': 'scan 1.8s linear infinite',
+                        'ecg': 'ecg 4s linear infinite',
+                        'breathe': 'breathe 2s ease-in-out infinite',
+                        'slide-up': 'slide-up 0.3s cubic-bezier(0.22,1,0.36,1)'
+                    }
+                }
+            }
+        };
+    </script>
+
+    <style type="text/css">
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Noto Sans SC', 'Sora', system-ui, sans-serif;
+            color: #0F172A;
+            background:
+                radial-gradient(1200px 600px at 90% -10%, rgba(22,93,255,0.08), transparent 60%),
+                radial-gradient(900px 500px at -10% 10%, rgba(20,184,166,0.06), transparent 60%),
+                linear-gradient(180deg, #F7FAFC 0%, #FFFFFF 60%, #F1F5F9 100%);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+        .font-display { font-family: 'Sora', 'Noto Sans SC', system-ui, sans-serif; letter-spacing: -0.01em; }
+
+        /* Upload zone */
+        .upload-zone {
+            border: 2px dashed #CBD5E1;
+            transition: all 0.3s cubic-bezier(0.22,1,0.36,1);
+            background-image: linear-gradient(135deg, rgba(22,93,255,0.02) 0%, rgba(22,93,255,0) 100%);
+        }
+        .upload-zone:hover { border-color: #165DFF; background-color: rgba(22,93,255,0.04); transform: translateY(-2px); box-shadow: 0 18px 40px -20px rgba(22,93,255,0.35); }
+        .upload-zone.is-drag { border-color: #165DFF; background-color: rgba(22,93,255,0.08); transform: scale(1.01); }
+        .upload-zone.has-image { border-style: solid; border-color: #165DFF; background-color: transparent; }
+
+        /* Buttons */
+        .btn-primary {
+            background: linear-gradient(135deg, #165DFF 0%, #0F4AD9 100%);
+            transition: all 0.25s cubic-bezier(0.22,1,0.36,1);
+            position: relative; overflow: hidden;
+        }
+        .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 14px 28px -10px rgba(22,93,255,0.55); }
+        .btn-primary:active:not(:disabled) { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-primary::after {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.25) 50%, transparent 70%);
+            transform: translateX(-120%); transition: transform 0.6s ease;
+        }
+        .btn-primary:hover:not(:disabled)::after { transform: translateX(120%); }
+
+        .btn-ghost {
+            background: rgba(255,255,255,0.6); backdrop-filter: blur(8px);
+            border: 1px solid #DFE5EE; transition: all 0.25s ease;
+        }
+        .btn-ghost:hover:not(:disabled) { background: #FFF; border-color: #165DFF; color: #165DFF; transform: translateY(-1px); }
+        .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .card {
+            background: #FFF; border-radius: 20px;
+            border: 1px solid rgba(223,229,238,0.7);
+            box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 20px 40px -24px rgba(15,23,42,0.12), 0 8px 16px -12px rgba(15,23,42,0.06);
+        }
+
+        .scan-bar { position: relative; overflow: hidden; background: #EEF2F7; border-radius: 999px; height: 6px; }
+        .scan-bar::after {
+            content: ''; position: absolute; top: 0; left: 0; width: 40%; height: 100%;
+            background: linear-gradient(90deg, transparent, #165DFF, transparent);
+            animation: scan 1.8s linear infinite;
+        }
+
+        .history-item { transition: all 0.25s ease; border: 1px solid transparent; }
+        .history-item:hover { transform: translateY(-2px); border-color: rgba(22,93,255,0.25); box-shadow: 0 12px 24px -16px rgba(22,93,255,0.3); }
+
+        .tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; letter-spacing: 0.02em; }
+
+        .risk-high { background: rgba(239,68,68,0.1); color: #DC2626; border: 1px solid rgba(239,68,68,0.3); }
+        .risk-medium { background: rgba(245,158,11,0.1); color: #D97706; border: 1px solid rgba(245,158,11,0.3); }
+        .risk-safe { background: rgba(16,185,129,0.1); color: #059669; border: 1px solid rgba(16,185,129,0.3); }
+
+        .brand-ring { background: conic-gradient(from 140deg, #165DFF, #5EEAD4, #165DFF); padding: 2px; border-radius: 14px; }
+        .brand-ring-inner { background: #FFF; border-radius: 12px; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+
+        .delay-1 { animation-delay: 0.05s; }
+        .delay-2 { animation-delay: 0.15s; }
+        .delay-3 { animation-delay: 0.25s; }
+        .delay-4 { animation-delay: 0.35s; }
+
+        .loading-overlay {
+            position: fixed; inset: 0; background: rgba(15,23,42,0.6); backdrop-filter: blur(4px);
+            z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+        }
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(15,23,42,0.5); backdrop-filter: blur(2px);
+            z-index: 200; display: flex; align-items: center; justify-content: center; padding: 16px;
+        }
+        .modal-content { background: #FFF; border-radius: 20px; max-width: 420px; width: 100%; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); }
+
+        .tab-btn { padding: 8px 16px; border-radius: 999px; font-size: 13px; font-weight: 500; transition: all 0.2s ease; border: 1px solid transparent; }
+        .tab-btn.active { background: #165DFF; color: white; }
+        .tab-btn:not(.active) { background: #F1F5F9; color: #64748B; }
+        .tab-btn:not(.active):hover { background: #E2E8F0; }
+
+        .preview-container { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 16px; }
+        .preview-container img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; }
+        .preview-container .remove-btn {
+            position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%;
+            background: rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.2s ease; opacity: 0;
+        }
+        .preview-container:hover .remove-btn { opacity: 1; }
+        .preview-container .remove-btn:hover { background: #EF4444; transform: scale(1.1); }
+
+        /* History delete button */
+        .history-delete-btn {
+            position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%;
+            background: rgba(0,0,0,0.05); color: #94A1B5; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.2s ease; opacity: 0; z-index: 10;
+        }
+        .history-item:hover .history-delete-btn { opacity: 1; }
+        .history-delete-btn:hover { background: #EF4444; color: white; transform: scale(1.1); }
+
+        /* Disclaimer banner */
+        .disclaimer-banner {
+            background: linear-gradient(135deg, #FFF7ED 0%, #FFFBEB 100%);
+            border: 1px solid #FDE68A;
+            border-radius: 16px;
+        }
+
+        /* PDF print styles */
+        @media print {
+            .no-print { display: none !important; }
+        }
+
+        /* Mobile optimizations */
+        @media (max-width: 640px) {
+            .card { border-radius: 16px; }
+            .upload-zone { min-height: 240px !important; }
+            .tab-btn { padding: 6px 12px; font-size: 12px; }
+            .modal-content { border-radius: 16px; }
+        }
+    </style>
+</head>
+
+<body class="font-sans">
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="relative">
+            <div class="w-16 h-16 border-4 border-primary-200 border-t-primary-500 rounded-full animate-spin"></div>
+            <div class="absolute inset-0 flex items-center justify-center">
+                <svg class="w-6 h-6 text-primary-500 animate-breathe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M3 12h18M8 8l8 8M16 8l-8 8"/></svg>
+            </div>
+        </div>
+        <div class="text-center">
+            <p class="text-white font-display font-semibold text-lg">AI 正在判读影像</p>
+            <p class="text-white/60 text-sm mt-1">请稍候，通常需要 5-15 秒</p>
+        </div>
+        <div class="flex gap-1 mt-2">
+            <span class="w-2 h-2 rounded-full bg-white/40 animate-pulse" style="animation-delay:0s"></span>
+            <span class="w-2 h-2 rounded-full bg-white/40 animate-pulse" style="animation-delay:0.2s"></span>
+            <span class="w-2 h-2 rounded-full bg-white/40 animate-pulse" style="animation-delay:0.4s"></span>
+        </div>
+    </div>
+
+    <!-- Modal Container -->
+    <div id="modal-container" class="modal-overlay hidden">
+        <div class="modal-content animate-slide-up"></div>
+    </div>
+
+    <!-- Header -->
+    <header class="sticky top-0 z-30 backdrop-blur-md bg-white/70 border-b border-slate2-100">
+        <div class="max-w-7xl mx-auto px-4 sm:px-8 py-3 sm:py-4 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                <div class="brand-ring w-9 h-9 sm:w-11 sm:h-11 shrink-0">
+                    <div class="brand-ring-inner">
+                        <svg viewBox="0 0 24 24" class="w-5 h-5 sm:w-6 sm:h-6 text-primary-500" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/></svg>
+                    </div>
+                </div>
+                <div class="min-w-0">
+                    <h1 class="font-display text-lg sm:text-xl sm:text-2xl font-semibold text-slate2-900 leading-tight truncate">Med<span class="text-primary-500">-</span>Guide</h1>
+                    <p class="text-[11px] sm:text-sm text-slate2-500 truncate">面向普通人的轻量化医学影像 AI 解读工具</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+                <button id="settings-btn" class="btn-ghost inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-slate2-700" title="设置 API Key">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    <span class="hidden sm:inline">设置</span>
+                </button>
+                <button id="new-analysis-btn" class="btn-primary inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 rounded-full text-xs sm:text-sm font-medium text-white">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/><path d="M12 8v8M8 12h8"/></svg>
+                    <span>新建判读</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero -->
+    <section class="max-w-7xl mx-auto px-4 sm:px-8 pt-8 sm:pt-14 pb-5 sm:pb-10">
+        <div class="grid lg:grid-cols-12 gap-6 sm:gap-8 items-end">
+            <div class="lg:col-span-8 animate-fade-up">
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary-50 text-primary-600 text-xs font-medium mb-3 sm:mb-4">
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse"></span>
+                    医学影像 · AI 辅助判读
+                </div>
+                <h2 class="font-display text-2xl sm:text-4xl lg:text-5xl font-semibold text-slate2-900 leading-[1.15]">
+                    让每一张影像，<br class="hidden sm:block"/>
+                    都能被<span class="relative inline-block"><span class="relative z-10 text-primary-500">通俗理解</span><span class="absolute bottom-1 left-0 w-full h-2 bg-primary-100/70 -z-0 rounded"></span></span>。
+                </h2>
+                <p class="mt-3 sm:mt-4 text-slate2-500 text-sm sm:text-lg max-w-2xl leading-relaxed">
+                    上传 X 光、CT 或 MRI 影像，Med-Guide 在几秒内给出可视化结构解读、关键发现提示与通俗解释。
+                </p>
+                <div class="mt-4 sm:mt-6 flex flex-wrap gap-2 text-xs text-slate2-500">
+                    <span class="tag bg-slate2-50 text-slate2-600 border border-slate2-100"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>本地处理，隐私安全</span>
+                    <span class="tag bg-slate2-50 text-slate2-600 border border-slate2-100"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>支持 JPG / PNG / DICOM</span>
+                    <span class="tag bg-slate2-50 text-slate2-600 border border-slate2-100"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>响应时间 &lt; 15s</span>
+                </div>
+            </div>
+            <div class="lg:col-span-4 animate-fade-up delay-1 hidden sm:block">
+                <div class="card p-5 sm:p-6">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-2 text-xs text-slate2-500 font-medium"><span class="w-2 h-2 rounded-full bg-accent-500 animate-pulse"></span>实时生命体征示意</div>
+                        <span class="text-xs text-slate2-400">Demo</span>
+                    </div>
+                    <svg viewBox="0 0 400 80" class="w-full h-16 text-primary-500" preserveAspectRatio="none">
+                        <path d="M0 40 L60 40 L80 40 L90 20 L100 60 L110 30 L120 50 L140 40 L200 40 L220 40 L230 10 L240 70 L250 25 L260 55 L280 40 L400 40" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1000" style="animation: ecg 4s linear infinite;"/>
+                    </svg>
+                    <div class="grid grid-cols-3 gap-3 mt-4">
+                        <div class="text-center"><div class="text-xs text-slate2-400">心率</div><div class="font-display text-lg font-semibold text-slate2-800">72 <span class="text-xs font-normal text-slate2-400">bpm</span></div></div>
+                        <div class="text-center border-x border-slate2-100"><div class="text-xs text-slate2-400">血氧</div><div class="font-display text-lg font-semibold text-slate2-800">98<span class="text-xs font-normal text-slate2-400">%</span></div></div>
+                        <div class="text-center"><div class="text-xs text-slate2-400">状态</div><div class="font-display text-lg font-semibold text-accent-600">平稳</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-8 pb-8 sm:pb-10">
+        <div class="grid lg:grid-cols-12 gap-5 sm:gap-6">
+
+            <!-- Upload Section -->
+            <section class="lg:col-span-7 animate-fade-up delay-2">
+                <div class="card p-4 sm:p-7 h-full flex flex-col">
+                    <div class="flex items-center justify-between mb-4 sm:mb-5">
+                        <div>
+                            <h3 class="font-display text-base sm:text-xl font-semibold text-slate2-900 flex items-center gap-2"><span class="w-1 h-5 rounded bg-primary-500"></span>影像上传</h3>
+                            <p class="text-xs sm:text-sm text-slate2-500 mt-1">支持拖拽 / 点击上传，单张不超过 20MB</p>
+                        </div>
+                        <span class="tag bg-primary-50 text-primary-600">步骤 01</span>
+                    </div>
+
+                    <label id="upload-zone" for="file-input" class="upload-zone flex-1 min-h-[240px] sm:min-h-[420px] rounded-2xl flex flex-col items-center justify-center cursor-pointer p-4 sm:p-6 text-center overflow-hidden">
+                        <div id="upload-placeholder" class="flex flex-col items-center">
+                            <div class="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl bg-primary-50 text-primary-500 flex items-center justify-center mb-3 sm:mb-4">
+                                <svg class="w-6 h-6 sm:w-8 sm:h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            </div>
+                            <p class="font-display text-sm sm:text-base font-semibold text-slate2-800">拖拽医学影像至此处</p>
+                            <p class="text-xs sm:text-sm text-slate2-500 mt-1">或 <span class="text-primary-500 font-medium">点击选择文件</span></p>
+                            <div class="mt-4 sm:mt-5 flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-xs text-slate2-400">
+                                <span class="px-2 py-1 rounded bg-slate2-50 border border-slate2-100">X-Ray</span>
+                                <span class="px-2 py-1 rounded bg-slate2-50 border border-slate2-100">CT</span>
+                                <span class="px-2 py-1 rounded bg-slate2-50 border border-slate2-100">MRI</span>
+                                <span class="px-2 py-1 rounded bg-slate2-50 border border-slate2-100">DICOM</span>
+                            </div>
+                        </div>
+                        <div id="preview-container" class="preview-container hidden">
+                            <img id="preview-image" src="" alt="影像预览" />
+                            <button id="remove-image-btn" class="remove-btn" type="button" title="移除图片"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                        </div>
+                        <input id="file-input" type="file" accept="image/*,.dcm" class="hidden" />
+                    </label>
+
+                    <div id="file-info" class="mt-3 sm:mt-4 hidden">
+                        <div class="flex items-center gap-3 p-3 rounded-xl bg-slate2-50 border border-slate2-100">
+                            <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-primary-100 text-primary-500 flex items-center justify-center shrink-0"><svg class="w-4 h-4 sm:w-5 sm:h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+                            <div class="flex-1 min-w-0"><p id="file-name" class="text-xs sm:text-sm font-medium text-slate2-800 truncate">--</p><p id="file-size" class="text-[11px] sm:text-xs text-slate2-500">--</p></div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 sm:mt-6 flex flex-col sm:flex-row gap-2 sm:gap-3">
+                        <button id="analyze-btn" class="btn-primary flex-1 inline-flex items-center justify-center gap-2 px-5 py-2.5 sm:py-3 rounded-full text-sm font-semibold text-white" disabled>
+                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20M12 2v20"/></svg>开始 AI 判读
+                        </button>
+                        <button id="clear-btn" class="btn-ghost inline-flex items-center justify-center gap-2 px-5 py-2.5 sm:py-3 rounded-full text-sm font-medium text-slate2-700" disabled>
+                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>清空
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Result Section -->
+            <section class="lg:col-span-5 animate-fade-up delay-3">
+                <div class="card p-4 sm:p-7 h-full flex flex-col">
+                    <div class="flex items-center justify-between mb-4 sm:mb-5">
+                        <div>
+                            <h3 class="font-display text-base sm:text-xl font-semibold text-slate2-900 flex items-center gap-2"><span class="w-1 h-5 rounded bg-accent-500"></span>AI 解读结果</h3>
+                            <p class="text-xs sm:text-sm text-slate2-500 mt-1">关键发现与解释</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button id="export-pdf-btn" class="hidden btn-ghost inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-slate2-600" title="导出PDF">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                PDF
+                            </button>
+                            <span id="risk-tag" class="tag hidden"><span class="w-1.5 h-1.5 rounded-full"></span><span>--</span></span>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 flex flex-col">
+                        <div class="mb-3 sm:mb-4">
+                            <div class="flex items-center justify-between text-xs text-slate2-500 mb-1.5"><span>判读状态</span><span id="status-text" class="font-medium text-slate2-700">等待上传</span></div>
+                            <div id="progress-bar" class="scan-bar opacity-0"></div>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2 sm:gap-3 mb-4 sm:mb-5">
+                            <div class="rounded-xl border border-slate2-100 p-2.5 sm:p-3"><div class="text-[10px] sm:text-xs text-slate2-400">影像类型</div><div id="result-type" class="font-display text-xs sm:text-sm font-semibold text-slate2-800 mt-1 truncate">--</div></div>
+                            <div class="rounded-xl border border-slate2-100 p-2.5 sm:p-3"><div class="text-[10px] sm:text-xs text-slate2-400">置信度</div><div id="result-confidence" class="font-display text-xs sm:text-sm font-semibold text-slate2-800 mt-1">--%</div></div>
+                            <div class="rounded-xl border border-slate2-100 p-2.5 sm:p-3"><div class="text-[10px] sm:text-xs text-slate2-400">发现数</div><div id="result-findings" class="font-display text-xs sm:text-sm font-semibold text-slate2-800 mt-1">0</div></div>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate2-100 p-3 sm:p-4 mb-3 sm:mb-4">
+                            <div class="text-sm font-semibold text-slate2-800 mb-2 sm:mb-3 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-primary-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>关键发现
+                            </div>
+                            <ul id="findings-list" class="space-y-1.5 sm:space-y-2 text-xs sm:text-sm text-slate2-500">
+                                <li class="flex items-start gap-2"><span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate2-300 shrink-0"></span><span>暂无数据，请先上传影像并开始判读。</span></li>
+                            </ul>
+                        </div>
+
+                        <div id="explanation-section" class="hidden">
+                            <div class="flex gap-2 mb-3">
+                                <button class="tab-btn active" data-tab="plain">通俗版</button>
+                                <button class="tab-btn" data-tab="professional">专业版</button>
+                            </div>
+                            <div id="plain-explanation" class="rounded-2xl bg-primary-50/60 border border-primary-100 p-3 sm:p-4">
+                                <div class="text-xs sm:text-sm font-semibold text-primary-700 mb-1 flex items-center gap-2"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>通俗解释</div>
+                                <p id="plain-text" class="text-xs sm:text-sm text-slate2-600 leading-relaxed whitespace-pre-wrap"></p>
+                            </div>
+                            <div id="professional-explanation" class="rounded-2xl bg-slate2-100/60 border border-slate2-200 p-3 sm:p-4 hidden">
+                                <div class="text-xs sm:text-sm font-semibold text-slate2-700 mb-1 flex items-center gap-2"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>专业学术版</div>
+                                <p id="professional-text" class="text-xs sm:text-sm text-slate2-600 leading-relaxed whitespace-pre-wrap"></p>
+                            </div>
+                        </div>
+
+                        <div id="default-explanation" class="rounded-2xl bg-primary-50/60 border border-primary-100 p-3 sm:p-4">
+                            <div class="text-xs sm:text-sm font-semibold text-primary-700 mb-1 flex items-center gap-2"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>通俗解释</div>
+                            <p class="text-xs sm:text-sm text-slate2-600 leading-relaxed">上传影像后，这里会展示用日常语言写成的判读说明，帮助你更好地与医生沟通。</p>
+                        </div>
+                    </div>
+
+                    <p class="mt-3 sm:mt-4 text-[10px] sm:text-[11px] text-slate2-400 text-center leading-relaxed">* 本结果由 AI 模型生成，仅供参考，不能替代专业医师的诊断意见。</p>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- History Section -->
+    <section class="max-w-7xl mx-auto px-4 sm:px-8 pb-8 sm:pb-16">
+        <div class="card p-4 sm:p-7 animate-fade-up delay-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-5 sm:mb-6">
+                <div>
+                    <h3 class="font-display text-base sm:text-xl font-semibold text-slate2-900 flex items-center gap-2"><span class="w-1 h-5 rounded bg-primary-500"></span>历史判读记录</h3>
+                    <p class="text-xs sm:text-sm text-slate2-500 mt-1">本地保存于浏览器，仅你可访问</p>
+                </div>
+                <div class="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+                    <div class="relative flex-1 sm:flex-none">
+                        <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate2-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input id="search-input" type="text" placeholder="搜索记录…" class="w-full sm:w-64 pl-9 pr-3 py-2 rounded-full text-xs sm:text-sm border border-slate2-200 focus:outline-none focus:border-primary-500 focus:shadow-glow transition" />
+                    </div>
+                    <button id="clear-history-btn" class="btn-ghost inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-slate2-700 shrink-0">
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        <span class="hidden sm:inline">清空</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="filter-tags" class="flex flex-wrap gap-2 mb-4 sm:mb-5 text-xs">
+                <button class="filter-tag px-3 py-1.5 rounded-full bg-primary-500 text-white font-medium" data-filter="all">全部</button>
+                <button class="filter-tag px-3 py-1.5 rounded-full bg-slate2-50 text-slate2-600 border border-slate2-100 hover:border-primary-300 hover:text-primary-600 transition" data-filter="high-risk">高风险</button>
+                <button class="filter-tag px-3 py-1.5 rounded-full bg-slate2-50 text-slate2-600 border border-slate2-100 hover:border-primary-300 hover:text-primary-600 transition" data-filter="medium-risk">中等风险</button>
+                <button class="filter-tag px-3 py-1.5 rounded-full bg-slate2-50 text-slate2-600 border border-slate2-100 hover:border-primary-300 hover:text-primary-600 transition" data-filter="safe">安全</button>
+            </div>
+
+            <div id="history-list" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                <div id="empty-history" class="col-span-full py-10 sm:py-12 text-center text-slate2-400">
+                    <svg class="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 text-slate2-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                    <p class="text-xs sm:text-sm">暂无历史记录</p>
+                    <p class="text-[11px] sm:text-xs mt-1">完成判读后会自动保存到这里</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Disclaimer Banner -->
+        <div class="disclaimer-banner mt-6 sm:mt-10 p-4 sm:p-5">
+            <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-500 flex items-center justify-center shrink-0 mt-0.5">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </div>
+                <div>
+                    <p class="text-xs sm:text-sm font-medium text-amber-700">重要提示</p>
+                    <p class="text-[11px] sm:text-xs text-amber-600 mt-1 leading-relaxed">
+                        本 Demo 为竞赛创意原型，仅供学习参考，不能作为正式医疗诊断依据。AI 分析结果可能存在误差，任何健康疑虑请务必咨询专业医师，规避医疗风险。
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-6 sm:mt-10 pt-5 sm:pt-6 border-t border-slate2-100 text-center text-[10px] sm:text-xs text-slate2-400">
+            <p> Med-Guide · 本工具为演示原型，不用于真实临床诊断</p>
+            <p class="mt-1 text-slate2-300">Trae-AI 创造力参赛 Demo · 原生 HTML + Tailwind CSS</p>
+        </footer>
+    </section>
+
+    <!-- Hidden PDF Template -->
+    <div id="pdf-template" class="hidden" style="padding: 40px; font-family: 'Noto Sans SC', sans-serif; color: #0F172A; background: #FFF;">
+        <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #165DFF;">
+            <h1 style="font-size: 24px; font-weight: 700; color: #165DFF; margin-bottom: 4px;">Med-Guide 医学影像判读报告</h1>
+            <p style="font-size: 12px; color: #64748B;">AI 辅助分析 · 仅供参考</p>
+        </div>
+        <div style="margin-bottom: 20px;">
+            <img id="pdf-image" src="" style="max-width: 100%; max-height: 300px; border-radius: 12px; border: 1px solid #DFE5EE; display: block; margin: 0 auto;" />
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 20px;">
+            <div style="background: #F7FAFC; padding: 12px; border-radius: 8px; text-align: center;"><div style="font-size: 11px; color: #94A1B5;">影像类型</div><div id="pdf-type" style="font-size: 13px; font-weight: 600; margin-top: 4px;">--</div></div>
+            <div style="background: #F7FAFC; padding: 12px; border-radius: 8px; text-align: center;"><div style="font-size: 11px; color: #94A1B5;">置信度</div><div id="pdf-confidence" style="font-size: 13px; font-weight: 600; margin-top: 4px;">--%</div></div>
+            <div style="background: #F7FAFC; padding: 12px; border-radius: 8px; text-align: center;"><div style="font-size: 11px; color: #94A1B5;">风险等级</div><div id="pdf-risk" style="font-size: 13px; font-weight: 600; margin-top: 4px;">--</div></div>
+        </div>
+        <div style="margin-bottom: 20px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 10px; color: #334155;">关键发现</h3>
+            <ul id="pdf-findings" style="font-size: 12px; line-height: 1.8; color: #475569; padding-left: 16px;"></ul>
+        </div>
+        <div style="background: #EAF1FF; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #D4E2FF;">
+            <h3 style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #165DFF;">通俗解释</h3>
+            <p id="pdf-plain" style="font-size: 12px; line-height: 1.8; color: #475569; white-space: pre-wrap;"></p>
+        </div>
+        <div style="background: #F1F5F9; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #E2E8F0;">
+            <h3 style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #475569;">专业学术版</h3>
+            <p id="pdf-professional" style="font-size: 12px; line-height: 1.8; color: #475569; white-space: pre-wrap;"></p>
+        </div>
+        <div style="text-align: center; font-size: 10px; color: #94A1B5; padding-top: 16px; border-top: 1px solid #E2E8F0;">
+            <p>本报告由 Med-Guide AI 生成，仅供学习参考，不能替代专业医师诊断。</p>
+            <p id="pdf-time" style="margin-top: 4px;"></p>
+        </div>
+    </div>
+
+    <script>
+        /* ==================== 配置与常量 ==================== */
+        const CONFIG = {
+            STORAGE_KEY: 'medguide.history.v1',
+            API_KEY_STORAGE: 'medguide.apikey.v1',
+            MAX_FILE_SIZE: 20 * 1024 * 1024,
+            ALLOWED_TYPES: ['image/jpeg','image/png','image/gif','image/webp','image/bmp'],
+            API_ENDPOINT: 'https://api.openai.com/v1/chat/completions',
+            MODEL: 'gpt-4o'
+        };
+
+        /* ==================== 状态 ==================== */
+        const state = {
+            currentFile: null,
+            currentBase64: null,
+            isAnalyzing: false,
+            apiKey: localStorage.getItem(CONFIG.API_KEY_STORAGE) || '',
+            history: [],
+            currentFilter: 'all',
+            searchQuery: '',
+            lastResult: null
+        };
+
+        /* ==================== DOM 引用 ==================== */
+        const $ = id => document.getElementById(id);
+        const els = {
+            uploadZone: $('upload-zone'), fileInput: $('file-input'),
+            uploadPlaceholder: $('upload-placeholder'), previewContainer: $('preview-container'),
+            previewImage: $('preview-image'), removeImageBtn: $('remove-image-btn'),
+            fileInfo: $('file-info'), fileName: $('file-name'), fileSize: $('file-size'),
+            analyzeBtn: $('analyze-btn'), clearBtn: $('clear-btn'),
+            settingsBtn: $('settings-btn'), newAnalysisBtn: $('new-analysis-btn'),
+            clearHistoryBtn: $('clear-history-btn'), exportPdfBtn: $('export-pdf-btn'),
+            statusText: $('status-text'), progressBar: $('progress-bar'),
+            resultType: $('result-type'), resultConfidence: $('result-confidence'),
+            resultFindings: $('result-findings'), findingsList: $('findings-list'),
+            riskTag: $('risk-tag'), explanationSection: $('explanation-section'),
+            defaultExplanation: $('default-explanation'), plainText: $('plain-text'),
+            professionalText: $('professional-text'), plainExplanation: $('plain-explanation'),
+            professionalExplanation: $('professional-explanation'),
+            searchInput: $('search-input'), filterTags: $('filter-tags'),
+            historyList: $('history-list'), loadingOverlay: $('loading-overlay'),
+            modalContainer: $('modal-container'), pdfTemplate: $('pdf-template')
+        };
+
+        /* ==================== 工具函数 ==================== */
+        const fmtSize = b => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(2) + ' MB';
+        const fmtDate = d => { const x = new Date(d), p = n => String(n).padStart(2, '0'); return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())} ${p(x.getHours())}:${p(x.getMinutes())}`; };
+        const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+        const toBase64 = file => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.onerror = rej; r.readAsDataURL(file); });
+        const compress = (file, maxW = 2048, q = 0.8) => new Promise(res => {
+            const img = new Image(), c = document.createElement('canvas'), ctx = c.getContext('2d');
+            img.onload = () => { let {width:w, height:h} = img; if (w > maxW) { h = h * maxW / w; w = maxW; } c.width = w; c.height = h; ctx.drawImage(img, 0, 0, w, h); c.toBlob(b => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(b); }, 'image/jpeg', q); };
+            img.src = URL.createObjectURL(file);
+        });
+
+        /* ==================== 弹窗系统 ==================== */
+        function showModal(html) {
+            els.modalContainer.querySelector('.modal-content').innerHTML = html;
+            els.modalContainer.classList.remove('hidden');
+        }
+        function hideModal() { els.modalContainer.classList.add('hidden'); }
+        function showLoading() { els.loadingOverlay.classList.remove('hidden'); }
+        function hideLoading() { els.loadingOverlay.classList.add('hidden'); }
+        function toast(msg) {
+            const t = document.createElement('div');
+            t.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-full bg-accent-500 text-white text-sm font-medium shadow-lg animate-fade-up z-50';
+            t.innerHTML = `<div class="flex items-center gap-2"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>${msg}</div>`;
+            document.body.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(10px)'; t.style.transition = 'all 0.3s ease'; setTimeout(() => t.remove(), 300); }, 2000);
+        }
+        function errModal(title, msg) {
+            showModal(`<div class="p-6"><div class="flex items-center gap-3 mb-4"><div class="w-12 h-12 rounded-full bg-red-100 text-red-500 flex items-center justify-center shrink-0"><svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><div><h3 class="font-display font-semibold text-lg text-slate2-900">${title}</h3><p class="text-sm text-slate2-500 mt-0.5">${msg}</p></div></div><button onclick="hideModal()" class="w-full py-2.5 rounded-full bg-slate2-100 text-slate2-700 font-medium hover:bg-slate2-200 transition">关闭</button></div>`);
+        }
+
+        /* ==================== API Key ==================== */
+        function showApiKeyModal() {
+            const cur = state.apiKey || '';
+            showModal(`<div class="p-6"><div class="flex items-center justify-between mb-4"><h3 class="font-display font-semibold text-lg text-slate2-900">API Key 设置</h3><button onclick="hideModal()" class="w-8 h-8 rounded-full hover:bg-slate2-100 flex items-center justify-center transition"><svg class="w-5 h-5 text-slate2-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><p class="text-sm text-slate2-500 mb-4">请输入你的大模型 API Key（如 OpenAI API Key）。密钥仅保存在本地浏览器，不会上传服务器。</p><div class="mb-4"><label class="block text-sm font-medium text-slate2-700 mb-1.5">API Key</label><input id="api-key-input" type="password" placeholder="sk-..." value="${cur}" class="w-full px-4 py-2.5 rounded-xl border border-slate2-200 focus:outline-none focus:border-primary-500 focus:shadow-glow transition text-sm"/></div><div class="mb-4"><label class="block text-sm font-medium text-slate2-700 mb-1.5">API 端点（可选）</label><input id="api-endpoint-input" type="text" placeholder="${CONFIG.API_ENDPOINT}" class="w-full px-4 py-2.5 rounded-xl border border-slate2-200 focus:outline-none focus:border-primary-500 focus:shadow-glow transition text-sm"/><p class="text-xs text-slate2-400 mt-1">留空使用默认端点，或填写兼容接口地址</p></div><div class="flex gap-3"><button onclick="saveApiKey()" class="flex-1 py-2.5 rounded-full bg-primary-500 text-white font-medium hover:bg-primary-600 transition">保存</button><button onclick="hideModal()" class="flex-1 py-2.5 rounded-full bg-slate2-100 text-slate2-700 font-medium hover:bg-slate2-200 transition">取消</button></div><p class="text-xs text-slate2-400 mt-4 text-center">* API Key 仅存储在浏览器 LocalStorage</p></div>`);
+        }
+        function saveApiKey() {
+            const key = document.getElementById('api-key-input').value.trim();
+            const ep = document.getElementById('api-endpoint-input').value.trim();
+            if (!key) { errModal('保存失败', '请输入有效的 API Key'); return; }
+            state.apiKey = key; localStorage.setItem(CONFIG.API_KEY_STORAGE, key);
+            if (ep) localStorage.setItem('medguide.endpoint.v1', ep);
+            hideModal(); toast('API Key 已保存');
+        }
+
+        /* ==================== 文件处理 ==================== */
+        async function handleFile(file) {
+            if (!CONFIG.ALLOWED_TYPES.includes(file.type) && !file.name.toLowerCase().endsWith('.dcm')) { errModal('文件格式错误', '请上传 JPG、PNG、GIF、WebP、BMP 或 DICOM 格式的图片'); return; }
+            if (file.size > CONFIG.MAX_FILE_SIZE) { errModal('文件过大', '图片大小不能超过 20MB'); return; }
+            state.currentFile = file;
+            const r = new FileReader();
+            r.onload = e => {
+                els.previewImage.src = e.target.result;
+                els.uploadPlaceholder.classList.add('hidden');
+                els.previewContainer.classList.remove('hidden');
+                els.uploadZone.classList.add('has-image');
+                els.fileName.textContent = file.name;
+                els.fileSize.textContent = fmtSize(file.size);
+                els.fileInfo.classList.remove('hidden');
+                els.analyzeBtn.disabled = false;
+                els.clearBtn.disabled = false;
+                els.statusText.textContent = '已就绪';
+            };
+            r.readAsDataURL(file);
+            try { state.currentBase64 = await compress(file); } catch { state.currentBase64 = await toBase64(file); }
+        }
+        function clearImage() {
+            state.currentFile = null; state.currentBase64 = null; state.lastResult = null;
+            els.previewImage.src = ''; els.uploadPlaceholder.classList.remove('hidden');
+            els.previewContainer.classList.add('hidden'); els.uploadZone.classList.remove('has-image');
+            els.fileInfo.classList.add('hidden'); els.fileInput.value = '';
+            els.analyzeBtn.disabled = true; els.clearBtn.disabled = true;
+            els.statusText.textContent = '等待上传'; els.progressBar.classList.add('opacity-0');
+            els.exportPdfBtn.classList.add('hidden');
+            resetResult();
+        }
+        function resetResult() {
+            els.resultType.textContent = '--'; els.resultConfidence.textContent = '--%';
+            els.resultFindings.textContent = '0';
+            els.findingsList.innerHTML = `<li class="flex items-start gap-2"><span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate2-300 shrink-0"></span><span>暂无数据，请先上传影像并开始判读。</span></li>`;
+            els.riskTag.classList.add('hidden');
+            els.explanationSection.classList.add('hidden');
+            els.defaultExplanation.classList.remove('hidden');
+        }
+
+        /* ==================== AI 分析 ==================== */
+        async function analyze() {
+            if (!state.apiKey) { errModal('请先设置 API Key', '点击右上角"设置"按钮输入你的 API Key'); return; }
+            if (!state.currentBase64) { errModal('请先上传图片', '请先上传需要分析的医学影像'); return; }
+            if (state.isAnalyzing) return;
+            state.isAnalyzing = true;
+            showLoading(); els.statusText.textContent = '正在判读...'; els.progressBar.classList.remove('opacity-0');
+            try {
+                const ep = localStorage.getItem('medguide.endpoint.v1') || CONFIG.API_ENDPOINT;
+                const body = {
+                    model: CONFIG.MODEL,
+                    messages: [
+                        { role: 'system', content: `你是一位专业的医学影像分析助手。请分析用户上传的医学影像，并严格按照以下 JSON 格式输出，不要输出任何其他内容：\n{\n  "imageType": "影像类型",\n  "confidence": 0-100的整数,\n  "riskLevel": "高风险/中等风险/安全",\n  "findings": ["发现1","发现2"],\n  "plainExplanation": "通俗大白话解释，让普通人理解",\n  "professionalExplanation": "专业学术版，使用医学影像学术术语"\n}\n注意：风险等级只能是 高风险/中等风险/安全 三种。通俗版避免专业术语，专业版使用准确学术表达。最后提醒用户：AI分析仅供参考，请以专业医师诊断为准。` },
+                        { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${state.currentBase64}` } }, { type: 'text', text: '请分析这张医学影像，并按 JSON 格式输出判读结果。' }] }
+                    ],
+                    max_tokens: 2000, temperature: 0.3
+                };
+                const res = await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.apiKey}` }, body: JSON.stringify(body) });
+                if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API 请求失败 (${res.status})`); }
+                const data = await res.json();
+                const content = data.choices?.[0]?.message?.content;
+                if (!content) throw new Error('API 返回内容为空');
+                let result;
+                try { const m = content.match(/\{[\s\S]*\}/); result = JSON.parse(m ? m[0] : content); } catch { throw new Error('AI 返回格式异常，请重试'); }
+                if (!result.riskLevel || !result.findings) throw new Error('AI 返回数据不完整');
+                displayResult(result);
+                saveHistory(result);
+                toast('判读完成');
+            } catch (e) {
+                console.error(e);
+                if (e.message.includes('401') || e.message.includes('API Key')) errModal('API Key 无效', '请检查 API Key 是否正确');
+                else if (e.message.includes('fetch') || e.message.includes('Failed')) errModal('网络错误', '请检查网络连接或更换 API 端点');
+                else errModal('分析失败', e.message || '未知错误，请重试');
+                els.statusText.textContent = '判读失败';
+            } finally { state.isAnalyzing = false; hideLoading(); els.progressBar.classList.add('opacity-0'); }
+        }
+        function displayResult(r) {
+            state.lastResult = r;
+            els.resultType.textContent = r.imageType || '未知类型';
+            els.resultConfidence.textContent = (r.confidence || '--') + '%';
+            els.resultFindings.textContent = r.findings?.length || '0';
+            els.riskTag.classList.remove('hidden', 'risk-high', 'risk-medium', 'risk-safe');
+            const map = { '高风险': 'risk-high', '中等风险': 'risk-medium', '安全': 'risk-safe' };
+            const cls = map[r.riskLevel] || 'risk-safe';
+            els.riskTag.classList.add(cls);
+            els.riskTag.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-current"></span><span>${r.riskLevel}</span>`;
+            els.findingsList.innerHTML = (r.findings || []).map(f => `<li class="flex items-start gap-2"><span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-primary-400 shrink-0"></span><span>${f}</span></li>`).join('') || `<li class="flex items-start gap-2"><span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate2-300 shrink-0"></span><span>未发现明显异常</span></li>`;
+            els.plainText.textContent = r.plainExplanation || '暂无解释';
+            els.professionalText.textContent = r.professionalExplanation || '暂无专业解释';
+            els.explanationSection.classList.remove('hidden');
+            els.defaultExplanation.classList.add('hidden');
+            els.plainExplanation.classList.remove('hidden');
+            els.professionalExplanation.classList.add('hidden');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'plain'));
+            els.statusText.textContent = '判读完成';
+            els.exportPdfBtn.classList.remove('hidden');
+        }
+
+        /* ==================== PDF 导出 ==================== */
+        function exportPDF() {
+            if (!state.lastResult || !state.currentBase64) { errModal('无法导出', '请先完成 AI 判读'); return; }
+            const r = state.lastResult;
+            $('pdf-image').src = `data:image/jpeg;base64,${state.currentBase64}`;
+            $('pdf-type').textContent = r.imageType || '未知类型';
+            $('pdf-confidence').textContent = (r.confidence || '--') + '%';
+            $('pdf-risk').textContent = r.riskLevel || '未知';
+            $('pdf-findings').innerHTML = (r.findings || []).map(f => `<li>${f}</li>`).join('');
+            $('pdf-plain').textContent = r.plainExplanation || '';
+            $('pdf-professional').textContent = r.professionalExplanation || '';
+            $('pdf-time').textContent = '生成时间：' + fmtDate(Date.now());
+            const opt = { margin: 0.5, filename: `MedGuide-报告-${fmtDate(Date.now()).replace(/[:\s]/g, '-')}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' } };
+            html2pdf().set(opt).from(els.pdfTemplate).save().then(() => toast('PDF 已下载')).catch(e => { console.error(e); errModal('导出失败', 'PDF 生成出错，请重试'); });
+        }
+
+        /* ==================== 历史记录 ==================== */
+        function loadHistory() { try { const raw = localStorage.getItem(CONFIG.STORAGE_KEY); state.history = raw ? JSON.parse(raw) : []; } catch { state.history = []; } }
+        function saveHistoryStore() {
+            try { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(state.history)); }
+            catch (e) { if (e.name === 'QuotaExceededError') { state.history = state.history.slice(-50); try { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(state.history)); } catch {} } }
+        }
+        function saveHistory(result) {
+            const rec = { id: uid(), timestamp: Date.now(), fileName: state.currentFile?.name || '未知文件', imageSize: state.currentFile?.size || 0, imageBase64: state.currentBase64, imageType: result.imageType, confidence: result.confidence, riskLevel: result.riskLevel, findings: result.findings, plainExplanation: result.plainExplanation, professionalExplanation: result.professionalExplanation };
+            state.history.unshift(rec); if (state.history.length > 100) state.history = state.history.slice(0, 100);
+            saveHistoryStore(); renderHistory();
+        }
+        function deleteHistory(id) {
+            state.history = state.history.filter(r => r.id !== id);
+            saveHistoryStore(); renderHistory(); toast('记录已删除');
+        }
+        function clearAllHistory() {
+            showModal(`<div class="p-6"><div class="flex items-center gap-3 mb-4"><div class="w-12 h-12 rounded-full bg-amber-100 text-amber-500 flex items-center justify-center shrink-0"><svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div><div><h3 class="font-display font-semibold text-lg text-slate2-900">清空历史记录</h3><p class="text-sm text-slate2-500 mt-0.5">此操作不可撤销，确定清空所有记录吗？</p></div></div><div class="flex gap-3"><button onclick="confirmClearAll()" class="flex-1 py-2.5 rounded-full bg-red-500 text-white font-medium hover:bg-red-600 transition">确认清空</button><button onclick="hideModal()" class="flex-1 py-2.5 rounded-full bg-slate2-100 text-slate2-700 font-medium hover:bg-slate2-200 transition">取消</button></div></div>`);
+        }
+        function confirmClearAll() { state.history = []; saveHistoryStore(); renderHistory(); hideModal(); toast('历史记录已清空'); }
+        function renderHistory() {
+            const c = els.historyList; let list = state.history;
+            if (state.currentFilter !== 'all') {
+                const map = { 'high-risk': '高风险', 'medium-risk': '中等风险', 'safe': '安全' };
+                list = list.filter(r => r.riskLevel === map[state.currentFilter]);
+            }
+            if (state.searchQuery) {
+                const q = state.searchQuery.toLowerCase();
+                list = list.filter(r => r.fileName.toLowerCase().includes(q) || r.imageType?.toLowerCase().includes(q) || r.findings?.some(f => f.toLowerCase().includes(q)));
+            }
+            c.innerHTML = '';
+            if (!list.length) { c.innerHTML = `<div class="col-span-full py-10 sm:py-12 text-center text-slate2-400"><svg class="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 text-slate2-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg><p class="text-xs sm:text-sm">暂无历史记录</p><p class="text-[11px] sm:text-xs mt-1">完成判读后会自动保存到这里</p></div>`; return; }
+            list.forEach(rec => {
+                const art = document.createElement('article');
+                art.className = 'history-item rounded-2xl p-3 sm:p-4 bg-white cursor-pointer relative';
+                const rc = { '高风险': 'risk-high', '中等风险': 'risk-medium', '安全': 'risk-safe' }[rec.riskLevel] || '';
+                art.innerHTML = `<div class="history-delete-btn" onclick="event.stopPropagation(); confirmDeleteHistory('${rec.id}')" title="删除"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div><div class="flex items-start gap-3"><div class="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-gradient-to-br from-primary-100 to-primary-50 overflow-hidden shrink-0 flex items-center justify-center">${rec.imageBase64 ? `<img src="data:image/jpeg;base64,${rec.imageBase64}" class="w-full h-full object-cover" alt="缩略图"/>` : `<svg class="w-5 h-5 sm:w-6 sm:h-6 text-primary-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`}</div><div class="min-w-0 flex-1 pr-6"><h4 class="font-display text-xs sm:text-sm font-semibold text-slate2-900 truncate">${rec.fileName}</h4><p class="text-[10px] sm:text-xs text-slate2-500 mt-0.5">${fmtDate(rec.timestamp)}</p><div class="mt-1.5 sm:mt-2 flex items-center gap-1.5 flex-wrap"><span class="tag ${rc}">${rec.riskLevel || '未知'}</span><span class="tag bg-slate2-50 text-slate2-500">${rec.findings?.length || 0} 项发现</span></div></div></div>`;
+                art.onclick = () => showDetail(rec);
+                c.appendChild(art);
+            });
+        }
+        function confirmDeleteHistory(id) {
+            showModal(`<div class="p-6"><div class="flex items-center gap-3 mb-4"><div class="w-10 h-10 rounded-full bg-red-100 text-red-500 flex items-center justify-center shrink-0"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div><div><h3 class="font-display font-semibold text-base text-slate2-900">删除记录</h3><p class="text-sm text-slate2-500 mt-0.5">确定要删除这条历史记录吗？</p></div></div><div class="flex gap-3"><button onclick="doDeleteHistory('${id}')" class="flex-1 py-2 rounded-full bg-red-500 text-white font-medium hover:bg-red-600 transition text-sm">删除</button><button onclick="hideModal()" class="flex-1 py-2 rounded-full bg-slate2-100 text-slate2-700 font-medium hover:bg-slate2-200 transition text-sm">取消</button></div></div>`);
+        }
+        function doDeleteHistory(id) { deleteHistory(id); hideModal(); }
+        function showDetail(rec) {
+            const rc = { '高风险': 'risk-high', '中等风险': 'risk-medium', '安全': 'risk-safe' }[rec.riskLevel] || '';
+            showModal(`<div class="p-5 sm:p-6 max-h-[80vh] overflow-y-auto"><div class="flex items-center justify-between mb-4"><h3 class="font-display font-semibold text-lg text-slate2-900">判读详情</h3><button onclick="hideModal()" class="w-8 h-8 rounded-full hover:bg-slate2-100 flex items-center justify-center transition"><svg class="w-5 h-5 text-slate2-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="mb-4 rounded-xl overflow-hidden bg-slate2-50">${rec.imageBase64 ? `<img src="data:image/jpeg;base64,${rec.imageBase64}" class="w-full max-h-48 object-contain" alt="影像预览"/>` : `<div class="h-24 flex items-center justify-center text-slate2-400">无图片预览</div>`}</div><div class="grid grid-cols-2 gap-3 mb-4"><div class="rounded-xl border border-slate2-100 p-3"><div class="text-xs text-slate2-400">文件名</div><div class="font-display text-xs sm:text-sm font-semibold text-slate2-800 mt-1 truncate">${rec.fileName}</div></div><div class="rounded-xl border border-slate2-100 p-3"><div class="text-xs text-slate2-400">影像类型</div><div class="font-display text-xs sm:text-sm font-semibold text-slate2-800 mt-1">${rec.imageType || '--'}</div></div><div class="rounded-xl border border-slate2-100 p-3"><div class="text-xs text-slate2-400">置信度</div><div class="font-display text-xs sm:text-sm font-semibold text-slate2-800 mt-1">${rec.confidence || '--'}%</div></div><div class="rounded-xl border border-slate2-100 p-3"><div class="text-xs text-slate2-400">风险等级</div><div class="mt-1"><span class="tag ${rc}">${rec.riskLevel || '未知'}</span></div></div></div><div class="rounded-2xl border border-slate2-100 p-4 mb-4"><div class="text-sm font-semibold text-slate2-800 mb-2">关键发现</div><ul class="space-y-1.5 text-xs sm:text-sm text-slate2-600">${(rec.findings || ['暂无发现']).map(f => `<li class="flex items-start gap-2"><span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-primary-400 shrink-0"></span><span>${f}</span></li>`).join('')}</ul></div><div class="rounded-2xl bg-primary-50/60 border border-primary-100 p-4 mb-4"><div class="text-xs sm:text-sm font-semibold text-primary-700 mb-1">通俗解释</div><p class="text-xs sm:text-sm text-slate2-600 leading-relaxed whitespace-pre-wrap">${rec.plainExplanation || '暂无解释'}</p></div><div class="rounded-2xl bg-slate2-100/60 border border-slate2-200 p-4 mb-4"><div class="text-xs sm:text-sm font-semibold text-slate2-700 mb-1">专业学术版</div><p class="text-xs sm:text-sm text-slate2-600 leading-relaxed whitespace-pre-wrap">${rec.professionalExplanation || '暂无专业解释'}</p></div><div class="text-[11px] text-slate2-400 text-center">判读时间：${fmtDate(rec.timestamp)}</div></div>`);
+        }
+
+        /* ==================== 事件绑定 ==================== */
+        function bindEvents() {
+            els.fileInput.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleFile(f); });
+            els.uploadZone.addEventListener('dragover', e => { e.preventDefault(); els.uploadZone.classList.add('is-drag'); });
+            els.uploadZone.addEventListener('dragleave', () => els.uploadZone.classList.remove('is-drag'));
+            els.uploadZone.addEventListener('drop', e => { e.preventDefault(); els.uploadZone.classList.remove('is-drag'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+            els.removeImageBtn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); clearImage(); });
+            els.analyzeBtn.addEventListener('click', analyze);
+            els.clearBtn.addEventListener('click', clearImage);
+            els.settingsBtn.addEventListener('click', showApiKeyModal);
+            els.exportPdfBtn.addEventListener('click', exportPDF);
+            els.newAnalysisBtn.addEventListener('click', () => { clearImage(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+            els.clearHistoryBtn.addEventListener('click', clearAllHistory);
+            els.searchInput.addEventListener('input', e => { state.searchQuery = e.target.value; renderHistory(); });
+            els.filterTags.addEventListener('click', e => {
+                const t = e.target.closest('.filter-tag'); if (!t) return;
+                document.querySelectorAll('.filter-tag').forEach(x => { x.classList.remove('bg-primary-500', 'text-white', 'font-medium'); x.classList.add('bg-slate2-50', 'text-slate2-600', 'border', 'border-slate2-100'); });
+                t.classList.remove('bg-slate2-50', 'text-slate2-600', 'border', 'border-slate2-100'); t.classList.add('bg-primary-500', 'text-white', 'font-medium');
+                state.currentFilter = t.dataset.filter; renderHistory();
+            });
+            document.addEventListener('click', e => {
+                if (e.target.classList.contains('tab-btn')) {
+                    const tab = e.target.dataset.tab;
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+                    els.plainExplanation.classList.toggle('hidden', tab !== 'plain');
+                    els.professionalExplanation.classList.toggle('hidden', tab !== 'professional');
+                }
+            });
+            els.modalContainer.addEventListener('click', e => { if (e.target === els.modalContainer) hideModal(); });
+            document.addEventListener('keydown', e => { if (e.key === 'Escape' && !els.modalContainer.classList.contains('hidden')) hideModal(); });
+        }
+
+        /* ==================== 初始化 ==================== */
+        function init() {
+            loadHistory(); renderHistory(); bindEvents();
+            console.log('[Med-Guide] 初始化完成，历史记录：', state.history.length);
+            if (!state.apiKey) setTimeout(showApiKeyModal, 500);
+        }
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

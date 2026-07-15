@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StorySplit —— AI 用户故事拆分粒度评估助手</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #08080c;
+      --bg-secondary: #0c0e14;
+      --bg-card: #11131a;
+      --bg-card-hover: #161924;
+      --accent-cyan: #00d4aa;
+      --accent-cyan-dim: #00a880;
+      --accent-purple: #7a5af5;
+      --accent-orange: #ff6b35;
+      --accent-amber: #f0a030;
+      --accent-red: #e84848;
+      --text-primary: #e0e2e8;
+      --text-secondary: #8890a0;
+      --text-muted: #555a6a;
+      --border-subtle: rgba(0,212,170,0.08);
+      --border-glow: rgba(0,212,170,0.2);
+      --shadow-cyan: rgba(0,212,170,0.06);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Outfit', 'Noto Serif SC', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      overflow-x: hidden;
+      line-height: 1.7;
+    }
+
+    /* ===== 背景Canvas：网格+数据流 ===== */
+    #gridCanvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* ===== 导航栏 ===== */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 1rem 3rem;
+      background: rgba(8,8,12,0.9);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .nav-logo {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      letter-spacing: -0.5px;
+    }
+    .nav-logo svg { width: 24px; height: 24px; }
+    .nav-links { display: flex; gap: 2rem; }
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: color 0.3s;
+      position: relative;
+      font-family: 'Outfit', sans-serif;
+    }
+    .nav-links a:hover { color: var(--accent-cyan); }
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: -4px; left: 0;
+      width: 0; height: 2px;
+      background: var(--accent-cyan);
+      transition: width 0.3s;
+    }
+    .nav-links a:hover::after { width: 100%; }
+
+    /* ===== 通用 ===== */
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; position: relative; z-index: 1; }
+    section { padding: 6rem 0; }
+    .section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--accent-cyan);
+      margin-bottom: 1rem;
+    }
+    .section-title {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 2.4rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      line-height: 1.3;
+    }
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+      max-width: 620px;
+    }
+
+    /* ===== Hero ===== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding-top: 80px;
+    }
+    .hero-content { max-width: 900px; }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(0,212,170,0.08);
+      border: 1px solid var(--border-glow);
+      padding: 0.4rem 1.2rem;
+      border-radius: 100px;
+      font-size: 0.8rem;
+      color: var(--accent-cyan);
+      margin-bottom: 2rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .hero-badge span {
+      width: 8px; height: 8px;
+      background: var(--accent-cyan);
+      border-radius: 50%;
+      animation: pulse-cyan 2s infinite;
+    }
+    @keyframes pulse-cyan {
+      0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--accent-cyan); }
+      50% { opacity: 0.4; box-shadow: 0 0 8px var(--accent-cyan); }
+    }
+    .hero h1 {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 3.4rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      line-height: 1.25;
+    }
+    .hero h1 .cyan {
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-subtitle {
+      font-size: 1.15rem;
+      color: var(--text-secondary);
+      margin-bottom: 3rem;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* 核心痛点可视化 */
+    .pain-visual {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+    .pain-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 1.8rem;
+      text-align: center;
+      transition: all 0.4s;
+      position: relative;
+      overflow: hidden;
+    }
+    .pain-card:hover {
+      border-color: var(--border-glow);
+      box-shadow: 0 8px 32px var(--shadow-cyan);
+      transform: translateY(-4px);
+    }
+    .pain-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+      opacity: 0.5;
+    }
+    .pain-icon {
+      font-size: 2rem;
+      margin-bottom: 0.8rem;
+      display: block;
+    }
+    .pain-title {
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 0.4rem;
+      font-family: 'Noto Serif SC', serif;
+    }
+    .pain-desc {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .pain-stat {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--accent-orange);
+      margin: 0.8rem 0 0.3rem;
+      display: block;
+    }
+    .pain-stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* ===== 粒度评估器 ===== */
+    .eval-section { background: linear-gradient(180deg, var(--bg-primary), var(--bg-secondary)); }
+    .eval-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 20px;
+      padding: 2.5rem;
+      margin-top: 3rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .eval-container::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+    }
+    .eval-header {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      margin-bottom: 1.5rem;
+    }
+    .eval-header-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      background: rgba(0,212,170,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+    }
+    .eval-title {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 1.2rem;
+      font-weight: 600;
+    }
+    .eval-subtitle { font-size: 0.8rem; color: var(--text-muted); }
+
+    /* 预设故事选择 */
+    .story-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-bottom: 1.5rem;
+    }
+    .story-preset {
+      padding: 0.45rem 1rem;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      border: 1px solid var(--border-subtle);
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.3s;
+      font-family: 'Outfit', sans-serif;
+    }
+    .story-preset:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+    .story-preset.active {
+      background: rgba(0,212,170,0.1);
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    /* 输入框 */
+    .story-input {
+      width: 100%;
+      min-height: 120px;
+      background: rgba(8,8,12,0.8);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1.2rem;
+      color: var(--text-primary);
+      font-family: 'Outfit', sans-serif;
+      font-size: 1rem;
+      line-height: 1.7;
+      resize: vertical;
+      transition: all 0.3s;
+    }
+    .story-input:focus {
+      outline: none;
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 20px rgba(0,212,170,0.08);
+    }
+    .story-input::placeholder { color: var(--text-muted); }
+
+    /* 评估按钮 */
+    .eval-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1.2rem;
+      padding: 0.8rem 2rem;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-cyan-dim));
+      border: none;
+      border-radius: 10px;
+      color: var(--bg-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .eval-btn:hover {
+      box-shadow: 0 8px 24px rgba(0,212,170,0.25);
+      transform: translateY(-2px);
+    }
+
+    /* 评估结果 */
+    .eval-result {
+      margin-top: 2rem;
+      padding: 1.5rem;
+      border-radius: 16px;
+      border: 1px dashed var(--border-subtle);
+      display: none;
+    }
+    .eval-result.visible { display: block; }
+    .result-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .result-score {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.6rem;
+      font-weight: 700;
+      flex-shrink: 0;
+      border: 3px solid;
+    }
+    .result-score.good { border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(0,212,170,0.05); }
+    .result-score.warn { border-color: var(--accent-amber); color: var(--accent-amber); background: rgba(240,160,48,0.05); }
+    .result-score.bad { border-color: var(--accent-red); color: var(--accent-red); background: rgba(232,72,72,0.05); }
+    .result-score-label { font-size: 0.6rem; font-weight: 400; letter-spacing: 1px; text-transform: uppercase; }
+    .result-title {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin-bottom: 0.3rem;
+    }
+    .result-desc { font-size: 0.85rem; color: var(--text-muted); }
+
+    /* 维度评分 */
+    .dimension-scores {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    .dim-item {
+      padding: 1rem;
+      background: rgba(8,8,12,0.6);
+      border-radius: 10px;
+      border: 1px solid var(--border-subtle);
+    }
+    .dim-name {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+    .dim-bar {
+      height: 6px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 0.4rem;
+    }
+    .dim-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+    }
+    .dim-fill.good { background: var(--accent-cyan); }
+    .dim-fill.warn { background: var(--accent-amber); }
+    .dim-fill.bad { background: var(--accent-red); }
+    .dim-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+    }
+
+    /* 拆分建议 */
+    .split-suggestion {
+      margin-top: 1.5rem;
+      padding: 1.2rem;
+      background: rgba(0,212,170,0.03);
+      border-left: 3px solid var(--accent-cyan);
+      border-radius: 0 10px 10px 0;
+    }
+    .split-suggestion-title {
+      font-family: 'Noto Serif SC', serif;
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--accent-cyan);
+      margin-bottom: 0.8rem;
+    }
+    .split-item {
+      display: flex;
+      gap: 0.8rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+    }
+    .split-item:last-child { border-bottom: none; }
+    .split-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--accent-cyan);
+      min-width: 24px;
+    }
+
+    /* ===== INVEST 原则 ===== */
+    .invest-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+    .invest-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 1.8rem;
+      transition: all 0.4s;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    .invest-card:hover {
+      border-color: var(--border-glow);
+      box-shadow: 0 8px 32px var(--shadow-cyan);
+      transform: translateY(-4px);
+    }
+    .invest-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 2px;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .invest-card:hover::before { opacity: 0.6; }
+    .invest-letter {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+    .invest-name {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+    }
+    .invest-desc {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .invest-checklist {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.5s cubic-bezier(0.4,0,0.2,1);
+    }
+    .invest-card.expanded .invest-checklist {
+      max-height: 300px;
+      margin-top: 1rem;
+    }
+    .invest-check {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.3rem 0;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+    .invest-check::before {
+      content: '☐';
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-cyan);
+      font-size: 0.9rem;
+    }
+
+    /* ===== 拆分策略 ===== */
+    .strategy-section { background: linear-gradient(180deg, var(--bg-primary), var(--bg-secondary)); }
+    .strategy-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+    .strategy-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 20px;
+      padding: 2rem;
+      transition: all 0.4s;
+    }
+    .strategy-card:hover {
+      border-color: var(--border-glow);
+      transform: translateY(-4px);
+    }
+    .strategy-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .strategy-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+    .strategy-icon.flow { background: rgba(0,212,170,0.1); }
+    .strategy-icon.data { background: rgba(122,90,245,0.1); }
+    .strategy-icon.role { background: rgba(255,107,53,0.1); }
+    .strategy-icon.op { background: rgba(240,160,48,0.1); }
+    .strategy-title {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .strategy-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+      line-height: 1.6;
+    }
+    .strategy-example {
+      background: rgba(8,8,12,0.6);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 1rem;
+    }
+    .strategy-example-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 0.5rem;
+    }
+    .strategy-example-text {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.7;
+    }
+    .strategy-example-text code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--accent-cyan);
+      background: rgba(0,212,170,0.06);
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+    }
+
+    /* ===== 示例对比 ===== */
+    .compare-section { background: linear-gradient(180deg, var(--bg-secondary), var(--bg-primary)); }
+    .compare-pair {
+      margin-top: 3rem;
+    }
+    .compare-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .compare-badge {
+      padding: 0.3rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+    }
+    .compare-badge.bad { background: rgba(232,72,72,0.1); color: var(--accent-red); border: 1px solid rgba(232,72,72,0.2); }
+    .compare-badge.good { background: rgba(0,212,170,0.1); color: var(--accent-cyan); border: 1px solid rgba(0,212,170,0.2); }
+    .compare-title { font-family: 'Noto Serif SC', serif; font-size: 1.2rem; font-weight: 600; }
+    .compare-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    .compare-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 1.5rem;
+      transition: all 0.3s;
+    }
+    .compare-card:hover { border-color: var(--border-glow); }
+    .compare-card.bad-card { border-left: 3px solid var(--accent-red); }
+    .compare-card.good-card { border-left: 3px solid var(--accent-cyan); }
+    .compare-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 0.8rem;
+    }
+    .compare-label.bad { color: var(--accent-red); }
+    .compare-label.good { color: var(--accent-cyan); }
+    .compare-story {
+      font-size: 0.95rem;
+      color: var(--text-primary);
+      line-height: 1.7;
+      margin-bottom: 1rem;
+      padding: 0.8rem;
+      background: rgba(8,8,12,0.6);
+      border-radius: 8px;
+      font-family: 'Outfit', sans-serif;
+    }
+    .compare-story code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      color: var(--accent-purple);
+    }
+    .compare-issues {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .compare-issue {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      padding-left: 1rem;
+      position: relative;
+    }
+    .compare-issue::before {
+      content: '⚠';
+      position: absolute;
+      left: 0;
+      font-size: 0.75rem;
+    }
+    .compare-fixes {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .compare-fix {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      padding-left: 1rem;
+      position: relative;
+    }
+    .compare-fix::before {
+      content: '✓';
+      position: absolute;
+      left: 0;
+      color: var(--accent-cyan);
+      font-size: 0.75rem;
+    }
+
+    /* ===== 页脚 ===== */
+    footer {
+      text-align: center;
+      padding: 4rem 2rem;
+      border-top: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .footer-logo {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-bottom: 0.5rem;
+    }
+    .footer-tagline {
+      font-family: 'Noto Serif SC', serif;
+      font-size: 1rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+    }
+
+    /* ===== 响应式 ===== */
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 2.2rem; }
+      .pain-visual { grid-template-columns: 1fr; }
+      .invest-grid { grid-template-columns: 1fr; }
+      .strategy-grid { grid-template-columns: 1fr; }
+      .compare-cards { grid-template-columns: 1fr; }
+      .dimension-scores { grid-template-columns: 1fr; }
+      nav { padding: 1rem 1.5rem; }
+      .nav-links { display: none; }
+      section { padding: 4rem 0; }
+    }
+
+    /* 滚动动画 */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: all 0.8s cubic-bezier(0.4,0,0.2,1);
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <canvas id="gridCanvas"></canvas>
+
+  <!-- 导航 -->
+  <nav>
+    <div class="nav-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14,2 14,8 20,8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/>
+        <line x1="16" y1="17" x2="8" y2="17"/>
+        <polyline points="10,9 9,9 8,9"/>
+      </svg>
+      StorySplit
+    </div>
+    <div class="nav-links">
+      <a href="#evaluator">粒度评估</a>
+      <a href="#invest">INVEST</a>
+      <a href="#strategy">拆分策略</a>
+      <a href="#compare">示例对比</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="hero-badge"><span></span>学习工作赛道</div>
+      <h1>你的用户故事<br>拆到<span class="cyan">刚刚好</span>了吗？</h1>
+      <p class="hero-subtitle">AI 驱动的用户故事拆分粒度评估助手，像代码 lint 一样自动检查故事质量，让 Sprint 计划会告别"凭感觉"</p>
+
+      <div class="pain-visual">
+        <div class="pain-card reveal">
+          <span class="pain-icon">📦</span>
+          <div class="pain-title">故事太大</div>
+          <span class="pain-stat">47%</span>
+          <div class="pain-stat-label">的团队常遇到</div>
+          <div class="pain-desc">单个故事占满整个 Sprint，做不完只能 Carry over，影响团队交付节奏</div>
+        </div>
+        <div class="pain-card reveal">
+          <span class="pain-icon">🔬</span>
+          <div class="pain-title">故事太碎</div>
+          <span class="pain-stat">32%</span>
+          <div class="pain-stat-label">的团队常遇到</div>
+          <div class="pain-desc">故事数量爆炸，Sprint 会议变成故事管理大会，管理成本远超开发成本</div>
+        </div>
+        <div class="pain-card reveal">
+          <span class="pain-icon">🎯</span>
+          <div class="pain-title">评审耗时</div>
+          <span class="pain-stat">2.5h</span>
+          <div class="pain-stat-label">每次计划会平均</div>
+          <div class="pain-desc">反复讨论"这个故事够不够小"，占据大量计划会时间，团队疲惫不堪</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 粒度评估器 -->
+  <section class="eval-section" id="evaluator">
+    <div class="container">
+      <div class="section-label">Story Granularity Evaluator</div>
+      <h2 class="section-title">AI 粒度评估器</h2>
+      <p class="section-desc">选择一个示例故事，或输入你自己的用户故事，StorySplit AI 会立即评估拆分粒度并给出改进建议</p>
+
+      <div class="eval-container">
+        <div class="eval-header">
+          <div class="eval-header-icon">🧪</div>
+          <div>
+            <div class="eval-title">用户故事评估</div>
+            <div class="eval-subtitle">AI 基于 INVEST 原则 + 业务复杂度 + 技术复杂度综合评估</div>
+          </div>
+        </div>
+
+        <div class="story-presets" id="storyPresets">
+          <button class="story-preset active" data-story="too-big">📦 故事太大示例</button>
+          <button class="story-preset" data-story="just-right">🎯 粒度刚好示例</button>
+          <button class="story-preset" data-story="too-small">🔬 故事太碎示例</button>
+          <button class="story-preset" data-story="custom">✏️ 自定义输入</button>
+        </div>
+
+        <textarea class="story-input" id="storyInput" placeholder="输入你的用户故事..."></textarea>
+        <button class="eval-btn" id="evalBtn">🚀 开始评估</button>
+
+        <div class="eval-result" id="evalResult">
+          <div class="result-header">
+            <div class="result-score" id="resultScore"><span id="scoreNum">72</span><span class="result-score-label">/100</span></div>
+            <div>
+              <div class="result-title" id="resultTitle">故事偏大，建议拆分</div>
+              <div class="result-desc" id="resultDesc">这个故事包含多个独立业务操作，预估需要 5-8 个故事点，超出了单个 Sprint 内建议的单个故事上限</div>
+            </div>
+          </div>
+
+          <div class="dimension-scores" id="dimensionScores">
+            <div class="dim-item">
+              <div class="dim-name">独立可交付</div>
+              <div class="dim-bar"><div class="dim-fill good" style="width:35%"></div></div>
+              <div class="dim-value">35/100 — 包含 4 个独立操作</div>
+            </div>
+            <div class="dim-item">
+              <div class="dim-name">可估算性</div>
+              <div class="dim-bar"><div class="dim-fill warn" style="width:48%"></div></div>
+              <div class="dim-value">48/100 — 边界模糊</div>
+            </div>
+            <div class="dim-item">
+              <div class="dim-name">业务价值清晰度</div>
+              <div class="dim-bar"><div class="dim-fill good" style="width:82%"></div></div>
+              <div class="dim-value">82/100 — 用户价值明确</div>
+            </div>
+            <div class="dim-item">
+              <div class="dim-name">技术可行性</div>
+              <div class="dim-bar"><div class="dim-fill warn" style="width:55%"></div></div>
+              <div class="dim-value">55/100 — 涉及多个系统</div>
+            </div>
+            <div class="dim-item">
+              <div class="dim-name">验收标准明确度</div>
+              <div class="dim-bar"><div class="dim-fill bad" style="width:25%"></div></div>
+              <div class="dim-value">25/100 — 缺少明确验收条件</div>
+            </div>
+            <div class="dim-item">
+              <div class="dim-name">可测试性</div>
+              <div class="dim-bar"><div class="dim-fill bad" style="width:30%"></div></div>
+              <div class="dim-value">30/100 — 测试场景过多</div>
+            </div>
+          </div>
+
+          <div class="split-suggestion" id="splitSuggestion">
+            <div class="split-suggestion-title">🎯 推荐拆分方案（按业务流拆分）</div>
+            <div id="splitItems"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INVEST 原则 -->
+  <section id="invest">
+    <div class="container">
+      <div class="section-label">INVEST Principles</div>
+      <h2 class="section-title">INVEST 原则检查</h2>
+      <p class="section-desc">点击每张卡片展开详细的检查清单，StorySplit AI 会对每个维度自动打分</p>
+
+      <div class="invest-grid">
+        <div class="invest-card reveal" onclick="this.classList.toggle('expanded')">
+          <span class="invest-letter">I</span>
+          <div class="invest-name">Independent 独立</div>
+          <div class="invest-desc">故事之间不相互依赖，可以独立开发、测试、交付</div>
+          <div class="invest-checklist">
+            <div class="invest-check">不依赖其他故事的前置条件</div>
+            <div class="invest-check">不阻塞其他故事的开发进度</div>
+            <div class="invest-check">可单独部署到生产环境</div>
+          </div>
+        </div>
+        <div class="invest-card reveal" onclick="this.classList.toggle('expanded')">
+          <span class="invest-letter">N</span>
+          <div class="invest-name">Negotiable 可协商</div>
+          <div class="invest-desc">故事描述的是"要什么"而非"怎么做"，细节可在实现过程中协商</div>
+          <div class="invest-checklist">
+            <div class="invest-check">描述的是需求而非具体实现方案</div>
+            <div class="invest-check">留有技术方案讨论空间</div>
+            <div class="invest-check">不规定 UI 的具体样式和布局</div>
+          </div>
+        </div>
+        <div class="invest-card reveal" onclick="this.classList.toggle('expanded')">
+          <span class="invest-letter">V</span>
+          <div class="invest-name">Valuable 有价值</div>
+          <div class="invest-desc">每个故事都为用户或业务带来明确可衡量的价值</div>
+          <div class="invest-checklist">
+            <div class="invest-check">能描述清楚"解决了用户的什么问题"</div>
+            <div class="invest-check">不拆分纯技术任务作为用户故事</div>
+            <div class="invest-check">用户愿意为这个功能付费/使用</div>
+          </div>
+        </div>
+        <div class="invest-card reveal" onclick="this.classList.toggle('expanded')">
+          <span class="invest-letter">E</span>
+          <div class="invest-name">Estimable 可估算</div>
+          <div class="invest-desc">团队能在合理时间内估算出完成这个故事的工作量</div>
+          <div class="invest-checklist">
+            <div class="invest-check">边界清晰，团队对范围有共识</div>
+            <div class="invest-check">没有过多未知的技术风险</div>
+            <div class="invest-check">估算偏差不超过 50%</div>
+          </div>
+        </div>
+        <div class="invest-card reveal" onclick="this.classList.toggle('expanded')">
+          <span class="invest-letter">S</span>
+          <div class="invest-name">Small 够小</div>
+          <div class="invest-desc">故事小到可以在一个 Sprint 内完成，通常建议 3-8 个故事点</div>
+          <div class="invest-checklist">
+            <div class="invest-check">能在单个 Sprint（通常 2 周）内完成</div>
+            <div class="invest-check">故事点建议 3-8 点之间</div>
+            <div class="invest-check">开发人员能清晰描述实现步骤</div>
+          </div>
+        </div>
+        <div class="invest-card reveal" onclick="this.classList.toggle('expanded')">
+          <span class="invest-letter">T</span>
+          <div class="invest-name">Testable 可测试</div>
+          <div class="invest-desc">故事有明确的验收标准，可以通过测试验证是否完成</div>
+          <div class="invest-checklist">
+            <div class="invest-check">定义了明确的验收条件（AC）</div>
+            <div class="invest-check">测试场景不超过 5 个</div>
+            <div class="invest-check">有明确的"完成"定义（DoD）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 拆分策略 -->
+  <section class="strategy-section" id="strategy">
+    <div class="container">
+      <div class="section-label">Splitting Strategies</div>
+      <h2 class="section-title">四大拆分策略</h2>
+      <p class="section-desc">StorySplit AI 会自动识别最适合的拆分策略，并给出具体拆分方案</p>
+
+      <div class="strategy-grid">
+        <div class="strategy-card reveal">
+          <div class="strategy-header">
+            <div class="strategy-icon flow">🌊</div>
+            <div class="strategy-title">按业务流程拆分</div>
+          </div>
+          <div class="strategy-desc">将一个完整的业务流程拆分为多个步骤，每个步骤是一个独立的用户故事。适用于有明显流程步骤的功能。</div>
+          <div class="strategy-example">
+            <div class="strategy-example-label">Example</div>
+            <div class="strategy-example-text">
+              <code>原故事</code>：作为用户，我可以在线购买商品<br><br>
+              <code>拆分后</code>：<br>
+              ① 浏览商品列表<br>
+              ② 加入购物车<br>
+              ③ 填写收货地址<br>
+              ④ 支付订单
+            </div>
+          </div>
+        </div>
+        <div class="strategy-card reveal">
+          <div class="strategy-header">
+            <div class="strategy-icon data">📊</div>
+            <div class="strategy-title">按数据边界拆分</div>
+          </div>
+          <div class="strategy-desc">按不同的数据类型或数据规则拆分，每个故事处理一类数据。适用于数据密集型功能。</div>
+          <div class="strategy-example">
+            <div class="strategy-example-label">Example</div>
+            <div class="strategy-example-text">
+              <code>原故事</code>：作为管理员，我可以导入所有数据<br><br>
+              <code>拆分后</code>：<br>
+              ① 导入用户数据<br>
+              ② 导入订单数据<br>
+              ③ 导入商品数据<br>
+              ④ 导入报表数据
+            </div>
+          </div>
+        </div>
+        <div class="strategy-card reveal">
+          <div class="strategy-header">
+            <div class="strategy-icon role">👤</div>
+            <div class="strategy-title">按角色视角拆分</div>
+          </div>
+          <div class="strategy-desc">同一个功能从不同角色的视角拆分为多个故事。适用于多角色协作的系统。</div>
+          <div class="strategy-example">
+            <div class="strategy-example-label">Example</div>
+            <div class="strategy-example-text">
+              <code>原故事</code>：作为系统用户，我可以审批申请<br><br>
+              <code>拆分后</code>：<br>
+              ① 员工提交申请<br>
+              ② 主管审批申请<br>
+              ③ 财务复核申请<br>
+              ④ 申请人查看状态
+            </div>
+          </div>
+        </div>
+        <div class="strategy-card reveal">
+          <div class="strategy-header">
+            <div class="strategy-icon op">🔧</div>
+            <div class="strategy-title">按操作类型拆分</div>
+          </div>
+          <div class="strategy-desc">按 CRUD 操作拆分，将增删改查分别作为独立的故事。适用于数据管理类功能。</div>
+          <div class="strategy-example">
+            <div class="strategy-example-label">Example</div>
+            <div class="strategy-example-text">
+              <code>原故事</code>：作为管理员，我可以管理商品<br><br>
+              <code>拆分后</code>：<br>
+              ① 创建新商品<br>
+              ② 查看商品详情<br>
+              ③ 编辑商品信息<br>
+              ④ 删除/下架商品
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 示例对比 -->
+  <section class="compare-section" id="compare">
+    <div class="container">
+      <div class="section-label">Before & After</div>
+      <h2 class="section-title">拆分前后对比</h2>
+      <p class="section-desc">看看 StorySplit 如何将一个过大的故事，精准拆分为刚刚好的一组故事</p>
+
+      <div class="compare-pair">
+        <div class="compare-header">
+          <span class="compare-badge bad">BEFORE</span>
+          <span class="compare-badge good">AFTER</span>
+          <span class="compare-title">电商订单管理功能</span>
+        </div>
+        <div class="compare-cards">
+          <div class="compare-card bad-card">
+            <div class="compare-label bad">原始故事（过大）</div>
+            <div class="compare-story">
+              作为电商管理员，我需要管理订单的全生命周期，包括创建订单、查看订单列表、编辑订单信息、取消订单、退款处理、物流跟踪，以及生成订单报表和导出数据。
+            </div>
+            <div class="compare-issues">
+              <div class="compare-issue">包含 7 个独立业务操作</div>
+              <div class="compare-issue">验收条件超过 15 条</div>
+              <div class="compare-issue">预估 13 个故事点，超出 Sprint 容量</div>
+              <div class="compare-issue">无法在一个 Sprint 内完成</div>
+            </div>
+          </div>
+          <div class="compare-card good-card">
+            <div class="compare-label good">StorySplit 拆分后</div>
+            <div class="compare-story">
+              <code>Story 1</code>（3pt）：作为管理员，我可以创建新订单<br>
+              <code>Story 2</code>（2pt）：作为管理员，我可以查看订单列表<br>
+              <code>Story 3</code>（3pt）：作为管理员，我可以编辑订单信息<br>
+              <code>Story 4</code>（2pt）：作为管理员，我可以取消订单<br>
+              <code>Story 5</code>（3pt）：作为管理员，我可以处理退款<br>
+              <code>Story 6</code>（2pt）：作为管理员，我可以查看物流状态<br>
+              <code>Story 7</code>（3pt）：作为管理员，我可以导出订单报表
+            </div>
+            <div class="compare-fixes">
+              <div class="compare-fix">每个故事 2-3 点，边界清晰</div>
+              <div class="compare-fix">验收条件 3-5 条，可测试</div>
+              <div class="compare-fix">可按优先级分批交付</div>
+              <div class="compare-fix">每个故事都能独立上线</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="compare-pair" style="margin-top:3rem">
+        <div class="compare-header">
+          <span class="compare-badge bad">BEFORE</span>
+          <span class="compare-badge good">AFTER</span>
+          <span class="compare-title">用户注册登录模块</span>
+        </div>
+        <div class="compare-cards">
+          <div class="compare-card bad-card">
+            <div class="compare-label bad">原始故事（过碎）</div>
+            <div class="compare-story">
+              <code>Story 1</code>：用户可以输入用户名<br>
+              <code>Story 2</code>：用户可以输入密码<br>
+              <code>Story 3</code>：用户可以点击登录按钮<br>
+              <code>Story 4</code>：系统可以验证用户名<br>
+              <code>Story 5</code>：系统可以验证密码格式<br>
+              <code>Story 6</code>：系统可以返回登录结果
+            </div>
+            <div class="compare-issues">
+              <div class="compare-issue">故事之间高度耦合</div>
+              <div class="compare-issue">单个故事无独立业务价值</div>
+              <div class="compare-issue">管理成本 > 开发成本</div>
+              <div class="compare-issue">无法单独交付给用户</div>
+            </div>
+          </div>
+          <div class="compare-card good-card">
+            <div class="compare-label good">StorySplit 合并建议</div>
+            <div class="compare-story">
+              <code>Story 1</code>（3pt）：作为新用户，我可以通过手机号+验证码注册账号<br>
+              <code>Story 2</code>（2pt）：作为用户，我可以通过手机号+密码登录<br>
+              <code>Story 3</code>（2pt）：作为用户，我可以使用微信扫码快捷登录<br>
+              <code>Story 4</code>（3pt）：作为用户，我可以在忘记密码时通过手机验证码重置
+            </div>
+            <div class="compare-fixes">
+              <div class="compare-fix">每个故事有完整的用户价值</div>
+              <div class="compare-fix">边界清晰，可独立测试上线</div>
+              <div class="compare-fix">管理成本合理，不喧宾夺主</div>
+              <div class="compare-fix">团队能快速估算和开发</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <footer>
+    <div class="footer-logo">StorySplit</div>
+    <div class="footer-tagline">让每一张用户故事卡片，都刚刚好</div>
+    <p>2026 TraeAI 创意大赛 · 学习工作赛道</p>
+  </footer>
+
+  <script>
+    // ===== Canvas 网格背景 =====
+    const canvas = document.getElementById('gridCanvas');
+    const ctx = canvas.getContext('2d');
+    let w, h;
+
+    function resize() {
+      w = canvas.width = window.innerWidth;
+      h = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let offset = 0;
+    function drawGrid() {
+      ctx.clearRect(0, 0, w, h);
+      const spacing = 60;
+      offset = (offset + 0.15) % spacing;
+
+      // 竖线
+      for (let x = 0; x < w; x += spacing) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.strokeStyle = 'rgba(0,212,170,0.03)';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+      // 横线
+      for (let y = offset; y < h; y += spacing) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.strokeStyle = 'rgba(0,212,170,0.03)';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+      // 数据流粒子
+      for (let i = 0; i < 8; i++) {
+        const y = ((Date.now() / 20 + i * 150) % h);
+        const alpha = 0.15 * (1 - Math.abs(y - h/2) / (h/2));
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.strokeStyle = `rgba(0,212,170,${alpha})`;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+      requestAnimationFrame(drawGrid);
+    }
+    drawGrid();
+
+    // ===== 评估数据 =====
+    const storyData = {
+      'too-big': {
+        text: '作为电商管理员，我需要管理订单的全生命周期，包括创建订单、查看订单列表、编辑订单信息、取消订单、退款处理、物流跟踪，以及生成订单报表和导出数据。',
+        score: 42,
+        scoreClass: 'bad',
+        title: '故事偏大，建议拆分',
+        desc: '这个故事包含 7 个独立业务操作，预估需要 13 个故事点，远超单个 Sprint 建议的 8 点上限',
+        dims: [
+          { name: '独立可交付', value: 35, cls: 'bad', text: '35/100 — 包含 7 个独立操作' },
+          { name: '可估算性', value: 48, cls: 'warn', text: '48/100 — 边界模糊，估不准' },
+          { name: '业务价值清晰度', value: 82, cls: 'good', text: '82/100 — 用户价值明确' },
+          { name: '技术可行性', value: 55, cls: 'warn', text: '55/100 — 涉及多个系统' },
+          { name: '验收标准明确度', value: 25, cls: 'bad', text: '25/100 — 缺少明确 AC' },
+          { name: '可测试性', value: 30, cls: 'bad', text: '30/100 — 测试场景过多' }
+        ],
+        strategy: '按业务流程拆分',
+        splits: [
+          '创建新订单（3pt）— 管理员填写订单信息并提交',
+          '查看订单列表（2pt）— 支持筛选、排序、分页',
+          '编辑订单信息（3pt）— 修改收货地址/商品数量',
+          '取消订单（2pt）— 管理员主动取消+自动退款触发',
+          '处理退款（3pt）— 审核退款申请并执行退款',
+          '查看物流状态（2pt）— 对接物流 API 显示轨迹',
+          '导出订单报表（3pt）— 按条件导出 Excel/PDF'
+        ]
+      },
+      'just-right': {
+        text: '作为电商管理员，我可以创建新订单，填写客户信息、选择商品、设置收货地址，并提交订单进入系统。',
+        score: 88,
+        scoreClass: 'good',
+        title: '粒度刚好，可以直接放入 Sprint',
+        desc: '这个故事边界清晰，包含一个完整的业务操作，预估 3 个故事点，符合 INVEST 原则',
+        dims: [
+          { name: '独立可交付', value: 90, cls: 'good', text: '90/100 — 可独立上线' },
+          { name: '可估算性', value: 85, cls: 'good', text: '85/100 — 范围明确' },
+          { name: '业务价值清晰度', value: 92, cls: 'good', text: '92/100 — 用户价值清晰' },
+          { name: '技术可行性', value: 88, cls: 'good', text: '88/100 — 技术风险低' },
+          { name: '验收标准明确度', value: 86, cls: 'good', text: '86/100 — AC 清晰' },
+          { name: '可测试性', value: 90, cls: 'good', text: '90/100 — 测试场景可控' }
+        ],
+        strategy: null,
+        splits: []
+      },
+      'too-small': {
+        text: '作为用户，我可以在登录页面输入用户名。\n作为用户，我可以在登录页面输入密码。\n作为用户，我可以点击登录按钮。\n作为系统，我可以验证用户名格式。\n作为系统，我可以验证密码强度。\n作为系统，我可以返回登录结果。',
+        score: 38,
+        scoreClass: 'bad',
+        title: '故事过碎，建议合并',
+        desc: '6 个故事高度耦合，单个故事无独立业务价值，管理成本远超开发成本',
+        dims: [
+          { name: '独立可交付', value: 15, cls: 'bad', text: '15/100 — 无法独立上线' },
+          { name: '可估算性', value: 40, cls: 'bad', text: '40/100 — 拆分过细反而难估' },
+          { name: '业务价值清晰度', value: 35, cls: 'bad', text: '35/100 — 单个无用户价值' },
+          { name: '技术可行性', value: 80, cls: 'good', text: '80/100 — 技术简单' },
+          { name: '验收标准明确度', value: 55, cls: 'warn', text: '55/100 — 碎片的 AC' },
+          { name: '可测试性', value: 45, cls: 'bad', text: '45/100 — 需要集成测试' }
+        ],
+        strategy: '按操作流程合并',
+        splits: [
+          '手机号+验证码注册（3pt）— 完整的注册流程',
+          '手机号+密码登录（2pt）— 完整的登录流程',
+          '微信扫码快捷登录（2pt）— 第三方授权登录',
+          '忘记密码重置（3pt）— 验证码+重置密码流程'
+        ]
+      },
+      'custom': {
+        text: '',
+        score: 0,
+        scoreClass: 'good',
+        title: '请输入用户故事进行评估',
+        desc: '在上方输入框中输入你的用户故事，点击"开始评估"按钮',
+        dims: [],
+        strategy: null,
+        splits: []
+      }
+    };
+
+    const storyInput = document.getElementById('storyInput');
+    const storyPresets = document.querySelectorAll('.story-preset');
+    const evalBtn = document.getElementById('evalBtn');
+    const evalResult = document.getElementById('evalResult');
+    const scoreNum = document.getElementById('scoreNum');
+    const resultScore = document.getElementById('resultScore');
+    const resultTitle = document.getElementById('resultTitle');
+    const resultDesc = document.getElementById('resultDesc');
+    const dimensionScores = document.getElementById('dimensionScores');
+    const splitSuggestion = document.getElementById('splitSuggestion');
+    const splitItems = document.getElementById('splitItems');
+
+    let currentStory = 'too-big';
+    storyInput.value = storyData['too-big'].text;
+
+    storyPresets.forEach(btn => {
+      btn.addEventListener('click', () => {
+        storyPresets.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentStory = btn.dataset.story;
+        storyInput.value = storyData[currentStory].text;
+        evalResult.classList.remove('visible');
+      });
+    });
+
+    evalBtn.addEventListener('click', () => {
+      const data = storyData[currentStory];
+      if (currentStory === 'custom' && !storyInput.value.trim()) {
+        storyInput.focus();
+        return;
+      }
+      if (currentStory === 'custom') {
+        // 自定义评估模拟
+        simulateCustomEval();
+        return;
+      }
+
+      evalResult.classList.add('visible');
+      scoreNum.textContent = data.score;
+      resultScore.className = 'result-score ' + data.scoreClass;
+      resultTitle.textContent = data.title;
+      resultDesc.textContent = data.desc;
+
+      // 维度评分
+      dimensionScores.innerHTML = data.dims.map(d => `
+        <div class="dim-item">
+          <div class="dim-name">${d.name}</div>
+          <div class="dim-bar"><div class="dim-fill ${d.cls}" style="width:0%"></div></div>
+          <div class="dim-value">${d.text}</div>
+        </div>
+      `).join('');
+
+      // 动画填充
+      setTimeout(() => {
+        document.querySelectorAll('.dim-fill').forEach((bar, i) => {
+          bar.style.width = data.dims[i].value + '%';
+        });
+      }, 100);
+
+      // 拆分建议
+      if (data.strategy && data.splits.length > 0) {
+        splitSuggestion.style.display = 'block';
+        splitSuggestion.querySelector('.split-suggestion-title').textContent = `🎯 推荐拆分方案（${data.strategy}）`;
+        splitItems.innerHTML = data.splits.map((s, i) => `
+          <div class="split-item"><span class="split-num">#${i+1}</span>${s}</div>
+        `).join('');
+      } else {
+        splitSuggestion.style.display = 'none';
+      }
+    });
+
+    function simulateCustomEval() {
+      evalResult.classList.add('visible');
+      const text = storyInput.value;
+      const len = text.length;
+      const score = Math.max(30, Math.min(90, 100 - len / 5));
+      const isGood = score >= 70;
+      const cls = score >= 70 ? 'good' : score >= 50 ? 'warn' : 'bad';
+
+      scoreNum.textContent = Math.round(score);
+      resultScore.className = 'result-score ' + cls;
+      resultTitle.textContent = isGood ? '粒度良好，可以放入 Sprint' : score >= 50 ? '故事偏大，建议检查' : '故事需要调整';
+      resultDesc.textContent = `基于故事长度(${len}字)和关键词分析，${isGood ? '这个故事拆分粒度适中' : '建议进一步拆分或补充验收条件'}`;
+
+      const dims = [
+        { name: '独立可交付', value: Math.round(score + Math.random()*20-10), cls, text: `${Math.round(score + Math.random()*20-10)}/100` },
+        { name: '可估算性', value: Math.round(score + Math.random()*15-7), cls, text: `${Math.round(score + Math.random()*15-7)}/100` },
+        { name: '业务价值清晰度', value: Math.round(score + 10), cls: score+10 >= 70 ? 'good' : cls, text: `${Math.round(score + 10)}/100` },
+        { name: '技术可行性', value: Math.round(score + Math.random()*10-5), cls, text: `${Math.round(score + Math.random()*10-5)}/100` },
+        { name: '验收标准明确度', value: Math.round(score - 15), cls: score-15 >= 50 ? 'warn' : 'bad', text: `${Math.round(score - 15)}/100` },
+        { name: '可测试性', value: Math.round(score - 10), cls: score-10 >= 50 ? 'warn' : 'bad', text: `${Math.round(score - 10)}/100` }
+      ];
+
+      dimensionScores.innerHTML = dims.map(d => `
+        <div class="dim-item">
+          <div class="dim-name">${d.name}</div>
+          <div class="dim-bar"><div class="dim-fill ${d.cls}" style="width:0%"></div></div>
+          <div class="dim-value">${d.text}</div>
+        </div>
+      `).join('');
+
+      setTimeout(() => {
+        document.querySelectorAll('.dim-fill').forEach((bar, i) => {
+          bar.style.width = Math.max(0, Math.min(100, dims[i].value)) + '%';
+        });
+      }, 100);
+
+      if (!isGood) {
+        splitSuggestion.style.display = 'block';
+        splitSuggestion.querySelector('.split-suggestion-title').textContent = '🎯 建议检查点';
+        splitItems.innerHTML = `
+          <div class="split-item"><span class="split-num">⚠</span>检查故事是否包含多个"作为...我可以..."的句式</div>
+          <div class="split-item"><span class="split-num">⚠</span>确认验收条件是否超过 5 条</div>
+          <div class="split-item"><span class="split-num">⚠</span>评估是否可以在一个 Sprint 内完成</div>
+          <div class="split-item"><span class="split-num">💡</span>尝试使用"按业务流程"或"按操作类型"策略拆分</div>
+        `;
+      } else {
+        splitSuggestion.style.display = 'none';
+      }
+    }
+
+    // ===== 滚动动画 =====
+    const revealEls = document.querySelectorAll('.reveal');
+    const revealObs = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) entry.target.classList.add('visible');
+      });
+    }, { threshold: 0.12 });
+    revealEls.forEach(el => revealObs.observe(el));
+
+    // ===== 平滑滚动 =====
+    document.querySelectorAll('a[href^="#"]').forEach(a => {
+      a.addEventListener('click', function(e) {
+        e.preventDefault();
+        const t = document.querySelector(this.getAttribute('href'));
+        if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  </script>
+</body>
+</html>

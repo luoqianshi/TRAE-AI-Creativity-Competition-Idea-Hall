@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>法衡 MethodMatch —— 研究方法适配性分析引擎</title>
+<link href="https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&family=Noto+Serif+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c14;--bg2:#0d1220;--bg3:#111828;
+  --gold:#d4a050;--gold-light:#e8c880;--gold-dark:#a07830;
+  --teal:#40b890;--teal-light:#60d8b0;--teal-dark:#2a8a68;
+  --red:#d04050;--red-light:#e86878;
+  --blue:#4080c0;--blue-light:#60a0e0;
+  --text:#e8e0d4;--text2:#a09888;--text3:#706858;
+  --card-bg:rgba(16,20,32,0.85);--card-border:rgba(212,160,80,0.15);
+  --serif-en:'Crimson Text',Georgia,serif;
+  --serif-cn:'Noto Serif SC','SimSun',serif;
+  --mono:'JetBrains Mono',monospace;
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:var(--serif-cn);line-height:1.8;
+  overflow-x:hidden;
+}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--gold-dark);border-radius:3px}
+
+/* Canvas BG */
+#particle-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+
+/* Side Nav */
+.side-nav{position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:100;display:flex;flex-direction:column;gap:10px}
+.side-nav a{width:10px;height:10px;border-radius:50%;background:var(--text3);transition:all .3s;display:block;position:relative}
+.side-nav a.active{background:var(--gold);box-shadow:0 0 8px var(--gold)}
+.side-nav a:hover{background:var(--gold-light)}
+.side-nav a .tip{position:absolute;right:20px;top:50%;transform:translateY(-50%);white-space:nowrap;font-size:12px;color:var(--gold);opacity:0;transition:opacity .3s;pointer-events:none;font-family:var(--mono)}
+.side-nav a:hover .tip{opacity:1}
+
+/* Section */
+.section{position:relative;z-index:1;max-width:1280px;margin:0 auto;padding:80px 40px}
+.section-title{font-family:var(--serif-cn);font-size:2rem;font-weight:700;color:var(--gold);margin-bottom:12px;position:relative;display:inline-block}
+.section-title::after{content:'';position:absolute;bottom:-6px;left:0;width:60px;height:3px;background:linear-gradient(90deg,var(--gold),transparent)}
+.section-subtitle{font-size:.95rem;color:var(--text2);margin-bottom:40px;font-family:var(--serif-cn)}
+
+/* Fade-in */
+.fade-in{opacity:0;transform:translateY(30px);transition:opacity .8s ease,transform .8s ease}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+
+/* ============ HERO ============ */
+#hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding-top:60px}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 20px;border:1px solid var(--card-border);border-radius:20px;font-size:.85rem;color:var(--text2);margin-bottom:30px;font-family:var(--mono);backdrop-filter:blur(10px);background:rgba(212,160,80,0.05)}
+.hero-badge .pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--gold);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(212,160,80,0.5)}50%{box-shadow:0 0 0 10px rgba(212,160,80,0)}}
+.hero-title{font-family:var(--serif-cn);font-size:clamp(2.5rem,6vw,4.5rem);font-weight:900;background:linear-gradient(135deg,var(--gold-light),var(--gold),var(--gold-dark));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:4px;margin-bottom:10px}
+.hero-subtitle{font-family:var(--serif-en);font-size:clamp(1rem,2.5vw,1.5rem);color:var(--teal);font-weight:600;letter-spacing:6px;text-transform:uppercase;margin-bottom:50px}
+.hero-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:30px;margin-top:20px;width:100%;max-width:800px}
+.kpi-card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:24px 16px;backdrop-filter:blur(10px)}
+.kpi-num{font-family:var(--mono);font-size:2.2rem;font-weight:700;color:var(--gold);line-height:1.2}
+.kpi-unit{font-size:.9rem;color:var(--text2);font-family:var(--mono)}
+.kpi-label{font-size:.85rem;color:var(--text2);margin-top:4px}
+
+/* ============ PAIN POINTS ============ */
+.pain-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px}
+.pain-card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:28px;backdrop-filter:blur(10px);transition:all .4s;position:relative;overflow:hidden}
+.pain-card::before{content:'';position:absolute;top:0;left:0;width:4px;height:100%;background:linear-gradient(180deg,var(--red),var(--gold))}
+.pain-card:hover{border-color:var(--gold);transform:translateY(-4px);box-shadow:0 8px 30px rgba(212,160,80,0.1)}
+.pain-icon{width:48px;height:48px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin-bottom:16px;font-family:var(--mono)}
+.pain-card:nth-child(1) .pain-icon{background:rgba(208,64,80,0.15);color:var(--red)}
+.pain-card:nth-child(2) .pain-icon{background:rgba(212,160,80,0.15);color:var(--gold)}
+.pain-card:nth-child(3) .pain-icon{background:rgba(64,184,144,0.15);color:var(--teal)}
+.pain-card:nth-child(4) .pain-icon{background:rgba(64,128,192,0.15);color:var(--blue)}
+.pain-title{font-size:1.15rem;font-weight:700;color:var(--text);margin-bottom:8px}
+.pain-desc{font-size:.9rem;color:var(--text2);line-height:1.7}
+.pain-stat{display:inline-block;margin-top:12px;padding:4px 12px;background:rgba(208,64,80,0.1);border:1px solid rgba(208,64,80,0.2);border-radius:6px;font-size:.8rem;color:var(--red-light);font-family:var(--mono)}
+
+/* ============ SIMULATOR ============ */
+.sim-wrapper{display:grid;grid-template-columns:280px 1fr 320px;gap:24px;min-height:600px}
+.sim-left{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:24px;overflow-y:auto}
+.sim-mid{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:24px;display:flex;flex-direction:column}
+.sim-right{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:24px;overflow-y:auto}
+.scene-btn{width:100%;padding:12px 16px;margin-bottom:10px;background:rgba(212,160,80,0.05);border:1px solid var(--card-border);border-radius:8px;color:var(--text);font-size:.82rem;font-family:var(--serif-cn);cursor:pointer;text-align:left;transition:all .3s;line-height:1.5}
+.scene-btn:hover{background:rgba(212,160,80,0.1);border-color:var(--gold)}
+.scene-btn.active{background:rgba(212,160,80,0.15);border-color:var(--gold);color:var(--gold-light)}
+.scene-btn .scene-num{font-family:var(--mono);font-size:.7rem;color:var(--gold);display:block;margin-bottom:4px}
+.sim-input-group{margin-top:16px}
+.sim-input-group label{display:block;font-size:.8rem;color:var(--text2);margin-bottom:6px;font-family:var(--mono)}
+.sim-input-group input,.sim-input-group select{
+  width:100%;padding:8px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--card-border);
+  border-radius:6px;color:var(--text);font-size:.85rem;font-family:var(--serif-cn);outline:none;transition:border .3s
+}
+.sim-input-group input:focus,.sim-input-group select:focus{border-color:var(--gold)}
+.sim-input-group select option{background:var(--bg2);color:var(--text)}
+.tag-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tag{padding:3px 10px;background:rgba(64,184,144,0.1);border:1px solid rgba(64,184,144,0.25);border-radius:4px;font-size:.75rem;color:var(--teal);font-family:var(--mono)}
+
+/* Bar Chart */
+.bar-container{flex:1;display:flex;flex-direction:column;gap:10px}
+.bar-row{display:flex;align-items:center;gap:12px;cursor:pointer;padding:8px 12px;border-radius:8px;transition:background .3s}
+.bar-row:hover{background:rgba(212,160,80,0.06)}
+.bar-row.active{background:rgba(212,160,80,0.1);box-shadow:inset 0 0 0 1px var(--gold)}
+.bar-name{width:100px;font-size:.82rem;color:var(--text);flex-shrink:0;text-align:right;font-family:var(--serif-cn)}
+.bar-track{flex:1;height:28px;background:rgba(255,255,255,0.03);border-radius:6px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:6px;transition:width 1s cubic-bezier(.4,0,.2,1);position:relative}
+.bar-fill::after{content:'';position:absolute;right:0;top:0;width:2px;height:100%;background:rgba(255,255,255,0.5);border-radius:1px}
+.bar-score{width:48px;font-family:var(--mono);font-size:.82rem;color:var(--gold);flex-shrink:0;font-weight:600}
+.bar-reason{position:absolute;bottom:-4px;left:12px;font-size:.7rem;color:var(--text2);white-space:nowrap;font-family:var(--serif-cn);transform:translateY(100%)}
+
+/* Detail Card */
+.detail-card{margin-top:12px;padding:16px;background:rgba(212,160,80,0.04);border:1px solid var(--card-border);border-radius:10px;animation:slideIn .4s ease}
+@keyframes slideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.detail-card h4{font-size:1rem;color:var(--gold);margin-bottom:10px}
+.detail-section{margin-bottom:10px}
+.detail-section h5{font-size:.8rem;color:var(--teal);margin-bottom:4px;font-family:var(--mono)}
+.detail-section p,.detail-section li{font-size:.82rem;color:var(--text2);line-height:1.6}
+.detail-section ul{padding-left:16px}
+.detail-section li::marker{color:var(--gold)}
+
+/* Right Panel */
+.rec-box{padding:14px;background:rgba(64,184,144,0.05);border:1px solid rgba(64,184,144,0.2);border-radius:8px;margin-bottom:16px}
+.rec-box h4{font-size:.85rem;color:var(--teal);margin-bottom:8px;font-family:var(--mono)}
+.rec-method{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.rec-badge{padding:2px 8px;border-radius:4px;font-size:.72rem;font-family:var(--mono);font-weight:600}
+.rec-badge.primary{background:rgba(64,184,144,0.2);color:var(--teal-light)}
+.rec-badge.assist{background:rgba(64,128,192,0.2);color:var(--blue-light)}
+.rec-method span:last-child{font-size:.82rem;color:var(--text)}
+
+.risk-box{padding:14px;background:rgba(208,64,80,0.05);border:1px solid rgba(208,64,80,0.25);border-radius:8px;margin-bottom:16px}
+.risk-box h4{font-size:.85rem;color:var(--red);margin-bottom:8px;font-family:var(--mono);display:flex;align-items:center;gap:6px}
+.risk-box h4::before{content:'!';display:inline-flex;width:16px;height:16px;background:var(--red);border-radius:50%;color:#fff;font-size:.7rem;align-items:center;justify-content:center;font-family:var(--mono)}
+.risk-item{font-size:.8rem;color:var(--text2);padding:4px 0;padding-left:12px;position:relative;line-height:1.5}
+.risk-item::before{content:'';position:absolute;left:0;top:11px;width:6px;height:6px;border-radius:50%;background:var(--red)}
+
+.log-box{padding:14px;background:rgba(0,0,0,0.3);border-radius:8px;max-height:300px;overflow-y:auto}
+.log-box h4{font-size:.85rem;color:var(--text2);margin-bottom:8px;font-family:var(--mono)}
+.log-line{font-family:var(--mono);font-size:.72rem;color:var(--text2);padding:2px 0;opacity:0;animation:fadeIn .3s forwards}
+.log-line .ts{color:var(--text3);margin-right:8px}
+.log-line .tag{padding:1px 5px;border-radius:3px;font-size:.68rem;margin-right:6px;font-weight:600}
+.tag-analysis{background:rgba(64,128,192,0.2);color:var(--blue-light)}
+.tag-match{background:rgba(64,184,144,0.2);color:var(--teal-light)}
+.tag-eval{background:rgba(212,160,80,0.2);color:var(--gold-light)}
+.tag-warn{background:rgba(208,64,80,0.2);color:var(--red-light)}
+@keyframes fadeIn{to{opacity:1}}
+
+/* ============ FLOW ============ */
+.flow-steps{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;position:relative}
+.flow-steps::before{content:'';position:absolute;top:32px;left:60px;right:60px;height:2px;background:linear-gradient(90deg,var(--gold-dark),var(--teal),var(--gold-dark))}
+.flow-step{flex:1;text-align:center;position:relative;z-index:1}
+.flow-icon{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:1.5rem;border:2px solid var(--gold);color:var(--gold);background:var(--bg);font-family:var(--mono);font-weight:700}
+.flow-step-title{font-size:.95rem;font-weight:700;color:var(--text);margin-bottom:6px}
+.flow-step-desc{font-size:.78rem;color:var(--text2);line-height:1.5;padding:0 8px}
+
+/* ============ RADAR ============ */
+#radar-chart{width:100%;height:420px}
+
+/* ============ METHOD LIBRARY ============ */
+.method-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.method-card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:22px;text-align:center;transition:all .4s;position:relative;overflow:hidden}
+.method-card:hover{border-color:var(--gold);transform:translateY(-4px);box-shadow:0 12px 40px rgba(212,160,80,0.08)}
+.method-card-icon{width:56px;height:56px;border-radius:14px;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;font-family:var(--mono);font-weight:700}
+.method-card:nth-child(1) .method-card-icon{background:rgba(212,160,80,0.12);color:var(--gold)}
+.method-card:nth-child(2) .method-card-icon{background:rgba(64,184,144,0.12);color:var(--teal)}
+.method-card:nth-child(3) .method-card-icon{background:rgba(64,128,192,0.12);color:var(--blue)}
+.method-card:nth-child(4) .method-card-icon{background:rgba(208,64,80,0.12);color:var(--red)}
+.method-card:nth-child(5) .method-card-icon{background:rgba(160,120,200,0.12);color:#a078c8}
+.method-card:nth-child(6) .method-card-icon{background:rgba(212,160,80,0.12);color:var(--gold-light)}
+.method-card:nth-child(7) .method-card-icon{background:rgba(64,184,144,0.12);color:var(--teal-dark)}
+.method-card:nth-child(8) .method-card-icon{background:rgba(64,128,192,0.12);color:var(--blue-light)}
+.method-card-name{font-size:1rem;font-weight:700;color:var(--text);margin-bottom:8px}
+.method-card-tags{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin-bottom:10px}
+.method-card-tags span{font-size:.7rem;padding:2px 8px;border-radius:4px;background:rgba(212,160,80,0.08);color:var(--gold);font-family:var(--mono)}
+.method-card-desc{font-size:.8rem;color:var(--text2);line-height:1.5;margin-bottom:8px}
+.method-card-sample{font-size:.75rem;color:var(--text3);font-family:var(--mono)}
+
+/* ============ HEATMAP ============ */
+#heatmap-chart{width:100%;height:420px}
+
+/* ============ COMPARISON TABLE ============ */
+.comp-table{width:100%;border-collapse:collapse;background:var(--card-bg);border-radius:12px;overflow:hidden;border:1px solid var(--card-border)}
+.comp-table thead{background:rgba(212,160,80,0.08)}
+.comp-table th{padding:16px 20px;font-size:.9rem;color:var(--gold);font-weight:700;text-align:left;border-bottom:1px solid var(--card-border)}
+.comp-table td{padding:14px 20px;font-size:.85rem;border-bottom:1px solid rgba(255,255,255,0.03);color:var(--text2)}
+.comp-table td:first-child{color:var(--text);font-weight:600}
+.comp-table tr:last-child td{border-bottom:none}
+.comp-table .old{color:var(--red-light);text-decoration:line-through;text-decoration-color:rgba(208,64,80,0.3)}
+.comp-table .new{color:var(--teal);font-weight:600}
+
+/* ============ MISMATCH CASES ============ */
+.case-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.case-card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:24px;position:relative;overflow:hidden}
+.case-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--red),var(--gold))}
+.case-wrong{padding:10px 14px;background:rgba(208,64,80,0.06);border:1px solid rgba(208,64,80,0.15);border-radius:8px;margin-bottom:12px}
+.case-wrong-label{font-size:.7rem;color:var(--red);font-family:var(--mono);font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:4px}
+.case-wrong-label::before{content:'x';display:inline-flex;width:14px;height:14px;background:var(--red);border-radius:50%;color:#fff;font-size:.6rem;align-items:center;justify-content:center}
+.case-right{padding:10px 14px;background:rgba(64,184,144,0.06);border:1px solid rgba(64,184,144,0.15);border-radius:8px}
+.case-right-label{font-size:.7rem;color:var(--teal);font-family:var(--mono);font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:4px}
+.case-right-label::before{content:'v';display:inline-flex;width:14px;height:14px;background:var(--teal);border-radius:50%;color:#fff;font-size:.6rem;align-items:center;justify-content:center}
+.case-text{font-size:.82rem;color:var(--text);line-height:1.5}
+.case-num{position:absolute;top:16px;right:16px;font-family:var(--mono);font-size:2.5rem;font-weight:700;color:rgba(212,160,80,0.08)}
+
+/* ============ TECH ARCH ============ */
+.arch-layers{display:flex;flex-direction:column;gap:16px}
+.arch-layer{display:flex;align-items:center;gap:20px;padding:20px 24px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;transition:all .3s}
+.arch-layer:hover{border-color:var(--gold);transform:translateX(8px)}
+.arch-layer-num{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;font-size:1.1rem;flex-shrink:0}
+.arch-layer:nth-child(1) .arch-layer-num{background:rgba(64,128,192,0.15);color:var(--blue)}
+.arch-layer:nth-child(2) .arch-layer-num{background:rgba(64,184,144,0.15);color:var(--teal)}
+.arch-layer:nth-child(3) .arch-layer-num{background:rgba(212,160,80,0.15);color:var(--gold)}
+.arch-layer:nth-child(4) .arch-layer-num{background:rgba(208,64,80,0.15);color:var(--red)}
+.arch-layer-content h4{font-size:.95rem;color:var(--text);margin-bottom:4px}
+.arch-layer-content p{font-size:.82rem;color:var(--text2)}
+.arch-arrow{text-align:center;color:var(--gold);font-family:var(--mono);font-size:1.2rem;opacity:.4}
+
+/* ============ VALUE BANNER ============ */
+.value-banner{text-align:center;padding:80px 40px;position:relative;z-index:1}
+.value-banner .quote{font-size:clamp(1.2rem,3vw,1.8rem);color:var(--gold-light);font-weight:700;line-height:1.8;max-width:800px;margin:0 auto;font-family:var(--serif-cn)}
+.value-banner .quote::before{content:'\201c';font-size:4rem;color:var(--gold);opacity:.3;vertical-align:top;margin-right:10px;display:block;font-family:var(--serif-en)}
+.value-banner .quote::after{content:'\201d';font-size:4rem;color:var(--gold);opacity:.3;vertical-align:bottom;margin-left:10px;display:block;font-family:var(--serif-en)}
+.value-divider{width:80px;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent);margin:20px auto}
+
+/* ============ FOOTER ============ */
+footer{text-align:center;padding:40px;color:var(--text3);font-size:.8rem;position:relative;z-index:1;font-family:var(--mono);border-top:1px solid rgba(212,160,80,0.08)}
+
+/* Toast */
+.toast-container{position:fixed;top:20px;right:20px;z-index:1000;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 20px;background:var(--bg3);border:1px solid var(--card-border);border-radius:8px;color:var(--text);font-size:.85rem;box-shadow:0 8px 30px rgba(0,0,0,0.4);animation:toastIn .4s ease;font-family:var(--serif-cn);backdrop-filter:blur(20px)}
+.toast.gold{border-color:var(--gold);color:var(--gold-light)}
+.toast.teal{border-color:var(--teal);color:var(--teal-light)}
+@keyframes toastIn{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+
+/* Responsive */
+@media(max-width:1024px){
+  .sim-wrapper{grid-template-columns:1fr;min-height:auto}
+  .method-grid{grid-template-columns:repeat(2,1fr)}
+  .case-grid{grid-template-columns:1fr}
+  .hero-kpis{grid-template-columns:repeat(2,1fr)}
+  .pain-grid{grid-template-columns:1fr}
+}
+@media(max-width:768px){
+  .section{padding:60px 20px}
+  .flow-steps{flex-direction:column;align-items:center}
+  .flow-steps::before{display:none}
+  .side-nav{display:none}
+  .method-grid{grid-template-columns:1fr}
+}
+
+/* Radar Switch Buttons */
+.radar-btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.radar-btn{padding:6px 14px;background:rgba(212,160,80,0.06);border:1px solid var(--card-border);border-radius:6px;color:var(--text2);font-size:.8rem;cursor:pointer;font-family:var(--serif-cn);transition:all .3s}
+.radar-btn:hover{border-color:var(--gold)}
+.radar-btn.active{background:rgba(212,160,80,0.15);border-color:var(--gold);color:var(--gold-light)}
+
+/* Section spacing helpers */
+.spacer{height:40px}
+</style>
+</head>
+<body>
+
+<!-- Canvas Particle BG -->
+<canvas id="particle-canvas"></canvas>
+
+<!-- Side Navigation -->
+<nav class="side-nav" id="sideNav">
+  <a href="#hero" class="active" data-idx="0"><span class="tip">首页</span></a>
+  <a href="#pain" data-idx="1"><span class="tip">痛点</span></a>
+  <a href="#simulator" data-idx="2"><span class="tip">模拟器</span></a>
+  <a href="#flow" data-idx="3"><span class="tip">流程</span></a>
+  <a href="#radar" data-idx="4"><span class="tip">雷达图</span></a>
+  <a href="#methods" data-idx="5"><span class="tip">方法库</span></a>
+  <a href="#heatmap" data-idx="6"><span class="tip">热力图</span></a>
+  <a href="#compare" data-idx="7"><span class="tip">对比</span></a>
+  <a href="#cases" data-idx="8"><span class="tip">案例</span></a>
+  <a href="#arch" data-idx="9"><span class="tip">架构</span></a>
+  <a href="#value" data-idx="10"><span class="tip">价值</span></a>
+</nav>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ==================== HERO ==================== -->
+<section class="section" id="hero">
+  <div class="fade-in">
+    <div class="hero-badge"><span class="pulse-dot"></span> Research Method Matching Engine v2.0</div>
+  </div>
+  <h1 class="hero-title fade-in">法衡 MethodMatch</h1>
+  <p class="hero-subtitle fade-in">研究方法适配性分析引擎</p>
+  <div class="hero-kpis fade-in">
+    <div class="kpi-card">
+      <div class="kpi-num" data-target="3" data-suffix="秒">0</div>
+      <div class="kpi-unit">平均匹配时间</div>
+      <div class="kpi-label">毫秒级语义解析</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-num" data-target="26" data-suffix="种">0</div>
+      <div class="kpi-unit">研究方法覆盖</div>
+      <div class="kpi-label">定量+定性全覆盖</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-num" data-target="8" data-suffix="大学科">0</div>
+      <div class="kpi-unit">学科领域</div>
+      <div class="kpi-label">跨学科智能匹配</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-num" data-target="92" data-suffix="%">0</div>
+      <div class="kpi-unit">专家验证准确率</div>
+      <div class="kpi-label">基于2000+案例</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== PAIN POINTS ==================== -->
+<section class="section" id="pain">
+  <h2 class="section-title fade-in">研究者的困境</h2>
+  <p class="section-subtitle fade-in">每一个痛点背后，都是无数研究者踩过的坑</p>
+  <div class="pain-grid">
+    <div class="pain-card fade-in">
+      <div class="pain-icon">?</div>
+      <div class="pain-title">方法选择凭感觉</div>
+      <div class="pain-desc">大多数研究者在选择研究方法时依赖导师推荐或简单模仿前人，缺乏系统的适配性分析。这种"拍脑袋"式选择往往导致研究设计与研究问题之间存在根本性的错配。</div>
+      <span class="pain-stat">60% 研究生表示选方法靠"抄前人"</span>
+    </div>
+    <div class="pain-card fade-in">
+      <div class="pain-icon">!</div>
+      <div class="pain-title">方法论漏洞频发</div>
+      <div class="pain-desc">方法论缺陷是学术论文被拒的核心原因之一。审稿人在审稿时最常指出的一个问题就是"研究方法与研究目的不匹配"，但这一问题往往在论文投稿后才被发现，白白浪费大量时间。</div>
+      <span class="pain-stat">方法错配占审稿拒稿原因 Top 3</span>
+    </div>
+    <div class="pain-card fade-in">
+      <div class="pain-icon">#</div>
+      <div class="pain-title">跨学科方法盲区</div>
+      <div class="pain-desc">随着学科交叉研究的增多，研究者经常需要使用自己不熟悉领域的方法。心理学研究者可能不了解教育学的质性方法，材料科学研究者可能不清楚社会科学的混合方法设计，导致方法选择出现严重盲区。</div>
+      <span class="pain-stat">跨学科研究者平均耗时 3 周确定方法</span>
+    </div>
+    <div class="pain-card fade-in">
+      <div class="pain-icon">~</div>
+      <div class="pain-title">碎片化信息搜索</div>
+      <div class="pain-desc">研究者通过搜索引擎、知乎、论坛等渠道收集方法信息，但这些信息来源分散、质量参差不齐、互相矛盾，研究者难以判断哪些信息是可靠的，最终选择的方法往往是"听起来最有道理"而非"最适合"的。</div>
+      <span class="pain-stat">网上方法信息矛盾率达 47%</span>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SIMULATOR ==================== -->
+<section class="section" id="simulator">
+  <h2 class="section-title fade-in">方法适配性分析模拟器</h2>
+  <p class="section-subtitle fade-in">选择一个研究场景，体验法衡 MethodMatch 的智能分析能力</p>
+  <div class="sim-wrapper fade-in">
+    <!-- Left: Research Input -->
+    <div class="sim-left">
+      <h3 style="font-size:.95rem;color:var(--gold);margin-bottom:16px;font-family:var(--mono)">预设研究场景</h3>
+      <button class="scene-btn active" onclick="switchScene(0)">
+        <span class="scene-num">SCENE 01</span>
+        社交媒体对青少年焦虑的影响
+      </button>
+      <button class="scene-btn" onclick="switchScene(1)">
+        <span class="scene-num">SCENE 02</span>
+        新型纳米材料的导电性能
+      </button>
+      <button class="scene-btn" onclick="switchScene(2)">
+        <span class="scene-num">SCENE 03</span>
+        城乡教育资源分配差异
+      </button>
+      <button class="scene-btn" onclick="switchScene(3)">
+        <span class="scene-num">SCENE 04</span>
+        深度学习模型的可解释性
+      </button>
+
+      <div class="sim-input-group">
+        <label>研究问题</label>
+        <input type="text" id="simQuestion" value="社交媒体对青少年焦虑的影响" readonly>
+      </div>
+      <div class="sim-input-group">
+        <label>研究目的</label>
+        <select id="simPurpose">
+          <option>探究因果关系</option>
+          <option>描述现状与分布</option>
+          <option>理解深层机制</option>
+          <option>开发与验证理论</option>
+        </select>
+      </div>
+      <div class="sim-input-group">
+        <label>学科领域</label>
+        <div class="tag-list" id="simTags">
+          <span class="tag">心理学</span>
+          <span class="tag">社会科学</span>
+        </div>
+      </div>
+      <div class="sim-input-group">
+        <label>预估样本规模</label>
+        <input type="number" id="simSample" value="500" readonly>
+      </div>
+    </div>
+
+    <!-- Mid: Adaptation Visualization -->
+    <div class="sim-mid">
+      <h3 style="font-size:.95rem;color:var(--gold);margin-bottom:16px;font-family:var(--mono)">方法适配度排名</h3>
+      <div class="bar-container" id="barContainer">
+        <!-- Filled by JS -->
+      </div>
+      <div id="detailPanel"></div>
+    </div>
+
+    <!-- Right: Analysis Panel -->
+    <div class="sim-right">
+      <div class="rec-box" id="recBox">
+        <h4>// AI 推荐组合</h4>
+        <div id="recContent"></div>
+      </div>
+      <div class="risk-box" id="riskBox">
+        <h4>风险预警</h4>
+        <div id="riskContent"></div>
+      </div>
+      <div class="log-box" id="logBox">
+        <h4>// 实时分析日志</h4>
+        <div id="logContent"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== FLOW ==================== -->
+<section class="section" id="flow">
+  <h2 class="section-title fade-in">五步分析流程</h2>
+  <p class="section-subtitle fade-in">从研究问题到方法推荐，全程智能化</p>
+  <div class="flow-steps fade-in">
+    <div class="flow-step">
+      <div class="flow-icon">01</div>
+      <div class="flow-step-title">输入研究问题</div>
+      <div class="flow-step-desc">用户输入自然语言描述的研究问题、研究目的和所属学科领域</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-icon">02</div>
+      <div class="flow-step-title">语义解析</div>
+      <div class="flow-step-desc">NLP引擎提取关键语义特征：研究变量、关系类型、理论框架</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-icon">03</div>
+      <div class="flow-step-title">方法库匹配</div>
+      <div class="flow-step-desc">基于方法知识图谱进行多维匹配，筛选出候选方法组合</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-icon">04</div>
+      <div class="flow-step-title">多维评估</div>
+      <div class="flow-step-desc">从信度、效度、可行性、成本、伦理五个维度进行量化评分</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-icon">05</div>
+      <div class="flow-step-title">输出推荐方案</div>
+      <div class="flow-step-desc">生成适配度排名、组合建议、风险预警和对比分析报告</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== RADAR ==================== -->
+<section class="section" id="radar">
+  <h2 class="section-title fade-in">方法五维评估雷达图</h2>
+  <p class="section-subtitle fade-in">点击不同方法查看其在五个核心维度的表现</p>
+  <div class="fade-in">
+    <div class="radar-btns" id="radarBtns"></div>
+    <div id="radar-chart"></div>
+  </div>
+</section>
+
+<!-- ==================== METHOD LIBRARY ==================== -->
+<section class="section" id="methods">
+  <h2 class="section-title fade-in">方法库概览</h2>
+  <p class="section-subtitle fade-in">覆盖定量、定性与混合方法三大类别</p>
+  <div class="method-grid fade-in" id="methodGrid">
+    <!-- Filled by JS -->
+  </div>
+</section>
+
+<!-- ==================== HEATMAP ==================== -->
+<section class="section" id="heatmap">
+  <h2 class="section-title fade-in">学科-方法适配热力图</h2>
+  <p class="section-subtitle fade-in">颜色越深表示该方法在该学科中的适配频次越高</p>
+  <div class="fade-in">
+    <div id="heatmap-chart"></div>
+  </div>
+</section>
+
+<!-- ==================== COMPARISON ==================== -->
+<section class="section" id="compare">
+  <h2 class="section-title fade-in">传统方式 vs 法衡 MethodMatch</h2>
+  <p class="section-subtitle fade-in">让数据说话，用效率证明价值</p>
+  <div class="fade-in">
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th>对比维度</th>
+          <th>传统方式</th>
+          <th>法衡 MethodMatch</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>方法调研时间</td>
+          <td class="old">1-2周手动检索</td>
+          <td class="new">3秒智能匹配</td>
+        </tr>
+        <tr>
+          <td>方法覆盖面</td>
+          <td class="old">依赖导师个人经验</td>
+          <td class="new">26种方法全覆盖</td>
+        </tr>
+        <tr>
+          <td>跨学科支持</td>
+          <td class="old">几乎没有，靠自己摸索</td>
+          <td class="new">8大学科智能匹配</td>
+        </tr>
+        <tr>
+          <td>风险预警</td>
+          <td class="old">无，论文被拒才知道</td>
+          <td class="new">实时3级风险提示</td>
+        </tr>
+        <tr>
+          <td>方法对比</td>
+          <td class="old">手动整理Excel表格</td>
+          <td class="new">自动生成对比报告</td>
+        </tr>
+        <tr>
+          <td>适配度量化</td>
+          <td class="old">主观判断，无数据支撑</td>
+          <td class="new">五维度量化评分体系</td>
+        </tr>
+        <tr>
+          <td>方法论学习</td>
+          <td class="old">零散论文中摸索</td>
+          <td class="new">内置方法知识图谱</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ==================== MISMATCH CASES ==================== -->
+<section class="section" id="cases">
+  <h2 class="section-title fade-in">典型错配案例展示</h2>
+  <p class="section-subtitle fade-in">这些都是真实发生的、导致论文被拒的方法论错误</p>
+  <div class="case-grid fade-in">
+    <div class="case-card">
+      <span class="case-num">A</span>
+      <div class="case-wrong">
+        <div class="case-wrong-label">错误做法</div>
+        <div class="case-text">用<strong>问卷调查</strong>验证社交媒体使用与青少年焦虑之间的<strong>因果关系</strong></div>
+      </div>
+      <div class="case-right">
+        <div class="case-right-label">正确方法</div>
+        <div class="case-text">应使用<strong>实验研究</strong>或<strong>纵向追踪研究</strong>建立因果推论，问卷仅能揭示相关关系</div>
+      </div>
+    </div>
+    <div class="case-card">
+      <span class="case-num">B</span>
+      <div class="case-wrong">
+        <div class="case-wrong-label">错误做法</div>
+        <div class="case-text">用<strong>个案研究</strong>（N=3）推断城乡教育资源分配的<strong>总体趋势</strong></div>
+      </div>
+      <div class="case-right">
+        <div class="case-right-label">正确方法</div>
+        <div class="case-text">应使用<strong>混合方法</strong>或<strong>大样本问卷调查</strong>，个案研究结论不可外推至总体</div>
+      </div>
+    </div>
+    <div class="case-card">
+      <span class="case-num">C</span>
+      <div class="case-wrong">
+        <div class="case-wrong-label">错误做法</div>
+        <div class="case-text">纯<strong>定量统计方法</strong>研究特定文化群体的仪式行为与身份认同</div>
+      </div>
+      <div class="case-right">
+        <div class="case-right-label">正确方法</div>
+        <div class="case-text">应包含<strong>民族志</strong>或<strong>扎根理论</strong>，文化现象需要深入理解本地语境与主体意义</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== TECH ARCH ==================== -->
+<section class="section" id="arch">
+  <h2 class="section-title fade-in">技术架构</h2>
+  <p class="section-subtitle fade-in">四层智能架构，从输入到输出的全链路解决方案</p>
+  <div class="arch-layers fade-in">
+    <div class="arch-layer">
+      <div class="arch-layer-num">L1</div>
+      <div class="arch-layer-content">
+        <h4>输入层 — 智能理解研究意图</h4>
+        <p>自然语言解析引擎提取研究问题中的核心变量、关系类型与理论倾向；结构化标签系统自动识别学科领域、研究范式与样本特征</p>
+      </div>
+    </div>
+    <div class="arch-arrow">|</div>
+    <div class="arch-layer">
+      <div class="arch-layer-num">L2</div>
+      <div class="arch-layer-content">
+        <h4>匹配层 — 语义驱动的知识检索</h4>
+        <p>NLP语义理解模型将研究问题映射至方法知识图谱；基于BERT微调的方法分类器进行初筛；知识图谱关联推理实现跨学科方法推荐</p>
+      </div>
+    </div>
+    <div class="arch-arrow">|</div>
+    <div class="arch-layer">
+      <div class="arch-layer-num">L3</div>
+      <div class="arch-layer-content">
+        <h4>评估层 — 多维度量化打分</h4>
+        <p>五维适配度算法（信度、效度、可行性、成本效益、伦理合规）对候选方法进行量化评分；风险检测模型识别潜在方法论漏洞与伦理风险</p>
+      </div>
+    </div>
+    <div class="arch-arrow">|</div>
+    <div class="arch-layer">
+      <div class="arch-layer-num">L4</div>
+      <div class="arch-layer-content">
+        <h4>输出层 — 结构化分析报告</h4>
+        <p>可视化适配度排名与方法对比图表；AI推荐组合与辅助方法建议；风险预警报告与分析日志；支持PDF/Word格式导出</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== VALUE BANNER ==================== -->
+<div class="value-banner fade-in" id="value">
+  <div class="value-divider"></div>
+  <p class="quote">让每一个研究问题找到最合适的方法，让每一篇论文的方法论经得起推敲</p>
+  <div class="value-divider"></div>
+</div>
+
+<!-- ==================== FOOTER ==================== -->
+<footer>
+  <p>法衡 MethodMatch — 研究方法适配性分析引擎 v2.0</p>
+  <p style="margin-top:4px">Powered by AI · 学习工作赛道 · 2026</p>
+</footer>
+
+<script>
+// ============================
+// DATA
+// ============================
+const SCENARIOS = [
+  {
+    id: 0,
+    question: '社交媒体对青少年焦虑的影响',
+    purpose: '探究因果关系',
+    tags: ['心理学', '社会科学'],
+    sample: 500,
+    methods: [
+      { name: '纵向追踪研究', score: 92, reason: '因果关系推断首选', detail: { strengths: ['可建立时间序列因果推论', '控制混杂变量能力强', '适合发展性研究'], weaknesses: ['耗时长、成本高', '样本流失风险大', '需要长期追踪 funding'], fit: '研究变量有时间先后关系，需验证因果路径', unfit: '短期项目或缺乏 funding 的研究' }},
+      { name: '实验研究', score: 85, reason: '可操控变量验证因果', detail: { strengths: ['因果推断内效度高', '可控制无关变量', '可重复验证'], weaknesses: ['生态效度可能较低', '伦理限制（青少年敏感话题）', '实验室环境与现实脱节'], fit: '可操控自变量的因果关系验证', unfit: '涉及伦理风险或无法操控的变量' }},
+      { name: '混合方法', score: 80, reason: '兼顾广度与深度', detail: { strengths: ['三角验证增强信度', '定量定性互补', '回答不同层面问题'], weaknesses: ['设计复杂度高', '需要掌握多种方法技能', '数据分析量大'], fit: '需要同时理解"多少"和"为什么"', unfit: '单一研究目的的简单问题' }},
+      { name: '问卷调查', score: 72, reason: '大样本覆盖面广', detail: { strengths: ['样本量大、代表性强', '数据标准化程度高', '统计分析方便'], weaknesses: ['只能揭示相关关系', '自报偏差大', '题目设计要求高'], fit: '描述现状、测量变量分布', unfit: '需要建立因果推论的研究' }},
+      { name: '个案研究', score: 45, reason: '样本代表性不足', detail: { strengths: ['深入了解个体经验', '适合探索性研究', '灵活适应研究对象'], weaknesses: ['不可外推至总体', '主观性较强', '信度较低'], fit: '罕见现象或深度个体探索', unfit: '需要广泛推广结论的研究' }},
+      { name: '民族志', score: 38, reason: '文化维度非核心', detail: { strengths: ['深入文化语境', '自然情境观察', '发现意料之外的现象'], weaknesses: ['耗时极长', '研究者主观影响大', '难以量化验证'], fit: '需要理解文化意义与本地知识', unfit: '关注可量化变量关系的研究' }}
+    ],
+    recommendation: { primary: '纵向追踪研究', assist: '问卷调查（辅助基线数据收集）' },
+    risks: [
+      '青少年为敏感人群，实验设计需通过伦理审查（IRB）',
+      '社交媒体使用为自报数据，存在回忆偏差与社会期望偏差',
+      '纵向追踪研究样本流失率可能超过 30%，影响统计效力'
+    ],
+    logs: [
+      { tag: 'analysis', text: '解析研究问题：识别核心变量 [社交媒体使用] → [青少年焦虑]' },
+      { tag: 'analysis', text: '关系类型判定：因果推断（需要验证影响方向与机制）' },
+      { tag: 'match', text: '匹配方法库：筛选出 6 种候选研究方法' },
+      { tag: 'match', text: '纵向追踪研究 — 因果推断内效度最高，匹配度 92%' },
+      { tag: 'match', text: '实验研究 — 可操控变量，但伦理风险需评估，匹配度 85%' },
+      { tag: 'match', text: '混合方法 — 定量定性互补，适合多层次分析，匹配度 80%' },
+      { tag: 'eval', text: '五维评估完成：纵向追踪研究综合评分最高' },
+      { tag: 'eval', text: '问卷调查匹配度 72%：仅能揭示相关，不可用于因果推断' },
+      { tag: 'warn', text: '风险检测：青少年为敏感人群，需 IRB 伦理审查' },
+      { tag: 'warn', text: '风险检测：纵向研究流失率预警，建议预留超额招募' },
+      { tag: 'eval', text: '最终推荐：纵向追踪研究（主）+ 问卷调查（辅助）' }
+    ]
+  },
+  {
+    id: 1,
+    question: '新型纳米材料的导电性能',
+    purpose: '描述与测量',
+    tags: ['材料科学', '理工科'],
+    sample: 50,
+    methods: [
+      { name: '实验研究', score: 95, reason: '理工科核心方法', detail: { strengths: ['精确操控实验条件', '可重复验证结果', '数据客观可靠'], weaknesses: ['需要专业设备与实验室', '成本较高', '实验周期可能较长'], fit: '需要操控变量验证材料性能的研究', unfit: '无法建立实验条件的场景' }},
+      { name: '元分析', score: 78, reason: '整合已有实验数据', detail: { strengths: ['整合大量已有研究', '统计效力强', '可发现整体趋势'], weaknesses: ['依赖已有文献质量', '发表偏倚影响', '异质性处理复杂'], fit: '已有大量同类实验数据需要整合', unfit: '全新领域、文献不足的情况' }},
+      { name: '问卷调查', score: 25, reason: '不适用于材料科学', detail: { strengths: ['适合主观感知类研究', '大面积覆盖'], weaknesses: ['无法测量材料物理性能', '主观偏差大', '信度效度难以保证'], fit: '测量主观态度与感知', unfit: '需要客观物理量测量的研究' }},
+      { name: '混合方法', score: 55, reason: '可结合材料测试与专家访谈', detail: { strengths: ['多角度数据互补', '增强结论可信度'], weaknesses: ['定性部分贡献有限', '增加研究复杂度'], fit: '需要同时测量性能和收集应用反馈', unfit: '纯性能测试的实验研究' }},
+      { name: '个案研究', score: 30, reason: '单一材料信息有限', detail: { strengths: ['深入探索单一案例', '适合新型材料初步研究'], weaknesses: ['不可推广', '缺乏统计基础', '信度低'], fit: '全新材料的初步探索', unfit: '需要建立一般性结论的研究' }},
+      { name: '扎根理论', score: 18, reason: '不适用理工领域', detail: { strengths: ['从数据中建构理论', '适合社会科学'], weaknesses: ['完全不适合材料性能研究', '需要质性数据', '理工领域无应用场景'], fit: '需要从质性数据中建构理论的社科研究', unfit: '所有理工科定量研究' }}
+    ],
+    recommendation: { primary: '实验研究', assist: '元分析（整合已有文献数据）' },
+    risks: [
+      '纳米材料制备的重复性可能不足，影响实验结果可复制性',
+      '样本量（N=50）可能不足以支撑统计分析，建议增加实验批次',
+      '导电性能测试环境温湿度控制要求严格，需排除环境干扰因素'
+    ],
+    logs: [
+      { tag: 'analysis', text: '解析研究问题：识别核心变量 [新型纳米材料] → [导电性能]' },
+      { tag: 'analysis', text: '研究领域判定：材料科学/理工科，以物理量测量为核心' },
+      { tag: 'match', text: '匹配方法库：实验研究为核心匹配方法，匹配度 95%' },
+      { tag: 'match', text: '元分析：可整合已有纳米材料导电性能数据，匹配度 78%' },
+      { tag: 'match', text: '问卷调查：不适用于材料物理性能测量，匹配度 25%' },
+      { tag: 'eval', text: '五维评估完成：实验研究信度与效度均达到最高水平' },
+      { tag: 'warn', text: '风险检测：样本量 N=50 偏小，建议增加实验批次' },
+      { tag: 'warn', text: '风险检测：纳米材料制备重复性需额外验证' },
+      { tag: 'eval', text: '最终推荐：实验研究（主）+ 元分析（辅助文献整合）' }
+    ]
+  },
+  {
+    id: 2,
+    question: '城乡教育资源分配差异',
+    purpose: '描述现状与分布',
+    tags: ['教育学', '社会学'],
+    sample: 2000,
+    methods: [
+      { name: '混合方法', score: 91, reason: '定量定性兼备最佳', detail: { strengths: ['大样本统计+深度访谈互补', '全面揭示问题', '政策建议更有说服力'], weaknesses: ['研究周期较长', '团队技能要求高', '数据分析工作量极大'], fit: '需要同时回答"差异有多大"和"为什么有差异"', unfit: '单一层面、单一目的的简单研究' }},
+      { name: '问卷调查', score: 86, reason: '大样本数据支撑', detail: { strengths: ['N=2000 足够覆盖城乡差异', '数据标准化便于统计分析', '可量化资源分配指标'], weaknesses: ['仅能描述表面差异', '无法深入理解原因', '问卷设计需要专业知识'], fit: '描述资源分配现状与分布特征', unfit: '需要深入理解原因与机制的研究' }},
+      { name: '个案研究', score: 68, reason: '可深入典型案例', detail: { strengths: ['揭示政策执行中的具体问题', '生动的案例有说服力', '适合补充大样本研究的不足'], weaknesses: ['不能代表整体', '选择偏差风险', ' generalize 受限'], fit: '作为大样本研究的补充，揭示典型案例', unfit: '单独使用来推断总体趋势' }},
+      { name: '实验研究', score: 32, reason: '无法操控城乡变量', detail: { strengths: ['因果推断严格'], weaknesses: ['无法随机分配"城乡"', '现实中不可操控', '不符合研究问题性质'], fit: '可以操控自变量的因果验证', unfit: '描述性研究、不可操控的变量' }},
+      { name: '民族志', score: 58, reason: '可深入田野观察', detail: { strengths: ['深入学校日常实践', '发现量化无法揭示的问题', '理解本地语境'], weaknesses: ['研究范围有限', '耗时长', '结论推广受限'], fit: '需要理解特定社区教育实践的深层文化', unfit: '需要大范围、可量化的资源分配比较' }},
+      { name: '扎根理论', score: 50, reason: '可建构教育资源理论', detail: { strengths: ['从数据中提炼理论框架', '适合探索性研究'], weaknesses: ['研究周期长', '需要大量质性数据', '理论建构依赖研究者能力'], fit: '教育资源分配理论尚不成熟时的探索', unfit: '理论框架已成熟的验证性研究' }}
+    ],
+    recommendation: { primary: '混合方法', assist: '问卷调查（大样本数据支撑）+ 个案研究（深度典型案例）' },
+    risks: [
+      '城乡二元划分过于简化，可能掩盖区域内差异（如城乡结合部）',
+      '大样本数据收集可能面临学校配合度不均的问题',
+      '混合方法研究报告撰写需平衡定量定性篇幅，避免偏向某一方'
+    ],
+    logs: [
+      { tag: 'analysis', text: '解析研究问题：识别核心变量 [城乡] → [教育资源分配差异]' },
+      { tag: 'analysis', text: '关系类型判定：描述性研究 + 差异比较，兼需原因探索' },
+      { tag: 'match', text: '匹配方法库：混合方法为最优匹配，匹配度 91%' },
+      { tag: 'match', text: '问卷调查：大样本 N=2000 覆盖面广，匹配度 86%' },
+      { tag: 'match', text: '民族志：可深入田野理解日常教育实践，匹配度 58%' },
+      { tag: 'eval', text: '五维评估完成：混合方法在效度与可行性上最优' },
+      { tag: 'warn', text: '风险检测：城乡二元划分可能过度简化，建议增加梯度分层' },
+      { tag: 'warn', text: '风险检测：学校配合度不均可能引入选择偏差' },
+      { tag: 'eval', text: '最终推荐：混合方法（主）+ 问卷调查 + 个案研究' }
+    ]
+  },
+  {
+    id: 3,
+    question: '深度学习模型的可解释性',
+    purpose: '开发与验证理论',
+    tags: ['计算机科学', 'AI'],
+    sample: 100,
+    methods: [
+      { name: '实验研究', score: 94, reason: '可系统操控模型变量', detail: { strengths: ['可控制模型架构、超参数等变量', '定量评估可解释性指标', '可重复实验'], weaknesses: ['计算资源需求大', '实验设计需要严格对照', '模型训练耗时长'], fit: '需要系统验证模型可解释性的研究', unfit: '不需要定量评估的研究' }},
+      { name: '元分析', score: 82, reason: '整合已有可解释性研究', detail: { strengths: ['整合大量基准测试结果', '发现不同方法的整体趋势', '为未来研究提供基准'], weaknesses: ['研究异质性大', '方法框架不统一', '新方法可能未被收录'], fit: '全面回顾可解释性研究现状', unfit: '提出全新可解释性方法的研究' }},
+      { name: '问卷调查', score: 42, reason: '可收集用户感知', detail: { strengths: ['可测量用户对解释的感知有用性', '了解人类理解AI的偏好'], weaknesses: ['主观偏差大', '样本代表性有限', '与模型客观性能不一致'], fit: '评估人类用户对模型解释的感知', unfit: '需要客观量化模型性能的研究' }},
+      { name: '混合方法', score: 75, reason: '结合客观指标与用户评估', detail: { strengths: ['客观指标+用户感知双维度', '更全面的评估'], weaknesses: ['增加研究复杂度', '协调两种数据难度大'], fit: '需要同时评估模型性能和用户体验', unfit: '纯技术性能评估' }},
+      { name: '个案研究', score: 55, reason: '可深入分析特定模型', detail: { strengths: ['深入理解特定模型决策过程', '适合探索性分析'], weaknesses: ['不可推广', '缺乏统计基础', '依赖具体案例'], fit: '深入分析单个模型的决策行为', unfit: '需要比较不同模型的研究' }},
+      { name: '扎根理论', score: 20, reason: '不适用AI技术评估', detail: { strengths: ['建构理论'], weaknesses: ['完全不适合技术性能评估', 'AI领域无典型应用'], fit: '理论建构类社科研究', unfit: '所有CS/AI定量技术评估研究' }}
+    ],
+    recommendation: { primary: '实验研究', assist: '元分析（整合已有基准测试结果）' },
+    risks: [
+      '可解释性评估指标尚未统一，不同研究间结果难以直接比较',
+      '实验中模型训练的随机性可能影响结果稳定性，需多次重复实验',
+      '计算资源需求较大，GPU训练成本可能超出预期预算'
+    ],
+    logs: [
+      { tag: 'analysis', text: '解析研究问题：识别核心变量 [深度学习模型] → [可解释性]' },
+      { tag: 'analysis', text: '研究领域判定：计算机科学/AI，以定量技术评估为核心' },
+      { tag: 'match', text: '匹配方法库：实验研究为最优匹配，匹配度 94%' },
+      { tag: 'match', text: '元分析：可整合基准测试与对比研究，匹配度 82%' },
+      { tag: 'match', text: '问卷调查：可辅助评估用户感知，但非核心方法，匹配度 42%' },
+      { tag: 'eval', text: '五维评估完成：实验研究在信度与效度上均表现优异' },
+      { tag: 'warn', text: '风险检测：可解释性指标不统一，跨研究比较需谨慎' },
+      { tag: 'warn', text: '风险检测：模型训练随机性需通过多次实验控制' },
+      { tag: 'eval', text: '最终推荐：实验研究（主）+ 元分析（辅助文献整合）' }
+    ]
+  }
+];
+
+const METHOD_LIB = [
+  { icon: 'QN', name: '问卷调查', tags: ['心理学', '教育学', '社会学', '管理学'], desc: '通过标准化问卷大面积收集数据，适合描述变量分布与相关关系', sample: '200-2000+' },
+  { icon: 'EX', name: '实验研究', tags: ['心理学', '材料科学', '医学', 'CS'], desc: '操控自变量观察因变量变化，是因果推断的金标准方法', sample: '30-500' },
+  { icon: 'CS', name: '个案研究', tags: ['心理学', '教育学', '管理学'], desc: '深入分析单个或少数案例，适合罕见现象或深度探索', sample: '1-10' },
+  { icon: 'GT', name: '扎根理论', tags: ['社会学', '教育学', '护理学'], desc: '从质性数据中自下而上建构理论，适合理论不成熟的领域', sample: '15-50' },
+  { icon: 'MA', name: '元分析', tags: ['心理学', '医学', '教育学', 'CS'], desc: '统计整合大量已有研究结果，发现整体效应与趋势', sample: '20-500篇文献' },
+  { icon: 'MM', name: '混合方法', tags: ['全学科'], desc: '定量与定性方法结合使用，实现三角验证与多层次分析', sample: '依设计而定' },
+  { icon: 'ET', name: '民族志', tags: ['社会学', '人类学', '教育学'], desc: '长期沉浸于研究现场，深入理解文化实践与本地知识', sample: '1个社区+' },
+  { icon: 'AR', name: '行动研究', tags: ['教育学', '管理学', '社会工作'], desc: '研究者即实践者，在行动中反思与改进，适合应用型研究', sample: '依情境而定' }
+];
+
+// ============================
+// PARTICLE CANVAS
+// ============================
+const canvas = document.getElementById('particle-canvas');
+const ctx = canvas.getContext('2d');
+let particles = [];
+const PARTICLE_COUNT = 80;
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+class Particle {
+  constructor() {
+    this.reset();
+  }
+  reset() {
+    this.x = Math.random() * canvas.width;
+    this.y = Math.random() * canvas.height;
+    this.vx = (Math.random() - 0.5) * 0.4;
+    this.vy = (Math.random() - 0.5) * 0.4;
+    this.radius = Math.random() * 2 + 0.5;
+    this.isGold = Math.random() > 0.4;
+    this.alpha = Math.random() * 0.5 + 0.2;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+    if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    if (this.isGold) {
+      ctx.fillStyle = `rgba(212, 160, 80, ${this.alpha})`;
+    } else {
+      ctx.fillStyle = `rgba(64, 184, 144, ${this.alpha * 0.7})`;
+    }
+    ctx.fill();
+  }
+}
+
+for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
+
+function drawConnections() {
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 150) {
+        const alpha = (1 - dist / 150) * 0.12;
+        const sameColor = particles[i].isGold === particles[j].isGold;
+        if (sameColor && particles[i].isGold) {
+          ctx.strokeStyle = `rgba(212, 160, 80, ${alpha})`;
+        } else if (sameColor) {
+          ctx.strokeStyle = `rgba(64, 184, 144, ${alpha})`;
+        } else {
+          ctx.strokeStyle = `rgba(180, 170, 150, ${alpha * 0.5})`;
+        }
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function animateParticles() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  particles.forEach(p => { p.update(); p.draw(); });
+  drawConnections();
+  requestAnimationFrame(animateParticles);
+}
+animateParticles();
+
+// ============================
+// KPI COUNTER
+// ============================
+function animateKPIs() {
+  document.querySelectorAll('.kpi-num').forEach(el => {
+    const target = parseInt(el.dataset.target);
+    const suffix = el.dataset.suffix || '';
+    let current = 0;
+    const increment = Math.max(1, Math.floor(target / 40));
+    const timer = setInterval(() => {
+      current += increment;
+      if (current >= target) { current = target; clearInterval(timer); }
+      el.textContent = current + suffix;
+    }, 40);
+  });
+}
+
+// ============================
+// INTERSECTION OBSERVER
+// ============================
+const fadeObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.1 });
+
+document.querySelectorAll('.fade-in').forEach(el => fadeObserver.observe(el));
+
+// Hero KPI trigger
+const heroObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      animateKPIs();
+      heroObserver.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.3 });
+heroObserver.observe(document.getElementById('hero'));
+
+// ============================
+// SIDE NAV SCROLL SPY
+// ============================
+const sections = ['hero','pain','simulator','flow','radar','methods','heatmap','compare','cases','arch','value'];
+const sideLinks = document.querySelectorAll('.side-nav a');
+
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      if (rect.top <= window.innerHeight * 0.4) current = id;
+    }
+  });
+  sideLinks.forEach((link, i) => {
+    link.classList.toggle('active', sections[i] === current);
+  });
+});
+
+// ============================
+// TOAST
+// ============================
+function showToast(msg, type = 'gold') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateX(30px)'; toast.style.transition = 'all .4s'; setTimeout(() => toast.remove(), 400); }, 3000);
+}
+
+// ============================
+// BAR COLOR HELPER
+// ============================
+function getBarColor(score) {
+  if (score >= 80) return 'linear-gradient(90deg, #2a8a68, #40b890)';
+  if (score >= 60) return 'linear-gradient(90deg, #a07830, #d4a050)';
+  return 'linear-gradient(90deg, #a03040, #d04050)';
+}
+
+function getBarClass(score) {
+  if (score >= 80) return 'high';
+  if (score >= 60) return 'mid';
+  return 'low';
+}
+
+// ============================
+// SCENE SWITCHER
+// ============================
+let currentScene = 0;
+let selectedMethod = null;
+
+function switchScene(idx) {
+  currentScene = idx;
+  selectedMethod = null;
+  const s = SCENARIOS[idx];
+
+  // Update buttons
+  document.querySelectorAll('.scene-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', i === idx);
+  });
+
+  // Update inputs
+  document.getElementById('simQuestion').value = s.question;
+  document.getElementById('simSample').value = s.sample;
+  const tagContainer = document.getElementById('simTags');
+  tagContainer.innerHTML = s.tags.map(t => `<span class="tag">${t}</span>`).join('');
+
+  // Set purpose dropdown
+  const purposeSelect = document.getElementById('simPurpose');
+  for (let i = 0; i < purposeSelect.options.length; i++) {
+    if (purposeSelect.options[i].text === s.purpose) { purposeSelect.selectedIndex = i; break; }
+  }
+
+  // Update bar chart
+  renderBars(s.methods);
+
+  // Update recommendation
+  renderRecommendation(s.recommendation);
+
+  // Update risks
+  renderRisks(s.risks);
+
+  // Clear detail panel
+  document.getElementById('detailPanel').innerHTML = '';
+
+  // Animate logs
+  renderLogs(s.logs);
+
+  // Update radar buttons
+  updateRadarBtns(s.methods);
+
+  // Update radar default
+  if (radarChart && s.methods.length > 0) {
+    updateRadar(s.methods[0]);
+  }
+
+  showToast(`已切换至场景：${s.question}`, 'teal');
+}
+
+// ============================
+// RENDER BARS
+// ============================
+function renderBars(methods) {
+  const container = document.getElementById('barContainer');
+  container.innerHTML = '';
+  methods.forEach((m, i) => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.onclick = () => selectMethod(m, i);
+    row.innerHTML = `
+      <div class="bar-name">${m.name}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:0%;background:${getBarColor(m.score)}" data-width="${m.score}%"></div>
+      </div>
+      <div class="bar-score">${m.score}%</div>
+    `;
+    container.appendChild(row);
+    // Animate
+    setTimeout(() => {
+      row.querySelector('.bar-fill').style.width = m.score + '%';
+    }, 100 + i * 100);
+  });
+}
+
+// ============================
+// SELECT METHOD
+// ============================
+function selectMethod(m, idx) {
+  selectedMethod = m;
+  // Highlight bar
+  document.querySelectorAll('.bar-row').forEach((row, i) => {
+    row.classList.toggle('active', i === idx);
+  });
+  // Show detail
+  const panel = document.getElementById('detailPanel');
+  panel.innerHTML = `
+    <div class="detail-card">
+      <h4>${m.name} — 详细分析</h4>
+      <div class="detail-section">
+        <h5>STRENGTHS 优势</h5>
+        <ul>${m.detail.strengths.map(s => `<li>${s}</li>`).join('')}</ul>
+      </div>
+      <div class="detail-section">
+        <h5>WEAKNESSES 局限</h5>
+        <ul>${m.detail.weaknesses.map(s => `<li>${s}</li>`).join('')}</ul>
+      </div>
+      <div class="detail-section">
+        <h5>FIT 适用条件</h5>
+        <p>${m.detail.fit}</p>
+      </div>
+      <div class="detail-section">
+        <h5>UNFIT 不适用条件</h5>
+        <p>${m.detail.unfit}</p>
+      </div>
+    </div>
+  `;
+  // Update radar
+  updateRadar(m);
+  showToast(`查看方法详情：${m.name}`, 'gold');
+}
+
+// ============================
+// RENDER RECOMMENDATION
+// ============================
+function renderRecommendation(rec) {
+  const container = document.getElementById('recContent');
+  container.innerHTML = `
+    <div class="rec-method">
+      <span class="rec-badge primary">主方法</span>
+      <span>${rec.primary}</span>
+    </div>
+    <div class="rec-method">
+      <span class="rec-badge assist">辅助方法</span>
+      <span>${rec.assist}</span>
+    </div>
+  `;
+}
+
+// ============================
+// RENDER RISKS
+// ============================
+function renderRisks(risks) {
+  const container = document.getElementById('riskContent');
+  container.innerHTML = risks.map(r => `<div class="risk-item">${r}</div>`).join('');
+}
+
+// ============================
+// RENDER LOGS (with animation)
+// ============================
+let logTimer = null;
+function renderLogs(logs) {
+  if (logTimer) clearTimeout(logTimer);
+  const container = document.getElementById('logContent');
+  container.innerHTML = '';
+
+  logs.forEach((log, i) => {
+    setTimeout(() => {
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      const now = new Date();
+      const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+      line.innerHTML = `<span class="ts">${ts}</span><span class="tag tag-${log.tag}">[${log.tag.toUpperCase()}]</span>${log.text}`;
+      container.appendChild(line);
+      container.scrollTop = container.scrollHeight;
+    }, i * 200);
+  });
+}
+
+// ============================
+// RADAR CHART
+// ============================
+let radarChart = null;
+
+function initRadar() {
+  const dom = document.getElementById('radar-chart');
+  radarChart = echarts.init(dom, 'dark');
+
+  const option = {
+    backgroundColor: 'transparent',
+    color: ['#d4a050'],
+    tooltip: { trigger: 'item' },
+    radar: {
+      indicator: [
+        { name: '信度', max: 100 },
+        { name: '效度', max: 100 },
+        { name: '可行性', max: 100 },
+        { name: '成本效益', max: 100 },
+        { name: '伦理合规', max: 100 }
+      ],
+      shape: 'polygon',
+      splitNumber: 5,
+      axisName: { color: '#a09888', fontSize: 13, fontFamily: 'Noto Serif SC' },
+      splitLine: { lineStyle: { color: 'rgba(212,160,80,0.1)' } },
+      splitArea: { areaStyle: { color: ['rgba(212,160,80,0.02)', 'rgba(212,160,80,0.04)'] } },
+      axisLine: { lineStyle: { color: 'rgba(212,160,80,0.15)' } }
+    },
+    series: [{
+      type: 'radar',
+      data: [{
+        value: [85, 90, 75, 70, 88],
+        name: '纵向追踪研究',
+        areaStyle: { color: 'rgba(212,160,80,0.15)' },
+        lineStyle: { color: '#d4a050', width: 2 },
+        itemStyle: { color: '#d4a050' }
+      }]
+    }]
+  };
+  radarChart.setOption(option);
+  window.addEventListener('resize', () => radarChart.resize());
+}
+
+const RADAR_DATA = {
+  '纵向追踪研究': [85, 92, 65, 60, 88],
+  '实验研究': [90, 88, 70, 65, 75],
+  '混合方法': [82, 90, 60, 55, 85],
+  '问卷调查': [78, 65, 90, 88, 80],
+  '个案研究': [55, 60, 85, 90, 82],
+  '民族志': [60, 72, 55, 70, 85],
+  '元分析': [88, 85, 80, 85, 90],
+  '扎根理论': [65, 75, 55, 65, 78],
+  '行动研究': [60, 70, 75, 80, 85]
+};
+
+function updateRadar(methodObj) {
+  if (!radarChart) return;
+  const name = methodObj.name;
+  // Generate radar data based on score with some variation
+  let data;
+  if (RADAR_DATA[name]) {
+    data = RADAR_DATA[name];
+  } else {
+    const base = methodObj.score;
+    data = [
+      Math.min(100, base + Math.floor(Math.random() * 15 - 5)),
+      Math.min(100, base + Math.floor(Math.random() * 15 - 5)),
+      Math.min(100, base + Math.floor(Math.random() * 20 - 10)),
+      Math.min(100, base + Math.floor(Math.random() * 20 - 10)),
+      Math.min(100, base + Math.floor(Math.random() * 10 - 2))
+    ];
+  }
+  radarChart.setOption({
+    series: [{
+      data: [{
+        value: data,
+        name: name,
+        areaStyle: { color: 'rgba(212,160,80,0.15)' },
+        lineStyle: { color: '#d4a050', width: 2 },
+        itemStyle: { color: '#d4a050' }
+      }]
+    }]
+  });
+}
+
+function updateRadarBtns(methods) {
+  const container = document.getElementById('radarBtns');
+  container.innerHTML = '';
+  methods.forEach((m, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'radar-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = m.name;
+    btn.onclick = () => {
+      container.querySelectorAll('.radar-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      updateRadar(m);
+      selectMethod(m, i);
+    };
+    container.appendChild(btn);
+  });
+}
+
+// ============================
+// METHOD LIBRARY GRID
+// ============================
+function renderMethodLibrary() {
+  const grid = document.getElementById('methodGrid');
+  grid.innerHTML = METHOD_LIB.map(m => `
+    <div class="method-card">
+      <div class="method-card-icon">${m.icon}</div>
+      <div class="method-card-name">${m.name}</div>
+      <div class="method-card-tags">${m.tags.map(t => `<span>${t}</span>`).join('')}</div>
+      <div class="method-card-desc">${m.desc}</div>
+      <div class="method-card-sample">典型样本: ${m.sample}</div>
+    </div>
+  `).join('');
+}
+
+// ============================
+// HEATMAP
+// ============================
+function initHeatmap() {
+  const dom = document.getElementById('heatmap-chart');
+  const chart = echarts.init(dom, 'dark');
+
+  const methods = ['问卷调查', '实验研究', '个案研究', '扎根理论', '元分析', '混合方法', '民族志', '行动研究'];
+  const subjects = ['心理学', '教育学', '社会学', '材料科学', '计算机科学', '医学'];
+  const data = [
+    [0,0,95],[0,1,88],[0,2,82],[0,3,10],[0,4,35],[0,5,70],
+    [1,0,92],[1,1,65],[1,2,50],[1,3,96],[1,4,88],[1,5,94],
+    [2,0,70],[2,1,78],[2,2,72],[2,3,15],[2,4,20],[2,5,30],
+    [3,0,45],[3,1,60],[3,2,75],[3,3,5],[3,4,10],[3,5,35],
+    [4,0,85],[4,1,72],[4,2,65],[4,3,70],[4,4,80],[4,5,90],
+    [5,0,82],[5,1,85],[5,2,88],[5,3,45],[5,4,60],[5,5,70],
+    [6,0,35],[6,1,65],[6,2,90],[6,3,5],[6,4,8],[6,5,25],
+    [7,0,40],[7,1,80],[7,2,55],[7,3,10],[7,4,15],[7,5,30]
+  ];
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      position: 'top',
+      formatter: (p) => `${subjects[p.value[1]]} × ${methods[p.value[0]]}<br/>适配指数: <b style="color:#d4a050">${p.value[2]}</b>`
+    },
+    grid: { top: 20, bottom: 80, left: 100, right: 40 },
+    xAxis: {
+      type: 'category', data: methods,
+      axisLabel: { color: '#a09888', fontSize: 11, rotate: 30, fontFamily: 'Noto Serif SC' },
+      axisLine: { lineStyle: { color: 'rgba(212,160,80,0.15)' } },
+      splitLine: { show: false }
+    },
+    yAxis: {
+      type: 'category', data: subjects,
+      axisLabel: { color: '#a09888', fontSize: 12, fontFamily: 'Noto Serif SC' },
+      axisLine: { lineStyle: { color: 'rgba(212,160,80,0.15)' } },
+      splitLine: { show: false }
+    },
+    visualMap: {
+      min: 0, max: 100,
+      calculable: false,
+      orient: 'horizontal',
+      left: 'center', bottom: 0,
+      inRange: { color: ['#0d1220', '#2a5040', '#40b890', '#d4a050', '#d04050'] },
+      textStyle: { color: '#a09888', fontFamily: 'JetBrains Mono', fontSize: 11 }
+    },
+    series: [{
+      type: 'heatmap',
+      data: data,
+      label: { show: true, color: '#e8e0d4', fontSize: 11, fontFamily: 'JetBrains Mono' },
+      emphasis: {
+        itemStyle: { shadowBlur: 10, shadowColor: 'rgba(212,160,80,0.3)' }
+      }
+    }]
+  };
+  chart.setOption(option);
+  window.addEventListener('resize', () => chart.resize());
+}
+
+// ============================
+// INIT
+// ============================
+function init() {
+  // Render method library
+  renderMethodLibrary();
+
+  // Init charts
+  initRadar();
+  initHeatmap();
+
+  // Load default scene
+  switchScene(0);
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
