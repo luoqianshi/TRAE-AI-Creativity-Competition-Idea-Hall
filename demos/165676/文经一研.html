@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>计量AI助手</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <style>
+    :root { --academic-blue: #1E3A5F; --accent-amber: #D97706; --warm-gray: #F5F5F0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--warm-gray); color: #1f2937; height: 100vh; overflow: hidden; }
+    #root { height: 100%; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    .msg-enter { animation: slideUp 0.3s ease-out; }
+    @keyframes pulse { 0%,80%,100% { opacity: 0.3; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1); } }
+    .pulse-dot { animation: pulse 1.4s infinite ease-in-out; }
+    .pulse-dot:nth-child(1) { animation-delay: -0.32s; }
+    .pulse-dot:nth-child(2) { animation-delay: -0.16s; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    const { useState, useEffect, useRef } = React;
+
+    const mockData = {
+      datasets: [
+        { id: 'ds-001', name: '上市公司面板数据', variables: [
+          { name: 'stkcd', type: 'id' }, { name: 'year', type: 'time' },
+          { name: 'roa', type: 'continuous' }, { name: 'lev', type: 'continuous' },
+          { name: 'size', type: 'continuous' }, { name: 'growth', type: 'continuous' },
+          { name: 'board_size', type: 'continuous' }, { name: 'soe', type: 'binary' },
+          { name: 'industry', type: 'categorical' }
+        ], rowCount: 28560 },
+        { id: 'ds-002', name: '地级市经济增长数据', variables: [
+          { name: 'city_id', type: 'id' }, { name: 'year', type: 'time' },
+          { name: 'gdp', type: 'continuous' }, { name: 'fdi', type: 'continuous' },
+          { name: 'edu_ratio', type: 'continuous' }, { name: 'pop', type: 'continuous' },
+          { name: 'prov', type: 'categorical' }, { name: 'east', type: 'binary' }
+        ], rowCount: 6320 }
+      ],
+      tables: {
+        ols: { caption: '表1 OLS回归结果', headers: ['变量', '系数', '标准误', 't值', 'P>|t|'], rows: [
+          ['const', '0.1852', '0.0213', '8.695', '0.000'],
+          ['lev', '-0.0894', '0.0072', '-12.417', '0.000'],
+          ['size', '0.0031', '0.0010', '3.100', '0.002'],
+          ['growth', '0.0125', '0.0028', '4.464', '0.000'],
+          ['soe', '-0.0156', '0.0042', '-3.714', '0.000']
+        ]},
+        fe: { caption: '表2 固定效应模型结果', headers: ['变量', '系数', '标准误', 't值', 'P>|t|'], rows: [
+          ['lev', '-0.0765', '0.0081', '-9.444', '0.000'],
+          ['size', '-0.0082', '0.0024', '-3.417', '0.001'],
+          ['growth', '0.0098', '0.0031', '3.161', '0.002'],
+          ['soe', '-0.0093', '0.0058', '-1.603', '0.109']
+        ]},
+        iv: { caption: '表3 工具变量法（2SLS）结果', headers: ['变量', '系数', '标准误', 'z值', 'P>|z|'], rows: [
+          ['lev', '-0.1023', '0.0156', '-6.558', '0.000'],
+          ['size', '0.0045', '0.0018', '2.500', '0.012'],
+          ['growth', '0.0142', '0.0045', '3.156', '0.002'],
+          ['soe', '-0.0189', '0.0067', '-2.821', '0.005']
+        ]},
+        summary: { caption: '表4 描述性统计', headers: ['变量', '均值', '标准差', '最小值', '最大值'], rows: [
+          ['roa', '0.0423', '0.0581', '-0.3125', '0.2896'],
+          ['lev', '0.4562', '0.2035', '0.0089', '0.9874'],
+          ['size', '22.1563', '1.3256', '18.5621', '26.8934'],
+          ['growth', '0.1856', '0.4237', '-0.7823', '3.1567']
+        ]}
+      }
+    };
+
+    function getMockResponse(content) {
+      const l = content.toLowerCase();
+      if (l.includes('ols') || l.includes('回归')) {
+        return { text: '已完成OLS回归分析，ROA为被解释变量。模型整体显著（F=58.42, p<0.001），R²=0.185。', table: mockData.tables.ols };
+      }
+      if (l.includes('fe') || l.includes('固定效应')) {
+        return { text: '使用固定效应模型重新估计，控制了公司层面的不随时间变化的异质性。', table: mockData.tables.fe };
+      }
+      if (l.includes('iv') || l.includes('2sls') || l.includes('工具变量')) {
+        return { text: '采用工具变量法（2SLS）解决内生性问题，选取行业平均负债率和滞后一期负债率作为工具变量。', table: mockData.tables.iv };
+      }
+      if (l.includes('描述') || l.includes('统计')) {
+        return { text: '以下是主要变量的描述性统计结果，样本覆盖28,560个公司-年度观测值。', table: mockData.tables.summary };
+      }
+      return { text: '您好！我是您的AI计量分析助手。当前已加载数据集：上市公司面板数据（28,560条观测）。您可以点击下方快捷按钮运行OLS、FE、IV/2SLS或描述统计。' };
+    }
+
+    function Sidebar({ datasets, sessions, currentSessionId, onSwitch, onAdd }) {
+      const [uploading, setUploading] = useState(false);
+      const handleUpload = () => {
+        setUploading(true);
+        setTimeout(() => {
+          const ds = { id: 'ds-' + Date.now(), name: '新数据集 ' + (datasets.length + 1), variables: [{ name: 'id', type: 'id' }, { name: 'x', type: 'continuous' }, { name: 'y', type: 'continuous' }], rowCount: 1200 };
+          onAdd(ds);
+          setUploading(false);
+        }, 800);
+      };
+      const sessionData = sessions.map(s => ({ session: s, dataset: datasets.find(d => d.id === s.datasetId) })).filter(x => x.dataset);
+      return React.createElement('aside', { style: { width: '260px', height: '100%', background: '#1E3A5F', display: 'flex', flexDirection: 'column' } },
+        React.createElement('div', { style: { padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+            React.createElement('svg', { width: '24', height: '24', viewBox: '0 0 24 24', fill: 'none', stroke: '#D97706', strokeWidth: '2' },
+              React.createElement('path', { d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }),
+              React.createElement('path', { d: 'M8 12h8' })
+            ),
+            React.createElement('h1', { style: { color: 'white', fontSize: '16px', fontWeight: 'bold', margin: 0 } }, '文经一研——计量AI助手')
+          ),
+          React.createElement('p', { style: { color: 'rgba(191,219,254,0.7)', fontSize: '11px', marginLeft: '34px', marginTop: '6px' } }, '智能计量经济学分析')
+        ),
+        React.createElement('div', { style: { flex: 1, overflowY: 'auto', padding: '12px' } },
+          React.createElement('div', { style: { color: 'rgba(191,219,254,0.5)', fontSize: '11px', fontWeight: '500', marginLeft: '8px', marginBottom: '8px', textTransform: 'uppercase' } }, '数据集会话'),
+          sessionData.map(item => React.createElement('button', {
+            key: item.session.id,
+            onClick: () => onSwitch(item.session.id),
+            style: {
+              width: '100%', textAlign: 'left', padding: '12px', borderRadius: '8px', border: 'none',
+              background: item.session.id === currentSessionId ? 'rgba(255,255,255,0.1)' : 'transparent',
+              color: item.session.id === currentSessionId ? 'white' : 'rgba(219,234,254,0.9)',
+              cursor: 'pointer', transition: 'all 0.2s', position: 'relative'
+            },
+            onMouseEnter: e => { if (item.session.id !== currentSessionId) e.target.style.background = 'rgba(255,255,255,0.05)'; },
+            onMouseLeave: e => { if (item.session.id !== currentSessionId) e.target.style.background = 'transparent'; }
+          },
+            item.session.id === currentSessionId && React.createElement('div', { style: { position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: '3px', height: '24px', background: '#D97706', borderRadius: '0 2px 2px 0' } }),
+            React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '10px' } },
+              React.createElement('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: item.session.id === currentSessionId ? '#D97706' : 'rgba(147,197,253,0.6)', strokeWidth: '2' },
+                React.createElement('path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
+                React.createElement('path', { d: 'M14 2v6h6M16 13H8M16 17H8M10 9H8' })
+              ),
+              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                React.createElement('div', { style: { fontSize: '14px', fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, item.dataset.name),
+                React.createElement('div', { style: { fontSize: '11px', color: 'rgba(147,197,253,0.5)', marginTop: '2px' } }, item.dataset.rowCount.toLocaleString() + ' 行 · ' + item.dataset.variables.length + ' 变量')
+              ),
+              item.session.id === currentSessionId && React.createElement('svg', { width: '14', height: '14', viewBox: '0 0 24 24', fill: 'none', stroke: '#D97706', strokeWidth: '2' }, React.createElement('path', { d: 'M9 18l6-6-6-6' }))
+            )
+          ))
+        ),
+        React.createElement('div', { style: { padding: '16px', borderTop: '1px solid rgba(255,255,255,0.1)' } },
+          React.createElement('button', {
+            onClick: handleUpload, disabled: uploading,
+            style: {
+              width: '100%', padding: '10px', borderRadius: '8px', border: 'none',
+              background: '#D97706', color: 'white', fontSize: '14px', fontWeight: '500',
+              cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+            },
+            onMouseEnter: e => { if (!uploading) e.target.style.background = '#F59E0B'; },
+            onMouseLeave: e => { if (!uploading) e.target.style.background = '#D97706'; }
+          },
+            React.createElement('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'white', strokeWidth: '2' },
+              React.createElement('path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }),
+              React.createElement('polyline', { points: '17 8 12 3 7 8' }),
+              React.createElement('line', { x1: '12', y1: '3', x2: '12', y2: '15' })
+            ),
+            uploading ? '上传中...' : '上传数据'
+          ),
+          React.createElement('p', { style: { color: 'rgba(147,197,253,0.4)', fontSize: '10px', textAlign: 'center', marginTop: '8px' } }, '支持 CSV, Excel, Stata')
+        )
+      );
+    }
+
+    function VariableBar({ dataset }) {
+      if (!dataset) return null;
+      const typeColors = {
+        continuous: { background: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
+        categorical: { background: '#ECFDF5', color: '#047857', border: '#A7F3D0' },
+        binary: { background: '#FAF5FF', color: '#7C3AED', border: '#D8B4FE' },
+        id: { background: '#F1F5F9', color: '#475569', border: '#E2E8F0' },
+        time: { background: '#FFFBEB', color: '#B45309', border: '#FDE68A' }
+      };
+      const typeLabels = { continuous: '连续', categorical: '类别', binary: '二元', id: 'ID', time: '时间' };
+      return React.createElement('div', { style: { height: '56px', background: 'white', borderBottom: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', padding: '0 20px', gap: '12px', overflowX: 'auto' } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', color: '#64748B', flexShrink: 0 } },
+          React.createElement('span', { style: { fontSize: '12px', fontWeight: '500' } }, '变量')
+        ),
+        dataset.variables.map(v => React.createElement('div', {
+          key: v.name,
+          style: {
+            ...typeColors[v.type],
+            display: 'inline-flex', alignItems: 'center', gap: '6px',
+            padding: '4px 10px', borderRadius: '12px', fontSize: '12px',
+            border: '1px solid', whiteSpace: 'nowrap'
+          }
+        },
+          React.createElement('span', { style: { fontWeight: '500' } }, v.name),
+          React.createElement('span', { style: { opacity: '0.6', fontSize: '10px' } }, typeLabels[v.type])
+        ))
+      );
+    }
+
+    function TableRenderer({ data }) {
+      return React.createElement('div', { style: { margin: '12px 0', overflowX: 'auto' } },
+        data.caption && React.createElement('div', { style: { fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' } }, data.caption),
+        React.createElement('table', { style: { width: '100%', fontSize: '12px', borderCollapse: 'collapse' } },
+          React.createElement('thead', null,
+            React.createElement('tr', { style: { background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' } },
+              data.headers.map((h, i) => React.createElement('th', { key: i, style: { textAlign: 'left', padding: '8px 12px', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' } }, h))
+            )
+          ),
+          React.createElement('tbody', null,
+            data.rows.map((row, i) => React.createElement('tr', { key: i, style: { borderBottom: '1px solid #F1F5F9', background: i % 2 === 1 ? 'rgba(248,250,252,0.5)' : 'white' } },
+              row.map((cell, j) => React.createElement('td', { key: j, style: { padding: '8px 12px', color: j === 0 ? '#374151' : '#475569', fontFamily: j === 0 ? 'inherit' : 'monospace', fontWeight: j === 0 ? '500' : 'normal', whiteSpace: 'nowrap' } }, cell))
+            ))
+          )
+        )
+      );
+    }
+
+    function MessageBubble({ message }) {
+      const isUser = message.role === 'user';
+      return React.createElement('div', { className: 'msg-enter', style: { display: 'flex', gap: '12px', flexDirection: isUser ? 'row-reverse' : 'row', marginBottom: '20px' } },
+        React.createElement('div', { style: { width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: isUser ? '#1E3A5F' : '#D97706' } },
+          React.createElement('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'white', strokeWidth: '2' },
+            isUser ? React.createElement('path', { d: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2' }) : React.createElement('path', { d: 'M12 2a7 7 0 0 0-7 7c0 2 1 3 3 4l2 2a2 2 0 0 0 3 0l1-1h3c4 0 6-3 6-7a7 7 0 0 0-7-7z' }),
+            isUser ? React.createElement('circle', { cx: '12', cy: '7', r: '4' }) : [React.createElement('circle', { cx: '9', cy: '12', r: '1' }), React.createElement('circle', { cx: '15', cy: '12', r: '1' })]
+          )
+        ),
+        React.createElement('div', { style: { maxWidth: '80%', borderRadius: '20px', padding: '14px 20px', background: isUser ? '#1E3A5F' : 'white', color: isUser ? 'white' : '#374151', border: isUser ? 'none' : '1px solid #E2E8F0', boxShadow: isUser ? 'none' : '0 1px 2px rgba(0,0,0,0.05)' } },
+          isUser ? React.createElement('p', { style: { fontSize: '14px', lineHeight: '1.5', margin: 0 } }, message.content) :
+          React.createElement('div', null,
+            React.createElement('p', { style: { fontSize: '14px', lineHeight: '1.6', color: '#374151', whiteSpace: 'pre-wrap', margin: 0 } }, message.content),
+            message.table && React.createElement(TableRenderer, { data: message.table })
+          )
+        )
+      );
+    }
+
+    function ChatArea({ messages, loading }) {
+      const ref = useRef(null);
+      useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [messages, loading]);
+      return React.createElement('div', { ref: ref, style: { flex: 1, overflowY: 'auto', padding: '24px' } },
+        messages.map(m => React.createElement(MessageBubble, { key: m.id, message: m })),
+        loading && React.createElement('div', { className: 'msg-enter', style: { display: 'flex', gap: '12px' } },
+          React.createElement('div', { style: { width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: '#D97706' } },
+            React.createElement('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'white', strokeWidth: '2' },
+              React.createElement('path', { d: 'M12 20V10' }), React.createElement('path', { d: 'M18 20V4' }), React.createElement('path', { d: 'M6 20v-6' })
+            )
+          ),
+          React.createElement('div', { style: { borderRadius: '20px', padding: '14px 20px', background: 'white', border: '1px solid #E2E8F0' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#64748B' } },
+              React.createElement('span', null, 'AI正在分析'),
+              React.createElement('div', { style: { display: 'flex', gap: '4px' } },
+                React.createElement('span', { className: 'pulse-dot', style: { width: '6px', height: '6px', borderRadius: '50%', background: '#D97706', display: 'inline-block' } }),
+                React.createElement('span', { className: 'pulse-dot', style: { width: '6px', height: '6px', borderRadius: '50%', background: '#D97706', display: 'inline-block' } }),
+                React.createElement('span', { className: 'pulse-dot', style: { width: '6px', height: '6px', borderRadius: '50%', background: '#D97706', display: 'inline-block' } })
+              )
+            )
+          )
+        )
+      );
+    }
+
+    function QuickButtons({ onSend, loading }) {
+      const actions = [
+        { label: 'OLS', prompt: '做一个OLS回归分析', style: { background: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' } },
+        { label: 'FE', prompt: '用固定效应模型分析', style: { background: '#ECFDF5', color: '#047857', border: '#A7F3D0' } },
+        { label: 'IV/2SLS', prompt: '使用工具变量法（2SLS）', style: { background: '#FAF5FF', color: '#7C3AED', border: '#D8B4FE' } },
+        { label: '描述统计', prompt: '做一个描述性统计', style: { background: '#FFFBEB', color: '#B45309', border: '#FDE68A' } }
+      ];
+      return React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '12px' } },
+        actions.map(a => React.createElement('button', {
+          key: a.label, onClick: () => onSend(a.prompt), disabled: loading,
+          style: {
+            ...a.style, padding: '6px 12px', borderRadius: '12px', border: '1px solid',
+            fontSize: '12px', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s',
+            opacity: loading ? 0.5 : 1
+          },
+          onMouseEnter: e => { if (!loading) { e.target.style.transform = 'translateY(-2px)'; e.target.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)'; } },
+          onMouseLeave: e => { if (!loading) { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = 'none'; } }
+        }, a.label))
+      );
+    }
+
+    function ChatInput({ onSend, loading }) {
+      const [text, setText] = useState('');
+      const handleSend = () => { if (text.trim() && !loading) { onSend(text.trim()); setText(''); } };
+      const handleKey = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
+      return React.createElement('div', { style: { padding: '0 24px 24px' } },
+        React.createElement('div', { style: { position: 'relative', background: 'white', borderRadius: '12px', border: '1px solid #E2E8F0' } },
+          React.createElement('textarea', {
+            value: text, onChange: e => setText(e.target.value), onKeyDown: handleKey,
+            placeholder: '输入自然语言指令，如：做一个OLS回归分析...',
+            style: { width: '100%', padding: '14px 48px 14px 16px', border: 'none', outline: 'none', resize: 'none', fontSize: '14px', minHeight: '48px', maxHeight: '120px', color: '#374151' }
+          }),
+          React.createElement('button', {
+            onClick: handleSend, disabled: !text.trim() || loading,
+            style: {
+              position: 'absolute', right: '8px', bottom: '8px', width: '40px', height: '40px',
+              borderRadius: '8px', border: 'none', background: '#1E3A5F', color: 'white',
+              cursor: 'pointer', opacity: (!text.trim() || loading) ? 0.4 : 1, transition: 'all 0.2s'
+            },
+            onMouseEnter: e => { if (!(!text.trim() || loading)) e.target.style.background = '#2A4A73'; },
+            onMouseLeave: e => { if (!(!text.trim() || loading)) e.target.style.background = '#1E3A5F'; }
+          },
+            React.createElement('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'white', strokeWidth: '2' },
+              React.createElement('line', { x1: '22', y1: '2', x2: '11', y2: '13' }),
+              React.createElement('polygon', { points: '22 2 15 22 11 13 2 9 22 2' })
+            )
+          )
+        ),
+        React.createElement('p', { style: { fontSize: '11px', color: '#9CA3AF', textAlign: 'center', marginTop: '8px' } }, 'AI生成的分析结果仅供参考')
+      );
+    }
+
+    function App() {
+      const [datasets, setDatasets] = useState(mockData.datasets);
+      const [sessions, setSessions] = useState([{ id: 'session-001', datasetId: 'ds-001', messages: [{ id: 'welcome', role: 'assistant', content: '您好！我是您的AI计量分析助手。当前已加载数据集：上市公司面板数据（28,560条观测）。您可以点击下方快捷按钮运行OLS、FE、IV/2SLS或描述统计。' }] }]);
+      const [currentSession, setCurrentSession] = useState('session-001');
+      const [loading, setLoading] = useState(false);
+
+      const current = sessions.find(s => s.id === currentSession);
+      const dataset = datasets.find(d => d.id === current?.datasetId);
+
+      const handleSwitch = id => setCurrentSession(id);
+
+      const handleAdd = ds => {
+        setDatasets(prev => [...prev, ds]);
+        const newSession = { id: 'session-' + Date.now(), datasetId: ds.id, messages: [{ id: 'welcome', role: 'assistant', content: '已加载数据集：' + ds.name + '。点击快捷按钮开始分析。' }] };
+        setSessions(prev => [...prev, newSession]);
+        setCurrentSession(newSession.id);
+      };
+
+      const handleSend = content => {
+        const userMsg = { id: 'msg-' + Date.now() + '-user', role: 'user', content };
+        setSessions(prev => prev.map(s => s.id === currentSession ? { ...s, messages: [...s.messages, userMsg] } : s));
+        setLoading(true);
+        setTimeout(() => {
+          const resp = getMockResponse(content);
+          const aiMsg = { id: 'msg-' + Date.now(), role: 'assistant', content: resp.text, table: resp.table };
+          setSessions(prev => prev.map(s => s.id === currentSession ? { ...s, messages: [...s.messages, aiMsg] } : s));
+          setLoading(false);
+        }, 1200);
+      };
+
+      return React.createElement('div', { style: { display: 'flex', height: '100%' } },
+        React.createElement(Sidebar, { datasets, sessions, currentSessionId: currentSession, onSwitch: handleSwitch, onAdd: handleAdd }),
+        React.createElement('main', { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 } },
+          React.createElement(VariableBar, { dataset }),
+          React.createElement(ChatArea, { messages: current?.messages || [], loading }),
+          React.createElement('div', { style: { background: 'rgba(245,245,240,0.8)', backdropFilter: 'blur(4px)', borderTop: '1px solid rgba(226,232,240,0.6)' } },
+            React.createElement(QuickButtons, { onSend: handleSend, loading }),
+            React.createElement(ChatInput, { onSend: handleSend, loading })
+          )
+        )
+      );
+    }
+
+    ReactDOM.render(React.createElement(App), document.getElementById('root'));
+  </script>
+</body>
+</html>

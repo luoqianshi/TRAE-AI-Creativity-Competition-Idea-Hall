@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的掌上AI社区</title>
+    <style>
+        :root {
+            --primary: #333;
+            --bg: #f0f4f8;
+            --panel-bg: rgba(255, 255, 255, 0.95);
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: var(--bg);
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .panel {
+            background: var(--panel-bg);
+            padding: 20px 30px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            border: 2px solid var(--primary);
+            backdrop-filter: blur(10px);
+        }
+        h1 {
+            margin: 0 0 12px 0;
+            font-size: 26px;
+            color: var(--primary);
+            font-weight: 800;
+        }
+        p.subtitle {
+            margin: 0;
+            color: #555;
+            font-size: 15px;
+            font-weight: 500;
+        }
+        #interaction-panel {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            display: none;
+            pointer-events: auto;
+            background: var(--panel-bg);
+            border: 2px solid var(--primary);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 6px 6px 0px rgba(0,0,0,0.15);
+            min-width: 240px;
+            z-index: 10;
+            backdrop-filter: blur(10px);
+            animation: slideIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes slideIn {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        button {
+            padding: 12px 20px;
+            background: #fff;
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        button:hover {
+            background: #ffeaa7;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--primary);
+            z-index: 100;
+            background: rgba(255,255,255,0.8);
+            padding: 20px 40px;
+            border-radius: 12px;
+            border: 2px solid var(--primary);
+        }
+    </style>
+    <!-- 使用 Import maps 引入本地 ES Module -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./three.module.js",
+                "three/addons/": "./"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="loading" class="loading">🚀 正在生成掌上社区...</div>
+    <div id="canvas-container"></div>
+    
+    <div id="ui-layer">
+        <div class="panel">
+            <h1>🏘️ 我的掌上AI社区</h1>
+            <p class="subtitle">拖拽旋转 | 滚轮缩放 | 点击建筑交互</p>
+        </div>
+    </div>
+
+    <div id="interaction-panel">
+        <h3 id="panel-title" style="margin:0 0 8px 0; color:var(--primary); font-size: 20px;">建筑名称</h3>
+        <p id="panel-desc" style="color:#666; font-size:14px; margin:0;">功能描述</p>
+        <div class="btn-group" id="panel-actions">
+            <!-- 动态生成按钮 -->
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/OrbitControls.js';
+
+        // 现代 ES2026 写法: 使用顶层 await, const/let, 箭头函数等
+        
+        const initCommunityApp = async () => {
+            // 核心变量状态
+            const state = {
+                scene: null,
+                camera: null,
+                renderer: null,
+                controls: null,
+                raycaster: new THREE.Raycaster(),
+                mouse: new THREE.Vector2(),
+                interactableObjects: [],
+                hoveredObject: null,
+                selectedObject: null
+            };
+
+            // 手绘风格配色 (莫兰迪/粉彩)
+            const COLORS = {
+                ground: 0xe8f4e5,
+                road: 0xdadada,
+                building: [0xfff1e6, 0xfde2e4, 0xe2ece9, 0xdfe7fd, 0xffeadb],
+                roof: [0xffadad, 0xffd6a5, 0xfdffb6, 0xcaffbf, 0x9bf6ff],
+                tree: 0xa0c49d,
+                treeTrunk: 0x8b5a2b,
+                outline: 0x2b2b2b,
+                highlight: 0xffeaa7,
+                selected: 0xffaa00,
+                serviceCenter: 0xffdac1,
+                parking: 0xcccccc
+            };
+
+            // 1. 初始化场景与相机
+            const container = document.getElementById('canvas-container');
+            
+            state.scene = new THREE.Scene();
+            state.scene.background = new THREE.Color(COLORS.ground);
+            state.scene.fog = new THREE.Fog(COLORS.ground, 20, 100);
+
+            // 正交相机 (2.5D等距视角)
+            const aspect = window.innerWidth / window.innerHeight;
+            const d = 16;
+            state.camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+            state.camera.position.set(20, 20, 20);
+            state.camera.lookAt(state.scene.position);
+
+            // 2. 渲染器
+            state.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            state.renderer.setSize(window.innerWidth, window.innerHeight);
+            state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            state.renderer.shadowMap.enabled = true;
+            state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(state.renderer.domElement);
+
+            // 3. 控制器
+            state.controls = new OrbitControls(state.camera, state.renderer.domElement);
+            state.controls.enableDamping = true;
+            state.controls.dampingFactor = 0.05;
+            state.controls.maxPolarAngle = Math.PI / 2 - 0.1; // 禁止视角穿透地面
+            state.controls.minZoom = 0.5;
+            state.controls.maxZoom = 3;
+
+            // 4. 光照 (明亮柔和)
+            state.scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+            
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(20, 40, 20);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.left = -25;
+            dirLight.shadow.camera.right = 25;
+            dirLight.shadow.camera.top = 25;
+            dirLight.shadow.camera.bottom = -25;
+            dirLight.shadow.bias = -0.0005;
+            state.scene.add(dirLight);
+
+            // 5. 辅助构建函数
+            const createToonMaterial = (color) => new THREE.MeshToonMaterial({ color });
+            
+            const addOutline = (mesh) => {
+                const edges = new THREE.EdgesGeometry(mesh.geometry);
+                const line = new THREE.LineSegments(
+                    edges, 
+                    new THREE.LineBasicMaterial({ color: COLORS.outline, linewidth: 2 })
+                );
+                mesh.add(line);
+                return line;
+            };
+
+            const createBuilding = (x, z, w, h, d_depth, name, type) => {
+                const group = new THREE.Group();
+                
+                // 主体
+                const bodyColor = COLORS.building[Math.floor(Math.random() * COLORS.building.length)];
+                const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d_depth), createToonMaterial(bodyColor));
+                body.position.y = h / 2;
+                body.castShadow = true;
+                body.receiveShadow = true;
+                addOutline(body);
+                group.add(body);
+
+                // 屋顶
+                const roofColor = COLORS.roof[Math.floor(Math.random() * COLORS.roof.length)];
+                const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.5, d_depth + 0.3), createToonMaterial(roofColor));
+                roof.position.y = h + 0.25;
+                roof.castShadow = true;
+                addOutline(roof);
+                group.add(roof);
+
+                // 窗户
+                const winGeo = new THREE.PlaneGeometry(0.5, 0.7);
+                const winMat = new THREE.MeshBasicMaterial({ color: 0x88ccff });
+                for(let i = 1.5; i < h - 1; i += 1.5) {
+                    for(let j = -w/2 + 0.6; j < w/2 - 0.2; j += 1.2) {
+                        const winF = new THREE.Mesh(winGeo, winMat);
+                        winF.position.set(j, i, d_depth/2 + 0.01);
+                        group.add(winF);
+                        
+                        const winB = new THREE.Mesh(winGeo, winMat);
+                        winB.position.set(j, i, -d_depth/2 - 0.01);
+                        winB.rotation.y = Math.PI;
+                        group.add(winB);
+                    }
+                }
+
+                group.position.set(x, 0, z);
+                
+                // 交互包围盒
+                const hitBox = new THREE.Mesh(
+                    new THREE.BoxGeometry(w + 1, h + 2, d_depth + 1),
+                    new THREE.MeshBasicMaterial({ visible: false })
+                );
+                hitBox.position.y = h / 2;
+                hitBox.userData = { name, type, originalColor: bodyColor, targetMesh: body };
+                group.add(hitBox);
+                state.interactableObjects.push(hitBox);
+
+                return group;
+            };
+
+            const createTree = (x, z, scale = 1) => {
+                const group = new THREE.Group();
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.6), createToonMaterial(COLORS.treeTrunk));
+                trunk.position.y = 0.3;
+                trunk.castShadow = true;
+                addOutline(trunk);
+                group.add(trunk);
+
+                const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 0), createToonMaterial(COLORS.tree));
+                leaves.position.y = 0.9;
+                leaves.castShadow = true;
+                addOutline(leaves);
+                group.add(leaves);
+
+                group.position.set(x, 0, z);
+                group.scale.setScalar(scale);
+                return group;
+            };
+
+            const buildCommunity = () => {
+                // 地面与道路
+                const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.MeshLambertMaterial({ color: COLORS.ground }));
+                ground.rotation.x = -Math.PI / 2;
+                ground.receiveShadow = true;
+                state.scene.add(ground);
+
+                const roadMat = new THREE.MeshLambertMaterial({ color: COLORS.road });
+                const road1 = new THREE.Mesh(new THREE.PlaneGeometry(50, 4.5), roadMat);
+                road1.rotation.x = -Math.PI / 2;
+                road1.position.y = 0.01;
+                road1.receiveShadow = true;
+                state.scene.add(road1);
+
+                const road2 = new THREE.Mesh(new THREE.PlaneGeometry(50, 4.5), roadMat);
+                road2.rotation.x = -Math.PI / 2;
+                road2.rotation.z = Math.PI / 2;
+                road2.position.y = 0.01;
+                road2.receiveShadow = true;
+                state.scene.add(road2);
+
+                // 居民楼
+                const positions = [
+                    [-12, -12], [-6, -12], [6, -12], [12, -12],
+                    [-12, -5], [-6, -5], [6, -5], [12, -5],
+                    [-12, 10], [12, 10]
+                ];
+                positions.forEach(([x, z], idx) => {
+                    const h = 4 + Math.random() * 5;
+                    state.scene.add(createBuilding(x, z, 3, h, 3, `居民楼 ${idx + 1}栋`, 'residential'));
+                });
+
+                // 服务中心
+                const serviceGroup = new THREE.Group();
+                const sBody = new THREE.Mesh(new THREE.BoxGeometry(5, 2.5, 4), createToonMaterial(COLORS.serviceCenter));
+                sBody.position.y = 1.25;
+                sBody.castShadow = sBody.receiveShadow = true;
+                addOutline(sBody);
+                serviceGroup.add(sBody);
+                
+                const sRoof = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 5.2, 16, 1, false, 0, Math.PI), createToonMaterial(0xff9999));
+                sRoof.rotation.z = Math.PI / 2;
+                sRoof.position.y = 2.5;
+                sRoof.castShadow = true;
+                addOutline(sRoof);
+                serviceGroup.add(sRoof);
+                serviceGroup.position.set(-6, 0, 10);
+
+                const sHitBox = new THREE.Mesh(new THREE.BoxGeometry(6, 4, 5), new THREE.MeshBasicMaterial({ visible: false }));
+                sHitBox.position.y = 2;
+                sHitBox.userData = { name: "社区服务中心", type: "service", originalColor: COLORS.serviceCenter, targetMesh: sBody };
+                serviceGroup.add(sHitBox);
+                state.interactableObjects.push(sHitBox);
+                state.scene.add(serviceGroup);
+
+                // 公园凉亭
+                const parkGroup = new THREE.Group();
+                const pGround = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshToonMaterial({ color: 0xb5e48c }));
+                pGround.rotation.x = -Math.PI / 2;
+                pGround.position.y = 0.02;
+                pGround.receiveShadow = true;
+                parkGroup.add(pGround);
+
+                const pavBase = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.3, 8), createToonMaterial(0xeeeeee));
+                pavBase.position.y = 0.15;
+                parkGroup.add(pavBase);
+
+                for(let i=0; i<4; i++) {
+                    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.8), createToonMaterial(COLORS.treeTrunk));
+                    pillar.position.set(Math.cos(i*Math.PI/2), 1.05, Math.sin(i*Math.PI/2));
+                    parkGroup.add(pillar);
+                }
+                const pavRoof = new THREE.Mesh(new THREE.ConeGeometry(1.5, 1.2, 8), createToonMaterial(0xd00000));
+                pavRoof.position.y = 2.2;
+                addOutline(pavRoof);
+                parkGroup.add(pavRoof);
+
+                // 树木点缀
+                parkGroup.add(createTree(2.5, 2.5, 1.2));
+                parkGroup.add(createTree(-2.5, -2.5, 0.9));
+                parkGroup.add(createTree(2.5, -2.5, 1.4));
+                parkGroup.position.set(6, 0, 10);
+
+                const pHitBox = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.5, 4), new THREE.MeshBasicMaterial({ visible: false }));
+                pHitBox.position.y = 2;
+                pHitBox.userData = { name: "中心公园凉亭", type: "park", originalColor: 0xeeeeee, targetMesh: pavBase };
+                parkGroup.add(pHitBox);
+                state.interactableObjects.push(pHitBox);
+                state.scene.add(parkGroup);
+
+                // 智能停车场
+                const parkingGroup = new THREE.Group();
+                const parkingLot = new THREE.Mesh(new THREE.PlaneGeometry(10, 6), new THREE.MeshLambertMaterial({ color: COLORS.parking }));
+                parkingLot.rotation.x = -Math.PI / 2;
+                parkingLot.position.y = 0.02;
+                parkingLot.receiveShadow = true;
+                parkingGroup.add(parkingLot);
+                
+                // 停车位线
+                for(let i=-4; i<=4; i+=2) {
+                    const line = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 2.5), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                    line.rotation.x = -Math.PI / 2;
+                    line.position.set(i, 0.03, 1.2);
+                    parkingGroup.add(line);
+                }
+
+                // 停放的车辆
+                const createCar = (cx, cz, color) => {
+                    const car = new THREE.Group();
+                    const bottom = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 2.4), createToonMaterial(color));
+                    bottom.position.y = 0.25;
+                    addOutline(bottom);
+                    car.add(bottom);
+                    const top = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 1.2), createToonMaterial(0xffffff));
+                    top.position.set(0, 0.7, -0.2);
+                    addOutline(top);
+                    car.add(top);
+                    car.position.set(cx, 0, cz);
+                    return car;
+                };
+                parkingGroup.add(createCar(-3, 1.2, 0xff7b54));
+                parkingGroup.add(createCar(1, 1.2, 0x41b8d5));
+                parkingGroup.add(createCar(3, 1.2, 0x2d4263));
+
+                parkingGroup.position.set(16, 0, -2);
+                const pkHitBox = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 6), new THREE.MeshBasicMaterial({ visible: false }));
+                pkHitBox.position.y = 1.5;
+                pkHitBox.userData = { name: "智能停车场", type: "parking", originalColor: COLORS.parking, targetMesh: parkingLot };
+                parkingGroup.add(pkHitBox);
+                state.interactableObjects.push(pkHitBox);
+                state.scene.add(parkingGroup);
+
+                // 路灯
+                const createStreetLight = (lx, lz) => {
+                    const group = new THREE.Group();
+                    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2), new THREE.MeshBasicMaterial({ color: 0x333333 }));
+                    pole.position.y = 1;
+                    group.add(pole);
+                    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2), new THREE.MeshBasicMaterial({ color: 0xffffcc }));
+                    lamp.position.y = 2.1;
+                    group.add(lamp);
+                    // 添加光源效果
+                    const light = new THREE.PointLight(0xffffcc, 0.5, 5);
+                    light.position.y = 2.1;
+                    group.add(light);
+                    group.position.set(lx, 0, lz);
+                    return group;
+                };
+                
+                const lightPositions = [
+                    [-18, 3], [-8, 3], [2, 3], [12, 3], [22, 3],
+                    [-18, -3], [-8, -3], [2, -3], [12, -3], [22, -3]
+                ];
+                lightPositions.forEach(([lx, lz]) => state.scene.add(createStreetLight(lx, lz)));
+
+                // 随机绿化带
+                for(let i=0; i<40; i++) {
+                    const tx = (Math.random() - 0.5) * 46;
+                    const tz = (Math.random() - 0.5) * 46;
+                    if(Math.abs(tx) > 3.5 && Math.abs(tz) > 3.5) {
+                        state.scene.add(createTree(tx, tz, 0.7 + Math.random()*0.6));
+                    }
+                }
+            };
+
+            buildCommunity();
+
+            // 6. 事件处理
+            const onResize = () => {
+                const aspect = window.innerWidth / window.innerHeight;
+                state.camera.left = -d * aspect;
+                state.camera.right = d * aspect;
+                state.camera.top = d;
+                state.camera.bottom = -d;
+                state.camera.updateProjectionMatrix();
+                state.renderer.setSize(window.innerWidth, window.innerHeight);
+            };
+
+            const onPointerMove = (e) => {
+                state.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                state.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+                state.raycaster.setFromCamera(state.mouse, state.camera);
+                const intersects = state.raycaster.intersectObjects(state.interactableObjects);
+
+                if (intersects.length > 0) {
+                    document.body.style.cursor = 'pointer';
+                    const obj = intersects[0].object;
+                    
+                    if (state.hoveredObject !== obj && state.selectedObject !== obj) {
+                        if (state.hoveredObject && state.hoveredObject !== state.selectedObject) {
+                            state.hoveredObject.userData.targetMesh.material.color.setHex(state.hoveredObject.userData.originalColor);
+                        }
+                        state.hoveredObject = obj;
+                        state.hoveredObject.userData.targetMesh.material.color.setHex(COLORS.highlight);
+                    }
+                } else {
+                    document.body.style.cursor = 'default';
+                    if (state.hoveredObject && state.hoveredObject !== state.selectedObject) {
+                        state.hoveredObject.userData.targetMesh.material.color.setHex(state.hoveredObject.userData.originalColor);
+                        state.hoveredObject = null;
+                    }
+                }
+            };
+
+            const updateUI = (data) => {
+                const panel = document.getElementById('interaction-panel');
+                document.getElementById('panel-title').innerText = data.name;
+                
+                const actionsMap = {
+                    residential: {
+                        desc: "居民专属生活服务",
+                        btns: [
+                            { icon: "⚡", text: "水电物业缴费" },
+                            { icon: "🔧", text: "一键报修" },
+                            { icon: "💬", text: "邻里议事厅" }
+                        ]
+                    },
+                    service: {
+                        desc: "社区综合政务与管理",
+                        btns: [
+                            { icon: "📄", text: "政务咨询与代办" },
+                            { icon: "🛡️", text: "网格化管理" },
+                            { icon: "✉️", text: "意见反馈箱" }
+                        ]
+                    },
+                    park: {
+                        desc: "社区公共活动空间",
+                        btns: [
+                            { icon: "🎉", text: "社区活动报名" },
+                            { icon: "👥", text: "实时人流量查看" }
+                        ]
+                    },
+                    parking: {
+                        desc: "智能泊车与车辆管理",
+                        btns: [
+                            { icon: "🚗", text: "余位查询" },
+                            { icon: "💳", text: "在线缴费" }
+                        ]
+                    }
+                };
+
+                const conf = actionsMap[data.type];
+                document.getElementById('panel-desc').innerText = conf.desc;
+                
+                const btnHtml = conf.btns.map(b => 
+                    `<button onclick="alert('即将打开: ${b.text}')"><span>${b.icon}</span> ${b.text}</button>`
+                ).join('');
+                document.getElementById('panel-actions').innerHTML = btnHtml;
+                
+                panel.style.display = 'block';
+            };
+
+            const onPointerDown = () => {
+                if (state.hoveredObject) {
+                    if (state.selectedObject) {
+                        state.selectedObject.userData.targetMesh.material.color.setHex(state.selectedObject.userData.originalColor);
+                    }
+                    state.selectedObject = state.hoveredObject;
+                    state.selectedObject.userData.targetMesh.material.color.setHex(COLORS.selected);
+                    updateUI(state.selectedObject.userData);
+                } else {
+                    if (state.selectedObject) {
+                        state.selectedObject.userData.targetMesh.material.color.setHex(state.selectedObject.userData.originalColor);
+                        state.selectedObject = null;
+                        document.getElementById('interaction-panel').style.display = 'none';
+                    }
+                }
+            };
+
+            window.addEventListener('resize', onResize);
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerdown', onPointerDown);
+
+            // 7. 渲染循环
+            const animate = () => {
+                requestAnimationFrame(animate);
+                state.controls.update();
+                state.renderer.render(state.scene, state.camera);
+            };
+
+            // 移除Loading
+            document.getElementById('loading').style.display = 'none';
+            animate();
+        };
+
+        // 启动应用
+        initCommunityApp().catch(console.error);
+    </script>
+</body>
+</html>

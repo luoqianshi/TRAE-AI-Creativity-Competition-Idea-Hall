@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF目录精灵 — 智能PDF目录生成工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Nunito:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            'display': ['"Plus Jakarta Sans"', 'sans-serif'],
+            'body': ['"Nunito"', 'sans-serif'],
+            'serif-cn': ['"Noto Serif SC"', 'serif'],
+          },
+          colors: {
+            'brand': {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              200: '#c7d2fe',
+              300: '#a5b4fc',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            },
+            'warm': {
+              50: '#fffbeb',
+              100: '#fef3c7',
+              400: '#fbbf24',
+              500: '#f59e0b',
+              600: '#d97706',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ===== Base ===== */
+    body {
+      font-family: 'Nunito', 'Noto Serif SC', sans-serif;
+      background-color: #f7f6fb;
+      background-image:
+        radial-gradient(at 12% 18%, rgba(99, 102, 241, 0.07) 0px, transparent 50%),
+        radial-gradient(at 88% 8%, rgba(245, 158, 11, 0.05) 0px, transparent 50%),
+        radial-gradient(at 50% 95%, rgba(236, 72, 153, 0.04) 0px, transparent 50%);
+      min-height: 100vh;
+    }
+
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.2); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.35); }
+
+    /* ===== Drop Zone ===== */
+    .drop-zone {
+      border: 2px dashed rgba(99, 102, 241, 0.25);
+      transition: all 0.3s ease;
+    }
+    .drop-zone.drag-over {
+      border-color: rgba(99, 102, 241, 0.5);
+      background-color: rgba(99, 102, 241, 0.03);
+      transform: scale(1.005);
+    }
+
+    /* ===== Animations ===== */
+    @keyframes float-soft {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+    @keyframes scan-line {
+      0% { top: 8%; opacity: 0; }
+      20% { opacity: 1; }
+      80% { opacity: 1; }
+      100% { top: 92%; opacity: 0; }
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.7); opacity: 0.5; }
+      100% { transform: scale(1.8); opacity: 0; }
+    }
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateX(-12px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    @keyframes spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .anim-float { animation: float-soft 3.5s ease-in-out infinite; }
+    .anim-fade-up { animation: fade-up 0.5s ease-out both; }
+    .anim-slide-in { animation: slide-in 0.3s ease-out both; }
+
+    /* ===== Processing ===== */
+    .proc-icon-wrap { animation: float-soft 3s ease-in-out infinite; }
+    .scan-bar {
+      position: absolute;
+      left: 10%;
+      right: 10%;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, #6366f1, #818cf8, transparent);
+      border-radius: 2px;
+      animation: scan-line 2s ease-in-out infinite;
+      box-shadow: 0 0 12px rgba(99, 102, 241, 0.5);
+    }
+    .pulse-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid rgba(99, 102, 241, 0.4);
+      animation: pulse-ring 2s ease-out infinite;
+    }
+    .progress-track {
+      background: rgba(99, 102, 241, 0.1);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #818cf8);
+      border-radius: 999px;
+      width: 0%;
+      transition: width 0.5s ease;
+    }
+
+    /* ===== PDF Page ===== */
+    .pdf-page {
+      background: #fefefe;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04);
+      position: relative;
+      overflow: hidden;
+    }
+    .pdf-page::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
+      opacity: 0.025;
+      pointer-events: none;
+      mix-blend-mode: multiply;
+    }
+
+    /* ===== TOC Entry ===== */
+    .toc-entry {
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .toc-entry:hover {
+      background-color: rgba(99, 102, 241, 0.05);
+    }
+    .toc-entry.active {
+      background-color: rgba(99, 102, 241, 0.1);
+    }
+    .toc-entry .entry-actions {
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .toc-entry:hover .entry-actions {
+      opacity: 1;
+    }
+
+    /* ===== Toast ===== */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      opacity: 0;
+      transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* ===== Misc ===== */
+    .gradient-text {
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .step-arrow {
+      background: linear-gradient(90deg, rgba(99,102,241,0.15), rgba(99,102,241,0.05));
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body class="font-body text-gray-700">
+
+  <!-- ===== Navigation ===== -->
+  <nav class="sticky top-0 z-50 backdrop-blur-md bg-white/70 border-b border-gray-100/80">
+    <div class="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center shadow-lg shadow-brand-500/25">
+          <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <path d="M9 7h6M9 11h4" stroke="currentColor"/>
+          </svg>
+        </div>
+        <span class="font-display font-bold text-lg text-gray-800">PDF目录精灵</span>
+      </div>
+      <div class="flex items-center gap-3 md:gap-5">
+        <a href="#features" class="hidden sm:block text-sm font-medium text-gray-500 hover:text-brand-600 transition-colors">功能特性</a>
+        <a href="#how" class="hidden sm:block text-sm font-medium text-gray-500 hover:text-brand-600 transition-colors">使用流程</a>
+        <span class="px-4 py-2 rounded-2xl bg-brand-50 text-brand-600 text-sm font-semibold">免费使用</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ===== Upload State ===== -->
+  <div id="uploadState">
+    <!-- Hero + Drop Zone -->
+    <section class="px-4 md:px-6 pt-12 md:pt-20 pb-8">
+      <div class="max-w-3xl mx-auto text-center">
+        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-50 text-brand-600 text-xs font-semibold mb-6 anim-fade-up">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
+          AI 驱动 · 支持扫描版图片PDF
+        </div>
+        <h1 class="font-display font-extrabold text-3xl md:text-5xl text-gray-800 leading-tight mb-4 anim-fade-up" style="animation-delay:0.05s">
+          为你的PDF<br class="md:hidden">一键添加<span class="gradient-text">智能目录</span>
+        </h1>
+        <p class="text-base md:text-lg text-gray-500 max-w-xl mx-auto mb-10 anim-fade-up" style="animation-delay:0.1s">
+          上传PDF，AI自动识别章节结构并生成可编辑目录，左侧目录右侧预览，检查无误后一键下载。
+        </p>
+      </div>
+
+      <!-- Drop Zone -->
+      <div class="max-w-2xl mx-auto anim-fade-up" style="animation-delay:0.15s">
+        <div id="dropZone" class="drop-zone bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-8 md:p-14 text-center cursor-pointer hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
+          <input type="file" id="fileInput" accept=".pdf" class="hidden">
+          <div class="anim-float mb-6 flex justify-center">
+            <div class="w-20 h-20 rounded-3xl bg-gradient-to-br from-brand-50 to-brand-100 flex items-center justify-center shadow-lg shadow-brand-500/10">
+              <svg class="w-10 h-10 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+          </div>
+          <button id="uploadBtn" class="px-8 py-3.5 rounded-2xl font-display font-semibold text-white bg-gradient-to-r from-brand-500 to-brand-600 shadow-lg shadow-brand-500/25 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 transition-all duration-200 active:scale-95 text-base">
+            选择 PDF 文件
+          </button>
+          <p class="text-sm text-gray-400 mt-4">或将 PDF 拖拽到此处</p>
+          <div class="flex flex-wrap items-center justify-center gap-2.5 mt-6">
+            <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-50 text-gray-500 text-xs font-medium">
+              <svg class="w-3.5 h-3.5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 12h10M7 8h10M7 16h6"/></svg>
+              支持扫描版PDF
+            </span>
+            <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-50 text-gray-500 text-xs font-medium">
+              <svg class="w-3.5 h-3.5 text-warm-500" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
+              AI智能识别
+            </span>
+            <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-50 text-gray-500 text-xs font-medium">
+              <svg class="w-3.5 h-3.5 text-brand-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              目录可编辑
+            </span>
+            <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-50 text-gray-500 text-xs font-medium">
+              <svg class="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              无需注册
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- How It Works -->
+    <section id="how" class="px-4 md:px-6 py-12 md:py-16">
+      <div class="max-w-4xl mx-auto">
+        <h2 class="font-display font-bold text-xl md:text-2xl text-gray-800 text-center mb-10">三步完成目录添加</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-3 relative">
+          <!-- Step 1 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 md:p-8 text-center hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
+            <div class="w-14 h-14 rounded-2xl bg-brand-50 flex items-center justify-center mx-auto mb-4">
+              <svg class="w-7 h-7 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 mb-1.5">上传 PDF</h3>
+            <p class="text-sm text-gray-400 leading-relaxed">点击或拖拽上传你的PDF文件，支持扫描版图片PDF</p>
+          </div>
+          <!-- Arrow -->
+          <div class="hidden md:flex items-center justify-center">
+            <div class="step-arrow w-full h-1 rounded-full"></div>
+          </div>
+          <!-- Step 2 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 md:p-8 text-center hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 md:col-start-2">
+            <div class="w-14 h-14 rounded-2xl bg-warm-50 flex items-center justify-center mx-auto mb-4">
+              <svg class="w-7 h-7 text-warm-500" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 mb-1.5">AI 智能识别</h3>
+            <p class="text-sm text-gray-400 leading-relaxed">自动分析内容结构，提取章节标题，生成完整目录</p>
+          </div>
+          <!-- Arrow -->
+          <div class="hidden md:flex items-center justify-center">
+            <div class="step-arrow w-full h-1 rounded-full"></div>
+          </div>
+          <!-- Step 3 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 md:p-8 text-center hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 md:col-start-3 md:row-start-1">
+            <div class="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center mx-auto mb-4">
+              <svg class="w-7 h-7 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 mb-1.5">预览并下载</h3>
+            <p class="text-sm text-gray-400 leading-relaxed">左侧目录右侧文档，检查编辑后一键下载成果</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="px-4 md:px-6 py-12 md:py-16">
+      <div class="max-w-5xl mx-auto">
+        <h2 class="font-display font-bold text-xl md:text-2xl text-gray-800 text-center mb-10">为什么选择目录精灵</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
+          <!-- Feature 1 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
+            <div class="w-12 h-12 rounded-2xl bg-brand-50 flex items-center justify-center mb-4">
+              <svg class="w-6 h-6 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                <rect x="7" y="7" width="10" height="10" rx="1"/>
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 text-sm md:text-base mb-1.5">OCR 智能识别</h3>
+            <p class="text-xs md:text-sm text-gray-400 leading-relaxed">深度支持扫描版图片PDF，AI提取文字内容并识别章节结构</p>
+          </div>
+          <!-- Feature 2 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
+            <div class="w-12 h-12 rounded-2xl bg-warm-50 flex items-center justify-center mb-4">
+              <svg class="w-6 h-6 text-warm-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"/>
+                <line x1="8" y1="12" x2="21" y2="12"/>
+                <line x1="8" y1="18" x2="21" y2="18"/>
+                <line x1="3" y1="6" x2="3.01" y2="6"/>
+                <line x1="3" y1="12" x2="3.01" y2="12"/>
+                <line x1="3" y1="18" x2="3.01" y2="18"/>
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 text-sm md:text-base mb-1.5">自动生成目录</h3>
+            <p class="text-xs md:text-sm text-gray-400 leading-relaxed">智能分析文档层次，一键生成多级目录树，含页码定位</p>
+          </div>
+          <!-- Feature 3 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
+            <div class="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4">
+              <svg class="w-6 h-6 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 text-sm md:text-base mb-1.5">实时预览检查</h3>
+            <p class="text-xs md:text-sm text-gray-400 leading-relaxed">左侧目录、右侧文档，点击目录条目即时跳转对应页面</p>
+          </div>
+          <!-- Feature 4 -->
+          <div class="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-6 hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
+            <div class="w-12 h-12 rounded-2xl bg-pink-50 flex items-center justify-center mb-4">
+              <svg class="w-6 h-6 text-pink-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-gray-800 text-sm md:text-base mb-1.5">一键下载</h3>
+            <p class="text-xs md:text-sm text-gray-400 leading-relaxed">添加目录后直接下载，保留原始排版，即下即用</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="px-4 md:px-6 py-10 mt-8">
+      <div class="max-w-5xl mx-auto text-center">
+        <div class="flex items-center justify-center gap-2 mb-3">
+          <div class="w-7 h-7 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          </div>
+          <span class="font-display font-bold text-gray-700">PDF目录精灵</span>
+        </div>
+        <p class="text-xs text-gray-400">让每一份PDF都有清晰的导航 · TRAE AI 创造力大赛参赛作品</p>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ===== Processing State ===== -->
+  <div id="processingState" class="hidden">
+    <section class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4">
+      <div class="text-center max-w-md">
+        <!-- Animated Icon -->
+        <div class="relative w-32 h-32 mx-auto mb-8">
+          <div class="pulse-ring" style="inset:0; animation-delay:0s;"></div>
+          <div class="pulse-ring" style="inset:0; animation-delay:0.5s;"></div>
+          <div class="pulse-ring" style="inset:0; animation-delay:1s;"></div>
+          <div class="proc-icon-wrap relative w-24 h-24 mx-auto rounded-3xl bg-white shadow-xl shadow-gray-200/50 flex items-center justify-center overflow-hidden" style="margin-top:16px;">
+            <div class="scan-bar"></div>
+            <svg class="w-12 h-12 text-brand-500 relative z-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="8" y1="13" x2="16" y2="13"/>
+              <line x1="8" y1="17" x2="13" y2="17"/>
+            </svg>
+          </div>
+        </div>
+        <h2 class="font-display font-bold text-xl text-gray-800 mb-2">正在处理你的PDF</h2>
+        <p id="processingMessage" class="text-sm text-gray-400 mb-6 h-5">正在上传PDF文件...</p>
+        <div class="progress-track w-64 h-1.5 mx-auto">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== Preview State ===== -->
+  <div id="previewState" class="hidden">
+    <div class="flex flex-col" style="height:calc(100vh - 4rem);">
+      <!-- Top Bar -->
+      <div class="flex-shrink-0 px-4 md:px-6 py-3 bg-white/80 backdrop-blur-md border-b border-gray-100/80">
+        <div class="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-9 h-9 rounded-2xl bg-brand-50 flex items-center justify-center flex-shrink-0">
+              <svg class="w-5 h-5 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+            </div>
+            <div class="min-w-0">
+              <p id="fileName" class="font-display font-semibold text-sm text-gray-800 truncate">人工智能基础与应用.pdf</p>
+              <p class="text-xs text-gray-400"><span id="pageCount">112</span> 页 · 目录已生成</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 md:gap-3 flex-shrink-0">
+            <button id="resetBtn" class="px-3 md:px-4 py-2 rounded-2xl bg-gray-50 text-gray-600 text-sm font-medium hover:bg-gray-100 hover:-translate-y-0.5 transition-all duration-200 active:scale-95 flex items-center gap-1.5">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+              <span class="hidden sm:inline">重新上传</span>
+            </button>
+            <button id="downloadBtn" class="px-4 md:px-6 py-2 rounded-2xl font-display font-semibold text-white bg-gradient-to-r from-brand-500 to-brand-600 shadow-lg shadow-brand-500/25 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 transition-all duration-200 active:scale-95 text-sm flex items-center gap-1.5">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              下载目录PDF
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Split View -->
+      <div class="flex-1 flex gap-3 md:gap-4 px-4 md:px-6 py-4 overflow-hidden">
+        <!-- TOC Panel -->
+        <div class="w-64 md:w-80 flex-shrink-0 bg-white rounded-3xl shadow-xl shadow-gray-200/50 flex flex-col overflow-hidden">
+          <div class="flex-shrink-0 px-5 py-4 border-b border-gray-50">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-warm-500" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
+                <h3 class="font-display font-semibold text-sm text-gray-800">智能生成的目录</h3>
+              </div>
+              <span id="tocCount" class="text-xs text-gray-400 font-medium">0 条</span>
+            </div>
+          </div>
+          <div id="tocList" class="flex-1 overflow-y-auto py-2 px-2">
+            <!-- TOC entries rendered by JS -->
+          </div>
+          <div class="flex-shrink-0 px-3 py-3 border-t border-gray-50">
+            <button id="addEntryBtn" class="w-full px-4 py-2.5 rounded-2xl bg-brand-50 text-brand-600 text-sm font-medium hover:bg-brand-100 hover:-translate-y-0.5 transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              添加自定义条目
+            </button>
+          </div>
+        </div>
+
+        <!-- PDF Preview Panel -->
+        <div class="flex-1 bg-gray-50/50 rounded-3xl shadow-xl shadow-gray-200/50 overflow-hidden flex flex-col">
+          <div class="flex-shrink-0 px-5 py-3 bg-white/60 backdrop-blur-sm border-b border-gray-100/60 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              <span class="text-sm font-medium text-gray-500">文档预览</span>
+            </div>
+            <span id="currentPageLabel" class="text-xs text-gray-400">第 1 页</span>
+          </div>
+          <div id="pdfPreview" class="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col items-center gap-6">
+            <!-- PDF pages rendered by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Toast ===== -->
+  <div id="toast" class="toast">
+    <div class="bg-white rounded-2xl shadow-2xl shadow-gray-300/30 px-5 py-3.5 flex items-center gap-3 border border-gray-100">
+      <div id="toastIcon" class="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <span id="toastMsg" class="text-sm font-medium text-gray-700">操作成功</span>
+    </div>
+  </div>
+
+  <script>
+    // ============ Mock Data ============
+    let tocData = [
+      { id: 1,  title: '第一章 人工智能概述',         page: 1,  level: 0 },
+      { id: 2,  title: '1.1 什么是人工智能',          page: 3,  level: 1 },
+      { id: 3,  title: '1.2 人工智能的发展历程',      page: 8,  level: 1 },
+      { id: 4,  title: '1.3 人工智能的应用领域',      page: 12, level: 1 },
+      { id: 5,  title: '第二章 机器学习基础',         page: 15, level: 0 },
+      { id: 6,  title: '2.1 监督学习',               page: 18, level: 1 },
+      { id: 7,  title: '2.2 无监督学习',             page: 25, level: 1 },
+      { id: 8,  title: '2.3 模型评估与选择',          page: 29, level: 1 },
+      { id: 9,  title: '第三章 深度学习',            page: 32, level: 0 },
+      { id: 10, title: '3.1 神经网络基础',           page: 35, level: 1 },
+      { id: 11, title: '3.2 卷积神经网络',           page: 42, level: 1 },
+      { id: 12, title: '3.3 循环神经网络',           page: 46, level: 1 },
+      { id: 13, title: '第四章 自然语言处理',         page: 48, level: 0 },
+      { id: 14, title: '4.1 文本表示方法',           page: 51, level: 1 },
+      { id: 15, title: '4.2 预训练语言模型',         page: 58, level: 1 },
+      { id: 16, title: '第五章 计算机视觉',          page: 65, level: 0 },
+      { id: 17, title: '第六章 强化学习',            page: 80, level: 0 },
+      { id: 18, title: '第七章 AI伦理与未来',        page: 95, level: 0 },
+    ];
+
+    const pdfPages = [
+      {
+        page: 1,
+        type: 'chapter',
+        chapterNum: '第一章',
+        title: '人工智能概述',
+        body: [
+          { type: 'label', text: '本章导读' },
+          { type: 'p', text: '人工智能（Artificial Intelligence，简称 AI）是计算机科学的一个重要分支，致力于研究和开发能够模拟、延伸与扩展人类智能的理论、方法、技术及应用系统。本章将介绍人工智能的基本概念、发展历程以及主要应用领域，帮助读者建立对这一领域的整体认知。' },
+          { type: 'keywords', text: '关键词：人工智能 · 机器学习 · 深度学习 · 智能系统' },
+        ]
+      },
+      {
+        page: 3,
+        type: 'section',
+        chapterNum: '1.1',
+        title: '什么是人工智能',
+        body: [
+          { type: 'p', text: '人工智能是指通过计算机程序模拟人类智能行为的技术体系。它涵盖学习、推理、感知、理解与决策等多个维度，旨在使计算机具备类似人类的思维能力与行为方式。' },
+          { type: 'p', text: '从广义上讲，任何能够感知环境并采取行动以最大化目标成功的系统，均可视为人工智能系统。而在工程实践中，AI 通常指那些能够从海量数据中学习规律，并据此做出预测或决策的算法与模型。' },
+          { type: 'p', text: '人工智能的核心能力包括以下几个方面：' },
+          { type: 'list', items: [
+            '学习能力 —— 从数据中自动获取知识与规律',
+            '推理能力 —— 基于已知信息进行逻辑推断与因果分析',
+            '感知能力 —— 理解和处理视觉、听觉等感官信息',
+            '语言能力 —— 理解和生成自然语言文本',
+          ]},
+        ]
+      },
+      {
+        page: 8,
+        type: 'section',
+        chapterNum: '1.2',
+        title: '人工智能的发展历程',
+        body: [
+          { type: 'p', text: '人工智能的发展并非一帆风顺，而是经历了多次浪潮与低谷。1956 年的达特茅斯会议标志着 AI 作为独立学科的诞生，与会学者首次提出了"人工智能"这一术语。' },
+          { type: 'p', text: '20 世纪 60 至 70 年代，研究者们对 AI 抱有极大热情，开发出了一系列早期系统。然而，受限于计算能力和数据规模，许多预期目标未能实现，AI 研究进入了被称为"AI 寒冬"的低谷期。' },
+          { type: 'p', text: '进入 21 世纪，随着大数据、云计算与深度学习技术的突破，人工智能迎来了前所未有的发展机遇。AlphaGo 战胜围棋世界冠军、大语言模型的涌现，标志着 AI 正在深刻改变人类社会的方方面面。' },
+        ]
+      },
+      {
+        page: 15,
+        type: 'chapter',
+        chapterNum: '第二章',
+        title: '机器学习基础',
+        body: [
+          { type: 'label', text: '本章导读' },
+          { type: 'p', text: '机器学习是人工智能的核心技术之一，它使计算机能够从数据中自动学习规律与模式，而无需显式编程。本章将系统介绍监督学习、无监督学习与强化学习三大范式，以及模型评估与选择的基本方法。' },
+          { type: 'keywords', text: '关键词：监督学习 · 无监督学习 · 模型评估 · 泛化能力' },
+        ]
+      },
+      {
+        page: 32,
+        type: 'chapter',
+        chapterNum: '第三章',
+        title: '深度学习',
+        body: [
+          { type: 'label', text: '本章导读' },
+          { type: 'p', text: '深度学习是机器学习的一个子领域，以深层神经网络为核心模型。近年来，深度学习在图像识别、语音识别、自然语言处理等领域取得了突破性进展，成为推动人工智能发展的关键技术力量。' },
+          { type: 'p', text: '本章将从神经网络的基本结构出发，逐步介绍卷积神经网络（CNN）、循环神经网络（RNN）以及注意力机制等核心内容，帮助读者建立对深度学习方法的系统理解。' },
+          { type: 'keywords', text: '关键词：神经网络 · 卷积网络 · 循环网络 · 注意力机制' },
+        ]
+      },
+      {
+        page: 48,
+        type: 'chapter',
+        chapterNum: '第四章',
+        title: '自然语言处理',
+        body: [
+          { type: 'label', text: '本章导读' },
+          { type: 'p', text: '自然语言处理（Natural Language Processing，简称 NLP）研究计算机如何理解、解释和生成人类语言。从早期的规则系统到现代的预训练大模型，NLP 技术经历了深刻的范式转变。' },
+          { type: 'p', text: '如今，自然语言处理已在机器翻译、智能问答、文本摘要、情感分析等场景中得到广泛应用，成为人机交互的重要桥梁。本章将介绍文本表示方法、语言模型以及预训练技术的发展脉络。' },
+          { type: 'keywords', text: '关键词：文本表示 · 语言模型 · 预训练 · 生成式 AI' },
+        ]
+      },
+    ];
+
+    // ============ DOM ============
+    const uploadState = document.getElementById('uploadState');
+    const processingState = document.getElementById('processingState');
+    const previewState = document.getElementById('previewState');
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const tocList = document.getElementById('tocList');
+    const pdfPreview = document.getElementById('pdfPreview');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const addEntryBtn = document.getElementById('addEntryBtn');
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toastMsg');
+    const toastIcon = document.getElementById('toastIcon');
+
+    let currentFilename = '人工智能基础与应用.pdf';
+    let activeEntryId = null;
+
+    // ============ State Management ============
+    function showState(state) {
+      uploadState.classList.toggle('hidden', state !== 'upload');
+      processingState.classList.toggle('hidden', state !== 'processing');
+      previewState.classList.toggle('hidden', state !== 'preview');
+      document.body.style.overflow = state === 'preview' ? 'hidden' : '';
+    }
+
+    // ============ Upload Handling ============
+    uploadBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fileInput.click();
+    });
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFile(e.target.files[0].name);
+      }
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0].name);
+      }
+    });
+
+    function handleFile(filename) {
+      currentFilename = filename || '人工智能基础与应用.pdf';
+      showState('processing');
+      runProcessing();
+    }
+
+    // ============ Processing ============
+    function runProcessing() {
+      const messages = [
+        '正在上传 PDF 文件...',
+        '正在识别页面内容...',
+        '正在提取章节标题...',
+        '正在分析目录结构...',
+        '正在生成智能目录...',
+        '即将完成...'
+      ];
+      const msgEl = document.getElementById('processingMessage');
+      const fillEl = document.getElementById('progressFill');
+      let i = 0;
+
+      const interval = setInterval(() => {
+        if (i < messages.length) {
+          msgEl.textContent = messages[i];
+          fillEl.style.width = ((i + 1) / messages.length * 100) + '%';
+          i++;
+        } else {
+          clearInterval(interval);
+          setTimeout(() => {
+            showState('preview');
+            initPreview();
+          }, 400);
+        }
+      }, 550);
+    }
+
+    // ============ Preview Init ============
+    function initPreview() {
+      document.getElementById('fileName').textContent = currentFilename;
+      renderTOC();
+      renderPDFPages();
+    }
+
+    // ============ Render TOC ============
+    function renderTOC() {
+      tocList.innerHTML = '';
+      document.getElementById('tocCount').textContent = tocData.length + ' 条';
+
+      tocData.forEach((entry, idx) => {
+        const div = document.createElement('div');
+        div.className = 'toc-entry rounded-2xl px-3 py-2 mb-0.5 anim-slide-in';
+        div.style.animationDelay = (idx * 0.03) + 's';
+        div.dataset.entryId = entry.id;
+        div.dataset.page = entry.page;
+
+        const isChapter = entry.level === 0;
+        const paddingLeft = isChapter ? '0.75rem' : '1.75rem';
+
+        div.innerHTML = `
+          <div class="flex items-start gap-2 group" style="padding-left:${paddingLeft}">
+            <div class="flex-1 min-w-0">
+              <p class="${isChapter ? 'font-display font-semibold text-gray-800' : 'font-medium text-gray-500'} text-sm leading-snug truncate">${escapeHtml(entry.title)}</p>
+            </div>
+            <span class="text-xs text-gray-300 font-mono flex-shrink-0 mt-0.5">P.${entry.page}</span>
+            <div class="entry-actions flex items-center gap-0.5 flex-shrink-0">
+              <button onclick="event.stopPropagation();editEntry(${entry.id})" class="w-6 h-6 rounded-lg hover:bg-brand-50 flex items-center justify-center transition-colors">
+                <svg class="w-3.5 h-3.5 text-gray-400 hover:text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+              <button onclick="event.stopPropagation();deleteEntry(${entry.id})" class="w-6 h-6 rounded-lg hover:bg-red-50 flex items-center justify-center transition-colors">
+                <svg class="w-3.5 h-3.5 text-gray-400 hover:text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+        `;
+
+        div.addEventListener('click', () => navigateToPage(entry.page, entry.id));
+        tocList.appendChild(div);
+      });
+    }
+
+    // ============ Render PDF Pages ============
+    function renderPDFPages() {
+      pdfPreview.innerHTML = '';
+      pdfPages.forEach((page, idx) => {
+        const div = document.createElement('div');
+        div.className = 'pdf-page w-full max-w-md p-8 md:p-10 anim-fade-up';
+        div.style.animationDelay = (idx * 0.08) + 's';
+        div.dataset.page = page.page;
+        div.id = 'pdf-page-' + page.page;
+
+        let inner = '';
+        if (page.type === 'chapter') {
+          inner += `<div class="text-center mb-6">`;
+          inner += `<p class="font-serif-cn text-sm text-gray-400 tracking-widest mb-3">${page.chapterNum}</p>`;
+          inner += `<h2 class="font-serif-cn font-semibold text-2xl text-gray-800 mb-6">${page.title}</h2>`;
+          inner += `<div class="w-12 h-0.5 bg-brand-300 mx-auto rounded-full"></div>`;
+          inner += `</div>`;
+        } else {
+          inner += `<h3 class="font-serif-cn font-semibold text-lg text-gray-800 mb-5">${page.chapterNum}  ${page.title}</h3>`;
+        }
+
+        page.body.forEach(block => {
+          if (block.type === 'label') {
+            inner += `<p class="font-serif-cn text-sm font-semibold text-brand-600 mb-2">${block.text}</p>`;
+          } else if (block.type === 'p') {
+            inner += `<p class="font-serif-cn text-sm text-gray-600 leading-7 mb-3 text-justify">${block.text}</p>`;
+          } else if (block.type === 'keywords') {
+            inner += `<p class="font-serif-cn text-xs text-gray-400 mt-4 pt-3 border-t border-gray-100">${block.text}</p>`;
+          } else if (block.type === 'list') {
+            inner += `<div class="my-3 space-y-1.5">`;
+            block.items.forEach(item => {
+              inner += `<div class="flex items-start gap-2"><span class="text-brand-400 text-xs mt-1">●</span><p class="font-serif-cn text-sm text-gray-600 leading-6 flex-1">${item}</p></div>`;
+            });
+            inner += `</div>`;
+          }
+        });
+
+        inner += `<div class="text-center mt-6 pt-4 border-t border-gray-50"><span class="font-serif-cn text-xs text-gray-300">— ${page.page} —</span></div>`;
+        div.innerHTML = inner;
+        pdfPreview.appendChild(div);
+      });
+
+      // Scroll observer for active TOC
+      setupScrollObserver();
+    }
+
+    // ============ Scroll Observer ============
+    function setupScrollObserver() {
+      const pages = pdfPreview.querySelectorAll('.pdf-page');
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting && entry.intersectionRatio > 0.3) {
+            const pageNum = parseInt(entry.target.dataset.page);
+            updateActiveTOC(pageNum);
+            document.getElementById('currentPageLabel').textContent = '第 ' + pageNum + ' 页';
+          }
+        });
+      }, { root: pdfPreview, threshold: [0.3] });
+      pages.forEach(p => observer.observe(p));
+    }
+
+    function updateActiveTOC(pageNum) {
+      // Find closest TOC entry
+      let closest = null;
+      let closestDiff = Infinity;
+      tocData.forEach(entry => {
+        const diff = entry.page - pageNum;
+        if (diff <= 0 && Math.abs(diff) < closestDiff) {
+          closestDiff = Math.abs(diff);
+          closest = entry;
+        }
+      });
+      if (!closest) closest = tocData[0];
+
+      document.querySelectorAll('.toc-entry').forEach(el => el.classList.remove('active'));
+      const activeEl = document.querySelector(`[data-entry-id="${closest.id}"]`);
+      if (activeEl) activeEl.classList.add('active');
+    }
+
+    // ============ Navigate ============
+    function navigateToPage(pageNum, entryId) {
+      const target = document.getElementById('pdf-page-' + pageNum);
+      if (!target) {
+        // Find closest page
+        const allPages = pdfPreview.querySelectorAll('.pdf-page');
+        let closest = null;
+        let diff = Infinity;
+        allPages.forEach(p => {
+          const d = Math.abs(parseInt(p.dataset.page) - pageNum);
+          if (d < diff) { diff = d; closest = p; }
+        });
+        if (closest) target = closest;
+      }
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Highlight entry
+      document.querySelectorAll('.toc-entry').forEach(el => el.classList.remove('active'));
+      if (entryId) {
+        const el = document.querySelector(`[data-entry-id="${entryId}"]`);
+        if (el) el.classList.add('active');
+      }
+    }
+
+    // ============ TOC Editing ============
+    function editEntry(id) {
+      const entry = tocData.find(e => e.id === id);
+      if (!entry) return;
+      const el = document.querySelector(`[data-entry-id="${id}"]`);
+      if (!el) return;
+
+      const isChapter = entry.level === 0;
+      const paddingLeft = isChapter ? '0.75rem' : '1.75rem';
+
+      el.innerHTML = `
+        <div class="flex items-center gap-2" style="padding-left:${paddingLeft}">
+          <input type="text" value="${escapeHtml(entry.title)}" class="flex-1 min-w-0 px-3 py-1.5 bg-gray-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-brand-500/50 focus:bg-white transition-all duration-200" id="editTitle-${id}">
+          <input type="number" value="${entry.page}" class="w-14 px-2 py-1.5 bg-gray-50 border-0 rounded-xl text-xs text-center focus:ring-2 focus:ring-brand-500/50 focus:bg-white transition-all duration-200" id="editPage-${id}">
+          <button onclick="saveEntry(${id})" class="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center hover:bg-emerald-100 transition-colors flex-shrink-0">
+            <svg class="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+          <button onclick="renderTOC()" class="w-7 h-7 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors flex-shrink-0">
+            <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      `;
+      const titleInput = document.getElementById('editTitle-' + id);
+      titleInput.focus();
+      titleInput.select();
+      titleInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveEntry(id);
+        if (e.key === 'Escape') renderTOC();
+      });
+    }
+
+    function saveEntry(id) {
+      const titleEl = document.getElementById('editTitle-' + id);
+      const pageEl = document.getElementById('editPage-' + id);
+      if (!titleEl || !pageEl) return;
+      const entry = tocData.find(e => e.id === id);
+      if (!entry) return;
+      const newTitle = titleEl.value.trim();
+      const newPage = parseInt(pageEl.value) || 1;
+      if (newTitle) {
+        entry.title = newTitle;
+        entry.page = newPage;
+        renderTOC();
+        showToast('目录条目已更新', 'success');
+      }
+    }
+
+    function deleteEntry(id) {
+      tocData = tocData.filter(e => e.id !== id);
+      renderTOC();
+      showToast('目录条目已删除', 'success');
+    }
+
+    function addEntry() {
+      const newId = Math.max(...tocData.map(e => e.id), 0) + 1;
+      tocData.push({ id: newId, title: '新目录条目', page: 1, level: 0 });
+      renderTOC();
+      // Scroll to bottom and edit
+      setTimeout(() => {
+        tocList.scrollTop = tocList.scrollHeight;
+        editEntry(newId);
+      }, 100);
+    }
+
+    // ============ Download ============
+    downloadBtn.addEventListener('click', () => {
+      const originalHTML = downloadBtn.innerHTML;
+      downloadBtn.disabled = true;
+      downloadBtn.innerHTML = '<svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" stroke-linecap="round"/></svg>正在生成...';
+
+      setTimeout(() => {
+        // Generate TOC text file
+        let text = '═══════════════════════════════\n';
+        text += '  PDF目录结构\n';
+        text += '  文件：' + currentFilename + '\n';
+        text += '  生成时间：' + new Date().toLocaleString('zh-CN') + '\n';
+        text += '═══════════════════════════════\n\n';
+        tocData.forEach(entry => {
+          const indent = entry.level === 1 ? '    ' : '';
+          const dots = '.'.repeat(Math.max(3, 50 - indent.length - entry.title.length - String(entry.page).length));
+          text += `${indent}${entry.title} ${dots} ${entry.page}\n`;
+        });
+        text += '\n═══════════════════════════════\n';
+        text += '  由 PDF目录精灵 生成\n';
+
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = currentFilename.replace(/\.pdf$/i, '') + '_目录.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        downloadBtn.disabled = false;
+        downloadBtn.innerHTML = originalHTML;
+        showToast('目录已成功添加！文件已下载', 'success');
+      }, 1500);
+    });
+
+    // ============ Reset ============
+    resetBtn.addEventListener('click', () => {
+      fileInput.value = '';
+      showState('upload');
+    });
+    addEntryBtn.addEventListener('click', addEntry);
+
+    // ============ Toast ============
+    function showToast(msg, type) {
+      toastMsg.textContent = msg;
+      if (type === 'error') {
+        toastIcon.className = 'w-8 h-8 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0';
+        toastIcon.innerHTML = '<svg class="w-5 h-5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      } else {
+        toastIcon.className = 'w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center flex-shrink-0';
+        toastIcon.innerHTML = '<svg class="w-5 h-5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      }
+      toast.classList.add('show');
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    // ============ Utils ============
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

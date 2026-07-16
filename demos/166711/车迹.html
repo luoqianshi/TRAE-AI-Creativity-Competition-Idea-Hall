@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>车迹 CHEJI · 汽车故障与维修可视化系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg-carbon:#0A0E12;
+    --bg-steel:#121821;
+    --bg-elevated:#1A2230;
+    --bg-deep:#070A0E;
+    --border-grid:#1F2937;
+    --border-soft:#2A3548;
+    --text-primary:#E6EDF3;
+    --text-muted:#7D8590;
+    --text-dim:#565F6B;
+    --accent-orange:#FF6B1A;
+    --accent-cyan:#00D4FF;
+    --alert-red:#FF3B3B;
+    --alert-yellow:#FFB800;
+    --alert-green:#2EA043;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --display:'Bebas Neue',Impact,sans-serif;
+    --body:'Noto Sans SC',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--body);
+    background:var(--bg-carbon);
+    color:var(--text-primary);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* 背景氛围：网格 + 噪点 + 扫描线 */
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background-image:
+      linear-gradient(rgba(31,41,55,.35) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(31,41,55,.35) 1px,transparent 1px);
+    background-size:48px 48px;
+    mask-image:radial-gradient(ellipse at center,#000 30%,transparent 80%);
+  }
+  body::after{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:1;opacity:.5;
+    background:
+      repeating-linear-gradient(0deg,rgba(0,212,255,.025) 0 2px,transparent 2px 4px),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  /* ===== 顶部状态栏 ===== */
+  .topbar{
+    position:relative;z-index:5;
+    display:flex;align-items:center;gap:24px;
+    padding:14px 28px;
+    background:linear-gradient(180deg,rgba(18,24,33,.95),rgba(18,24,33,.7));
+    border-bottom:1px solid var(--border-grid);
+    backdrop-filter:blur(8px);
+  }
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand .logo{
+    font-family:var(--display);font-size:30px;letter-spacing:3px;
+    color:var(--accent-orange);line-height:1;
+    text-shadow:0 0 18px rgba(255,107,26,.4);
+  }
+  .brand .sub{
+    font-family:var(--mono);font-size:11px;letter-spacing:2px;
+    color:var(--text-muted);text-transform:uppercase;
+  }
+  .brand .tag{
+    font-family:var(--mono);font-size:10px;color:var(--accent-cyan);
+    border:1px solid rgba(0,212,255,.4);padding:2px 8px;letter-spacing:1px;
+  }
+  .spacer{flex:1}
+
+  .progress-wrap{display:flex;align-items:center;gap:14px;min-width:340px}
+  .progress-label{
+    font-family:var(--mono);font-size:11px;color:var(--text-muted);
+    letter-spacing:1px;text-transform:uppercase;white-space:nowrap;
+  }
+  .progress-track{
+    flex:1;height:10px;background:var(--bg-deep);
+    border:1px solid var(--border-grid);position:relative;overflow:hidden;
+    clip-path:polygon(0 0,calc(100% - 6px) 0,100% 50%,calc(100% - 6px) 100%,0 100%);
+  }
+  .progress-fill{
+    height:100%;width:0%;transition:width .5s cubic-bezier(.2,.8,.2,1);
+    background:linear-gradient(90deg,var(--accent-cyan),#7df0ff);
+    box-shadow:0 0 12px rgba(0,212,255,.6);
+  }
+  .progress-pct{font-family:var(--mono);font-size:13px;color:var(--accent-cyan);min-width:42px;text-align:right}
+
+  .status{
+    display:flex;align-items:center;gap:8px;
+    font-family:var(--mono);font-size:11px;color:var(--text-muted);
+    letter-spacing:1px;text-transform:uppercase;
+  }
+  .status .dot{
+    width:8px;height:8px;border-radius:50%;background:var(--alert-green);
+    box-shadow:0 0 0 0 rgba(46,160,67,.7);animation:breathe 2s infinite;
+  }
+  @keyframes breathe{
+    0%{box-shadow:0 0 0 0 rgba(46,160,67,.7)}
+    70%{box-shadow:0 0 0 8px rgba(46,160,67,0)}
+    100%{box-shadow:0 0 0 0 rgba(46,160,67,0)}
+  }
+
+  /* ===== 主布局 三栏 ===== */
+  .layout{
+    position:relative;z-index:2;
+    display:grid;grid-template-columns:1.15fr .85fr 1.1fr;
+    gap:16px;padding:16px 20px 20px;
+    height:calc(100vh - 61px);
+  }
+  .panel{
+    background:linear-gradient(180deg,rgba(26,34,48,.7),rgba(18,24,33,.7));
+    border:1px solid var(--border-grid);
+    display:flex;flex-direction:column;overflow:hidden;
+    position:relative;
+  }
+  .panel::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,transparent,var(--accent-orange),transparent);
+    opacity:.5;
+  }
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 18px;border-bottom:1px solid var(--border-grid);
+    background:rgba(7,10,14,.4);
+  }
+  .panel-title{
+    font-family:var(--display);font-size:20px;letter-spacing:2px;
+    color:var(--text-primary);line-height:1;
+  }
+  .panel-title .num{
+    font-family:var(--mono);font-size:11px;color:var(--accent-orange);
+    margin-right:8px;letter-spacing:1px;
+  }
+  .panel-meta{
+    font-family:var(--mono);font-size:10px;color:var(--text-dim);
+    letter-spacing:1px;text-transform:uppercase;
+  }
+  .panel-body{flex:1;overflow-y:auto;padding:18px}
+  .panel-body::-webkit-scrollbar{width:6px}
+  .panel-body::-webkit-scrollbar-track{background:transparent}
+  .panel-body::-webkit-scrollbar-thumb{background:var(--border-soft);border-radius:3px}
+
+  /* ===== 左栏：车辆示意图 ===== */
+  .vehicle-stage{
+    position:relative;flex:1;display:flex;align-items:center;justify-content:center;
+    padding:8px;
+  }
+  .vehicle-stage svg{width:100%;height:auto;max-height:340px}
+  .vzone{cursor:pointer;transition:filter .3s}
+  .vzone:hover{filter:drop-shadow(0 0 6px var(--accent-cyan))}
+  .vzone.active .zone-fill{fill:rgba(255,107,26,.18)!important;stroke:var(--accent-orange)!important}
+  .zone-fill{fill:rgba(31,41,55,.55);stroke:var(--border-soft);stroke-width:1;transition:all .3s}
+  .zone-label{
+    font-family:var(--mono);font-size:7px;fill:var(--text-muted);
+    letter-spacing:.5px;text-transform:uppercase;pointer-events:none;
+  }
+  .vzone.active .zone-label{fill:var(--accent-orange)}
+  .hotspot{pointer-events:none}
+  .hotspot circle.pulse{
+    fill:var(--accent-orange);transform-origin:center;transform-box:fill-box;
+    animation:pulse 1.8s infinite ease-out;
+  }
+  @keyframes pulse{
+    0%{transform:scale(.6);opacity:.9}
+    100%{transform:scale(2.6);opacity:0}
+  }
+  .hotspot circle.core{fill:var(--accent-orange)}
+  .hotspot.sev-high circle.core{fill:var(--alert-red)}
+  .hotspot.sev-high circle.pulse{fill:var(--alert-red)}
+  .hotspot.sev-low circle.core{fill:var(--alert-yellow)}
+  .hotspot.sev-low circle.pulse{fill:var(--alert-yellow)}
+
+  .vehicle-legend{
+    display:flex;flex-wrap:wrap;gap:14px;padding:12px 18px;
+    border-top:1px solid var(--border-grid);background:rgba(7,10,14,.4);
+  }
+  .legend-item{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-muted);letter-spacing:.5px}
+  .legend-dot{width:8px;height:8px;border-radius:50%}
+
+  .fault-list{padding:0 18px 16px}
+  .fault-list-title{
+    font-family:var(--mono);font-size:10px;color:var(--text-dim);
+    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .fault-list-title::after{content:"";flex:1;height:1px;background:var(--border-grid)}
+  .fault-chips{display:flex;flex-direction:column;gap:6px}
+  .fault-chip{
+    display:flex;align-items:center;gap:10px;padding:9px 12px;
+    background:rgba(7,10,14,.5);border:1px solid var(--border-grid);
+    border-left:3px solid var(--text-dim);cursor:pointer;transition:all .25s;
+  }
+  .fault-chip:hover{border-color:var(--border-soft);background:rgba(26,34,48,.6)}
+  .fault-chip.active{border-color:var(--accent-orange);background:rgba(255,107,26,.08);border-left-color:var(--accent-orange)}
+  .fault-chip.sev-high{border-left-color:var(--alert-red)}
+  .fault-chip.sev-medium{border-left-color:var(--alert-yellow)}
+  .fault-chip.sev-low{border-left-color:var(--alert-green)}
+  .chip-code{font-family:var(--mono);font-size:12px;color:var(--accent-cyan);font-weight:700}
+  .chip-name{font-size:12px;color:var(--text-primary);flex:1}
+  .chip-sys{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.5px;text-transform:uppercase}
+
+  /* ===== 中栏：故障详情 ===== */
+  .code-block{
+    background:var(--bg-deep);border:1px solid var(--border-grid);
+    padding:16px 18px;position:relative;overflow:hidden;
+  }
+  .code-block::after{
+    content:"";position:absolute;top:0;right:0;width:60px;height:100%;
+    background:linear-gradient(90deg,transparent,rgba(0,212,255,.06));
+  }
+  .code-label{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
+  .code-value{font-family:var(--mono);font-size:34px;font-weight:700;color:var(--accent-orange);letter-spacing:2px;line-height:1;text-shadow:0 0 16px rgba(255,107,26,.35)}
+  .code-name{font-family:var(--display);font-size:22px;letter-spacing:1.5px;color:var(--text-primary);margin-top:8px}
+  .code-desc{font-size:12px;color:var(--text-muted);line-height:1.6;margin-top:10px}
+
+  .sev-bar{display:flex;align-items:center;gap:10px;margin-top:14px}
+  .sev-label{font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;min-width:56px}
+  .sev-track{flex:1;height:6px;background:var(--bg-deep);border:1px solid var(--border-grid);position:relative}
+  .sev-fill{height:100%;transition:width .5s}
+  .sev-text{font-family:var(--mono);font-size:11px;letter-spacing:1px;min-width:60px;text-align:right}
+
+  .section{margin-top:22px}
+  .section-head{
+    display:flex;align-items:center;gap:8px;margin-bottom:12px;
+    font-family:var(--mono);font-size:10px;color:var(--text-muted);
+    letter-spacing:1.5px;text-transform:uppercase;
+  }
+  .section-head .sq{width:6px;height:6px;background:var(--accent-orange)}
+  .section-head::after{content:"";flex:1;height:1px;background:var(--border-grid)}
+
+  .symptom-grid{display:flex;flex-direction:column;gap:7px}
+  .symptom{
+    display:flex;align-items:center;gap:10px;padding:9px 11px;
+    background:rgba(7,10,14,.4);border:1px solid var(--border-grid);
+  }
+  .sym-icon{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border-soft);color:var(--accent-cyan)}
+  .sym-label{font-size:12px;color:var(--text-primary);flex:1}
+  .sym-sev{width:5px;height:18px}
+
+  .cause-row{margin-bottom:9px}
+  .cause-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+  .cause-name{font-size:12px;color:var(--text-primary)}
+  .cause-pct{font-family:var(--mono);font-size:11px;color:var(--accent-orange);font-weight:700}
+  .cause-track{height:8px;background:var(--bg-deep);border:1px solid var(--border-grid);position:relative;overflow:hidden}
+  .cause-fill{height:100%;background:linear-gradient(90deg,#b03d00,var(--accent-orange));transition:width .8s cubic-bezier(.2,.8,.2,1);box-shadow:0 0 8px rgba(255,107,26,.4)}
+
+  /* ===== 右栏：维修流程 ===== */
+  .repair-summary{
+    display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px;
+  }
+  .sum-cell{
+    background:rgba(7,10,14,.5);border:1px solid var(--border-grid);padding:10px;
+  }
+  .sum-label{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase}
+  .sum-value{font-family:var(--display);font-size:24px;color:var(--accent-cyan);letter-spacing:1px;line-height:1.1;margin-top:3px}
+  .sum-unit{font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-left:2px}
+
+  .timeline{position:relative;padding-left:8px}
+  .timeline::before{
+    content:"";position:absolute;left:19px;top:8px;bottom:8px;width:2px;
+    background:linear-gradient(180deg,var(--accent-orange),var(--border-grid));
+  }
+  .step{position:relative;padding-left:48px;margin-bottom:14px}
+  .step:last-child{margin-bottom:0}
+  .step-node{
+    position:absolute;left:8px;top:2px;width:24px;height:24px;
+    background:var(--bg-deep);border:1px solid var(--border-soft);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:11px;color:var(--text-muted);z-index:2;
+    transition:all .3s;
+  }
+  .step.done .step-node{background:var(--accent-cyan);border-color:var(--accent-cyan);color:var(--bg-carbon);box-shadow:0 0 10px rgba(0,212,255,.5)}
+  .step.current .step-node{border-color:var(--accent-orange);color:var(--accent-orange)}
+  .step-card{
+    background:rgba(7,10,14,.45);border:1px solid var(--border-grid);
+    transition:all .3s;cursor:pointer;
+  }
+  .step.done .step-card{border-color:rgba(0,212,255,.3);opacity:.75}
+  .step.current .step-card{border-color:var(--accent-orange)}
+  .step-head{display:flex;align-items:center;gap:10px;padding:11px 13px}
+  .step-title{font-size:13px;color:var(--text-primary);flex:1;font-weight:500}
+  .step-time{font-family:var(--mono);font-size:10px;color:var(--text-muted);letter-spacing:.5px}
+  .step-check{
+    width:18px;height:18px;border:1px solid var(--border-soft);
+    display:flex;align-items:center;justify-content:center;color:transparent;
+    transition:all .2s;
+  }
+  .step.done .step-check{background:var(--accent-cyan);border-color:var(--accent-cyan);color:var(--bg-carbon)}
+  .step-detail{display:none;padding:0 13px 13px;border-top:1px solid var(--border-grid);margin-top:0}
+  .step.expanded .step-detail{display:block;padding-top:12px}
+  .detail-row{display:flex;gap:10px;margin-top:8px}
+  .detail-col{flex:1;font-size:11px;line-height:1.55}
+  .detail-col .dt{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;gap:5px}
+  .dt .ic{width:10px;height:10px;display:inline-block}
+  .dt.action{color:var(--accent-cyan)}
+  .dt.tool{color:var(--text-muted)}
+  .dt.warn{color:var(--alert-red)}
+  .detail-col .dv{color:var(--text-primary)}
+  .warn-box{
+    background:rgba(255,59,59,.08);border-left:3px solid var(--alert-red);
+    padding:8px 10px;font-size:11px;color:#ffb8b8;line-height:1.5;margin-top:4px;
+  }
+
+  /* 流动光点 */
+  .step.current .step-node::after{
+    content:"";position:absolute;left:50%;top:100%;width:2px;height:30px;
+    background:linear-gradient(180deg,var(--accent-orange),transparent);
+    transform:translateX(-50%);animation:flow 1.6s infinite;
+  }
+  @keyframes flow{
+    0%{opacity:0;transform:translate(-50%,0)}
+    50%{opacity:1}
+    100%{opacity:0;transform:translate(-50%,12px)}
+  }
+
+  .empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-dim);font-family:var(--mono);font-size:12px;letter-spacing:1px}
+
+  /* 响应式 */
+  @media (max-width:1100px){
+    .layout{grid-template-columns:1fr;height:auto;overflow-y:auto}
+    body{overflow:auto}
+    .progress-wrap{min-width:200px}
+  }
+  @media (max-width:640px){
+    .topbar{flex-wrap:wrap;gap:12px;padding:12px 16px}
+    .progress-wrap{order:3;width:100%;min-width:0}
+    .layout{padding:12px}
+  }
+
+  .fade-in{animation:fadeIn .4s ease}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+  <!-- 顶部状态栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">车迹</div>
+      <div class="sub">CHEJI · DIAGNOSTIC COCKPIT</div>
+      <div class="tag">v1.0</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="progress-wrap">
+      <span class="progress-label">维修进度</span>
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <span class="progress-pct" id="progressPct">0%</span>
+    </div>
+    <div class="status"><span class="dot"></span><span id="statusText">诊断中</span></div>
+  </header>
+
+  <!-- 主布局 -->
+  <main class="layout">
+    <!-- 左栏：车辆示意图 -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="num">01</span>车辆故障示意图</div>
+        <div class="panel-meta">TOP VIEW · 6 SYSTEMS</div>
+      </div>
+      <div class="vehicle-stage" id="vehicleStage"></div>
+      <div class="vehicle-legend">
+        <div class="legend-item"><span class="legend-dot" style="background:var(--alert-red)"></span>高危故障</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--alert-yellow)"></span>中危故障</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--alert-green)"></span>低危故障</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--accent-cyan)"></span>正常</div>
+      </div>
+      <div class="fault-list">
+        <div class="fault-list-title">当前故障清单 <span id="faultCount" style="color:var(--accent-orange);font-family:var(--mono)">0</span></div>
+        <div class="fault-chips" id="faultChips"></div>
+      </div>
+    </section>
+
+    <!-- 中栏：故障详情 -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="num">02</span>故障详情中心</div>
+        <div class="panel-meta" id="faultMeta">— · —</div>
+      </div>
+      <div class="panel-body" id="faultBody">
+        <div class="empty">点击左侧故障点或清单查看详情</div>
+      </div>
+    </section>
+
+    <!-- 右栏：维修流程 -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="num">03</span>维修流程沙盘</div>
+        <div class="panel-meta" id="repairMeta">— STEPS</div>
+      </div>
+      <div class="panel-body" id="repairBody">
+        <div class="empty">选择故障后展示对应维修流程</div>
+      </div>
+    </section>
+  </main>
+
+<script>
+/* ================= 数据 ================= */
+const SYSTEMS = {
+  engine:{label:"发动机",color:"var(--accent-orange)"},
+  transmission:{label:"变速箱",color:"var(--alert-yellow)"},
+  brake:{label:"制动系统",color:"var(--alert-red)"},
+  electrical:{label:"电气系统",color:"var(--accent-cyan)"},
+  suspension:{label:"悬挂系统",color:"#a78bfa"},
+  exhaust:{label:"排气系统",color:"#64748b"}
+};
+
+// 车辆部位坐标（viewBox 0 0 100 130 顶视图）
+const ZONES = [
+  {key:"engine",label:"ENGINE",x:30,y:8,w:40,h:24},
+  {key:"electrical",label:"ELECTRICAL",x:62,y:8,w:14,h:24},
+  {key:"suspension",label:"SUSPENSION",x:10,y:30,w:14,h:18},
+  {key:"transmission",label:"TRANSMISSION",x:30,y:34,w:40,h:30},
+  {key:"brake",label:"BRAKE",x:10,y:52,w:14,h:18},
+  {key:"exhaust",label:"EXHAUST",x:30,y:66,w:40,h:20}
+];
+
+const FAULTS = [
+  {
+    id:"P0301",code:"P0301",name:"第1缸失火",system:"engine",severity:"high",part:"engine",
+    desc:"发动机控制单元检测到第1气缸存在失火现象，持续失火可能导致三元催化器过热损坏，并引起发动机异常抖动与排放超标。",
+    symptoms:[
+      {label:"发动机明显抖动",sev:"high",icon:"振动"},
+      {label:"发动机故障灯闪烁",sev:"high",icon:"灯"},
+      {label:"急加速无力",sev:"medium",icon:"速"},
+      {label:"怠速不稳易熄火",sev:"medium",icon:"转"}
+    ],
+    causes:[
+      {desc:"火花塞电极烧蚀老化",pct:45},
+      {desc:"点火线圈内部击穿",pct:30},
+      {desc:"喷油嘴积碳堵塞",pct:15},
+      {desc:"气缸压力不足(活塞环/气门)",pct:10}
+    ],
+    repair:{
+      total:90,difficulty:3,
+      steps:[
+        {t:"断电与防护",m:5,act:"断开蓄电池负极，佩戴绝缘手套，等待发动机完全冷却至常温后方可操作。",tool:"绝缘手套 · 10mm扳手",warn:"未断电操作可能导致短路触电或ECU损坏"},
+        {t:"拆卸点火线圈",m:10,act:"拔下第1缸点火线圈控制插头，使用10mm套筒拧下固定螺栓，垂直向上取出点火线圈。",tool:"10mm套筒 · 加长杆",warn:"插头带锁扣，禁止直接拉拽线束，须按压卡扣脱开"},
+        {t:"取出旧火花塞",m:8,act:"将16mm火花塞套筒带磁力加长杆伸入火花塞孔，逆时针旋出旧火花塞。",tool:"16mm磁力火花塞套筒",warn:"套筒须完全到位，避免滑丝损坏螺纹"},
+        {t:"检查与间隙调整",m:7,act:"对比新旧火花塞电极，使用塞尺测量新火花塞电极间隙(标准0.8-0.9mm)。",tool:"塞尺 · 间隙规",warn:"间隙过小易积碳熄火，过大易失火"},
+        {t:"安装新火花塞",m:12,act:"手动顺时针旋入至贴合，使用扭矩扳手按25N·m紧固，禁止直接用套筒猛拧。",tool:"扭矩扳手 · NGK铱金火花塞",warn:"必须按标准扭矩紧固，过紧会导致陶瓷碎裂或螺纹拉伤"},
+        {t:"复装点火线圈",m:8,act:"将点火线圈复位，拧紧固定螺栓，插回控制插头直至锁扣咔哒入位。",tool:"10mm套筒",warn:"插头未完全锁紧会导致间歇性失火"},
+        {t:"通电试车与复检",m:40,act:"接通蓄电池，启动发动机怠速运转3分钟，路试急加速验证抖动消失，使用诊断仪清除故障码并确认无复发。",tool:"OBD-II诊断仪",warn:"若故障码立即复发，需排查点火线圈或喷油嘴"}
+      ]
+    }
+  },
+  {
+    id:"P0420",code:"P0420",name:"三元催化效率低",system:"exhaust",severity:"medium",part:"exhaust",
+    desc:"下游氧传感器信号与上游接近，ECU判断三元催化器转化效率低于阈值，通常为催化器载体老化或中毒。",
+    symptoms:[
+      {label:"发动机故障灯常亮",sev:"medium",icon:"灯"},
+      {label:"尾气异味加重",sev:"medium",icon:"气"},
+      {label:"油耗轻微上升",sev:"low",icon:"油"}
+    ],
+    causes:[
+      {desc:"三元催化器载体烧结老化",pct:55},
+      {desc:"氧传感器信号漂移",pct:25},
+      {desc:"发动机长期燃烧不良",pct:12},
+      {desc:"排气管漏气",pct:8}
+    ],
+    repair:{
+      total:120,difficulty:4,
+      steps:[
+        {t:"诊断确认",m:15,act:"连接诊断仪读取P0420冻结帧数据，对比前后氧传感器波形确认催化器效率异常。",tool:"OBD-II诊断仪 · 波形示波器",warn:"需先排除氧传感器故障，避免误换催化器"},
+        {t:"车辆举升与防护",m:10,act:"使用双柱举升机将车辆举升至工作高度，确认保险锁止，佩戴护目镜。",tool:"双柱举升机 · 护目镜",warn:"举升后必须确认机械锁止，禁止人员长时间位于车下无人值守"},
+        {t:"拆卸前排气管总成",m:30,act:"喷涂除锈剂于排气管螺栓，使用渗透剂浸泡15分钟后拆下氧传感器与排气管连接螺栓。",tool:"除锈剂 · 14mm/17mm套筒 · 氧传感器套筒",warn:"高温部件降温后方可操作，螺栓易断裂需小心"},
+        {t:"更换三元催化器",m:35,act:"拆下旧催化器总成，更换全新原厂催化器，更换排气管密封垫片。",tool:"原厂催化器总成 · 排气密封垫",warn:"密封垫必须更换新件，旧垫复用必漏气"},
+        {t:"复装与扭矩紧固",m:15,act:"按对角顺序紧固排气管螺栓，氧传感器涂抹防卡剂后装复，扭矩45N·m。",tool:"扭矩扳手 · 氧传感器防卡剂",warn:"防卡剂仅涂螺纹，勿触及传感器头部"},
+        {t:"启动与排放复测",m:15,act:"启动发动机暖机至工作温度，使用尾气分析仪检测CO/HC数值达标，清除故障码。",tool:"尾气分析仪 · OBD-II诊断仪",warn:"若排放仍超标需检查发动机燃烧状况"}
+      ]
+    }
+  },
+  {
+    id:"C1201",code:"C1201",name:"ABS系统通讯故障",system:"brake",severity:"high",part:"brake",
+    desc:"ABS控制单元与ECU通讯中断，防抱死功能失效，紧急制动时车轮可能抱死导致方向失控。",
+    symptoms:[
+      {label:"ABS故障灯常亮",sev:"high",icon:"灯"},
+      {label:"仪表ABS指示灯与制动灯同亮",sev:"high",icon:"灯"},
+      {label:"制动踏板手感异常",sev:"medium",icon:"踏"}
+    ],
+    causes:[
+      {desc:"ABS控制单元插头接触不良",pct:40},
+      {desc:"轮速传感器线路断路",pct:30},
+      {desc:"ABS泵内部故障",pct:20},
+      {desc:"保险丝熔断",pct:10}
+    ],
+    repair:{
+      total:75,difficulty:3,
+      steps:[
+        {t:"安全驻车与诊断",m:10,act:"拉紧手刹，连接诊断仪读取ABS控制单元故障码与数据流，定位通讯中断节点。",tool:"OBD-II诊断仪 · 电路图",warn:"ABS失效时禁止高速行驶，应低速驶往维修点"},
+        {t:"检查保险丝与电源",m:10,act:"查发动机舱保险盒ABS专用保险丝，测量ABS泵电源电压是否正常12V。",tool:"万用表 · 保险丝拔取器",warn:"更换保险丝前须排查短路原因，否则会再次熔断"},
+        {t:"检查控制单元插头",m:20,act:"断开ABS控制单元32针插头，检查针脚是否氧化弯曲，喷电子接点清洁剂后重新插接。",tool:"电子接点清洁剂 · 探针",warn:"插拔前必须断电，针脚脆弱勿用力"},
+        {t:"轮速传感器线路检测",m:20,act:"举升车辆，测量四轮轮速传感器电阻(标准1.0-1.5kΩ)，检查线路通断与屏蔽。",tool:"万用表 · 举升机",warn:"传感器电阻异常需成对更换同轴传感器"},
+        {t:"清除故障码与路试",m:15,act:"清除所有故障码，举升机空转测试四轮数据流正常后，30km/h路试验证ABS功能。",tool:"OBD-II诊断仪",warn:"路试须在安全场地进行，模拟紧急制动验证"}
+      ]
+    }
+  },
+  {
+    id:"B1241",code:"B1241",name:"蓄电池电压偏低",system:"electrical",severity:"low",part:"electrical",
+    desc:"系统检测到蓄电池静态电压低于12.2V，可能影响启动性能与电气设备稳定工作。",
+    symptoms:[
+      {label:"启动时起动机转速低",sev:"low",icon:"转"},
+      {label:"仪表灯光昏暗",sev:"low",icon:"灯"},
+      {label:"音响偶尔重启",sev:"low",icon:"响"}
+    ],
+    causes:[
+      {desc:"蓄电池老化容量衰减",pct:50},
+      {desc:"发电机皮带打滑充电不足",pct:25},
+      {desc:"车辆静态漏电流过大",pct:15},
+      {desc:"发电机调节器故障",pct:10}
+    ],
+    repair:{
+      total:45,difficulty:2,
+      steps:[
+        {t:"蓄电池电压检测",m:5,act:"使用蓄电池检测仪测量静态电压与启动瞬间压降，评估电池健康度。",tool:"蓄电池检测仪",warn:"测量前关闭所有用电设备静置2小时"},
+        {t:"发电机充电检测",m:10,act:"启动发动机2000转，测量电瓶极柱电压，正常13.8-14.4V为充电正常。",tool:"万用表",warn:"电压超15V为调节器故障，须立即停机"},
+        {t:"静态漏电流测量",m:15,act:"锁车待眠后断开蓄电池负极，万用表串联测量静态电流，应小于50mA。",tool:"万用表 · 电流钳",warn:"串联测量前须先并联导线，避免瞬间大电流烧表"},
+        {t:"更换蓄电池",m:15,act:"先拆负极再拆正极，更换同规格蓄电池，先装正极后装负极并涂抹凡士林防腐。",tool:"10mm扳手 · 蓄电池搬运带",warn:"拆卸顺序错误可能短路引发火灾"}
+      ]
+    }
+  }
+];
+
+/* ================= 状态 ================= */
+let selectedFaultId = FAULTS[0].id;
+const completed = new Set(); // "faultId:stepIndex"
+
+/* ================= 渲染：车辆示意图 ================= */
+function renderVehicle(){
+  const stage = document.getElementById('vehicleStage');
+  const hotspots = FAULTS.map(f=>{
+    const z = ZONES.find(z=>z.key===f.part);
+    const cx = z.x + z.w/2, cy = z.y + z.h/2;
+    // 同部位多故障错开
+    const samePart = FAULTS.filter(ff=>ff.part===f.part);
+    const idx = samePart.indexOf(f);
+    const ox = idx*6 - (samePart.length-1)*3;
+    return {f,cx:cx+ox,cy};
+  });
+
+  let svg = `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">`;
+  // 网格底
+  svg += `<defs>
+    <linearGradient id="bodyG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A2230"/><stop offset="1" stop-color="#0E141C"/>
+    </linearGradient>
+    <radialGradient id="hoodG"><stop offset="0" stop-color="#243042"/><stop offset="1" stop-color="transparent"/></radialGradient>
+  </defs>`;
+  // 车身轮廓（顶视图）
+  svg += `<rect x="6" y="6" width="88" height="88" rx="14" fill="url(#bodyG)" stroke="#2A3548" stroke-width="1"/>`;
+  svg += `<rect x="6" y="6" width="88" height="88" rx="14" fill="none" stroke="rgba(0,212,255,.08)" stroke-width="1" stroke-dasharray="2 3"/>`;
+  // 前后挡风/车顶
+  svg += `<rect x="14" y="14" width="72" height="20" rx="6" fill="url(#hoodG)" stroke="#2A3548" stroke-width=".5"/>`;
+  svg += `<rect x="20" y="36" width="60" height="30" rx="4" fill="#0E141C" stroke="#2A3548" stroke-width=".5"/>`;
+  svg += `<rect x="14" y="68" width="72" height="18" rx="6" fill="url(#hoodG)" stroke="#2A3548" stroke-width=".5"/>`;
+  // 车窗分隔
+  svg += `<line x1="50" y1="36" x2="50" y2="66" stroke="#2A3548" stroke-width=".4"/>`;
+  // 车轮
+  [[10,24],[10,58],[84,24],[84,58]].forEach(([x,y])=>{
+    svg += `<rect x="${x-3}" y="${y-7}" width="6" height="14" rx="2" fill="#070A0E" stroke="#2A3548" stroke-width=".5"/>`;
+  });
+  // 方向盘指示（前部）
+  svg += `<circle cx="50" cy="22" r="3" fill="none" stroke="#3a4658" stroke-width=".5"/>`;
+  svg += `<text x="50" y="3.5" text-anchor="middle" font-family="JetBrains Mono" font-size="3" fill="#565F6B" letter-spacing=".5">FRONT ▲</text>`;
+
+  // 系统分区
+  ZONES.forEach(z=>{
+    const active = FAULTS.some(f=>f.part===z.key);
+    const cls = active ? (selectedFault() && selectedFault().part===z.key ? "active":"") : "";
+    svg += `<g class="vzone ${cls}" data-zone="${z.key}">`;
+    svg += `<rect class="zone-fill" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="2"/>`;
+    svg += `<text class="zone-label" x="${z.x+1.5}" y="${z.y+z.h-1.5}">${z.label}</text>`;
+    svg += `</g>`;
+  });
+
+  // 故障热点
+  hotspots.forEach(h=>{
+    const active = h.f.id===selectedFaultId;
+    svg += `<g class="hotspot sev-${h.f.severity}" data-fault="${h.f.id}" opacity="${active?1:.85}">`;
+    svg += `<circle class="pulse" cx="${h.cx}" cy="${h.cy}" r="2"/>`;
+    svg += `<circle class="core" cx="${h.cx}" cy="${h.cy}" r="1.4"/>`;
+    if(active){
+      svg += `<circle cx="${h.cx}" cy="${h.cy}" r="3.5" fill="none" stroke="var(--accent-orange)" stroke-width=".5"/>`;
+    }
+    svg += `</g>`;
+  });
+
+  svg += `</svg>`;
+  stage.innerHTML = svg;
+
+  // 绑定分区点击
+  stage.querySelectorAll('.vzone').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const zone = el.dataset.zone;
+      const f = FAULTS.find(f=>f.part===zone);
+      if(f){ selectFault(f.id); }
+    });
+  });
+}
+
+/* ================= 渲染：故障清单 ================= */
+function renderFaultList(){
+  const box = document.getElementById('faultChips');
+  document.getElementById('faultCount').textContent = String(FAULTS.length).padStart(2,'0');
+  box.innerHTML = FAULTS.map(f=>{
+    const active = f.id===selectedFaultId;
+    return `<div class="fault-chip sev-${f.severity} ${active?'active':''}" data-fault="${f.id}">
+      <span class="chip-code">${f.code}</span>
+      <span class="chip-name">${f.name}</span>
+      <span class="chip-sys">${SYSTEMS[f.system].label}</span>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.fault-chip').forEach(el=>{
+    el.addEventListener('click',()=>selectFault(el.dataset.fault));
+  });
+}
+
+/* ================= 渲染：故障详情 ================= */
+function renderFaultDetail(){
+  const body = document.getElementById('faultBody');
+  const meta = document.getElementById('faultMeta');
+  const f = selectedFault();
+  if(!f){ body.innerHTML='<div class="empty">未选择故障</div>'; meta.textContent='— · —'; return; }
+
+  const sevMap = {
+    high:{txt:"高危",pct:90,color:"var(--alert-red)"},
+    medium:{txt:"中危",pct:55,color:"var(--alert-yellow)"},
+    low:{txt:"低危",pct:25,color:"var(--alert-green)"}
+  };
+  const sv = sevMap[f.severity];
+  meta.textContent = `${SYSTEMS[f.system].label} · ${sv.txt}`;
+
+  const symIcon = (s)=>{
+    const map = {"灯":"⚠","振动":"≋","速":"»","转":"↻","气":"¤","油":"⛽","踏":"▮","响":"♪"};
+    return map[s.icon]||"•";
+  };
+  const symSevColor = {high:"var(--alert-red)",medium:"var(--alert-yellow)",low:"var(--alert-green)"};
+
+  body.innerHTML = `
+    <div class="code-block fade-in">
+      <div class="code-label">OBD-II DIAGNOSTIC CODE</div>
+      <div class="code-value">${f.code}</div>
+      <div class="code-name">${f.name}</div>
+      <div class="code-desc">${f.desc}</div>
+      <div class="sev-bar">
+        <span class="sev-label">严重度</span>
+        <div class="sev-track"><div class="sev-fill" style="width:${sv.pct}%;background:${sv.color};box-shadow:0 0 8px ${sv.color}"></div></div>
+        <span class="sev-text" style="color:${sv.color}">${sv.txt}</span>
+      </div>
+    </div>
+
+    <div class="section fade-in">
+      <div class="section-head"><span class="sq"></span>症状表现 SYMPTOMS</div>
+      <div class="symptom-grid">
+        ${f.symptoms.map(s=>`
+          <div class="symptom">
+            <div class="sym-icon">${symIcon(s)}</div>
+            <div class="sym-label">${s.label}</div>
+            <div class="sym-sev" style="background:${symSevColor[s.sev]}"></div>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <div class="section fade-in">
+      <div class="section-head"><span class="sq"></span>可能成因 PROBABLE CAUSES</div>
+      ${f.causes.map(c=>`
+        <div class="cause-row">
+          <div class="cause-top"><span class="cause-name">${c.desc}</span><span class="cause-pct">${c.pct}%</span></div>
+          <div class="cause-track"><div class="cause-fill" style="width:${c.pct}%"></div></div>
+        </div>`).join('')}
+    </div>
+  `;
+}
+
+/* ================= 渲染：维修流程 ================= */
+function renderRepair(){
+  const body = document.getElementById('repairBody');
+  const meta = document.getElementById('repairMeta');
+  const f = selectedFault();
+  if(!f||!f.repair){ body.innerHTML='<div class="empty">该故障暂无维修流程</div>'; meta.textContent='— STEPS'; return; }
+  const r = f.repair;
+  meta.textContent = `${r.steps.length} STEPS`;
+
+  const doneCount = r.steps.filter((_,i)=>completed.has(f.id+":"+i)).length;
+  const remMin = r.steps.filter((_,i)=>!completed.has(f.id+":"+i)).reduce((a,_,i)=>a,0);
+  const remMinutes = r.steps.reduce((a,s,i)=>a+(completed.has(f.id+":"+i)?0:s.m),0);
+  const diffStars = "▮".repeat(r.difficulty)+"▯".repeat(5-r.difficulty);
+
+  body.innerHTML = `
+    <div class="repair-summary fade-in">
+      <div class="sum-cell"><div class="sum-label">总工时</div><div class="sum-value">${r.total}<span class="sum-unit">MIN</span></div></div>
+      <div class="sum-cell"><div class="sum-label">剩余</div><div class="sum-value">${remMinutes}<span class="sum-unit">MIN</span></div></div>
+      <div class="sum-cell"><div class="sum-label">难度</div><div class="sum-value" style="font-size:18px;color:var(--alert-yellow);letter-spacing:1px">${diffStars}</div></div>
+    </div>
+    <div class="timeline fade-in">
+      ${r.steps.map((s,i)=>{
+        const done = completed.has(f.id+":"+i);
+        const current = !done && r.steps.slice(0,i).every((_,j)=>completed.has(f.id+":"+j));
+        const cls = done?"done":(current?"current":"");
+        return `<div class="step ${cls}" data-idx="${i}">
+          <div class="step-node">${done?"✓":String(i+1).padStart(2,'0')}</div>
+          <div class="step-card">
+            <div class="step-head">
+              <div class="step-check">✓</div>
+              <div class="step-title">${s.t}</div>
+              <div class="step-time">${s.m} MIN</div>
+            </div>
+            <div class="step-detail">
+              <div class="detail-row">
+                <div class="detail-col">
+                  <div class="dt action"><span class="ic" style="background:var(--accent-cyan)"></span>操作要点</div>
+                  <div class="dv">${s.act}</div>
+                </div>
+              </div>
+              <div class="detail-row">
+                <div class="detail-col">
+                  <div class="dt tool"><span class="ic" style="background:var(--text-muted)"></span>所需工具/零件</div>
+                  <div class="dv" style="font-family:var(--mono);font-size:11px;color:var(--accent-cyan)">${s.tool}</div>
+                </div>
+              </div>
+              <div class="warn-box"><strong style="font-family:var(--mono);font-size:9px;letter-spacing:1px">⚠ SAFETY</strong>　${s.warn}</div>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  // 步骤交互：点击卡片切换展开，点击check标记完成
+  body.querySelectorAll('.step').forEach(el=>{
+    const idx = +el.dataset.idx;
+    const head = el.querySelector('.step-head');
+    head.addEventListener('click',(e)=>{
+      if(e.target.closest('.step-check')){ toggleStep(f.id,idx); return; }
+      el.classList.toggle('expanded');
+    });
+  });
+}
+
+/* ================= 进度条 ================= */
+function renderProgress(){
+  const f = selectedFault();
+  const fill = document.getElementById('progressFill');
+  const pct = document.getElementById('progressPct');
+  const statusText = document.getElementById('statusText');
+  const dot = document.querySelector('.status .dot');
+  if(!f||!f.repair){ fill.style.width='0%'; pct.textContent='0%'; return; }
+  const total = f.repair.steps.length;
+  const done = f.repair.steps.filter((_,i)=>completed.has(f.id+":"+i)).length;
+  const p = Math.round(done/total*100);
+  fill.style.width = p+'%';
+  pct.textContent = p+'%';
+  if(p===100){
+    statusText.textContent='维修完成';
+    dot.style.background='var(--accent-cyan)';
+  } else if(p>0){
+    statusText.textContent='维修中';
+    dot.style.background='var(--accent-orange)';
+  } else {
+    statusText.textContent='诊断中';
+    dot.style.background='var(--alert-green)';
+  }
+}
+
+/* ================= 辅助 ================= */
+function selectedFault(){ return FAULTS.find(f=>f.id===selectedFaultId); }
+function selectFault(id){
+  selectedFaultId = id;
+  renderAll();
+}
+function toggleStep(fid,idx){
+  const key = fid+":"+idx;
+  if(completed.has(key)) completed.delete(key); else completed.add(key);
+  renderAll();
+}
+function renderAll(){
+  renderVehicle();
+  renderFaultList();
+  renderFaultDetail();
+  renderRepair();
+  renderProgress();
+}
+
+/* ================= 启动 ================= */
+renderAll();
+</script>
+</body>
+</html>

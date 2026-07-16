@@ -1,0 +1,309 @@
+<!--
+  NAS离线部署说明（一年级AR体感数学学习系统）
+  =============================================
+  1. 将完整项目文件夹上传NAS静态网页共享目录；
+  2. NAS开启http静态文件服务，确保assets/models资源可通过相对路径访问；
+  3. 电视/电脑连接同一局域网，浏览器访问 http://NAS内网IP/文件夹名/index.html；
+  4. 首次加载会本地读取assets内MediaPipe模型，加载完成后断网也能正常体感识别；
+  5. 无摄像头设备可在设置面板释放摄像头，纯遥控器/鼠标手动做题。
+
+  技术特性：
+  - 纯静态无后端、无编译依赖，文件夹原样上传NAS就能运行
+  - MediaPipe全量模型本地化打包，不依赖任何CDN
+  - 所有摄像头运算本地浏览器执行，视频流不上传任何服务器
+  - 适配电视安卓浏览器、电视盒子浏览器
+  - 资源路径全部使用相对路径
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#FF9AA2">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>柚柚的数学乐园 - AR体感数学启蒙游戏</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+  <div id="ar-background" class="ar-background"></div>
+  <canvas id="ar-overlay" class="ar-overlay"></canvas>
+  <video id="camera-feed" class="camera-feed" playsinline muted></video>
+
+  <div id="game-container" class="game-container">
+    <canvas id="game-canvas" class="game-canvas"></canvas>
+
+    <div id="top-bar" class="top-bar">
+      <button id="btn-settings" class="top-btn btn-settings">⚙️ 设置</button>
+      <span class="top-title">🎮 柚柚数学乐园</span>
+      <button id="btn-fullscreen" class="top-btn btn-fullscreen">⛶ 全屏</button>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="settings-modal">
+    <div class="settings-overlay"></div>
+    <div class="settings-panel">
+      <button id="btn-close-settings" class="btn-close-settings">✕</button>
+      
+      <h2 class="settings-title">🎨 设置</h2>
+      
+      <div class="settings-section">
+        <h3>AR摄像头</h3>
+        
+        <div class="setting-item">
+          <label>透明度</label>
+          <input type="range" id="slider-transparency" min="0" max="0.8" step="0.05" value="0.65">
+          <span class="setting-value" id="val-transparency">65%</span>
+        </div>
+
+        <div class="setting-item">
+          <label>摄像头背景</label>
+          <button id="btn-camera-background" class="toggle-btn">开启</button>
+        </div>
+        
+        <div class="setting-item">
+          <label>画面镜像</label>
+          <button id="btn-mirror" class="toggle-btn">开启</button>
+        </div>
+        
+        <div class="setting-item">
+          <label>骨骼显示</label>
+          <button id="btn-skeleton" class="toggle-btn">关闭</button>
+        </div>
+        
+        <div class="setting-item">
+          <label>流畅模式</label>
+          <button id="btn-smooth" class="toggle-btn">关闭</button>
+        </div>
+        
+        <div class="setting-item">
+          <button id="btn-release-camera" class="action-btn warning-btn">释放摄像头</button>
+          <button id="btn-restore-camera" class="action-btn success-btn" style="display:none;">重新打开摄像头</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>音效</h3>
+        
+        <div class="setting-item">
+          <label>音量</label>
+          <input type="range" id="slider-volume" min="0" max="1" step="0.1" value="0.7">
+          <span class="setting-value" id="val-volume">70%</span>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>存档管理</h3>
+        
+        <div class="setting-item">
+          <button id="btn-export-save" class="action-btn">导出存档</button>
+        </div>
+        
+        <div class="setting-item">
+          <button id="btn-import-save" class="action-btn">导入存档</button>
+          <textarea id="import-text" class="import-textarea" placeholder="粘贴存档文本..."></textarea>
+        </div>
+        
+        <div class="setting-item">
+          <button id="btn-reset-save" class="action-btn danger-btn">重置全部进度</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <textarea id="export-textarea" class="hidden-textarea"></textarea>
+
+  <script>
+    window.__youyouMediaPipeExports = {};
+    window.exports = window.__youyouMediaPipeExports;
+  </script>
+  <script src="assets/models/vision_bundle.js" onload="
+    window.MediaPipeVision = window.__youyouMediaPipeExports;
+    window.mediapipe = window.MediaPipeVision;
+    console.log('本地 vision_bundle.js 加载完成');
+    console.log('FilesetResolver:', typeof window.MediaPipeVision.FilesetResolver);
+    console.log('PoseLandmarker:', typeof window.MediaPipeVision.PoseLandmarker);
+    console.log('HandLandmarker:', typeof window.MediaPipeVision.HandLandmarker);
+  " onerror="
+    console.error('本地 vision_bundle.js 加载失败，已切换为鼠标/触屏模式');
+  "></script>
+  <script>
+    delete window.__youyouMediaPipeExports;
+    delete window.exports;
+  </script>
+
+  <script src="js/config.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/speech.js"></script>
+  <script src="js/canvasDraw.js"></script>
+  <script src="js/arCamera.js"></script>
+  <script src="js/mediapipe.js"></script>
+  <script src="js/handCursor.js"></script>
+  <script src="js/main.js"></script>
+
+  <script>
+    window.addEventListener('load', () => {
+      Game.init();
+      initSettingsPanel();
+    });
+
+    function initSettingsPanel() {
+      const modal = document.getElementById('settings-modal');
+      const overlay = modal.querySelector('.settings-overlay');
+      const panel = modal.querySelector('.settings-panel');
+      const btnSettings = document.getElementById('btn-settings');
+      const btnClose = document.getElementById('btn-close-settings');
+      const preferences = Storage.getPreferences();
+
+      function updateToggle(button, enabled) {
+        button.textContent = enabled ? '开启' : '关闭';
+        button.setAttribute('aria-pressed', String(Boolean(enabled)));
+      }
+
+      const sliderTransparency = document.getElementById('slider-transparency');
+      const valTransparency = document.getElementById('val-transparency');
+      sliderTransparency.value = preferences.cameraOpacity;
+      valTransparency.textContent = Math.round(preferences.cameraOpacity * 100) + '%';
+      updateToggle(document.getElementById('btn-camera-background'), preferences.cameraShow);
+      updateToggle(document.getElementById('btn-mirror'), preferences.cameraMirror);
+      updateToggle(document.getElementById('btn-skeleton'), preferences.cameraSkeleton);
+      updateToggle(document.getElementById('btn-smooth'), preferences.smoothMode);
+
+      const sliderVolume = document.getElementById('slider-volume');
+      const valVolume = document.getElementById('val-volume');
+      sliderVolume.value = preferences.speechVolume;
+      valVolume.textContent = Math.round(preferences.speechVolume * 100) + '%';
+      Speech.setSpeechVolume(preferences.speechVolume);
+      Speech.setSfxVolume(preferences.sfxVolume);
+
+      btnSettings.addEventListener('click', () => {
+        modal.classList.add('open');
+        MediaPipe.pause();
+      });
+
+      btnClose.addEventListener('click', () => {
+        modal.classList.remove('open');
+        MediaPipe.resume();
+        ARCamera.resume();
+      });
+
+      overlay.addEventListener('click', () => {
+        modal.classList.remove('open');
+        MediaPipe.resume();
+        ARCamera.resume();
+      });
+
+      sliderTransparency.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        valTransparency.textContent = Math.round(val * 100) + '%';
+        ARCamera.setTransparency(val);
+        Storage.setPreference('cameraOpacity', val);
+      });
+
+      const btnCameraBackground = document.getElementById('btn-camera-background');
+      btnCameraBackground.addEventListener('click', () => {
+        const visible = !ARCamera.isCameraVisible();
+        ARCamera.setCameraVisible(visible);
+        updateToggle(btnCameraBackground, visible);
+        Storage.setPreference('cameraShow', visible);
+      });
+
+      const btnMirror = document.getElementById('btn-mirror');
+      btnMirror.addEventListener('click', () => {
+        ARCamera.toggleMirror();
+        const enabled = ARCamera.getIsMirrored();
+        updateToggle(btnMirror, enabled);
+        Storage.setPreference('cameraMirror', enabled);
+      });
+
+      const btnSkeleton = document.getElementById('btn-skeleton');
+      btnSkeleton.addEventListener('click', () => {
+        ARCamera.toggleSkeleton();
+        const enabled = ARCamera.isSkeletonVisible();
+        updateToggle(btnSkeleton, enabled);
+        Storage.setPreference('cameraSkeleton', enabled);
+      });
+
+      const btnSmooth = document.getElementById('btn-smooth');
+      btnSmooth.addEventListener('click', () => {
+        const smoothMode = ARCamera.toggleSmoothMode();
+        updateToggle(btnSmooth, smoothMode);
+        Storage.setPreference('smoothMode', smoothMode);
+      });
+
+      const btnRelease = document.getElementById('btn-release-camera');
+      const btnRestore = document.getElementById('btn-restore-camera');
+      btnRelease.addEventListener('click', () => {
+        ARCamera.forceRelease();
+        btnRelease.style.display = 'none';
+        btnRestore.style.display = 'inline-block';
+      });
+
+      btnRestore.addEventListener('click', async () => {
+        if (btnRestore.disabled) return;
+        btnRestore.disabled = true;
+        const originalText = btnRestore.textContent;
+        btnRestore.textContent = '正在打开摄像头…';
+        try {
+          const ok = await Game.restartCamera();
+          if (ok) {
+            btnRestore.style.display = 'none';
+            btnRelease.style.display = 'inline-block';
+          }
+        } finally {
+          btnRestore.disabled = false;
+          btnRestore.textContent = originalText;
+        }
+      });
+
+      sliderVolume.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        valVolume.textContent = Math.round(val * 100) + '%';
+        Speech.setSpeechVolume(val);
+        Speech.setSfxVolume(val);
+        Storage.setPreference('speechVolume', val);
+        Storage.setPreference('sfxVolume', val);
+      });
+
+      const btnExport = document.getElementById('btn-export-save');
+      const exportTextarea = document.getElementById('export-textarea');
+      btnExport.addEventListener('click', () => {
+        const saveStr = Storage.exportSave();
+        exportTextarea.value = saveStr;
+        exportTextarea.select();
+        document.execCommand('copy');
+        alert('存档已复制到剪贴板！');
+      });
+
+      const btnImport = document.getElementById('btn-import-save');
+      const importText = document.getElementById('import-text');
+      btnImport.addEventListener('click', () => {
+        const saveStr = importText.value.trim();
+        if (saveStr) {
+          const result = Storage.importSave(saveStr);
+          if (result.success) {
+            alert('存档导入成功！');
+            importText.value = '';
+            location.reload();
+          } else {
+            alert(result.message || '存档格式不正确！');
+          }
+        } else {
+          alert('请先粘贴存档文本！');
+        }
+      });
+
+      const btnReset = document.getElementById('btn-reset-save');
+      btnReset.addEventListener('click', () => {
+        if (confirm('确定要重置柚柚的全部学习进度吗？此操作不可恢复！')) {
+          if (confirm('再次确认：确定要重置所有进度吗？')) {
+            Storage.resetAll();
+            alert('已重置全部进度！');
+            location.reload();
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>问题详情 - 证见</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-inner">
+    <a href="index.html" class="logo">
+      <div class="logo-icon">&#x2696;</div>
+      <span>证见</span>
+    </a>
+    <div class="nav-links">
+      <a href="index.html">问题列表</a>
+      <a href="#">发起辩论</a>
+      <a href="#">关于</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container" id="detailContainer">
+  <!-- 动态渲染 -->
+</div>
+
+<footer class="site-footer">
+  <p>证见 Demo &nbsp;|&nbsp; 多 AI 协同 x 用户参与</p>
+</footer>
+
+<script src="js/data.js"></script>
+<script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var issueId = parseInt(params.get('id'));
+  var issue = getIssueById(issueId);
+  var container = document.getElementById('detailContainer');
+
+  if (!issue) {
+    container.innerHTML = '<div class="card"><p>问题未找到</p><a href="index.html">返回列表</a></div>';
+    return;
+  }
+
+  // 判定结果映射
+  function verdictTag(verdict) {
+    if (!verdict) return '';
+    if (verdict === 'established') return '<span class="verdict-tag verdict-pass">成立</span>';
+    if (verdict === 'rejected') return '<span class="verdict-tag verdict-fail">被推翻</span>';
+    return '<span class="verdict-tag verdict-pending">未定论</span>';
+  }
+
+  // 问题标题区
+  var titleHTML = '\
+    <div class="issue-title-block">\
+      <a href="index.html" class="back-link">&#x2190; 返回列表</a>\
+      <h1 class="issue-title-main">' + issue.title + '</h1>\
+      <div class="issue-title-meta">\
+        <span class="status-tag ' + getStatusClass(issue.status) + '">' + issue.statusLabel + '</span>\
+        <span style="color:var(--muted);font-size:0.8rem;">置信度 ' + issue.confidence + '%</span>\
+        <span style="color:var(--muted);font-size:0.8rem;">' + issue.date + '</span>\
+      </div>\
+    </div>';
+
+  // 结论摘要区
+  var conclusionHTML = '\
+    <div class="conclusion-bar">\
+      <div class="conclusion-header">\
+        <span class="conclusion-label">AI 共同判定结论</span>\
+        <span class="status-tag ' + getStatusClass(issue.status) + '">' + issue.statusLabel + '</span>\
+      </div>\
+      <div class="conclusion-verdict" style="color: ' + (issue.status === 'verified' ? 'var(--accent2)' : (issue.status === 'debunked' ? 'var(--accent)' : 'var(--pro)')) + ';">\
+        ' + issue.statusLabel + '\
+      </div>\
+      <div class="conclusion-summary">' + (issue.summary || '') + '</div>\
+      <div class="conclusion-desc">' + issue.conclusion + '</div>\
+      <div class="conclusion-meta">\
+        <span>置信度 ' + issue.confidence + '%</span>\
+        <span>&#x2022;</span>\
+        <span>' + issue.aiJudges.join(' / ') + ' 共同确认</span>\
+        <span>&#x2022;</span>\
+        <span>' + issue.date + '</span>\
+      </div>\
+      <div class="confidence-bar">\
+        <div class="confidence-fill" style="width: ' + issue.confidence + '%"></div>\
+      </div>\
+    </div>';
+
+  // 证据概览（带内联展开）
+  function renderEvidenceCard(e, side) {
+    var hasChildren = e.children && e.children.length > 0;
+    var sideClass = side === 'pro' ? 'pro' : 'con';
+    var badgeClass = sideClass === 'pro' ? 'badge-pro' : 'badge-con';
+    var childCount = hasChildren ? countSub(e) : 0;
+    var verdictClass = e.verdict ? (' verdict-' + e.verdict) : '';
+    var html = '<div class="evidence-card ' + sideClass + verdictClass + '">';
+    html += '<div class="evidence-card-header" ' + (hasChildren ? 'onclick="toggleEvidence(this)"' : '') + '>';
+    html += '<div class="evi-title">' + e.title + '</div>';
+    html += '<div class="evidence-card-meta">';
+    html += '<span class="badge ' + badgeClass + '">' + e.author + '</span>';
+    html += '<span class="pill pill-gray">' + e.type + '</span>';
+    html += verdictTag(e.verdict);
+    if (hasChildren) {
+      html += '<span class="evi-toggle-icon">&#x25B6; 展开子辩论 (' + childCount + ')</span>';
+    }
+    if (e.source) {
+      html += '<a href="' + e.source + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--con);font-size:0.72rem;">查看来源</a>';
+    }
+    html += '</div></div>';
+    if (hasChildren) {
+      html += '<div class="evidence-card-children collapsed" id="evi-' + e.id + '">';
+      html += '<div class="evidence-card-children-inner"></div>';
+      html += '</div>';
+    }
+    // 发言区（默认折叠，点击展开）
+    html += '<div class="evidence-reply-toggle" onclick="toggleReply(this)"><span class="reply-toggle-text">&#x270D; 我要发言</span></div>';
+    html += '<div class="evidence-reply collapsed">';
+    html += '<textarea placeholder="补充论据或提出质疑..." data-evi-id="' + e.id + '" data-side="' + side + '"></textarea>';
+    html += '<div class="reply-actions">';
+    html += '<span class="reply-hint">加入' + (side === 'pro' ? '正方' : '反方') + '辩论</span>';
+    html += '<button class="btn btn-primary btn-small" onclick="submitReply(this, \'' + e.id + '\', \'' + side + '\')">提交</button>';
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // 排序：成立 > 未定论 > 被推翻
+  function sortEvidences(arr) {
+    var order = { established: 0, pending: 1, rejected: 2 };
+    return arr.slice().sort(function(a, b) {
+      var va = order[a.verdict] !== undefined ? order[a.verdict] : 1;
+      var vb = order[b.verdict] !== undefined ? order[b.verdict] : 1;
+      return va - vb;
+    });
+  }
+
+  var sortedPro = sortEvidences(issue.evidences.pro);
+  var sortedCon = sortEvidences(issue.evidences.con);
+  var proEvidences = sortedPro.map(function(e) { return renderEvidenceCard(e, 'pro'); }).join('');
+  var conEvidences = sortedCon.map(function(e) { return renderEvidenceCard(e, 'con'); }).join('');
+
+  var overviewHTML = '\
+    <div class="evidence-overview">\
+      <div class="evidence-col pro">\
+        <h4>&#x25B6; 正方论据 (' + issue.evidences.pro.length + ')</h4>\
+        ' + (proEvidences || '<p style="font-size:0.85rem;color:var(--muted);">暂无正方论据</p>') + '\
+      </div>\
+      <div class="evidence-col con">\
+        <h4>&#x25C0; 反方论据 (' + issue.evidences.con.length + ')</h4>\
+        ' + (conEvidences || '<p style="font-size:0.85rem;color:var(--muted);">暂无反方论据</p>') + '\
+      </div>\
+    </div>';
+
+  // 完整证据链
+  var chainHTML = '\
+    <div class="evidence-chain">\
+      <div class="chain-header">\
+        <h3>&#x1F4CB; 完整证据链</h3>\
+      </div>\
+      <div id="treeContainer"></div>\
+    </div>';
+
+  // 裁判区
+  var judgesHTML = '\
+    <div class="judges-section">\
+      <h3>&#x2696; 裁判 AI 独立评估</h3>\
+      <div class="judge-cards">\
+        ' + issue.judgeResults.map(function(j) { return '\
+          <div class="judge-card">\
+            <div class="judge-name">' + j.name + '</div>\
+            <div class="judge-score">' + j.score + '%</div>\
+            <div class="judge-verdict">' + j.verdict + '</div>\
+          </div>'; }).join('') + '\
+      </div>\
+    </div>';
+
+  // 操作按钮
+  var actionsHTML = '\
+    <div style="display:flex;gap:0.75rem;margin:1.5rem 0;justify-content:center;">\
+      <a href="index.html" class="btn btn-outline">&#x2190; 返回列表</a>\
+    </div>';
+
+  container.innerHTML = titleHTML + conclusionHTML + overviewHTML + chainHTML + judgesHTML + actionsHTML;
+
+  // 渲染树（用排序后的数据）
+  var treeContainer = document.getElementById('treeContainer');
+  var allNodes = sortedPro.concat(sortedCon);
+  renderTree(allNodes, treeContainer);
+
+  // 渲染展开的子辩论
+  function renderSubDebate(container, children) {
+    var inner = container.querySelector('.evidence-card-children-inner');
+    if (!inner) return;
+    inner.innerHTML = '';
+    renderTree(children, inner);
+  }
+
+  // 展开切换函数（全局）
+  window.toggleEvidence = function(header) {
+    var card = header.parentElement;
+    var childrenEl = card.querySelector('.evidence-card-children');
+    var icon = header.querySelector('.evi-toggle-icon');
+    if (!childrenEl) return;
+    var isCollapsed = childrenEl.classList.contains('collapsed');
+    if (isCollapsed) {
+      // 找到对应证据的 children
+      var allEvi = issue.evidences.pro.concat(issue.evidences.con);
+      var findEvi = function(nodes, el) {
+        for (var i = 0; i < nodes.length; i++) {
+          var childWrap = el.querySelector('.evidence-card-children-inner');
+          if (nodes[i].children && childWrap) {
+            renderSubDebate(el, nodes[i].children);
+          }
+          if (nodes[i].children) findEvi(nodes[i].children, el);
+        }
+      };
+      renderSubDebate(card, [{ children: null }]);
+      // 直接从 data.js 数据渲染
+      var eviId = childrenEl.id.replace('evi-', '');
+      var findInData = function(nodes) {
+        for (var i = 0; i < nodes.length; i++) {
+          if (nodes[i].id === eviId && nodes[i].children) {
+            childrenEl.querySelector('.evidence-card-children-inner').innerHTML = '';
+            renderTree(nodes[i].children, childrenEl.querySelector('.evidence-card-children-inner'));
+            return true;
+          }
+          if (nodes[i].children && findInData(nodes[i].children)) return true;
+        }
+        return false;
+      };
+      findInData(allEvi);
+      childrenEl.classList.remove('collapsed');
+      childrenEl.classList.add('expanded');
+      if (icon) icon.innerHTML = '&#x25BC; 收起子辩论';
+    } else {
+      childrenEl.classList.remove('expanded');
+      childrenEl.classList.add('collapsed');
+      if (icon) icon.innerHTML = '&#x25B6; 展开子辩论 (' + countSub(findEviById(eviId)) + ')';
+    }
+  };
+
+  function findEviById(id) {
+    var all = issue.evidences.pro.concat(issue.evidences.con);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id === id) return all[i];
+    }
+    return null;
+  }
+
+  function countSub(node) {
+    if (!node || !node.children) return 0;
+    var c = node.children.length;
+    node.children.forEach(function(ch) { c += countSub(ch); });
+    return c;
+  }
+
+  // 提交发言（Demo：插入到卡片下方）
+  window.toggleReply = function(toggleEl) {
+    var replyEl = toggleEl.nextElementSibling;
+    if (!replyEl || !replyEl.classList.contains('evidence-reply')) return;
+    var isCollapsed = replyEl.classList.contains('collapsed');
+    if (isCollapsed) {
+      replyEl.classList.remove('collapsed');
+      replyEl.classList.add('expanded');
+      toggleEl.querySelector('.reply-toggle-text').innerHTML = '&#x270D; 收起发言';
+      var ta = replyEl.querySelector('textarea');
+      if (ta) setTimeout(function() { ta.focus(); }, 100);
+    } else {
+      replyEl.classList.remove('expanded');
+      replyEl.classList.add('collapsed');
+      toggleEl.querySelector('.reply-toggle-text').innerHTML = '&#x270D; 我要发言';
+    }
+  };
+
+  window.submitReply = function(btn, eviId, side) {
+    var card = btn.closest('.evidence-card');
+    var textarea = card.querySelector('.evidence-reply textarea');
+    var text = textarea.value.trim();
+    if (!text) {
+      textarea.focus();
+      return;
+    }
+    var replyList = card.querySelector('.reply-list');
+    if (!replyList) {
+      replyList = document.createElement('div');
+      replyList.className = 'reply-list';
+      card.querySelector('.evidence-reply').insertAdjacentElement('beforebegin', replyList);
+    }
+    var msg = document.createElement('div');
+    msg.className = 'debate-msg ' + side;
+    var now = new Date();
+    var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+    msg.innerHTML = '<div class="msg-author"><span class="badge badge-user">你</span><span style="font-size:0.7rem;color:var(--muted);">' + timeStr + '</span></div><div class="msg-content">' + text + '</div>';
+    replyList.appendChild(msg);
+    textarea.value = '';
+    btn.textContent = '已提交';
+    setTimeout(function() { btn.textContent = '提交'; }, 1500);
+  };
+})();
+</script>
+
+</body>
+</html>

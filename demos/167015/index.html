@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Chalkdraw Studio · 拟真黑板</title>
+<style>
+  /* ============ 设计令牌 ============ */
+  :root {
+    --bg-deep: #0b0d12;
+    --panel-bg: rgba(20, 22, 30, 0.66);
+    --panel-bg-solid: rgba(20, 22, 30, 0.92);
+    --panel-border: rgba(255,255,255,0.09);
+    --panel-border-strong: rgba(255,255,255,0.16);
+    --text-primary: #f1f2f6;
+    --text-secondary: rgba(255,255,255,0.62);
+    --text-muted: rgba(255,255,255,0.38);
+    --accent: #8A2BE2;
+    --accent-2: #b15cff;
+    --accent-glow: rgba(138, 43, 226, 0.45);
+    --accent-soft: rgba(138, 43, 226, 0.16);
+    --hover: rgba(255,255,255,0.08);
+    --wood-1: #6b4220;
+    --wood-2: #8b5a2b;
+    --wood-3: #a0693a;
+    --radius: 16px;
+    --ease: cubic-bezier(.2,.8,.2,1);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background: var(--bg-deep);
+    font-family: 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', system-ui, sans-serif;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color: transparent;
+    color: var(--text-primary);
+  }
+
+  /* ============ 画布层 ============ */
+  canvas { position:fixed; top:0; left:0; display:block; }
+  #bg { z-index:0; pointer-events:none; }
+  #draw { z-index:3; touch-action:none; cursor:none; }
+
+  /* 网格辅助线 */
+  .guides {
+    position:fixed; inset:0; z-index:1; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+    opacity:0; transition: opacity .35s var(--ease);
+  }
+  .guides.on { opacity:1; }
+
+  /* 黑板反光叠加 */
+  .glare {
+    position:fixed; inset:0; z-index:2; pointer-events:none;
+    background:
+      radial-gradient(120% 80% at 20% 0%, rgba(255,255,255,0.06), transparent 50%),
+      radial-gradient(100% 100% at 50% 50%, transparent 60%, rgba(0,0,0,0.45) 100%);
+  }
+
+  /* ============ 木质黑板槽 ============ */
+  .wood-tray {
+    position:fixed; bottom:0; left:0; right:0; height:40px; z-index:6;
+    background:
+      linear-gradient(180deg, rgba(0,0,0,0.45), transparent 28%),
+      repeating-linear-gradient(90deg, rgba(0,0,0,0.07) 0 2px, transparent 2px 9px),
+      linear-gradient(180deg, var(--wood-1) 0%, var(--wood-2) 18%, var(--wood-3) 48%, #7a4a24 78%, #523014 100%);
+    box-shadow:
+      inset 0 6px 14px rgba(0,0,0,0.55),
+      inset 0 2px 0 rgba(255,255,255,0.07),
+      0 -2px 10px rgba(0,0,0,0.35);
+    border-top: 1px solid rgba(0,0,0,0.5);
+  }
+  .wood-tray::after {
+    content:''; position:absolute; left:12%; right:12%; top:3px; height:7px;
+    background: radial-gradient(ellipse, rgba(255,255,255,0.18), transparent 72%);
+    border-radius:50%; pointer-events:none;
+  }
+
+  /* ============ 顶部工具栏 ============ */
+  .topbar {
+    position:fixed; top:0; left:0; right:0; height:58px; z-index:30;
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 0 18px;
+    background: linear-gradient(180deg, rgba(11,13,18,0.92), rgba(11,13,18,0.55));
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .brand {
+    display:flex; align-items:center; gap:10px;
+    font-family: 'Georgia', serif; font-style: italic; font-size:17px;
+    letter-spacing:.3px; color: var(--text-primary);
+  }
+  .brand .dot { width:10px; height:10px; border-radius:50%; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+  .brand small {
+    font-style:normal; font-family:'SF Mono', Consolas, monospace;
+    font-size:10px; color: var(--text-muted); letter-spacing:1.2px;
+    margin-left:2px; padding:2px 6px; border:1px solid var(--panel-border); border-radius:5px;
+  }
+
+  .tool-group {
+    display:flex; align-items:center; gap:4px; padding:5px; border-radius:13px;
+    background: rgba(255,255,255,0.035); border:1px solid var(--panel-border);
+  }
+  .tool-btn {
+    width:38px; height:38px; border-radius:9px;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; color: var(--text-secondary);
+    background:transparent; border:none;
+    transition: all .18s var(--ease); position:relative;
+  }
+  .tool-btn:hover { background: var(--hover); color: var(--text-primary); }
+  .tool-btn.active {
+    background: var(--accent); color:#fff;
+    box-shadow: 0 4px 14px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.2);
+  }
+  .tool-btn svg { width:19px; height:19px; }
+  .tool-btn .kbd { position:absolute; bottom:3px; right:4px; font-size:8px; opacity:.5; font-family:'SF Mono', monospace; }
+  .tool-btn.active .kbd { opacity:.7; }
+  .tool-sep { width:1px; height:22px; background: var(--panel-border); margin:0 3px; }
+
+  .top-actions { display:flex; align-items:center; gap:8px; }
+  .btn {
+    height:36px; padding:0 16px; border-radius:10px;
+    display:inline-flex; align-items:center; gap:7px;
+    cursor:pointer; font-size:13px; font-weight:500;
+    border:1px solid var(--panel-border);
+    background: rgba(255,255,255,0.04); color: var(--text-secondary);
+    transition: all .18s var(--ease);
+  }
+  .btn:hover { background: var(--hover); color: var(--text-primary); border-color: var(--panel-border-strong); }
+  .btn svg { width:15px; height:15px; }
+  .btn.primary { background: var(--accent); color:#fff; border-color: transparent; box-shadow: 0 4px 16px var(--accent-glow); }
+  .btn.primary:hover { background: var(--accent-2); color:#fff; }
+
+  /* ============ 左侧控制面板 ============ */
+  .left-panel {
+    position:fixed; left:16px; top:74px; bottom:56px; width:252px; z-index:25;
+    background: var(--panel-bg);
+    backdrop-filter: blur(22px) saturate(1.5);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    border:1px solid var(--panel-border); border-radius: var(--radius);
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+    padding:18px 16px; display:flex; flex-direction:column; gap:18px;
+    overflow-y:auto;
+    animation: slideInL .5s var(--ease) both;
+    transition: opacity .35s var(--ease), transform .35s var(--ease);
+  }
+  @keyframes slideInL { from{opacity:0;transform:translateX(-20px)} to{opacity:1;transform:none} }
+
+  .section .label {
+    font-size:11px; letter-spacing:1px; color: var(--text-muted);
+    font-weight:600; margin-bottom:10px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .section .label .val { color: var(--accent-2); font-family:'SF Mono', monospace; font-size:11px; }
+
+  .size-row { display:flex; align-items:center; gap:12px; }
+  .size-preview {
+    width:38px; height:38px; border-radius:9px;
+    background: rgba(255,255,255,0.04); border:1px solid var(--panel-border);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  .size-dot { background:#f4f1ea; border-radius:50%; transition: all .15s var(--ease); }
+  .slider {
+    -webkit-appearance:none; appearance:none; flex:1; height:4px; border-radius:2px;
+    background: linear-gradient(90deg, var(--accent), rgba(255,255,255,0.12));
+    outline:none; cursor:pointer;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance:none; width:16px; height:16px; border-radius:50%;
+    background:#fff; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.6), 0 0 0 3px var(--accent-soft);
+    transition: transform .15s;
+  }
+  .slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+  .slider::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:#fff; border:none; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.6); }
+
+  .segmented {
+    display:flex; padding:3px; gap:3px; border-radius:10px;
+    background: rgba(255,255,255,0.04); border:1px solid var(--panel-border);
+  }
+  .seg {
+    flex:1; text-align:center; padding:8px 0; border-radius:7px;
+    font-size:12px; color: var(--text-secondary); cursor:pointer;
+    transition: all .18s var(--ease); font-weight:500;
+  }
+  .seg:hover { color: var(--text-primary); }
+  .seg.active { background: var(--accent-soft); color: var(--accent-2); box-shadow: inset 0 0 0 1px var(--accent-glow); }
+
+  .palette { display:grid; grid-template-columns:repeat(5,1fr); gap:9px; }
+  .swatch {
+    aspect-ratio:1; border-radius:50%; cursor:pointer; position:relative;
+    border:1.5px solid rgba(255,255,255,0.12);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.3);
+    transition: all .18s var(--ease);
+  }
+  .swatch:hover { transform: scale(1.12); }
+  .swatch.active { transform: scale(1.18); box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft), 0 4px 10px rgba(0,0,0,0.5); }
+
+  .themes { display:flex; gap:9px; }
+  .theme {
+    flex:1; height:42px; border-radius:9px; cursor:pointer; position:relative;
+    border:1.5px solid rgba(255,255,255,0.1);
+    transition: all .18s var(--ease); overflow:hidden;
+  }
+  .theme:hover { transform: translateY(-2px); }
+  .theme.active { box-shadow: 0 0 0 2px var(--accent); }
+  .theme .name { position:absolute; bottom:3px; left:0; right:0; text-align:center; font-size:10px; color:rgba(255,255,255,0.78); letter-spacing:.5px; }
+
+  .switch-row { display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
+  .switch-row span { font-size:12.5px; color: var(--text-secondary); }
+  .switch {
+    width:38px; height:22px; border-radius:11px; cursor:pointer;
+    background: rgba(255,255,255,0.1); position:relative;
+    transition: background .2s var(--ease);
+  }
+  .switch::after {
+    content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff;
+    transition: transform .2s var(--ease); box-shadow:0 1px 3px rgba(0,0,0,0.4);
+  }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { transform: translateX(16px); }
+
+  /* ============ 右侧悬浮面板 ============ */
+  .right-panel {
+    position:fixed; right:16px; top:74px; z-index:25;
+    display:flex; flex-direction:column; gap:8px; padding:9px;
+    background: var(--panel-bg);
+    backdrop-filter: blur(22px) saturate(1.5);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    border:1px solid var(--panel-border); border-radius: var(--radius);
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+    animation: slideInR .5s var(--ease) both;
+    transition: opacity .35s var(--ease), transform .35s var(--ease);
+  }
+  @keyframes slideInR { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+  .icon-btn {
+    width:44px; height:44px; border-radius:11px;
+    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:2px;
+    cursor:pointer; color: var(--text-secondary);
+    background:transparent; border:none;
+    transition: all .18s var(--ease); position:relative;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text-primary); }
+  .icon-btn svg { width:18px; height:18px; }
+  .icon-btn .tip { font-size:9px; letter-spacing:.5px; opacity:.75; }
+  .icon-btn.replay { background: var(--accent-soft); color: var(--accent-2); box-shadow: inset 0 0 0 1px var(--accent-glow); }
+  .icon-btn.replay:hover { background: var(--accent); color:#fff; }
+  .icon-btn.replay.playing { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%,100%{ box-shadow: inset 0 0 0 1px var(--accent-glow), 0 0 0 0 var(--accent-glow);}
+    50%{ box-shadow: inset 0 0 0 1px var(--accent-glow), 0 0 0 8px transparent;}
+  }
+  .rp-sep { height:1px; background: var(--panel-border); margin:2px 4px; }
+
+  /* ============ 底部悬浮栏 ============ */
+  .bottom-bar {
+    position:fixed; bottom:52px; left:50%; transform:translateX(-50%); z-index:25;
+    display:flex; align-items:center; gap:4px;
+    padding:6px 8px; border-radius:12px;
+    background: var(--panel-bg);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border:1px solid var(--panel-border);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+    font-size:12px; color: var(--text-secondary);
+    transition: opacity .35s var(--ease), transform .35s var(--ease);
+  }
+  .bb-btn {
+    width:28px; height:28px; border-radius:7px;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; color:var(--text-secondary); font-size:15px; font-weight:600;
+    transition: all .15s var(--ease);
+  }
+  .bb-btn:hover { background:var(--hover); color:var(--text-primary); }
+  .zoom-val { min-width:46px; text-align:center; font-family:'SF Mono', monospace; color: var(--text-primary); font-size:12px; }
+  .bb-sep { width:1px; height:18px; background:var(--panel-border); margin:0 4px; }
+  .immersive {
+    padding:6px 12px; border-radius:8px; cursor:pointer; color:var(--text-secondary);
+    display:flex; align-items:center; gap:6px; font-size:12px;
+    transition: all .15s var(--ease);
+  }
+  .immersive:hover { background:var(--hover); color:var(--text-primary); }
+  .immersive.active { background:var(--accent-soft); color:var(--accent-2); }
+  .immersive svg { width:14px; height:14px; }
+
+  /* 沉浸模式：隐藏侧栏与底部栏 */
+  body.immersive .left-panel,
+  body.immersive .right-panel,
+  body.immersive .bottom-bar { opacity:0; pointer-events:none; transform: translateY(10px); }
+  body.immersive .left-panel { transform: translateX(-30px); }
+  body.immersive .right-panel { transform: translateX(30px); }
+
+  /* ============ 实体粉笔/板擦光标 ============ */
+  #physical-cursor {
+    position:fixed; left:0; top:0; pointer-events:none; z-index:1000;
+    transform-origin: 0 0; opacity:0;
+    transition: opacity .2s var(--ease);
+    will-change: transform;
+  }
+  #physical-cursor.show { opacity:1; }
+  .cursor-inner {
+    transform-origin: 0 0;
+    transition: transform .13s var(--ease);
+    filter: drop-shadow(0 5px 6px rgba(0,0,0,0.5));
+  }
+  .cursor-inner.pressing { transform: rotate(10deg) scale(0.88); }
+  .cursor-inner.eraser-mode.pressing { transform: rotate(-6deg) scale(0.92); }
+
+  /* ============ Toast ============ */
+  .toast {
+    position:fixed; top:74px; left:50%; transform: translateX(-50%) translateY(-12px);
+    background: var(--panel-bg-solid);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border:1px solid var(--panel-border-strong);
+    padding:11px 20px; border-radius:11px;
+    font-size:13px; letter-spacing:.3px; z-index:200;
+    opacity:0; pointer-events:none;
+    transition: opacity .25s, transform .25s var(--ease);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+    display:flex; align-items:center; gap:9px;
+  }
+  .toast.show { opacity:1; transform: translateX(-50%) translateY(0); }
+  .toast .dot { width:7px; height:7px; border-radius:50%; background: var(--accent-2); }
+
+  .left-panel::-webkit-scrollbar { width:5px; }
+  .left-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius:3px; }
+
+  @media (max-width: 860px) {
+    .left-panel { width:212px; }
+    .brand small { display:none; }
+    .btn span { display:none; } .btn { padding:0 10px; }
+  }
+  @media (max-width: 640px) {
+    .left-panel { display:none; }
+    .topbar { padding:0 10px; }
+    .tool-btn { width:34px; height:34px; }
+    .bottom-bar { font-size:11px; }
+  }
+</style>
+</head>
+<body>
+  <canvas id="bg"></canvas>
+  <div class="guides" id="guides"></div>
+  <div class="glare"></div>
+  <canvas id="draw"></canvas>
+
+  <!-- 顶部工具栏 -->
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>Chalkdraw<small>STUDIO</small></div>
+
+    <div class="tool-group" id="tools">
+      <button class="tool-btn active" data-tool="select" title="选择 (V)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l5 16 2-7 7-2z"/></svg><span class="kbd">V</span>
+      </button>
+      <button class="tool-btn" data-tool="chalk" title="粉笔 (B)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><span class="kbd">B</span>
+      </button>
+      <button class="tool-btn" data-tool="text" title="文本 (T)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M12 4v16"/><path d="M9 20h6"/></svg><span class="kbd">T</span>
+      </button>
+      <div class="tool-sep"></div>
+      <button class="tool-btn" data-tool="rect" title="矩形 (R)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/></svg><span class="kbd">R</span>
+      </button>
+      <button class="tool-btn" data-tool="circle" title="圆形 (O)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg><span class="kbd">O</span>
+      </button>
+      <button class="tool-btn" data-tool="line" title="直线 (L)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19L19 5"/></svg><span class="kbd">L</span>
+      </button>
+      <div class="tool-sep"></div>
+      <button class="tool-btn" data-tool="eraser" title="橡皮 (E)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H8L3 15a2 2 0 0 1 0-2.8L12.2 3a2 2 0 0 1 2.8 0l6 6a2 2 0 0 1 0 2.8L13 20"/><path d="M9 11l4 4"/></svg><span class="kbd">E</span>
+      </button>
+    </div>
+
+    <div class="top-actions">
+      <button class="btn" id="shareBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>
+        <span>分享</span>
+      </button>
+      <button class="btn primary" id="saveBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        <span>保存图片</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 左侧控制面板 -->
+  <aside class="left-panel">
+    <div class="section">
+      <div class="label">粉笔粗细 <span class="val" id="sizeVal">6 px</span></div>
+      <div class="size-row">
+        <div class="size-preview"><div class="size-dot" id="sizeDot"></div></div>
+        <input type="range" class="slider" id="size" min="2" max="24" value="6" step="1">
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label">字体风格</div>
+      <div class="segmented" id="handwriting">
+        <div class="seg active" data-style="print">印刷体</div>
+        <div class="seg" data-style="slant">倾斜体</div>
+        <div class="seg" data-style="block">方块体</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label">粉笔颜色</div>
+      <div class="palette" id="palette"></div>
+    </div>
+
+    <div class="section">
+      <div class="label">黑板主题</div>
+      <div class="themes" id="themes">
+        <div class="theme active" data-theme="slate" style="background:linear-gradient(135deg,#3a3f47,#15181d)"><span class="name">石板黑</span></div>
+        <div class="theme" data-theme="green" style="background:linear-gradient(135deg,#1f3a2e,#0f1a14)"><span class="name">墨绿</span></div>
+        <div class="theme" data-theme="navy" style="background:linear-gradient(135deg,#1a2342,#0c1120)"><span class="name">深蓝</span></div>
+      </div>
+      <div class="switch-row">
+        <span>辅助网格</span>
+        <div class="switch" id="guideSwitch"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label">偏好设置</div>
+      <div class="switch-row" style="margin-top:0">
+        <span>显示实体粉笔</span>
+        <div class="switch on" id="chalkCursorSwitch"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 右侧悬浮面板 -->
+  <aside class="right-panel">
+    <button class="icon-btn" id="layersBtn" title="图层">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>
+      <span class="tip">图层</span>
+    </button>
+    <button class="icon-btn replay" id="replayBtn" title="动画回放">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+      <span class="tip">动画回放</span>
+    </button>
+    <button class="icon-btn" id="undoBtn" title="撤销">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a6 6 0 0 1 0 12h-3"/></svg>
+      <span class="tip">撤销</span>
+    </button>
+    <div class="rp-sep"></div>
+    <button class="icon-btn" id="exportBtn" title="导出">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+      <span class="tip">导出</span>
+    </button>
+  </aside>
+
+  <!-- 底部悬浮栏 -->
+  <div class="bottom-bar" id="bottomBar">
+    <div class="bb-btn" id="zoomOut" title="缩小">−</div>
+    <div class="zoom-val" id="zoomVal">57%</div>
+    <div class="bb-btn" id="zoomIn" title="放大">+</div>
+    <div class="bb-sep"></div>
+    <div class="immersive" id="immersiveBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9V5a2 2 0 0 1 2-2h4"/><path d="M21 9V5a2 2 0 0 0-2-2h-4"/><path d="M3 15v4a2 2 0 0 0 2 2h4"/><path d="M21 15v4a2 2 0 0 1-2 2h-4"/></svg>
+      沉浸模式 (Classroom View)
+    </div>
+  </div>
+
+  <!-- 木质黑板槽 -->
+  <div class="wood-tray"></div>
+
+  <!-- 实体光标 -->
+  <div id="physical-cursor"><div class="cursor-inner" id="cursorInner"></div></div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"><span class="dot"></span><span id="toastMsg">就绪</span></div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ============ 画布初始化 ============
+    const bgCanvas = document.getElementById('bg');
+    const drawCanvas = document.getElementById('draw');
+    const bgCtx = bgCanvas.getContext('2d', { willReadFrequently: true });
+    const ctx = drawCanvas.getContext('2d');
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+
+    const state = {
+      tool: 'chalk', color: '#f4f1ea', size: 6,
+      theme: 'slate', handstyle: 'print', guides: false,
+      drawing: false, last: null, lastTime: 0,
+      shapeStart: null, snapshot: null,
+    };
+    const prefs = { physicalCursor: true, immersive: false, zoom: 57 };
+
+    const themes = {
+      slate: { c1:'#3a3f47', c2:'#2a2e35', c3:'#15181d' },
+      green: { c1:'#264f3a', c2:'#1a3a2a', c3:'#0f1a14' },
+      navy:  { c1:'#243056', c2:'#1a2342', c3:'#0c1120' },
+    };
+
+    // ============ 尺寸适配 ============
+    let resizeTimer = null;
+    function resize() {
+      let snap = null;
+      if (drawCanvas.width > 0) {
+        snap = document.createElement('canvas');
+        snap.width = drawCanvas.width; snap.height = drawCanvas.height;
+        snap.getContext('2d').drawImage(drawCanvas, 0, 0);
+      }
+      const w = window.innerWidth, h = window.innerHeight;
+      [bgCanvas, drawCanvas].forEach(c => {
+        c.width = Math.floor(w * dpr); c.height = Math.floor(h * dpr);
+        c.style.width = w + 'px'; c.style.height = h + 'px';
+      });
+      bgCtx.setTransform(1,0,0,1,0,0);
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      drawBackground();
+      if (snap) {
+        ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+        ctx.drawImage(snap, 0,0,snap.width,snap.height, 0,0,drawCanvas.width,drawCanvas.height);
+        ctx.restore();
+      }
+    }
+    window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 120); });
+
+    // ============ 黑板底纹 ============
+    function drawBackground() {
+      const w = bgCanvas.width, h = bgCanvas.height;
+      const t = themes[state.theme];
+      const grad = bgCtx.createRadialGradient(w*0.5, h*0.45, 0, w*0.5, h*0.5, Math.max(w,h)*0.78);
+      grad.addColorStop(0, t.c1); grad.addColorStop(0.55, t.c2); grad.addColorStop(1, t.c3);
+      bgCtx.fillStyle = grad; bgCtx.fillRect(0,0,w,h);
+
+      bgCtx.globalAlpha = 0.07;
+      const blotches = Math.floor((w*h)/16000);
+      for (let i=0;i<blotches;i++){
+        const x=Math.random()*w, y=Math.random()*h, r=Math.random()*150+40;
+        const g2 = bgCtx.createRadialGradient(x,y,0,x,y,r);
+        const v = Math.random()>0.5?255:0;
+        g2.addColorStop(0,`rgba(${v},${v},${v},0.5)`); g2.addColorStop(1,`rgba(${v},${v},${v},0)`);
+        bgCtx.fillStyle = g2; bgCtx.beginPath(); bgCtx.arc(x,y,r,0,Math.PI*2); bgCtx.fill();
+      }
+      bgCtx.globalAlpha = 1;
+
+      const img = bgCtx.getImageData(0,0,w,h); const d = img.data;
+      for (let i=0;i<d.length;i+=4){
+        const n=(Math.random()-0.5)*14;
+        d[i]=Math.max(0,Math.min(255,d[i]+n));
+        d[i+1]=Math.max(0,Math.min(255,d[i+1]+n));
+        d[i+2]=Math.max(0,Math.min(255,d[i+2]+n));
+      }
+      bgCtx.putImageData(img,0,0);
+    }
+
+    // ============ 粉笔印章 ============
+    const stampCache = new Map();
+    function getStamp(color, size) {
+      const key = color + '|' + size;
+      let s = stampCache.get(key);
+      if (s) return s;
+      s = makeStamp(color, size); stampCache.set(key, s);
+      if (stampCache.size > 80) stampCache.delete(stampCache.keys().next().value);
+      return s;
+    }
+    function makeStamp(color, size) {
+      const r = Math.max(1, size);
+      const dim = Math.ceil(r * 2.4);
+      const c = document.createElement('canvas'); c.width = dim; c.height = dim;
+      const x = c.getContext('2d'); const center = dim/2;
+      x.fillStyle = color;
+      const dots = Math.max(40, Math.floor(r*r*2.2));
+      for (let i=0;i<dots;i++){
+        const ang = Math.random()*Math.PI*2;
+        const dist = Math.pow(Math.random(),0.65)*r;
+        const px = center+Math.cos(ang)*dist, py = center+Math.sin(ang)*dist;
+        const dr = Math.random()*0.9+0.25;
+        const a = (1-dist/r)*0.55+0.12;
+        x.globalAlpha = a*(Math.random()*0.6+0.4);
+        x.beginPath(); x.arc(px,py,dr,0,Math.PI*2); x.fill();
+      }
+      return c;
+    }
+
+    function pointerPos(e) { const r = drawCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+
+    // ============ 粉笔笔触（散点断裂感） ============
+    function drawChalkSeg(from, to, speed) {
+      const stamp = getStamp(state.color, state.size);
+      const dx = to.x - from.x, dy = to.y - from.y;
+      const dist = Math.hypot(dx, dy);
+      const step = Math.max(0.8, state.size * 0.22);
+      const steps = Math.max(1, Math.ceil(dist / step));
+      const pressure = speed == null ? 0.9 : Math.max(0.55, Math.min(1, 1 - speed / 4));
+
+      ctx.globalCompositeOperation = 'source-over';
+      const half = stamp.width / 2;
+
+      // 主笔触盖章
+      ctx.globalAlpha = 0.55 * pressure;
+      for (let i=0;i<=steps;i++){
+        const t = steps===0?0:i/steps;
+        const x = from.x+dx*t, y = from.y+dy*t;
+        const jx = x + (Math.random()-0.5)*state.size*0.4;
+        const jy = y + (Math.random()-0.5)*state.size*0.4;
+        const rot = Math.random()*Math.PI*2;
+        const sc = (0.78+Math.random()*0.42)*pressure;
+        ctx.save(); ctx.translate(jx,jy); ctx.rotate(rot); ctx.scale(sc,sc);
+        ctx.drawImage(stamp, -half, -half); ctx.restore();
+      }
+
+      // 离散散点：rgba + Math.random 偏移，模拟粉笔断裂颗粒
+      ctx.fillStyle = state.color;
+      const scatter = Math.max(4, Math.floor(steps * 0.8));
+      for (let i=0;i<scatter;i++){
+        const t = Math.random();
+        const x = from.x+dx*t + (Math.random()-0.5)*state.size*1.2;
+        const y = from.y+dy*t + (Math.random()-0.5)*state.size*1.2;
+        ctx.globalAlpha = (0.08+Math.random()*0.32)*pressure;
+        ctx.beginPath(); ctx.arc(x,y, Math.random()*0.9+0.2, 0, Math.PI*2); ctx.fill();
+      }
+
+      // 飞散粉笔灰
+      if (Math.random() < 0.55) {
+        ctx.fillStyle = state.color;
+        const dn = 1 + Math.floor(Math.random()*2);
+        for (let i=0;i<dn;i++){
+          const ang = Math.random()*Math.PI*2;
+          const dd = state.size*(0.9+Math.random()*0.9);
+          ctx.globalAlpha = 0.22*pressure;
+          ctx.beginPath();
+          ctx.arc(to.x+Math.cos(ang)*dd, to.y+Math.sin(ang)*dd, Math.random()*0.7+0.2, 0, Math.PI*2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // ============ 橡皮（抹痕） ============
+    function drawEraserSeg(from, to) {
+      const r = Math.max(2, state.size * 1.8);
+      const dx = to.x - from.x, dy = to.y - from.y;
+      const dist = Math.hypot(dx, dy);
+      const step = Math.max(1, r * 0.25);
+      const steps = Math.max(1, Math.ceil(dist / step));
+      ctx.globalCompositeOperation = 'destination-out';
+      for (let i=0;i<=steps;i++){
+        const t = steps===0?0:i/steps;
+        const x = from.x+dx*t, y = from.y+dy*t;
+        const g = ctx.createRadialGradient(x,y,0,x,y,r);
+        g.addColorStop(0,'rgba(0,0,0,0.42)'); g.addColorStop(0.6,'rgba(0,0,0,0.18)'); g.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // ============ 形状预览 ============
+    function saveSnapshot() {
+      state.snapshot = document.createElement('canvas');
+      state.snapshot.width = drawCanvas.width; state.snapshot.height = drawCanvas.height;
+      state.snapshot.getContext('2d').drawImage(drawCanvas, 0, 0);
+    }
+    function restoreSnapshot() {
+      if (!state.snapshot) return;
+      ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+      ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+      ctx.drawImage(state.snapshot, 0, 0); ctx.restore();
+    }
+    function drawShape(from, to) {
+      restoreSnapshot();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = state.color; ctx.lineWidth = state.size;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      if (state.tool === 'rect') ctx.rect(from.x, from.y, to.x-from.x, to.y-from.y);
+      else if (state.tool === 'circle') {
+        const cx=(from.x+to.x)/2, cy=(from.y+to.y)/2;
+        ctx.ellipse(cx,cy,Math.max(1,Math.abs(to.x-from.x)/2),Math.max(1,Math.abs(to.y-from.y)/2),0,0,Math.PI*2);
+      } else if (state.tool === 'line') { ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); }
+      ctx.stroke();
+      ctx.fillStyle = state.color;
+      for (let i=0;i<40;i++){
+        const t=Math.random();
+        const x=from.x+(to.x-from.x)*t + (Math.random()-0.5)*state.size;
+        const y=from.y+(to.y-from.y)*t + (Math.random()-0.5)*state.size;
+        ctx.globalAlpha=Math.random()*0.25;
+        ctx.beginPath();ctx.arc(x,y,Math.random()*0.7+0.2,0,Math.PI*2);ctx.fill();
+      }
+      ctx.globalAlpha=1;
+    }
+
+    // ============ 实体粉笔/板擦光标 SVG ============
+    const CHALK_SVG = `
+    <svg width="84" height="84" viewBox="-10 -10 84 84" overflow="visible">
+      <defs>
+        <linearGradient id="cyl" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#a8a8a8"/>
+          <stop offset="0.28" stop-color="#ececec"/>
+          <stop offset="0.55" stop-color="#ffffff"/>
+          <stop offset="1" stop-color="#bcbcbc"/>
+        </linearGradient>
+        <linearGradient id="cylCap" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#8e8e8e"/>
+          <stop offset="0.5" stop-color="#d8d8d8"/>
+          <stop offset="1" stop-color="#9a9a9a"/>
+        </linearGradient>
+      </defs>
+      <g transform="rotate(-45)">
+        <rect x="-7" y="-60" width="14" height="56" rx="3" fill="rgba(0,0,0,0.28)" transform="translate(2.2,3)"/>
+        <rect x="-7" y="-60" width="14" height="56" rx="3" fill="url(#cyl)" stroke="rgba(0,0,0,0.22)" stroke-width="0.6"/>
+        <ellipse cx="0" cy="-60" rx="7" ry="2.6" fill="url(#cylCap)" stroke="rgba(0,0,0,0.18)" stroke-width="0.5"/>
+        <rect x="-7" y="-44" width="14" height="2.4" fill="rgba(0,0,0,0.08)"/>
+        <path d="M -7,-4 L 7,-4 L 4,0 L -4,0 Z" fill="#ffffff" stroke="rgba(0,0,0,0.16)" stroke-width="0.5"/>
+        <ellipse cx="0" cy="0" rx="4" ry="1" fill="#fff"/>
+      </g>
+    </svg>`;
+
+    const ERASER_SVG = `
+    <svg width="76" height="76" viewBox="-12 -12 76 76" overflow="visible">
+      <defs>
+        <linearGradient id="woodG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#7a4a24"/>
+          <stop offset="0.5" stop-color="#a0693a"/>
+          <stop offset="1" stop-color="#5a3818"/>
+        </linearGradient>
+        <linearGradient id="feltG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#2a2a2a"/>
+          <stop offset="1" stop-color="#0a0a0a"/>
+        </linearGradient>
+      </defs>
+      <g transform="rotate(-18)">
+        <rect x="-22" y="-34" width="44" height="22" rx="3" fill="rgba(0,0,0,0.3)" transform="translate(2,3)"/>
+        <rect x="-22" y="-34" width="44" height="22" rx="3" fill="url(#woodG)" stroke="rgba(0,0,0,0.35)" stroke-width="0.7"/>
+        <path d="M -20,-30 Q 0,-32 20,-29" stroke="rgba(0,0,0,0.16)" stroke-width="0.6" fill="none"/>
+        <path d="M -20,-25 Q 0,-23 20,-26" stroke="rgba(0,0,0,0.13)" stroke-width="0.5" fill="none"/>
+        <path d="M -20,-19 Q 0,-21 20,-18" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" fill="none"/>
+        <rect x="-22" y="-12" width="44" height="12" rx="2" fill="url(#feltG)" stroke="rgba(0,0,0,0.4)" stroke-width="0.5"/>
+        <line x1="-20" y1="-8" x2="20" y2="-8" stroke="rgba(255,255,255,0.04)"/>
+        <line x1="-20" y1="-4" x2="20" y2="-4" stroke="rgba(255,255,255,0.04)"/>
+        <rect x="-22" y="-1" width="44" height="1.6" fill="#000"/>
+      </g>
+    </svg>`;
+
+    const cursorEl = document.getElementById('physical-cursor');
+    const cursorInner = document.getElementById('cursorInner');
+
+    function setCursorSVG() {
+      if (!prefs.physicalCursor) { cursorInner.innerHTML = ''; return; }
+      cursorInner.innerHTML = (state.tool === 'eraser') ? ERASER_SVG : CHALK_SVG;
+      cursorInner.classList.toggle('eraser-mode', state.tool === 'eraser');
+    }
+
+    function movePhysicalCursor(x, y, drawing) {
+      const tilt = drawing ? (Math.random()-0.5)*6 : 0;
+      const wig = drawing ? (Math.random()-0.5)*1.6 : 0;
+      cursorEl.style.transform = `translate(${x+wig}px, ${y+wig}px) rotate(${tilt}deg)`;
+    }
+    function showPhysicalCursor(show) {
+      cursorEl.classList.toggle('show', show && prefs.physicalCursor);
+    }
+    function updateCanvasCursorStyle() {
+      // 显示实体粉笔开 → cursor:none；关 → crosshair
+      drawCanvas.style.cursor = prefs.physicalCursor ? 'none' : 'crosshair';
+    }
+
+    // ============ 指针事件 ============
+    drawCanvas.addEventListener('pointerdown', e => {
+      if (replay && replay.active) return;
+      e.preventDefault();
+      drawCanvas.setPointerCapture(e.pointerId);
+      const p = pointerPos(e);
+      state.last = p; state.lastTime = performance.now();
+      // 按压动画
+      if (prefs.physicalCursor) cursorInner.classList.add('pressing');
+      if (['rect','circle','line'].includes(state.tool)) { state.shapeStart = p; saveSnapshot(); state.drawing = true; return; }
+      if (state.tool === 'select') return;
+      state.drawing = true;
+      if (state.tool === 'chalk' || state.tool === 'text') drawChalkSeg(p, p, 0);
+      else if (state.tool === 'eraser') drawEraserSeg(p, p);
+    });
+
+    drawCanvas.addEventListener('pointermove', e => {
+      movePhysicalCursor(e.clientX, e.clientY, state.drawing);
+      if (!state.drawing) return;
+      const p = pointerPos(e);
+      if (['rect','circle','line'].includes(state.tool)) { drawShape(state.shapeStart, p); return; }
+      if (state.tool === 'select') return;
+      const now = performance.now();
+      const dt = Math.max(1, now - state.lastTime);
+      const speed = Math.hypot(p.x-state.last.x, p.y-state.last.y)/dt;
+      if (state.tool === 'chalk' || state.tool === 'text') drawChalkSeg(state.last, p, speed);
+      else if (state.tool === 'eraser') drawEraserSeg(state.last, p);
+      state.last = p; state.lastTime = now;
+    });
+
+    function endDraw() {
+      state.drawing = false; state.last = null; state.shapeStart = null; state.snapshot = null;
+      cursorInner.classList.remove('pressing');
+    }
+    drawCanvas.addEventListener('pointerup', endDraw);
+    drawCanvas.addEventListener('pointercancel', endDraw);
+
+    // 全局 mousemove 实时跟随
+    window.addEventListener('mousemove', e => {
+      movePhysicalCursor(e.clientX, e.clientY, state.drawing);
+    });
+    drawCanvas.addEventListener('mouseenter', () => showPhysicalCursor(true));
+    drawCanvas.addEventListener('mouseleave', () => showPhysicalCursor(false));
+
+    // ============ UI 绑定 ============
+    document.getElementById('tools').addEventListener('click', e => {
+      const b = e.target.closest('.tool-btn'); if (!b) return;
+      selectTool(b.dataset.tool);
+    });
+    function selectTool(t) {
+      state.tool = t;
+      document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
+      updateCanvasCursorStyle();
+      setCursorSVG();
+      showPhysicalCursor(state.tool !== 'select');
+    }
+
+    const colors = ['#f4f1ea','#ffe085','#a8efc0','#ffb0c4','#9fd0ff','#c9a8ff','#ff9a6b','#7fe5d3','#ff6b9d','#ffffff'];
+    const paletteEl = document.getElementById('palette');
+    colors.forEach((c, i) => {
+      const s = document.createElement('div');
+      s.className = 'swatch' + (i === 0 ? ' active' : '');
+      s.style.background = c; s.dataset.color = c;
+      paletteEl.appendChild(s);
+    });
+    paletteEl.addEventListener('click', e => {
+      const sw = e.target.closest('.swatch'); if (!sw) return;
+      document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active'); state.color = sw.dataset.color;
+      document.getElementById('sizeDot').style.background = state.color;
+      if (state.tool === 'eraser') selectTool('chalk');
+    });
+
+    const sizeInput = document.getElementById('size');
+    const sizeVal = document.getElementById('sizeVal');
+    const sizeDot = document.getElementById('sizeDot');
+    function updateSize() {
+      state.size = parseInt(sizeInput.value, 10);
+      sizeVal.textContent = state.size + ' px';
+      const d = Math.max(4, state.size * 1.4);
+      sizeDot.style.width = d + 'px'; sizeDot.style.height = d + 'px';
+      sizeDot.style.background = state.color;
+    }
+    sizeInput.addEventListener('input', updateSize);
+
+    document.getElementById('handwriting').addEventListener('click', e => {
+      const s = e.target.closest('.seg'); if (!s) return;
+      document.querySelectorAll('#handwriting .seg').forEach(x => x.classList.remove('active'));
+      s.classList.add('active'); state.handstyle = s.dataset.style;
+    });
+
+    document.getElementById('themes').addEventListener('click', e => {
+      const t = e.target.closest('.theme'); if (!t) return;
+      document.querySelectorAll('.theme').forEach(x => x.classList.remove('active'));
+      t.classList.add('active'); state.theme = t.dataset.theme; drawBackground();
+    });
+
+    const guideSwitch = document.getElementById('guideSwitch');
+    const guidesEl = document.getElementById('guides');
+    guideSwitch.addEventListener('click', () => {
+      state.guides = !state.guides;
+      guideSwitch.classList.toggle('on', state.guides);
+      guidesEl.classList.toggle('on', state.guides);
+    });
+
+    // 偏好：显示实体粉笔
+    const chalkCursorSwitch = document.getElementById('chalkCursorSwitch');
+    chalkCursorSwitch.addEventListener('click', () => {
+      prefs.physicalCursor = !prefs.physicalCursor;
+      chalkCursorSwitch.classList.toggle('on', prefs.physicalCursor);
+      updateCanvasCursorStyle();
+      setCursorSVG();
+      showPhysicalCursor(state.tool !== 'select');
+      showToast(prefs.physicalCursor ? '已开启实体粉笔光标' : '已关闭实体粉笔光标');
+    });
+
+    // 顶部按钮
+    document.getElementById('shareBtn').addEventListener('click', () => showToast('分享链接已复制（演示）'));
+    document.getElementById('saveBtn').addEventListener('click', savePNG);
+    document.getElementById('layersBtn').addEventListener('click', () => showToast('图层面板（演示）'));
+    document.getElementById('undoBtn').addEventListener('click', () => showToast('已撤销最近一笔（演示）'));
+    document.getElementById('exportBtn').addEventListener('click', savePNG);
+    document.getElementById('replayBtn').addEventListener('click', startReplay);
+
+    // 底部栏
+    const zoomVal = document.getElementById('zoomVal');
+    document.getElementById('zoomOut').addEventListener('click', () => { prefs.zoom = Math.max(20, prefs.zoom-10); zoomVal.textContent = prefs.zoom + '%'; });
+    document.getElementById('zoomIn').addEventListener('click', () => { prefs.zoom = Math.min(200, prefs.zoom+10); zoomVal.textContent = prefs.zoom + '%'; });
+    const immersiveBtn = document.getElementById('immersiveBtn');
+    immersiveBtn.addEventListener('click', () => {
+      prefs.immersive = !prefs.immersive;
+      document.body.classList.toggle('immersive', prefs.immersive);
+      immersiveBtn.classList.toggle('active', prefs.immersive);
+      showToast(prefs.immersive ? '已进入沉浸模式' : '已退出沉浸模式');
+    });
+
+    // ============ Toast ============
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toastMsg');
+    let toastTimer = null;
+    function showToast(msg) {
+      toastMsg.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1600);
+    }
+
+    // ============ 保存 PNG ============
+    function savePNG() {
+      const out = document.createElement('canvas');
+      out.width = bgCanvas.width; out.height = bgCanvas.height;
+      const o = out.getContext('2d');
+      o.drawImage(bgCanvas, 0, 0); o.drawImage(drawCanvas, 0, 0);
+      const a = document.createElement('a');
+      a.download = 'chalkdraw.png'; a.href = out.toDataURL('image/png'); a.click();
+      showToast('已保存为图片');
+    }
+
+    // ============ 快捷键 ============
+    window.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT') return;
+      const k = e.key.toLowerCase();
+      const map = { v:'select', b:'chalk', t:'text', r:'rect', o:'circle', l:'line', e:'eraser' };
+      if (map[k]) { selectTool(map[k]); return; }
+      if (k === 'p' || k === ' ') { e.preventDefault(); startReplay(); }
+      else if (k === 'c') clearBoard();
+      else if (['1','2','3','4','5','6','7','8','9','0'].includes(k)) {
+        const sw = paletteEl.children[parseInt(k,10) === 0 ? 9 : parseInt(k,10)-1];
+        if (sw) sw.click();
+      }
+    });
+    function clearBoard() {
+      ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+      ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+      ctx.restore();
+      showToast('已清空黑板');
+    }
+
+    // ============ 「你好，世界！」中文手写演示 ============
+    // 字符笔画库（局部 50×50 坐标系）
+    const charStrokes = {
+      '你': [
+        [[14,6],[8,22]],
+        [[11,12],[11,40]],
+        [[28,8],[40,18]],
+        [[24,14],[38,14]],
+        [[31,18],[31,40],[35,44]],
+        [[24,28],[27,32]],
+        [[38,28],[35,32]]
+      ],
+      '好': [
+        [[14,10],[9,18]],
+        [[22,6],[10,30]],
+        [[8,24],[26,22]],
+        [[20,18],[14,42]],
+        [[28,12],[44,12],[44,20]],
+        [[36,16],[36,42],[40,45]],
+        [[28,32],[44,30]]
+      ],
+      '，': [[[10,38],[16,44]]],
+      '世': [
+        [[6,16],[44,16]],
+        [[25,6],[25,44]],
+        [[14,22],[14,40]],
+        [[36,22],[36,40]],
+        [[10,40],[40,40]]
+      ],
+      '界': [
+        [[14,6],[14,32]],
+        [[12,8],[38,8]],
+        [[38,8],[38,32]],
+        [[12,32],[38,32]],
+        [[25,8],[25,32]],
+        [[12,20],[38,20]],
+        [[6,38],[44,38]],
+        [[16,34],[16,46]],
+        [[34,34],[34,46]]
+      ],
+      '！': [[[25,6],[25,32]],[[25,40],[25,44]]]
+    };
+
+    function buildWord() {
+      const text = '你好，世界！';
+      const scale = 1.6;
+      const charW = 60, punctW = 40;
+      const strokes = [];
+      let x = 0;
+      for (const ch of text) {
+        const def = charStrokes[ch];
+        const isPunct = '，！'.includes(ch);
+        const w = isPunct ? punctW : charW;
+        if (def) def.forEach(s => strokes.push(s.map(p => [p[0]*scale + x, p[1]*scale])));
+        x += w;
+      }
+      // 包围盒居中
+      let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+      strokes.forEach(s => s.forEach(p => {
+        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+      }));
+      const ww=maxX-minX, hh=maxY-minY;
+      const cxS=window.innerWidth/2, cyS=window.innerHeight/2;
+      const offX=cxS-ww/2-minX, offY=cyS-hh/2-minY;
+
+      let skewX=0, scaleX=1;
+      if (state.handstyle==='slant') skewX=-0.22;
+      if (state.handstyle==='block') scaleX=1.18;
+
+      return strokes.map(s => s.map(p => {
+        let px=p[0]+offX, py=p[1]+offY;
+        px += (py-cyS)*skewX;
+        px = (px-cxS)*scaleX + cxS;
+        return [px, py];
+      }));
+    }
+
+    let replay = null;
+    const replayBtn = document.getElementById('replayBtn');
+    function startReplay() {
+      if (replay && replay.active) { stopReplay(); return; }
+      ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+      ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+      ctx.restore();
+
+      const strokes = buildWord();
+      replay = { strokes, si:0, pi:0, lastDraw:null, lastTime:performance.now(), active:true, raf:0 };
+      replayBtn.classList.add('playing');
+      // 演示时强制使用粉笔光标
+      const prevTool = state.tool;
+      if (state.tool === 'eraser') { state.tool = 'chalk'; setCursorSVG(); }
+      showPhysicalCursor(true);
+      showToast('正在书写“你好，世界！”');
+      replay.raf = requestAnimationFrame(replayFrame);
+    }
+    function stopReplay() {
+      if (!replay) return;
+      replay.active = false;
+      cancelAnimationFrame(replay.raf);
+      replayBtn.classList.remove('playing');
+      replay = null;
+    }
+    function replayFrame(now) {
+      if (!replay || !replay.active) return;
+      const dt = Math.min(50, now - replay.lastTime);
+      replay.lastTime = now;
+      const speed = 0.62;
+      let budget = speed * dt;
+
+      while (budget > 0 && replay.si < replay.strokes.length) {
+        const stroke = replay.strokes[replay.si];
+        if (replay.pi >= stroke.length - 1) {
+          replay.si++; replay.pi = 0; replay.lastDraw = null;
+          budget -= 12; // 提笔停顿
+          continue;
+        }
+        const p1 = stroke[replay.pi], p2 = stroke[replay.pi + 1];
+        if (!replay.lastDraw) {
+          replay.lastDraw = p1;
+          movePhysicalCursor(p1[0], p1[1], false);
+          cursorInner.classList.add('pressing');
+        }
+        const remain = Math.hypot(p2[0]-replay.lastDraw[0], p2[1]-replay.lastDraw[1]);
+        if (remain <= budget) {
+          drawChalkSeg({x:replay.lastDraw[0], y:replay.lastDraw[1]}, {x:p2[0], y:p2[1]}, 0.35);
+          movePhysicalCursor(p2[0], p2[1], true);
+          replay.lastDraw = p2; replay.pi++; budget -= remain;
+        } else {
+          const t = budget / remain;
+          const nx = replay.lastDraw[0] + (p2[0]-replay.lastDraw[0])*t;
+          const ny = replay.lastDraw[1] + (p2[1]-replay.lastDraw[1])*t;
+          drawChalkSeg({x:replay.lastDraw[0], y:replay.lastDraw[1]}, {x:nx, y:ny}, 0.35);
+          movePhysicalCursor(nx, ny, true);
+          replay.lastDraw = [nx, ny]; budget = 0;
+        }
+      }
+
+      if (replay.si >= replay.strokes.length) {
+        cursorInner.classList.remove('pressing');
+        stopReplay();
+        showToast('书写完成，点击“动画回放”可重播');
+        return;
+      }
+      replay.raf = requestAnimationFrame(replayFrame);
+    }
+
+    document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+    // ============ 初始化 ============
+    resize();
+    updateSize();
+    setCursorSVG();
+    selectTool('chalk');
+    setTimeout(() => showToast('点击右侧“动画回放”观看中文手写演示'), 700);
+  })();
+  </script>
+</body>
+</html>

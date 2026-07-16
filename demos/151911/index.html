@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>企业360度团队互评 - 打分页面</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="card-header">
+        <h1 class="card-title">360度团队互评系统</h1>
+        <div class="nav-links">
+          <a href="index.html" class="nav-btn active">打分</a>
+          <a href="report.html" class="nav-btn">报表</a>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">选择您的身份</label>
+        <select id="evaluatorSelect" class="form-select">
+          <option value="">请选择...</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">选择被评价人</label>
+        <select id="evaluateeSelect" class="form-select" disabled>
+          <option value="">请先选择您的身份...</option>
+        </select>
+      </div>
+
+      <div class="dimension-row">
+        <div class="dimension-item">
+          <label class="form-label">重点工作成效 <span style="color:#667eea">(权重70%)</span></label>
+          <input type="number" id="dimension1" class="form-input" min="0" max="100" placeholder="0-100" disabled>
+          <div class="score-label">评价工作成果、目标达成情况</div>
+        </div>
+        <div class="dimension-item">
+          <label class="form-label">常规工作表现 <span style="color:#764ba2">(权重30%)</span></label>
+          <input type="number" id="dimension2" class="form-input" min="0" max="100" placeholder="0-100" disabled>
+          <div class="score-label">评价工作态度、协作配合情况</div>
+        </div>
+      </div>
+
+      <button id="submitBtn" class="submit-btn" disabled>提交打分</button>
+
+      <div class="quota-section" id="quotaSection" style="display:none;">
+        <div class="quota-title">当前打分配额统计</div>
+        <div class="quota-grid" id="quotaGrid"></div>
+      </div>
+
+      <div class="info-section">
+        <div class="info-title">打分规则说明</div>
+        <div class="info-text">
+          <p>• 总分 = 重点工作成效 × 0.7 + 常规工作表现 × 0.3</p>
+          <p>• 禁止自评，系统已自动隐藏自评选项</p>
+          <p>• 提交前系统将校验分数段配额限制</p>
+          <p>• 若某类评分人仅1-2人参与，将不允许给同职级人员打分</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:18px;margin-bottom:16px;">已提交记录</h2>
+      <div id="submittedList"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    const evaluatorSelect = document.getElementById('evaluatorSelect');
+    const evaluateeSelect = document.getElementById('evaluateeSelect');
+    const dimension1 = document.getElementById('dimension1');
+    const dimension2 = document.getElementById('dimension2');
+    const submitBtn = document.getElementById('submitBtn');
+    const quotaSection = document.getElementById('quotaSection');
+    const quotaGrid = document.getElementById('quotaGrid');
+    const submittedList = document.getElementById('submittedList');
+
+    let currentEvaluatorId = null;
+
+    function loadEvaluators() {
+      const users = getUsers();
+      evaluatorSelect.innerHTML = '<option value="">请选择...</option>';
+      users.forEach(user => {
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = `${user.name} (${user.typeLabel})`;
+        evaluatorSelect.appendChild(option);
+      });
+    }
+
+    function loadEvaluatees() {
+      const users = getUsers();
+      evaluateeSelect.innerHTML = '<option value="">请选择被评价人...</option>';
+      
+      users.forEach(user => {
+        if (!canEvaluate(currentEvaluatorId, user.id)) {
+          return;
+        }
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = `${user.name} (${user.typeLabel})`;
+        
+        const scores = getScores();
+        const existing = scores.find(
+          s => s.evaluatorId === currentEvaluatorId && s.evaluateeId === user.id
+        );
+        if (existing) {
+          option.style.color = '#888';
+          option.textContent += ' ✓';
+        }
+        
+        evaluateeSelect.appendChild(option);
+      });
+
+      if (evaluateeSelect.options.length <= 1) {
+        evaluateeSelect.innerHTML = '<option value="">没有可评价的人员</option>';
+      }
+    }
+
+    function loadExistingScore() {
+      const evaluateeId = evaluateeSelect.value;
+      if (!evaluateeId) {
+        dimension1.value = '';
+        dimension2.value = '';
+        return;
+      }
+
+      const scores = getScores();
+      const existing = scores.find(
+        s => s.evaluatorId === currentEvaluatorId && s.evaluateeId === evaluateeId
+      );
+
+      if (existing) {
+        dimension1.value = existing.dimension1;
+        dimension2.value = existing.dimension2;
+      } else {
+        dimension1.value = '';
+        dimension2.value = '';
+      }
+    }
+
+    function updateQuotaDisplay() {
+      if (!currentEvaluatorId) {
+        quotaSection.style.display = 'none';
+        return;
+      }
+
+      quotaSection.style.display = 'block';
+      const stats = getQuotaStats(currentEvaluatorId);
+      
+      quotaGrid.innerHTML = '';
+      stats.forEach(stat => {
+        const item = document.createElement('div');
+        item.className = `quota-item ${stat.status}`;
+        
+        let desc = '';
+        if (stat.maxCount === Infinity) {
+          desc = '无限制';
+        } else if (stat.minCount) {
+          desc = `最少${stat.minCount}人`;
+        } else {
+          desc = `最多${stat.maxCount}人`;
+        }
+        
+        item.innerHTML = `
+          <div class="quota-range">${stat.label}</div>
+          <div class="quota-count ${stat.status === 'error' ? 'error' : ''}">${stat.currentCount}</div>
+          <div class="quota-desc">${desc}</div>
+        `;
+        quotaGrid.appendChild(item);
+      });
+    }
+
+    function updateSubmitBtn() {
+      const evalId = currentEvaluatorId;
+      const evalueeId = evaluateeSelect.value;
+      const d1 = parseFloat(dimension1.value);
+      const d2 = parseFloat(dimension2.value);
+
+      const hasAllData = evalId && evalueeId && !isNaN(d1) && !isNaN(d2) && d1 >= 0 && d1 <= 100 && d2 >= 0 && d2 <= 100;
+      submitBtn.disabled = !hasAllData;
+
+      if (hasAllData) {
+        const result = validateQuota(evalId, d1, d2);
+        if (!result.valid) {
+          submitBtn.disabled = true;
+          submitBtn.title = result.message;
+        } else {
+          submitBtn.title = '';
+        }
+      }
+    }
+
+    function loadSubmittedList() {
+      if (!currentEvaluatorId) {
+        submittedList.innerHTML = '<div class="empty-state">请先选择您的身份</div>';
+        return;
+      }
+
+      const scores = getScores();
+      const users = getUsers();
+      const myScores = scores.filter(s => s.evaluatorId === currentEvaluatorId);
+
+      if (myScores.length === 0) {
+        submittedList.innerHTML = '<div class="empty-state">暂无提交记录</div>';
+        return;
+      }
+
+      const table = document.createElement('table');
+      table.className = 'data-table';
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>被评价人</th>
+            <th>类型</th>
+            <th>重点工作成效</th>
+            <th>常规工作表现</th>
+            <th>平均分</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      `;
+
+      const tbody = table.querySelector('tbody');
+      myScores.forEach(score => {
+        const evaluatee = users.find(u => u.id === score.evaluateeId);
+        const avg = ((score.dimension1 + score.dimension2) / 2).toFixed(1);
+        
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${evaluatee?.name || '未知'}</td>
+          <td>${evaluatee?.typeLabel || '未知'}</td>
+          <td>${score.dimension1}</td>
+          <td>${score.dimension2}</td>
+          <td>${avg}</td>
+          <td>
+            <button onclick="deleteScore('${currentEvaluatorId}', '${score.evaluateeId}'); location.reload();" class="detail-btn">删除</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      submittedList.innerHTML = '';
+      submittedList.appendChild(table);
+    }
+
+    evaluatorSelect.addEventListener('change', (e) => {
+      currentEvaluatorId = e.target.value;
+      
+      if (currentEvaluatorId) {
+        evaluateeSelect.disabled = false;
+        dimension1.disabled = false;
+        dimension2.disabled = false;
+        loadEvaluatees();
+        updateQuotaDisplay();
+        loadSubmittedList();
+      } else {
+        evaluateeSelect.disabled = true;
+        evaluateeSelect.innerHTML = '<option value="">请先选择您的身份...</option>';
+        dimension1.disabled = true;
+        dimension2.disabled = true;
+        dimension1.value = '';
+        dimension2.value = '';
+        quotaSection.style.display = 'none';
+        loadSubmittedList();
+      }
+      updateSubmitBtn();
+    });
+
+    evaluateeSelect.addEventListener('change', () => {
+      loadExistingScore();
+      updateSubmitBtn();
+    });
+
+    dimension1.addEventListener('input', () => {
+      const val = parseFloat(dimension1.value);
+      if (val > 100) dimension1.value = 100;
+      if (val < 0) dimension1.value = 0;
+      updateSubmitBtn();
+    });
+
+    dimension2.addEventListener('input', () => {
+      const val = parseFloat(dimension2.value);
+      if (val > 100) dimension2.value = 100;
+      if (val < 0) dimension2.value = 0;
+      updateSubmitBtn();
+    });
+
+    submitBtn.addEventListener('click', () => {
+      const evaluateeId = evaluateeSelect.value;
+      const d1 = parseFloat(dimension1.value);
+      const d2 = parseFloat(dimension2.value);
+
+      const quotaResult = validateQuota(currentEvaluatorId, d1, d2);
+      if (!quotaResult.valid) {
+        showToast(quotaResult.message, 'error');
+        return;
+      }
+
+      const score = {
+        id: `score_${Date.now()}`,
+        evaluatorId: currentEvaluatorId,
+        evaluateeId: evaluateeId,
+        dimension1: d1,
+        dimension2: d2,
+        submitTime: Date.now()
+      };
+
+      saveScore(score);
+      showToast('打分提交成功！', 'success');
+
+      loadEvaluatees();
+      updateQuotaDisplay();
+      loadSubmittedList();
+      dimension1.value = '';
+      dimension2.value = '';
+      evaluateeSelect.value = '';
+    });
+
+    loadEvaluators();
+    loadSubmittedList();
+  </script>
+</body>
+</html>

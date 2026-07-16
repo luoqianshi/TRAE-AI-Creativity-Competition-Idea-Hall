@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>实时液体玻璃相机 · Real-time Liquid Glass Camera</title>
+<meta name="description" content="纯前端 Web 应用，调用摄像头经 9 段 GPU Shader 后处理，呈现 Apple Liquid Glass + Ripple Refraction 风格的实时液体玻璃视觉。" />
+<link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#05060b;
+    --bg-2:#090a14;
+    --ink:#eaf2ff;
+    --ink-dim:#8b94aa;
+    --ink-mute:#5a6378;
+    --accent:#7dd3fc;
+    --accent-2:#22d3ee;
+    --accent-3:#38bdf8;
+    --warm:#f0a8c0;
+    --glass:rgba(255,255,255,.035);
+    --glass-2:rgba(255,255,255,.055);
+    --line:rgba(255,255,255,.08);
+    --line-2:rgba(125,211,252,.16);
+    --r:18px;
+    --display:"Bricolage Grotesque",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{
+    font-family:var(--display);
+    background:var(--bg);
+    color:var(--ink);
+    line-height:1.6;
+    overflow-x:hidden;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+  ::selection{background:rgba(125,211,252,.28);color:#fff}
+  a{color:inherit;text-decoration:none}
+  img{max-width:100%;display:block}
+
+  /* ---------- 水波 canvas 背景 ---------- */
+  #ripple{
+    position:fixed;inset:0;width:100vw;height:100vh;
+    z-index:0;display:block;
+    /* 微微压暗以保证内容可读 */
+    filter:saturate(1.05);
+  }
+  #veil{
+    position:fixed;inset:0;z-index:1;pointer-events:none;
+    background:
+      radial-gradient(1200px 800px at 78% -10%, rgba(34,211,238,.10), transparent 60%),
+      radial-gradient(900px 700px at 10% 110%, rgba(125,211,252,.08), transparent 60%),
+      linear-gradient(180deg, rgba(5,6,11,.55) 0%, rgba(5,6,11,.35) 30%, rgba(5,6,11,.78) 100%);
+  }
+  #grain{
+    position:fixed;inset:0;z-index:2;pointer-events:none;opacity:.045;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .wrap{position:relative;z-index:3}
+
+  /* ---------- 导航 ---------- */
+  nav.top{
+    position:fixed;top:0;left:0;right:0;z-index:50;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px clamp(20px,5vw,64px);
+    backdrop-filter:blur(14px) saturate(1.2);
+    -webkit-backdrop-filter:blur(14px) saturate(1.2);
+    background:linear-gradient(180deg, rgba(5,6,11,.72), rgba(5,6,11,.12));
+    border-bottom:1px solid var(--line);
+  }
+  .logo{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:600;letter-spacing:.12em;font-size:13px}
+  .logo .mark{
+    width:22px;height:22px;border-radius:7px;display:grid;place-items:center;
+    background:radial-gradient(circle at 30% 30%, #bff0ff, #22d3ee 40%, #0e7490 80%);
+    box-shadow:0 0 18px rgba(34,211,238,.55), inset 0 0 8px rgba(255,255,255,.5);
+  }
+  .navlinks{display:flex;gap:26px;font-size:13px;color:var(--ink-dim);font-family:var(--mono)}
+  .navlinks a{transition:color .2s, text-shadow .2s}
+  .navlinks a:hover{color:var(--ink);text-shadow:0 0 14px rgba(125,211,252,.6)}
+  @media(max-width:760px){.navlinks{display:none}}
+
+  /* ---------- 通用 ---------- */
+  section{padding:clamp(80px,11vh,150px) clamp(20px,5vw,64px);position:relative}
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--accent);display:inline-flex;align-items:center;gap:10px;
+  }
+  .eyebrow::before{content:"";width:26px;height:1px;background:linear-gradient(90deg,var(--accent),transparent)}
+  .h2{font-size:clamp(30px,4.4vw,54px);font-weight:600;line-height:1.08;letter-spacing:-.02em;margin:18px 0 14px}
+  .lede{color:var(--ink-dim);max-width:62ch;font-size:clamp(15px,1.4vw,17px)}
+  .sec-head{max-width:780px;margin-bottom:54px}
+  .container{max-width:1240px;margin:0 auto}
+
+  /* ---------- Hero ---------- */
+  .hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding-top:120px}
+  .hero .container{display:flex;flex-direction:column;align-items:flex-start;gap:28px}
+  .hero h1{
+    font-family:var(--display);
+    font-weight:600;font-size:clamp(46px,9vw,128px);line-height:.96;letter-spacing:-.035em;
+    background:linear-gradient(180deg,#ffffff 0%, #cfe9ff 55%, #7dd3fc 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 0 80px rgba(125,211,252,.15);
+  }
+  .hero .sub{
+    font-family:var(--mono);font-size:clamp(13px,1.4vw,16px);letter-spacing:.04em;
+    color:var(--accent);text-transform:uppercase;
+  }
+  .hero p.desc{font-size:clamp(16px,1.5vw,20px);color:#cdd6e6;max-width:58ch;line-height:1.65}
+  .cta-row{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px}
+  .btn{
+    font-family:var(--mono);font-size:13px;letter-spacing:.06em;
+    padding:15px 26px;border-radius:999px;cursor:pointer;border:1px solid var(--line);
+    display:inline-flex;align-items:center;gap:10px;transition:transform .25s, background .25s, box-shadow .25s, border-color .25s;
+  }
+  .btn-primary{
+    background:linear-gradient(180deg, rgba(125,211,252,.22), rgba(34,211,238,.12));
+    border-color:rgba(125,211,252,.5);color:#eaf6ff;
+    box-shadow:0 0 0 0 rgba(125,211,252,.0), 0 10px 40px -12px rgba(34,211,238,.6), inset 0 1px 0 rgba(255,255,255,.18);
+  }
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 50px -14px rgba(34,211,238,.75), inset 0 1px 0 rgba(255,255,255,.25)}
+  .btn-ghost{background:var(--glass);color:var(--ink-dim)}
+  .btn-ghost:hover{color:var(--ink);background:var(--glass-2);transform:translateY(-2px);border-color:var(--line-2)}
+  .arrow{transition:transform .25s}
+  .btn:hover .arrow{transform:translateX(4px)}
+
+  .hero-meta{
+    margin-top:8px;display:flex;flex-wrap:wrap;gap:10px 22px;font-family:var(--mono);font-size:12px;color:var(--ink-mute);
+    letter-spacing:.08em;
+  }
+  .hero-meta b{color:var(--accent);font-weight:500}
+
+  .scroll-hint{
+    position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
+    font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--ink-mute);
+    display:flex;flex-direction:column;align-items:center;gap:10px;
+  }
+  .scroll-hint .line{width:1px;height:46px;background:linear-gradient(180deg,var(--accent),transparent);animation:drip 2.4s ease-in-out infinite}
+  @keyframes drip{0%,100%{opacity:.2;transform:scaleY(.6)}50%{opacity:1;transform:scaleY(1)}}
+
+  /* ---------- Marquee ---------- */
+  .marquee{padding:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:rgba(7,9,16,.5);overflow:hidden}
+  .mq-track{display:flex;gap:0;width:max-content;animation:scrollX 38s linear infinite}
+  .mq-track:hover{animation-play-state:paused}
+  .mq-item{font-family:var(--mono);font-size:13px;letter-spacing:.1em;color:var(--ink-dim);padding:18px 34px;white-space:nowrap;display:flex;align-items:center;gap:34px}
+  .mq-item::after{content:"◆";color:var(--accent);font-size:8px}
+  @keyframes scrollX{to{transform:translateX(-50%)}}
+
+  /* ---------- 玻璃卡片 ---------- */
+  .card{
+    background:var(--glass);border:1px solid var(--line);border-radius:var(--r);
+    backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);
+    padding:28px;transition:transform .35s, border-color .35s, background .35s, box-shadow .35s;
+    position:relative;overflow:hidden;
+  }
+  .card::before{
+    content:"";position:absolute;inset:0;border-radius:var(--r);pointer-events:none;
+    background:radial-gradient(420px 200px at var(--mx,50%) var(--my,0%), rgba(125,211,252,.10), transparent 60%);
+    opacity:0;transition:opacity .35s;
+  }
+  .card:hover{transform:translateY(-4px);border-color:var(--line-2);background:var(--glass-2);box-shadow:0 24px 60px -28px rgba(34,211,238,.35)}
+  .card:hover::before{opacity:1}
+
+  .grid{display:grid;gap:18px}
+  .grid.feat{grid-template-columns:repeat(3,1fr)}
+  .grid.four{grid-template-columns:repeat(4,1fr)}
+  .grid.two{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:980px){.grid.feat{grid-template-columns:repeat(2,1fr)}.grid.four{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:620px){.grid.feat,.grid.four,.grid.two{grid-template-columns:1fr}}
+
+  .card .ic{
+    width:46px;height:46px;border-radius:12px;display:grid;place-items:center;margin-bottom:18px;
+    background:linear-gradient(180deg, rgba(125,211,252,.18), rgba(34,211,238,.06));
+    border:1px solid var(--line-2);color:var(--accent);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.12);
+  }
+  .card h3{font-size:19px;font-weight:600;letter-spacing:-.01em;margin-bottom:8px}
+  .card p{color:var(--ink-dim);font-size:14.5px}
+  .card .num{font-family:var(--mono);font-size:11px;color:var(--ink-mute);letter-spacing:.18em}
+
+  /* ---------- Pass 管线 ---------- */
+  .pipeline{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .pass{
+    flex:1;min-width:118px;border:1px solid var(--line);border-left:none;
+    padding:20px 16px;position:relative;background:rgba(10,12,20,.4);
+    transition:background .3s, color .3s;
+  }
+  .pass:first-child{border-left:1px solid var(--line);border-radius:14px 0 0 14px}
+  .pass:last-child{border-radius:0 14px 14px 0}
+  .pass:hover{background:rgba(34,211,238,.06)}
+  .pass .p-no{font-family:var(--mono);font-size:10px;color:var(--ink-mute);letter-spacing:.2em}
+  .pass .p-name{font-family:var(--mono);font-size:13px;color:var(--accent);margin:8px 0 8px;letter-spacing:.02em}
+  .pass .p-desc{font-size:12px;color:var(--ink-dim);line-height:1.5}
+  .pass .arr{position:absolute;right:-7px;top:50%;transform:translateY(-50%);color:var(--accent);font-size:13px;z-index:2;background:var(--bg);padding:1px 0}
+  .pass:last-child .arr{display:none}
+  @media(max-width:760px){
+    .pipeline{flex-direction:column}
+    .pass{border-left:1px solid var(--line)!important;border-radius:0!important}
+    .pass:first-child{border-radius:14px 14px 0 0!important}
+    .pass:last-child{border-radius:0 0 14px 14px!important;border-bottom:1px solid var(--line)!important}
+    .pass .arr{right:16px;top:auto;bottom:-7px;transform:rotate(90deg);background:var(--bg)}
+  }
+
+  /* ---------- 预设 ---------- */
+  .preset{padding:0;overflow:hidden}
+  .preset .swatch{height:120px;position:relative;overflow:hidden;border-bottom:1px solid var(--line)}
+  .preset .body{padding:22px}
+  .preset .tag{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--ink-mute)}
+  .preset h3{font-size:22px;margin:6px 0 10px}
+  .preset p{font-size:14px;color:var(--ink-dim)}
+  .preset .params{margin-top:16px;display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:11.5px;color:var(--ink-mute)}
+  .preset .params span b{color:var(--accent);font-weight:500}
+
+  /* 预设色块 */
+  .sw-original{background:radial-gradient(circle at 50% 40%, #3a4255, #0b0d15)}
+  .sw-dreamy{background:radial-gradient(circle at 50% 40%, #f3d9ff, #b9a7ff 35%, #6d7bd0 70%, #1a1730)}
+  .sw-cyber{background:linear-gradient(120deg, #ff2e88 0%, #b026ff 30%, #00e5ff 65%, #001a2b 100%)}
+  .sw-subtle{background:radial-gradient(circle at 50% 45%, #eaf6ff, #c4d8ec 40%, #8194ad 75%, #11151d)}
+  .preset .swatch::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%, rgba(5,6,11,.6))}
+
+  /* ---------- 交互 ---------- */
+  .interact .row{display:flex;align-items:flex-start;gap:18px;padding:20px 0;border-bottom:1px solid var(--line)}
+  .interact .row:last-child{border-bottom:none}
+  .interact .k{font-family:var(--mono);font-size:12px;color:var(--accent);min-width:78px;letter-spacing:.06em}
+  .interact h4{font-size:16px;font-weight:600}
+  .interact p{font-size:14px;color:var(--ink-dim)}
+
+  /* ---------- 技术栈 ---------- */
+  .chips{display:flex;flex-wrap:wrap;gap:10px}
+  .chip{
+    font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;
+    padding:9px 15px;border-radius:999px;border:1px solid var(--line);background:var(--glass);
+    color:var(--ink-dim);transition:all .25s;
+  }
+  .chip:hover{color:var(--ink);border-color:var(--line-2);background:var(--glass-2);transform:translateY(-2px);box-shadow:0 10px 30px -16px rgba(34,211,238,.5)}
+
+  /* ---------- 平台 ---------- */
+  .plat{display:flex;flex-wrap:wrap;gap:14px}
+  .plat .pl{
+    flex:1;min-width:150px;text-align:center;padding:30px 18px;border-radius:14px;
+    border:1px solid var(--line);background:var(--glass);transition:all .3s;
+  }
+  .plat .pl:hover{border-color:var(--line-2);background:var(--glass-2);transform:translateY(-3px)}
+  .plat .pl .nm{font-size:16px;font-weight:600;margin-top:6px}
+  .plat .pl .dv{font-family:var(--mono);font-size:11px;color:var(--ink-mute);margin-top:4px;letter-spacing:.1em}
+
+  /* ---------- 终极 CTA ---------- */
+  .cta-final{text-align:center}
+  .cta-final h2{
+    font-size:clamp(34px,5.4vw,76px);font-weight:600;letter-spacing:-.03em;line-height:1.05;
+    background:linear-gradient(180deg,#fff,#7dd3fc);-webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .cta-final p{color:var(--ink-dim);max-width:52ch;margin:18px auto 32px;font-size:16px}
+
+  /* ---------- 页脚 ---------- */
+  footer{padding:40px clamp(20px,5vw,64px);border-top:1px solid var(--line);background:rgba(5,6,11,.6)}
+  footer .container{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:18px}
+  footer .l{font-family:var(--mono);font-size:12px;color:var(--ink-mute);letter-spacing:.08em}
+  footer .r{font-family:var(--mono);font-size:12px;color:var(--ink-mute)}
+
+  /* ---------- 滚动揭示 ---------- */
+  .reveal{opacity:0;transform:translateY(26px);transition:opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+  .reveal.d1{transition-delay:.08s}.reveal.d2{transition-delay:.16s}.reveal.d3{transition-delay:.24s}
+  .reveal.d4{transition-delay:.32s}.reveal.d5{transition-delay:.4s}.reveal.d6{transition-delay:.48s}
+
+  @media(prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+    .reveal{opacity:1;transform:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- 交互式水波背景 -->
+<canvas id="ripple" aria-hidden="true"></canvas>
+<div id="veil"></div>
+<div id="grain"></div>
+
+<div class="wrap">
+
+  <!-- 导航 -->
+  <nav class="top">
+    <a href="#top" class="logo"><span class="mark"></span> LIQUID&nbsp;GLASS</a>
+    <div class="navlinks">
+      <a href="#features">特性</a>
+      <a href="#pipeline">管线</a>
+      <a href="#presets">预设</a>
+      <a href="#tech">技术</a>
+      <a href="#platform">平台</a>
+    </div>
+  </nav>
+
+  <main id="top">
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="container">
+        <span class="eyebrow">Real-time · GPU Shader · Browser-Native</span>
+        <h1>实时液体<br/>玻璃相机</h1>
+        <div class="sub">Real-time Liquid Glass Camera</div>
+        <p class="desc">调用手机或电脑摄像头，画面经 9 段 GPU Shader 后处理，瞬间化作折射、涟漪与玻璃高光交织的艺术影像。无需安装，跨平台浏览器即开即用，达到高端 GPU Shader Demo 水准。</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="./app/" target="_blank" rel="noopener">开启摄像头体验 <span class="arrow">→</span></a>
+          <a class="btn btn-ghost" href="#pipeline">查看渲染管线</a>
+        </div>
+        <div class="hero-meta">
+          <span>后端 <b>WebGPU 优先</b></span>
+          <span>降级 <b>WebGL2</b></span>
+          <span>目标 <b>60FPS @1080P</b></span>
+          <span>纹理 <b>零拷贝</b></span>
+        </div>
+      </div>
+      <div class="scroll-hint">SCROLL<div class="line"></div></div>
+    </section>
+
+    <!-- Marquee -->
+    <div class="marquee" aria-hidden="true">
+      <div class="mq-track">
+        <span class="mq-item">WebGPU 优先</span>
+        <span class="mq-item">WebGL2 降级</span>
+        <span class="mq-item">9-Pass Frame Graph</span>
+        <span class="mq-item">零拷贝 Video Texture</span>
+        <span class="mq-item">双缓冲 RenderTarget</span>
+        <span class="mq-item">60FPS @1080P</span>
+        <span class="mq-item">跨平台浏览器原生</span>
+        <span class="mq-item">实时交互调参</span>
+        <span class="mq-item">MediaPipe 手势追踪</span>
+        <span class="mq-item">ACES 色调映射</span>
+        <!-- 复制一遍以实现无缝滚动 -->
+        <span class="mq-item">WebGPU 优先</span>
+        <span class="mq-item">WebGL2 降级</span>
+        <span class="mq-item">9-Pass Frame Graph</span>
+        <span class="mq-item">零拷贝 Video Texture</span>
+        <span class="mq-item">双缓冲 RenderTarget</span>
+        <span class="mq-item">60FPS @1080P</span>
+        <span class="mq-item">跨平台浏览器原生</span>
+        <span class="mq-item">实时交互调参</span>
+        <span class="mq-item">MediaPipe 手势追踪</span>
+        <span class="mq-item">ACES 色调映射</span>
+      </div>
+    </div>
+
+    <!-- 核心特性 -->
+    <section id="features">
+      <div class="container">
+        <div class="sec-head reveal">
+          <span class="eyebrow">核心特性</span>
+          <h2 class="h2">把现实画面，<br/>炼成流动的玻璃。</h2>
+          <p class="lede">从摄像头采集到最终成帧，每一帧都流经一条模块化的 GPU Pass 管线。新增 Shader 只需新增 Pass，无需改动既有代码。</p>
+        </div>
+        <div class="grid feat">
+          <article class="card reveal d1">
+            <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></div>
+            <div class="num">01 · CAPTURE</div>
+            <h3>实时摄像头后处理</h3>
+            <p>getUserMedia 采集 MediaStream，作为 Video Texture 直接进入 GPU 管线，零 CPU 拷贝。</p>
+          </article>
+          <article class="card reveal d2">
+            <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/></svg></div>
+            <div class="num">02 · PIPELINE</div>
+            <h3>9-Pass Frame Graph</h3>
+            <p>Frame Graph 思路串联 9 个独立 Pass，双缓冲 RenderTarget ping-pong，与 Unreal / URP 同构。</p>
+          </article>
+          <article class="card reveal d3">
+            <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 2v10l7 7"/></svg></div>
+            <div class="num">03 · RIPPLE</div>
+            <h3>交互式水波涟漪</h3>
+            <p>点击产生涟漪、拖动绘出连续波纹、双指缩放玻璃，多指触摸与鼠标皆可驱动。</p>
+          </article>
+          <article class="card reveal d1">
+            <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12c4-8 14-8 18 0-4 8-14 8-18 0z"/><circle cx="12" cy="12" r="3"/></svg></div>
+            <div class="num">04 · GLASS</div>
+            <h3>液体玻璃 Shader</h3>
+            <p>Blur + Refraction + Fresnel + Specular + Bevel + Thickness + Edge，复刻 Apple Liquid Glass 质感。</p>
+          </article>
+          <article class="card reveal d2">
+            <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+            <div class="num">05 · PRESETS</div>
+            <h3>四种艺术预设</h3>
+            <p>Original / Dreamy / Cyber / Subtle 一键切换，参数通过 localStorage 持久化保存。</p>
+          </article>
+          <article class="card reveal d3">
+            <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></div>
+            <div class="num">06 · MONITOR</div>
+            <h3>实时性能监控</h3>
+            <p>FPS、分辨率、当前激活 Pass 列表、GPU 后端类型一览，桌面 1080P 稳定 60 帧。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 渲染管线 -->
+    <section id="pipeline">
+      <div class="container">
+        <div class="sec-head reveal">
+          <span class="eyebrow">渲染管线</span>
+          <h2 class="h2">从摄像头到屏幕，<br/>一条 Frame Graph。</h2>
+          <p class="lede">每帧画面依次流经 9 个独立 Pass，模块解耦、顺序可循。这正是高端实时图形引擎的通行结构。</p>
+        </div>
+        <div class="pipeline reveal d1">
+          <div class="pass"><div class="p-no">INPUT</div><div class="p-name">Camera Texture</div><div class="p-desc">getUserMedia → Video Texture</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 1</div><div class="p-name">Refraction</div><div class="p-desc">UV 折射 + 噪声扰动</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 2</div><div class="p-name">Ripple</div><div class="p-desc">水波扩散·点击 / 拖动</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 3</div><div class="p-name">Liquid Glass</div><div class="p-desc">Blur+Fresnel+Specular</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 4</div><div class="p-name">Lens Distortion</div><div class="p-desc">镜头桶形畸变</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 5</div><div class="p-name">Chromatic Aberration</div><div class="p-desc">RGB 色散偏移</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 6</div><div class="p-name">Noise</div><div class="p-desc">胶片颗粒 / 噪点</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 7</div><div class="p-name">Bloom</div><div class="p-desc">亮部辉光</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 8</div><div class="p-name">Tone Mapping</div><div class="p-desc">ACES 色调映射</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">PASS 9</div><div class="p-name">FXAA</div><div class="p-desc">快速近似抗锯齿</div><span class="arr">▶</span></div>
+          <div class="pass"><div class="p-no">OUTPUT</div><div class="p-name">Screen</div><div class="p-desc">全屏输出最终画面</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 预设 -->
+    <section id="presets">
+      <div class="container">
+        <div class="sec-head reveal">
+          <span class="eyebrow">艺术预设</span>
+          <h2 class="h2">一键切换，<br/>四种视觉气质。</h2>
+          <p class="lede">每个预设即一组完整参数组合，实时注入管线，所见即所得。</p>
+        </div>
+        <div class="grid four">
+          <article class="card preset reveal d1">
+            <div class="swatch sw-original"></div>
+            <div class="body">
+              <div class="tag">PRESET · 01</div>
+              <h3>Original</h3>
+              <p>原始画面，最清晰无后处理。</p>
+              <div class="params"><span>enabled · <b>all off</b></span></div>
+            </div>
+          </article>
+          <article class="card preset reveal d2">
+            <div class="swatch sw-dreamy"></div>
+            <div class="body">
+              <div class="tag">PRESET · 02</div>
+              <h3>Dreamy</h3>
+              <p>梦幻柔焦，轻微 Bloom。</p>
+              <div class="params">
+                <span>glass.blur · <b>0.25</b></span>
+                <span>bloom.intensity · <b>0.50</b></span>
+                <span>chromatic · <b>0.002</b></span>
+              </div>
+            </div>
+          </article>
+          <article class="card preset reveal d3">
+            <div class="swatch sw-cyber"></div>
+            <div class="body">
+              <div class="tag">PRESET · 03</div>
+              <h3>Cyber</h3>
+              <p>赛博朋克，强色散强畸变。</p>
+              <div class="params">
+                <span>refraction · <b>0.20</b></span>
+                <span>lensDistortion · <b>0.18</b></span>
+                <span>chromatic · <b>0.006</b></span>
+              </div>
+            </div>
+          </article>
+          <article class="card preset reveal d4">
+            <div class="swatch sw-subtle"></div>
+            <div class="body">
+              <div class="tag">PRESET · 04</div>
+              <h3>Subtle</h3>
+              <p>极轻微玻璃质感，几乎无后处理。</p>
+              <div class="params">
+                <span>glass.blur · <b>0.02</b></span>
+                <span>glass.fresnel · <b>0.10</b></span>
+                <span>bloom · <b>0.08</b></span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 交互 + 技术栈 -->
+    <section id="tech">
+      <div class="container">
+        <div class="grid two" style="align-items:start">
+          <div class="reveal">
+            <span class="eyebrow">交互方式</span>
+            <h2 class="h2">指尖即涟漪。</h2>
+            <div class="interact" style="margin-top:18px">
+              <div class="row"><div class="k">CLICK</div><div><h4>点击 · 产生水波</h4><p>单次点击在画面上激发一圈衰减涟漪。</p></div></div>
+              <div class="row"><div class="k">DRAG</div><div><h4>拖动 · 连续波纹</h4><p>按住拖动，沿轨迹持续注入水波场。</p></div></div>
+              <div class="row"><div class="k">PINCH</div><div><h4>双指 · 缩放玻璃</h4><p>双指捏合实时调节液体玻璃强度。</p></div></div>
+              <div class="row"><div class="k">GESTURE</div><div><h4>手势 · MediaPipe 追踪</h4><p>可选手势追踪驱动 Glass Distortion。</p></div></div>
+            </div>
+          </div>
+          <div class="reveal d2">
+            <span class="eyebrow">技术栈</span>
+            <h2 class="h2">现代前端图形<br/>工程组合。</h2>
+            <p class="lede" style="margin-bottom:24px">React + TypeScript + Vite 构建应用骨架，WebGPU / WebGL2 双后端抽象，Leva 实时调参。</p>
+            <div class="chips">
+              <span class="chip">React 18</span>
+              <span class="chip">TypeScript 5</span>
+              <span class="chip">Vite 6</span>
+              <span class="chip">Tailwind CSS 3</span>
+              <span class="chip">WebGPU</span>
+              <span class="chip">WebGL2</span>
+              <span class="chip">Leva</span>
+              <span class="chip">MediaPipe Tasks-Vision</span>
+              <span class="chip">gl-matrix</span>
+              <span class="chip">Zustand</span>
+              <span class="chip">lucide-react</span>
+              <span class="chip">ACES Tone Mapping</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 平台 -->
+    <section id="platform">
+      <div class="container">
+        <div class="sec-head reveal">
+          <span class="eyebrow">跨平台</span>
+          <h2 class="h2">一个链接，全平台通行。</h2>
+          <p class="lede">纯前端、无安装、浏览器原生。WebGPU 不可用时自动降级 WebGL2，覆盖含鸿蒙在内的主流浏览器。</p>
+        </div>
+        <div class="plat reveal d1">
+          <div class="pl">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="1.4"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>
+            <div class="nm">鸿蒙浏览器</div><div class="dv">HARMONYOS</div>
+          </div>
+          <div class="pl">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="1.4"><path d="M5 7l5-3 5 3 5-3v14l-5 3-5-3-5 3V7z"/><path d="M10 4v14M15 7v14"/></svg>
+            <div class="nm">Android</div><div class="dv">MOBILE</div>
+          </div>
+          <div class="pl">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="1.4"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
+            <div class="nm">iOS</div><div class="dv">SAFARI</div>
+          </div>
+          <div class="pl">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="1.4"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            <div class="nm">桌面端</div><div class="dv">DESKTOP</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 终极 CTA -->
+    <section class="cta-final">
+      <div class="container reveal">
+        <span class="eyebrow">现在开始</span>
+        <h2>开启你的<br/>液体玻璃相机。</h2>
+        <p>授权摄像头，把眼前的世界化作折射与涟漪。无需下载，无需注册。</p>
+        <a class="btn btn-primary" href="./app/" target="_blank" rel="noopener">立即体验 <span class="arrow">→</span></a>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="l">◈ LIQUID GLASS · Real-time Liquid Glass Camera</div>
+      <div class="r">纯前端 · WebGPU / WebGL2 · 浏览器原生</div>
+    </div>
+  </footer>
+</div>
+
+<script>
+/* =========================================================
+   交互式水波涟漪背景（高度场仿真 + 法线着色）
+   直接呼应产品本身的 Ripple Refraction 交互
+   ========================================================= */
+(function(){
+  const canvas = document.getElementById('ripple');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const SCALE = 4;            // 每 4px 一个仿真单元
+  const DAMP = 0.986;         // 阻尼
+  let W=0, H=0, cols=0, rows=0;
+  let cur, prev, img, low, lowCtx;
+
+  function alloc(){
+    cur  = new Float32Array(cols * rows);
+    prev = new Float32Array(cols * rows);
+    low = document.createElement('canvas');
+    low.width = cols; low.height = rows;
+    lowCtx = low.getContext('2d');
+    img = lowCtx.createImageData(cols, rows);
+  }
+
+  function resize(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.width  = Math.floor(window.innerWidth  * dpr);
+    H = canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    cols = Math.max(2, Math.floor(W / SCALE));
+    rows = Math.max(2, Math.floor(H / SCALE));
+    alloc();
+  }
+
+  function disturb(cx, cy, strength, radius){
+    const r = radius || 2;
+    const px = Math.floor(cx / SCALE), py = Math.floor(cy / SCALE);
+    for (let dy = -r; dy <= r; dy++){
+      for (let dx = -r; dx <= r; dx++){
+        const x = px + dx, y = py + dy;
+        if (x > 0 && x < cols-1 && y > 0 && y < rows-1){
+          const d = dx*dx + dy*dy;
+          if (d <= r*r){
+            prev[y * cols + x] += strength * (1 - d/(r*r));
+          }
+        }
+      }
+    }
+  }
+
+  function step(){
+    // 计算新一帧
+    for (let y = 1; y < rows - 1; y++){
+      const yo = y * cols;
+      for (let x = 1; x < cols - 1; x++){
+        const i = yo + x;
+        let v = (prev[i-1] + prev[i+1] + prev[i-cols] + prev[i+cols]) * 0.5 - cur[i];
+        v *= DAMP;
+        cur[i] = v;
+      }
+    }
+    // 交换缓冲
+    const t = cur; cur = prev; prev = t;
+  }
+
+  function render(){
+    const d = img.data;
+    // 基色：深蓝黑液体
+    const baseR = 6, baseG = 10, baseB = 22;
+    for (let y = 1; y < rows - 1; y++){
+      const yo = y * cols;
+      for (let x = 1; x < cols - 1; x++){
+        const i = yo + x;
+        const h = prev[i];
+        const dxh = prev[i-1] - prev[i+1];
+        const dyh = prev[i-cols] - prev[i+cols];
+
+        // 漫反射：斜率朝向左上光源
+        let lum = dxh * 1.7 + dyh * 1.7;
+        // 高光：波峰
+        const peak = Math.max(0, h) * 1.6;
+
+        let r = baseR, g = baseG, b = baseB;
+        if (lum > 0){
+          // 冰蓝高光
+          r += lum * 14;
+          g += lum * 46;
+          b += lum * 96;
+        } else {
+          // 负向斜率：暖色色散
+          const n = -lum;
+          r += n * 34;
+          g += n * 10;
+          b += n * 2;
+        }
+        // 波峰白光
+        r += peak * 120; g += peak * 140; b += peak * 170;
+
+        const o = i * 4;
+        d[o]   = r > 255 ? 255 : r;
+        d[o+1] = g > 255 ? 255 : g;
+        d[o+2] = b > 255 ? 255 : b;
+        d[o+3] = 255;
+      }
+    }
+    lowCtx.putImageData(img, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(low, 0, 0, W, H);
+  }
+
+  // 自动随机涟漪 + 鼠标涟漪
+  let lastEmit = 0;
+  function loop(ts){
+    step();
+    render();
+    if (!reduce && ts - lastEmit > 1400 + Math.random() * 1600){
+      lastEmit = ts;
+      disturb(
+        Math.random() * W,
+        Math.random() * H,
+        60 + Math.random() * 80,
+        3
+      );
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // 鼠标 / 触摸注入
+  let lastMove = 0;
+  function onMove(e){
+    const now = performance.now();
+    if (now - lastMove < 28) return; // 节流
+    lastMove = now;
+    const p = e.touches ? e.touches[0] : e;
+    disturb(p.clientX * (W / window.innerWidth), p.clientY * (H / window.innerHeight), 90, 2);
+  }
+  function onDown(e){
+    const p = e.touches ? e.touches[0] : e;
+    disturb(p.clientX * (W / window.innerWidth), p.clientY * (H / window.innerHeight), 220, 3);
+  }
+  window.addEventListener('pointermove', onMove, { passive: true });
+  window.addEventListener('pointerdown', onDown, { passive: true });
+
+  // 初始几圈涟漪让首屏不空
+  function seed(){
+    disturb(W * 0.5, H * 0.55, 160, 3);
+    setTimeout(()=>disturb(W * 0.3, H * 0.4, 90, 2), 250);
+    setTimeout(()=>disturb(W * 0.72, H * 0.62, 110, 2), 500);
+  }
+
+  let rt;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 180); });
+  resize();
+  seed();
+  requestAnimationFrame(loop);
+
+  /* =========================================================
+     滚动揭示 + 卡片光标跟随
+     ========================================================= */
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach(en=>{ if(en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+  document.querySelectorAll('.card').forEach(card=>{
+    card.addEventListener('pointermove', e=>{
+      const r = card.getBoundingClientRect();
+      card.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100) + '%');
+      card.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
+    });
+  });
+})();
+</script>
+</body>
+</html>
